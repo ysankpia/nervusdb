@@ -26,24 +26,24 @@ SynapseDB 将会是一个**嵌入式（embedded）、零配置、基于文件的
 
 1.  **文件格式**：一个自定义的二进制格式 `.synapsedb`。
 2.  **内部结构**：
-    *   **字典区 (Dictionary Section)**：
-        *   **目的**：将所有字符串（如文件路径、函数名、关系标签 `MODIFIES`）映射为一个唯一的整数ID。
-        *   **实现**：使用两个哈希表（一个用于字符串到ID，一个用于ID到字符串）进行高效查找。
-        *   **好处**：极大地减小了索引和三元组本身的存储体积，使得数值比较远快于字符串比较。
-    *   **三元组区 (Triples Section)**：
-        *   **目的**：存储所有的“事实”（SPO三元组）。
-        *   **实现**：这是一个巨大的、紧凑的数组，每个元素是一个SPO三元组，但存储的是它们在字典区对应的整数ID：`(subject_id, predicate_id, object_id)`。
-    *   **索引区 (Index Section)**：
-        *   **目的**：这是实现**闪电般快速联想查询**的关键！我们需要创建多个索引来支持从任何方向进行查询。
-        *   **实现**：我们会为SPO的所有6种排列创建排序好的索引：
-            *   `SPO` (主语 -> 谓语 -> 宾语)
-            *   `POS` (谓语 -> 宾语 -> 主语)
-            *   `OSP` (宾语 -> 主语 -> 谓语)
-            *   `SOP`, `PSO`, `OPS` ...
-        *   每个索引本身可以是一个B+树或类似的排序数据结构，允许进行高效的范围查询。
-    *   **属性区 (Properties Section)**：
-        *   **目的**：存储与节点（主语/宾语）和边（关系）相关的额外数据（例如，文件的行数，commit的时间戳）。
-        *   **实现**：一个键值存储，键是`subject_id`或一个三元组的唯一哈希，值是序列化的JSON数据（例如，使用MessagePack或CBOR进行二进制序列化以节省空间）。
+    - **字典区 (Dictionary Section)**：
+      - **目的**：将所有字符串（如文件路径、函数名、关系标签 `MODIFIES`）映射为一个唯一的整数ID。
+      - **实现**：使用两个哈希表（一个用于字符串到ID，一个用于ID到字符串）进行高效查找。
+      - **好处**：极大地减小了索引和三元组本身的存储体积，使得数值比较远快于字符串比较。
+    - **三元组区 (Triples Section)**：
+      - **目的**：存储所有的“事实”（SPO三元组）。
+      - **实现**：这是一个巨大的、紧凑的数组，每个元素是一个SPO三元组，但存储的是它们在字典区对应的整数ID：`(subject_id, predicate_id, object_id)`。
+    - **索引区 (Index Section)**：
+      - **目的**：这是实现**闪电般快速联想查询**的关键！我们需要创建多个索引来支持从任何方向进行查询。
+      - **实现**：我们会为SPO的所有6种排列创建排序好的索引：
+        - `SPO` (主语 -> 谓语 -> 宾语)
+        - `POS` (谓语 -> 宾语 -> 主语)
+        - `OSP` (宾语 -> 主语 -> 谓语)
+        - `SOP`, `PSO`, `OPS` ...
+      - 每个索引本身可以是一个B+树或类似的排序数据结构，允许进行高效的范围查询。
+    - **属性区 (Properties Section)**：
+      - **目的**：存储与节点（主语/宾语）和边（关系）相关的额外数据（例如，文件的行数，commit的时间戳）。
+      - **实现**：一个键值存储，键是`subject_id`或一个三元组的唯一哈希，值是序列化的JSON数据（例如，使用MessagePack或CBOR进行二进制序列化以节省空间）。
 
 ---
 
@@ -61,12 +61,17 @@ const db = new SynapseDB('./.repomix/project_brain.synapsedb');
 await db.addFact({
   subject: 'file:/src/user.ts',
   predicate: 'DEFINES',
-  object: 'class:User'
+  object: 'class:User',
 });
 
 await db.addFacts([
   { subject: 'class:User', predicate: 'HAS_METHOD', object: 'method:login' },
-  { subject: 'commit:abc123', predicate: 'MODIFIES', object: 'file:/src/user.ts', properties: { timestamp: Date.now() } }
+  {
+    subject: 'commit:abc123',
+    predicate: 'MODIFIES',
+    object: 'file:/src/user.ts',
+    properties: { timestamp: Date.now() },
+  },
 ]);
 
 // ---- 查询操作：进行“联想” ----
@@ -77,17 +82,18 @@ const methods = await db.find({ subject: 'class:User', predicate: 'HAS_METHOD' }
 
 // 2. 链式查询（多跳推理）：找到修改了包含'method:login'的文件的所有开发者
 const authors = await db
-  .find({ object: 'method:login' })         // 从“login方法”这个宾语开始
-  .followReverse('HAS_METHOD')              // 反向跟随 HAS_METHOD 找到主语 'class:User'
-  .followReverse('DEFINES')                 // 反向跟随 DEFINES 找到主语 'file:/src/user.ts'
-  .followReverse('MODIFIES')                // 反向跟随 MODIFIES 找到主语 'commit:abc123'
-  .follow('AUTHOR_OF')                      // 正向跟随 AUTHOR_OF 找到宾语 'person:张三'
+  .find({ object: 'method:login' }) // 从“login方法”这个宾语开始
+  .followReverse('HAS_METHOD') // 反向跟随 HAS_METHOD 找到主语 'class:User'
+  .followReverse('DEFINES') // 反向跟随 DEFINES 找到主语 'file:/src/user.ts'
+  .followReverse('MODIFIES') // 反向跟随 MODIFIES 找到主语 'commit:abc123'
+  .follow('AUTHOR_OF') // 正向跟随 AUTHOR_OF 找到宾语 'person:张三'
   .all();
 // -> [{ object: 'person:张三' }, ...]
 
 // 3. 属性查询：找到所有类型为'File'且大小超过1000行的节点
-const largeFiles = await db.find({ type: 'File' })
-  .filter(node => node.properties.lines > 1000)
+const largeFiles = await db
+  .find({ type: 'File' })
+  .filter((node) => node.properties.lines > 1000)
   .all();
 ```
 
@@ -98,20 +104,23 @@ const largeFiles = await db.find({ type: 'File' })
 这是一个可行的、分阶段的实现路线图：
 
 **阶段1：核心存储引擎**
+
 1.  **文件I/O**：设计`.synapsedb`文件的二进制格式和读写逻辑。
 2.  **字典实现**：实现字符串到整数ID的双向映射字典，并能持久化到文件。
 3.  **三元组存储**：实现SPO三元组（使用整数ID）的追加和存储。
 4.  **属性存储**：实现一个简单的键值存储用于存放节点和边的属性。
 
 **阶段2：索引与查询**
+
 1.  **构建核心索引**：至少先实现`SPO`、`POS`、`OSP`这三个核心索引。当添加一个事实时，需要同步更新这三个索引。
 2.  **实现`find()`**：编写`find()`方法的内部逻辑。它会根据你提供的`subject`, `predicate`, `object`（可以是具体值或通配符），智能地选择**最高效**的索引。例如：
-    *   `find({ subject: 'A' })` -> 使用`SPO`索引。
-    *   `find({ object: 'C' })` -> 使用`OSP`索引。
-    *   `find({ predicate: 'B', object: 'C' })` -> 使用`POS`索引。
+    - `find({ subject: 'A' })` -> 使用`SPO`索引。
+    - `find({ object: 'C' })` -> 使用`OSP`索引。
+    - `find({ predicate: 'B', object: 'C' })` -> 使用`POS`索引。
 3.  **实现链式调用**：`find()`的结果是一个可链式调用的“查询构建器”对象，它内部维护着一系列中间结果，`follow()`和`followReverse()`方法会基于这些中间结果继续查询。
 
 **阶段3：高级功能与优化**
+
 1.  **事务支持**：为批量写入操作增加ACID事务，保证数据一致性。
 2.  **类型安全**：利用TypeScript的泛型和接口，让用户可以定义自己的节点和边的类型 schema，并在编译时进行检查。
 3.  **性能优化**：对文件I/O使用内存映射（Memory-mapped files），对索引使用更高级的数据结构（如 LSM-Tree），以支持更快的写入和查询。
@@ -125,9 +134,9 @@ const largeFiles = await db.find({ type: 'File' })
 
 与现有的通用图数据库相比，**SynapseDB**的优势在于：
 
-*   **轻量与专注**：它只为“主谓宾”这一种模型做了极致优化，因此会比通用图数据库更小、更快、更易于使用。
-*   **开发者体验**：其API设计完全贴合开发者的思维模式，将复杂的图论概念隐藏在流畅的链式调用背后。
-*   **与项目共生**：它就像`.git`文件夹一样，成为项目本身的一部分，无需任何外部依赖。
+- **轻量与专注**：它只为“主谓宾”这一种模型做了极致优化，因此会比通用图数据库更小、更快、更易于使用。
+- **开发者体验**：其API设计完全贴合开发者的思维模式，将复杂的图论概念隐藏在流畅的链式调用背后。
+- **与项目共生**：它就像`.git`文件夹一样，成为项目本身的一部分，无需任何外部依赖。
 
 通过这个方案，您将不仅仅是在构建一个“工具”，而是在创造一个全新的、强大的**基础设施**，为下一代AI代码分析工具（包括您自己的Repomix-Graph）提供坚实可靠的、真正理解代码内在逻辑的“大脑”。
 

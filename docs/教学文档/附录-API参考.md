@@ -7,13 +7,19 @@
 ```ts
 class SynapseDB {
   static open(path: string, options?: SynapseDBOpenOptions): Promise<SynapseDB>;
-  addFact(fact: FactInput, opts?: {
-    subjectProperties?: Record<string, unknown>;
-    objectProperties?: Record<string, unknown>;
-    edgeProperties?: Record<string, unknown>;
-  }): FactRecord;
+  addFact(
+    fact: FactInput,
+    opts?: {
+      subjectProperties?: Record<string, unknown>;
+      objectProperties?: Record<string, unknown>;
+      edgeProperties?: Record<string, unknown>;
+    },
+  ): FactRecord;
   listFacts(): FactRecord[];
-  streamFacts(criteria?: Partial<{subject:string;predicate:string;object:string}>, batchSize?: number): AsyncGenerator<FactRecord[],void,unknown>;
+  streamFacts(
+    criteria?: Partial<{ subject: string; predicate: string; object: string }>,
+    batchSize?: number,
+  ): AsyncGenerator<FactRecord[], void, unknown>;
   find(criteria: FactCriteria, options?: { anchor?: FrontierOrientation }): QueryBuilder;
   deleteFact(fact: FactInput): void;
   setNodeProperties(nodeId: number, props: Record<string, unknown>): void;
@@ -34,7 +40,9 @@ class SynapseDB {
 ```ts
 type FactInput = { subject: string; predicate: string; object: string };
 type FactRecord = FactInput & {
-  subjectId: number; predicateId: number; objectId: number;
+  subjectId: number;
+  predicateId: number;
+  objectId: number;
   subjectProperties?: Record<string, unknown>;
   objectProperties?: Record<string, unknown>;
   edgeProperties?: Record<string, unknown>;
@@ -45,23 +53,28 @@ type FrontierOrientation = 'subject' | 'object' | 'both';
 
 type TripleKey = { subjectId: number; predicateId: number; objectId: number };
 
-interface BeginBatchOptions { txId?: string; sessionId?: string }
-interface CommitBatchOptions { durable?: boolean }
+interface BeginBatchOptions {
+  txId?: string;
+  sessionId?: string;
+}
+interface CommitBatchOptions {
+  durable?: boolean;
+}
 ```
 
 ## 打开选项（SynapseDBOpenOptions）
 
 ```ts
 interface SynapseDBOpenOptions {
-  indexDirectory?: string;            // 默认 <db>.pages
-  pageSize?: number;                  // 建议 1K~2K
-  rebuildIndexes?: boolean;           // 强制重建索引
-  compression?: { codec: 'none'|'brotli'; level?: number };
-  enableLock?: boolean;               // 生产建议开启
-  registerReader?: boolean;           // 默认 true
-  stagingMode?: 'default'|'lsm-lite'; // 实验
+  indexDirectory?: string; // 默认 <db>.pages
+  pageSize?: number; // 建议 1K~2K
+  rebuildIndexes?: boolean; // 强制重建索引
+  compression?: { codec: 'none' | 'brotli'; level?: number };
+  enableLock?: boolean; // 生产建议开启
+  registerReader?: boolean; // 默认 true
+  stagingMode?: 'default' | 'lsm-lite'; // 实验
   enablePersistentTxDedupe?: boolean; // 幂等
-  maxRememberTxIds?: number;          // 默认 1000
+  maxRememberTxIds?: number; // 默认 1000
 }
 ```
 
@@ -71,8 +84,7 @@ interface SynapseDBOpenOptions {
 db.find({ subject: 'S' })
   .follow('R')
   .followReverse('R2')
-  .where(edge => (edge.edgeProperties?.weight as number) > 10)
+  .where((edge) => (edge.edgeProperties?.weight as number) > 10)
   .limit(100)
   .all();
 ```
-

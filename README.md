@@ -3,6 +3,7 @@
 一个用 TypeScript/Node.js 实现的嵌入式“三元组（SPO）知识库”。面向代码知识、配置/关系图谱、轻量推理与链式联想的本地/边缘嵌入式场景，强调“可恢复、可治理、可扩展”。支持分页索引、WAL v2 崩溃恢复、链式联想查询、Auto‑Compact/GC 运维工具与读快照一致性。当前处于原型/Alpha 阶段。
 
 核心特性（Highlights）
+
 - 单文件主数据 + 分页索引：`*.synapsedb` + `*.synapsedb.pages/`
 - 六序索引（SPO/SOP/POS/PSO/OSP/OPS）与增量分页合并（Compaction incremental/rewrite）
 - WAL v2：批次 `BEGIN/COMMIT/ABORT`，崩溃后可重放，尾部安全截断
@@ -40,6 +41,7 @@ await db.flush();
 - 链式查询：`find().follow()/followReverse().where().limit().anchor()`，执行期间自动 pin/unpin epoch。
 
 环境与模块说明：
+
 - 运行时要求 Node.js 18+（推荐 20+）。
 - 包为 ESM（`package.json: { "type": "module" }`），请确保你的项目也是 ESM 环境或使用支持 ESM 的打包器。
 - 若在本仓库内开发，可继续使用 `@` → `src/` 的路径别名（见 `vitest.config.ts`）。
@@ -76,6 +78,7 @@ CLI 子命令速览（语义与 `pnpm db:*` 脚本等价）：
 - `synapsedb repair-page <db> <order> <primary>`
 
 示例输出说明（以 `synapsedb stats` 为例）：
+
 - `dictionaryEntries`：字典条目数（字符串→ID）
 - `triples`：主数据三元组条数（不含 tombstones）
 - `epoch`：manifest 版本（每次合并/更新递增）
@@ -92,7 +95,7 @@ CLI 子命令速览（语义与 `pnpm db:*` 脚本等价）：
 ```ts
 const db = await SynapseDB.open('tx.synapsedb', {
   enablePersistentTxDedupe: true, // 开启跨周期幂等去重（可选）
-  maxRememberTxIds: 2000,         // 最多记忆最近 2000 个 txId（可选）
+  maxRememberTxIds: 2000, // 最多记忆最近 2000 个 txId（可选）
 });
 
 db.beginBatch({ txId: 'T-123', sessionId: 'writer-A' });
@@ -127,6 +130,7 @@ db.commitBatch();
 - 关闭：`close()`（释放写锁、注销读者）
 
 打开参数（`SynapseDBOpenOptions` 要点）
+
 - `indexDirectory`：索引目录（默认 `path + '.pages'`）
 - `pageSize`：每页三元组数（默认 1000～1024 量级）
 - `rebuildIndexes`：强制在下次 open 时重建分页索引
@@ -138,15 +142,18 @@ db.commitBatch();
 - `maxRememberTxIds`：记忆 txId 上限（默认 1000）
 
 查询模型与索引选择
+
 - 条件为 `subject/predicate/object` 任意组合；内部按覆盖前缀选取最佳顺序（如 `s+p` → `SPO`）
 - `anchor: 'subject' | 'object' | 'both'` 决定联想查询初始前沿
 - 读快照一致性：`withSnapshot(fn)` 在回调内固定 manifest；`QueryBuilder` 链式期间同样固定
 
 属性与版本
+
 - 节点/边属性以 JSON 序列化存储，边属性键为 `subjectId:predicateId:objectId`
 - 多次覆盖写会升级 `__v`（版本号）
 
 删除与 tombstones
+
 - `deleteFact({ s,p,o })` 仅写入 tombstone，查询自动过滤；合并/GC 后由 manifest 与页面级 GC 清理无引用页
 
 ## 运维与治理（CLI/脚本）
@@ -169,16 +176,19 @@ db.commitBatch();
     - `--clear`：清空注册表（谨慎使用）
 
 Compaction（合并）策略
+
 - rewrite：全量重写指定顺序的页文件（压缩比高，I/O 较大）
 - incremental：仅为目标 primary 追加新页并替换映射（更快，适用于热主键/多页场景）
 - 选择标准：`min-merge`（多页阈值）/ `tombstone-threshold`（墓碑比例）/ 热度驱动（`hot-threshold` + TopK）
 - LSM 段并入：`--includeLsmSegments` 或 `--includeLsmSegmentsAuto`（满足阈值时自动并入并清空段）
 
 GC（页面级）
+
 - 针对增量重写后遗留的 `orphans`（孤页）进行目录内文件收缩
 - 建议在有读者时启用 `--respect-readers` 保障查询安全
 
 Repair（修复）
+
 - `repair --fast`：按页（primary）快速修复，仅替换坏页映射
 - 未发现坏页则尝试“按序重写”；仍无则全量重建（保留 tombstones）
 
@@ -222,7 +232,7 @@ rm -rf repo_demo.synapsedb repo_demo.synapsedb.pages repo_demo.synapsedb.wal
 - 教程-09-FAQ 与排错：docs/教学文档/教程-09-FAQ与排错.md
 - 附录-CLI 参考：docs/教学文档/附录-CLI参考.md
 - 附录-API 参考：docs/教学文档/附录-API参考.md
-  
+
 ## 实战案例
 
 - 实战-代码知识图谱：docs/教学文档/实战-代码知识图谱.md
@@ -240,6 +250,7 @@ rm -rf repo_demo.synapsedb repo_demo.synapsedb.pages repo_demo.synapsedb.wal
 - 写入日志：`<name>.synapsedb.wal`（WAL v2，崩溃可重放并在校验失败处安全截断）
 
 一致性与恢复
+
 - WAL 重放顺序：add/delete/props → safeOffset 截断 → 合并 txId 注册表（如启用）
 - Manifest 原子更新：`*.tmp` 写入与目录 fsync，崩溃不留临时文件
 - 查询快照：epoch-pin，链式联想期间 manifest 不变

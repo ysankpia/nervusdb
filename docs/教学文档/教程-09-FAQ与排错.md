@@ -26,4 +26,3 @@
 ## 大结果集内存压力
 
 - 使用 `streamFacts(criteria, batchSize)` 流式查询；前端/服务端用分页或流式输出
-

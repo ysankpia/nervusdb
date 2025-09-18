@@ -64,4 +64,3 @@ const propsEdge = db.getEdgeProperties({
   objectId: rec.objectId,
 });
 ```
-

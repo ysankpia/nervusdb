@@ -70,4 +70,3 @@ synapsedb hot <db> [--order=SPO] [--top=10]
 ```
 synapsedb txids <db> [--list[=N]] [--since=MIN] [--session=ID] [--max=N] [--clear]
 ```
-

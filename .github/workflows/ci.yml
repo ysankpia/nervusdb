@@ -34,8 +34,11 @@ jobs:
       - name: Lint (core, blocking)
         run: pnpm lint:core
 
-      - name: Lint (full, non-blocking)
-        run: pnpm lint || true
+      - name: Lint (full, blocking)
+        run: pnpm lint:full:strict
+
+      - name: Format check (Prettier)
+        run: pnpm format:check
 
       - name: Test (coverage)
         run: pnpm test:coverage

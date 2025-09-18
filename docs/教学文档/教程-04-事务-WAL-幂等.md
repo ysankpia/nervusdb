@@ -39,4 +39,3 @@ db.commitBatch();
 
 - `synapsedb stats <db> --txids[=N] --txids-window=MIN`：查看事务时间窗与会话聚合
 - `synapsedb txids <db> [--list[=N]] [--since=MIN] [--session=ID] [--max=N] [--clear]`
-
