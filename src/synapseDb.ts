@@ -6,7 +6,11 @@ import {
   QueryBuilder,
   buildFindContext,
 } from './query/queryBuilder.js';
-import { SynapseDBOpenOptions, CommitBatchOptions, BeginBatchOptions } from './types/openOptions.js';
+import {
+  SynapseDBOpenOptions,
+  CommitBatchOptions,
+  BeginBatchOptions,
+} from './types/openOptions.js';
 
 export interface FactOptions {
   subjectProperties?: Record<string, unknown>;
