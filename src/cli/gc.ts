@@ -1,0 +1,15 @@
+import { garbageCollectPages } from '../maintenance/gc';
+
+async function main() {
+  const [dbPath, ...args] = process.argv.slice(2);
+  if (!dbPath) {
+    console.log('用法: pnpm db:gc <db> [--respect-readers]');
+    process.exit(1);
+  }
+  const respect = args.includes('--respect-readers');
+  const stats = await garbageCollectPages(dbPath, { respectReaders: respect });
+  console.log(JSON.stringify(stats, null, 2));
+}
+
+// eslint-disable-next-line @typescript-eslint/no-floating-promises
+main();
