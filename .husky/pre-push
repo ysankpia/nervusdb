@@ -1,3 +1,3 @@
 #!/usr/bin/env sh
-echo "[husky] pre-push: typecheck + lint:core + test"
-pnpm typecheck && pnpm lint:core && pnpm test
+echo "[husky] pre-push: typecheck + lint:core + coverage + build"
+pnpm run ci:prepush
