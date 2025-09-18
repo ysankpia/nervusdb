@@ -31,6 +31,27 @@ export async function autoCompact(dbPath, options = {}) {
     const selected = new Set();
     const onlyPrimaries = {};
     const hot = await readHotness(`${dbPath}.pages`).catch(() => null);
+    const getCountsForOrder = (order) => {
+        if (!hot)
+            return {};
+        const a = hot.counts[order] ?? {};
+        const pair = {
+            SPO: 'SOP',
+            SOP: 'SPO',
+            POS: 'PSO',
+            PSO: 'POS',
+            OSP: 'OPS',
+            OPS: 'OSP',
+        };
+        const bKey = pair[order];
+        if (!bKey)
+            return a;
+        const b = hot.counts[bKey] ?? {};
+        const merged = { ...a };
+        for (const [k, v] of Object.entries(b))
+            merged[k] = (merged[k] ?? 0) + v;
+        return merged;
+    };
     for (const order of orders) {
         const lookup = manifest.lookups.find((l) => l.order === order);
         if (!lookup || lookup.pages.length === 0)
@@ -47,7 +68,7 @@ export async function autoCompact(dbPath, options = {}) {
             selected.add(order);
         // 热度驱动（增量模式）：选取热度超过阈值且拥有多页的 primary
         if (options.mode !== 'rewrite' && hot && options.hotThreshold && options.hotThreshold > 0) {
-            const counts = hot.counts[order] ?? {};
+            const counts = getCountsForOrder(order);
             const candidates = [];
             const w = {
                 hot: options.scoreWeights?.hot ?? 1,
