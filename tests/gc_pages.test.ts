@@ -49,7 +49,6 @@ describe('页面级 GC（移除不可达页块）', () => {
       // 忽略所有清理错误
     }
 
-
     await rm(workspace, { recursive: true, force: true });
   });
 

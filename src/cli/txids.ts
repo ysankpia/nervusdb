@@ -1,4 +1,5 @@
-import { join } from 'node:path';
+#!/usr/bin/env node
+// 无需 path 依赖
 
 async function main() {
   const args = process.argv.slice(2);
@@ -9,7 +10,7 @@ async function main() {
   }
 
   const dir = `${dbPath}.pages`;
-  const { readTxIdRegistry, writeTxIdRegistry } = await import('../storage/txidRegistry');
+  const { readTxIdRegistry, writeTxIdRegistry } = await import('../storage/txidRegistry.js');
 
   const maxArg = args.find((a) => a.startsWith('--max='));
   const setMax = maxArg ? Number(maxArg.split('=')[1]) : undefined;

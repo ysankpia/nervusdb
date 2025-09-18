@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
-import { readPagedManifest, pageFileName } from '../storage/pagedIndex';
+import { readPagedManifest, pageFileName } from '../storage/pagedIndex.js';
 
 export interface PageError {
   order: string;

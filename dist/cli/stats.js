@@ -1,6 +1,7 @@
+#!/usr/bin/env node
 import { promises as fs } from 'node:fs';
-import { readStorageFile } from '../storage/fileHeader';
-import { readPagedManifest } from '../storage/pagedIndex';
+import { readStorageFile } from '../storage/fileHeader.js';
+import { readPagedManifest } from '../storage/pagedIndex.js';
 async function stats(dbPath, opts) {
     const sections = await readStorageFile(dbPath);
     const dictCount = sections.dictionary.length >= 4 ? sections.dictionary.readUInt32LE(0) : 0;
@@ -36,7 +37,7 @@ async function stats(dbPath, opts) {
     let lsmSegments = 0;
     let lsmTriples = 0;
     try {
-        const { readTxIdRegistry } = await import('../storage/txidRegistry');
+        const { readTxIdRegistry } = await import('../storage/txidRegistry.js');
         const reg = await readTxIdRegistry(`${dbPath}.pages`);
         txIds = reg.txIds.length;
         if (opts.listTxIds && opts.listTxIds > 0) {

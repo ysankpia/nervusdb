@@ -1,4 +1,4 @@
-import { FileHeader } from './layout';
+import { FileHeader } from './layout.js';
 export interface SerializedSections {
     dictionary: Buffer;
     triples: Buffer;

@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { join, dirname } from 'node:path';
 
-import type { IndexOrder } from './tripleIndexes';
+import type { IndexOrder } from './tripleIndexes.js';
 
 export interface HotnessData {
   version: number;

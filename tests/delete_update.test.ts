@@ -45,7 +45,6 @@ describe('删除与属性更新', () => {
       // 忽略所有清理错误
     }
 
-
     await rm(workspace, { recursive: true, force: true });
   });
 

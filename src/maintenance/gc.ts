@@ -6,8 +6,8 @@ import {
   writePagedManifest,
   pageFileName,
   type PagedIndexManifest,
-} from '../storage/pagedIndex';
-import { getActiveReaders } from '../storage/readerRegistry';
+} from '../storage/pagedIndex.js';
+import { getActiveReaders } from '../storage/readerRegistry.js';
 
 export interface GCStats {
   orders: Array<{ order: string; bytesBefore: number; bytesAfter: number; pages: number }>;

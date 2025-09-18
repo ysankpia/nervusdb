@@ -53,7 +53,6 @@ describe('QueryBuilder 联想查询', () => {
       // 忽略所有清理错误
     }
 
-
     await db.flush();
     await rm(workspace, { recursive: true, force: true });
   });

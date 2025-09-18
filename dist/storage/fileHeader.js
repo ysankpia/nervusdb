@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import { dirname } from 'node:path';
-import { FILE_HEADER_LENGTH, FILE_VERSION, MAGIC_HEADER, createEmptyLayout, } from './layout';
+import { FILE_HEADER_LENGTH, FILE_VERSION, MAGIC_HEADER, createEmptyLayout, } from './layout.js';
 const UINT32_BYTES = 4;
 function encodeHeader(layout) {
     const buffer = Buffer.alloc(FILE_HEADER_LENGTH, 0);

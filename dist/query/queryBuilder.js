@@ -123,29 +123,8 @@ export class QueryBuilder {
     pin() {
         if (this.pinnedEpoch !== undefined) {
             try {
-                // 调用store的pushPinnedEpoch方法进行真正的reader注册
-                // 使用同步等待确保reader注册完成
-                const result = this.store.pushPinnedEpoch(this.pinnedEpoch);
-                if (result && typeof result.then === 'function') {
-                    // 如果返回Promise，同步等待它完成（这会阻塞，但确保一致性）
-                    // 使用busy wait来同步等待异步操作完成
-                    let resolved = false;
-                    let error = null;
-                    result
-                        .then(() => {
-                        resolved = true;
-                    })
-                        .catch((e) => {
-                        error = e;
-                        resolved = true;
-                    });
-                    const start = Date.now();
-                    while (!resolved && Date.now() - start < 1000) {
-                        // busy wait，最多等待1秒
-                    }
-                    if (error)
-                        throw error;
-                }
+                // 只做内存级别的epoch固定，避免与withSnapshot的reader注册冲突
+                this.store.pinnedEpochStack?.push(this.pinnedEpoch);
             }
             catch {
                 /* ignore */
@@ -155,28 +134,8 @@ export class QueryBuilder {
     unpin() {
         if (this.pinnedEpoch !== undefined) {
             try {
-                // 调用store的popPinnedEpoch方法进行真正的reader注销
-                // 使用同步等待确保reader注销完成
-                const result = this.store.popPinnedEpoch();
-                if (result && typeof result.then === 'function') {
-                    // 如果返回Promise，同步等待它完成
-                    let resolved = false;
-                    let error = null;
-                    result
-                        .then(() => {
-                        resolved = true;
-                    })
-                        .catch((e) => {
-                        error = e;
-                        resolved = true;
-                    });
-                    const start = Date.now();
-                    while (!resolved && Date.now() - start < 1000) {
-                        // busy wait，最多等待1秒
-                    }
-                    if (error)
-                        throw error;
-                }
+                // 只做内存级别的epoch释放，避免与withSnapshot的reader注册冲突
+                this.store.pinnedEpochStack?.pop();
             }
             catch {
                 /* ignore */

@@ -1,4 +1,5 @@
-import { SynapseDB } from '../synapseDb';
+#!/usr/bin/env node
+import { SynapseDB } from '../synapseDb.js';
 async function main() {
     const [dbPath, countArg, modeArg] = process.argv.slice(2);
     if (!dbPath) {

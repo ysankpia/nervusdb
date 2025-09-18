@@ -1,5 +1,5 @@
-import { PersistentStore } from './storage/persistentStore';
-import { QueryBuilder, buildFindContext, } from './query/queryBuilder';
+import { PersistentStore } from './storage/persistentStore.js';
+import { QueryBuilder, buildFindContext, } from './query/queryBuilder.js';
 /**
  * SynapseDB - 嵌入式三元组知识库
  *
@@ -82,6 +82,38 @@ export class SynapseDB {
     }
     listFacts() {
         return this.store.listFacts();
+    }
+    // 流式查询：逐批返回事实记录，避免大结果集内存压力
+    async *streamFacts(criteria, batchSize = 1000) {
+        // 将字符串条件转换为ID条件
+        const encodedCriteria = {};
+        if (criteria?.subject) {
+            const subjectId = this.store.getNodeIdByValue(criteria.subject);
+            if (subjectId !== undefined)
+                encodedCriteria.subjectId = subjectId;
+            else
+                return; // 主语不存在，返回空
+        }
+        if (criteria?.predicate) {
+            const predicateId = this.store.getNodeIdByValue(criteria.predicate);
+            if (predicateId !== undefined)
+                encodedCriteria.predicateId = predicateId;
+            else
+                return; // 谓语不存在，返回空
+        }
+        if (criteria?.object) {
+            const objectId = this.store.getNodeIdByValue(criteria.object);
+            if (objectId !== undefined)
+                encodedCriteria.objectId = objectId;
+            else
+                return; // 宾语不存在，返回空
+        }
+        // 使用底层流式查询
+        for await (const batch of this.store.streamFactRecords(encodedCriteria, batchSize)) {
+            if (batch.length > 0) {
+                yield batch;
+            }
+        }
     }
     getNodeId(value) {
         return this.store.getNodeIdByValue(value);

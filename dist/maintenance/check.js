@@ -1,12 +1,15 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
-import { readPagedManifest, pageFileName } from '../storage/pagedIndex';
+import { readPagedManifest, pageFileName } from '../storage/pagedIndex.js';
 export async function checkStrict(dbPath) {
     const indexDir = `${dbPath}.pages`;
     const manifest = await readPagedManifest(indexDir);
     const errors = [];
     if (!manifest) {
-        return { ok: false, errors: [{ order: '*', primaryValue: -1, offset: 0, length: 0, reason: 'missing_manifest' }] };
+        return {
+            ok: false,
+            errors: [{ order: '*', primaryValue: -1, offset: 0, length: 0, reason: 'missing_manifest' }],
+        };
     }
     for (const lookup of manifest.lookups) {
         const file = join(indexDir, pageFileName(lookup.order));
@@ -44,7 +47,13 @@ export async function checkStrict(dbPath) {
             }
         }
         catch (e) {
-            errors.push({ order: lookup.order, primaryValue: -1, offset: 0, length: 0, reason: `open_failed:${e.message}` });
+            errors.push({
+                order: lookup.order,
+                primaryValue: -1,
+                offset: 0,
+                length: 0,
+                reason: `open_failed:${e.message}`,
+            });
         }
         finally {
             if (handle)
@@ -59,7 +68,7 @@ const CRC32_TABLE = (() => {
     for (let i = 0; i < 256; i += 1) {
         let c = i;
         for (let k = 0; k < 8; k += 1) {
-            c = (c & 1) ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+            c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
         }
         table[i] = c >>> 0;
     }

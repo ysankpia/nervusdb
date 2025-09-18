@@ -1,4 +1,5 @@
-import { readHotness } from '../storage/hotness';
+#!/usr/bin/env node
+import { readHotness } from '../storage/hotness.js';
 async function main() {
     const [dbPath, ...args] = process.argv.slice(2);
     if (!dbPath) {
@@ -14,7 +15,9 @@ async function main() {
     const top = Number(opts['top'] ?? '10');
     const hot = await readHotness(`${dbPath}.pages`);
     const counts = hot.counts[order] ?? {};
-    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, top);
+    const sorted = Object.entries(counts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, top);
     const out = sorted.map(([primary, count]) => ({ primary: Number(primary), count }));
     console.log(JSON.stringify({ order, updatedAt: hot.updatedAt, top: out }, null, 2));
 }

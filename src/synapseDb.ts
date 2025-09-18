@@ -1,12 +1,12 @@
-import { PersistentStore, FactInput, FactRecord } from './storage/persistentStore';
-import { TripleKey } from './storage/propertyStore';
+import { PersistentStore, FactInput, FactRecord } from './storage/persistentStore.js';
+import { TripleKey } from './storage/propertyStore.js';
 import {
   FactCriteria,
   FrontierOrientation,
   QueryBuilder,
   buildFindContext,
-} from './query/queryBuilder';
-import { SynapseDBOpenOptions, CommitBatchOptions, BeginBatchOptions } from './types/openOptions';
+} from './query/queryBuilder.js';
+import { SynapseDBOpenOptions, CommitBatchOptions, BeginBatchOptions } from './types/openOptions.js';
 
 export interface FactOptions {
   subjectProperties?: Record<string, unknown>;
@@ -102,6 +102,41 @@ export class SynapseDB {
     return this.store.listFacts();
   }
 
+  // 流式查询：逐批返回事实记录，避免大结果集内存压力
+  async *streamFacts(
+    criteria?: Partial<{ subject: string; predicate: string; object: string }>,
+    batchSize = 1000,
+  ): AsyncGenerator<FactRecord[], void, unknown> {
+    // 将字符串条件转换为ID条件
+    const encodedCriteria: Partial<{ subjectId: number; predicateId: number; objectId: number }> =
+      {};
+
+    if (criteria?.subject) {
+      const subjectId = this.store.getNodeIdByValue(criteria.subject);
+      if (subjectId !== undefined) encodedCriteria.subjectId = subjectId;
+      else return; // 主语不存在，返回空
+    }
+
+    if (criteria?.predicate) {
+      const predicateId = this.store.getNodeIdByValue(criteria.predicate);
+      if (predicateId !== undefined) encodedCriteria.predicateId = predicateId;
+      else return; // 谓语不存在，返回空
+    }
+
+    if (criteria?.object) {
+      const objectId = this.store.getNodeIdByValue(criteria.object);
+      if (objectId !== undefined) encodedCriteria.objectId = objectId;
+      else return; // 宾语不存在，返回空
+    }
+
+    // 使用底层流式查询
+    for await (const batch of this.store.streamFactRecords(encodedCriteria, batchSize)) {
+      if (batch.length > 0) {
+        yield batch;
+      }
+    }
+  }
+
   getNodeId(value: string): number | undefined {
     return this.store.getNodeIdByValue(value);
   }
@@ -110,15 +145,15 @@ export class SynapseDB {
     return this.store.getNodeValueById(id);
   }
 
-  getNodeProperties(nodeId: number): Record<string, unknown> | undefined {
+  getNodeProperties(nodeId: number): Record<string, unknown> | null {
     const v = this.store.getNodeProperties(nodeId);
     // 对外 API 约定：未设置返回 null，便于测试与调用方判空
-    return (v as any) ?? null;
+    return v ?? null;
   }
 
-  getEdgeProperties(key: TripleKey): Record<string, unknown> | undefined {
+  getEdgeProperties(key: TripleKey): Record<string, unknown> | null {
     const v = this.store.getEdgeProperties(key);
-    return (v as any) ?? null;
+    return v ?? null;
   }
 
   async flush(): Promise<void> {

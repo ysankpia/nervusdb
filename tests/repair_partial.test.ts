@@ -49,7 +49,6 @@ describe('按页（primary）快速修复', () => {
       // 忽略所有清理错误
     }
 
-
     await rm(workspace, { recursive: true, force: true });
   });
 

@@ -1,4 +1,4 @@
-import type { IndexOrder } from './tripleIndexes';
+import type { IndexOrder } from './tripleIndexes.js';
 export interface HotnessData {
     version: number;
     updatedAt: number;

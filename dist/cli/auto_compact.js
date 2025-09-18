@@ -1,4 +1,5 @@
-import { autoCompact } from '../maintenance/autoCompact';
+#!/usr/bin/env node
+import { autoCompact } from '../maintenance/autoCompact.js';
 async function main() {
     const [dbPath, ...args] = process.argv.slice(2);
     if (!dbPath) {
@@ -17,7 +18,7 @@ async function main() {
     const hotThreshold = opts['hot-threshold'] ? Number(opts['hot-threshold']) : undefined;
     const maxPrimariesPerOrder = opts['max-primary'] ? Number(opts['max-primary']) : undefined;
     const autoGC = Boolean(opts['auto-gc']);
-    const respectReaders = !Boolean(opts['no-respect-readers']);
+    const respectReaders = !opts['no-respect-readers'];
     const result = await autoCompact(dbPath, {
         mode,
         minMergePages,

@@ -1,10 +1,11 @@
+#!/usr/bin/env node
 import { basename, join } from 'node:path';
 import { promises as fs } from 'node:fs';
-import { readStorageFile } from '../storage/fileHeader';
-import { pageFileName, readPagedManifest, writePagedManifest } from '../storage/pagedIndex';
-import { SynapseDB } from '../synapseDb';
-import { checkStrict } from '../maintenance/check';
-import { repairCorruptedOrders, repairCorruptedPagesFast } from '../maintenance/repair';
+import { readStorageFile } from '../storage/fileHeader.js';
+import { pageFileName, readPagedManifest, writePagedManifest } from '../storage/pagedIndex.js';
+import { SynapseDB } from '../synapseDb.js';
+import { checkStrict } from '../maintenance/check.js';
+import { repairCorruptedOrders, repairCorruptedPagesFast } from '../maintenance/repair.js';
 async function check(dbPath) {
     const errors = [];
     try {
@@ -94,7 +95,11 @@ async function main() {
                     for (const p of l.pages)
                         cnt.set(p.primaryValue, (cnt.get(p.primaryValue) ?? 0) + 1);
                     const multi = [...cnt.values()].filter((c) => c > 1).length;
-                    orders[l.order] = { pages: l.pages.length, primaries: cnt.size, multiPagePrimaries: multi };
+                    orders[l.order] = {
+                        pages: l.pages.length,
+                        primaries: cnt.size,
+                        multiPagePrimaries: multi,
+                    };
                 }
                 const orphanCount = (manifest.orphans ?? []).reduce((acc, g) => acc + g.pages.length, 0);
                 console.log(JSON.stringify({ ok: true, epoch: manifest.epoch ?? 0, orders, orphans: orphanCount }, null, 2));

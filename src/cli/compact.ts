@@ -1,4 +1,5 @@
-import { compactDatabase, type IndexOrder } from '../maintenance/compaction';
+#!/usr/bin/env node
+import { compactDatabase, type IndexOrder } from '../maintenance/compaction.js';
 
 async function main() {
   const [dbPath, ...args] = process.argv.slice(2);

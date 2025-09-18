@@ -1,13 +1,13 @@
-import { readPagedManifest } from '../storage/pagedIndex';
+import { readPagedManifest } from '../storage/pagedIndex.js';
 import { promises as fsp } from 'node:fs';
 import {
   compactDatabase,
   type CompactOptions,
   type CompactStats,
   type IndexOrder,
-} from './compaction';
-import { readHotness } from '../storage/hotness';
-import { garbageCollectPages } from './gc';
+} from './compaction.js';
+import { readHotness } from '../storage/hotness.js';
+import { garbageCollectPages } from './gc.js';
 
 export interface AutoCompactOptions {
   orders?: IndexOrder[];
@@ -49,7 +49,7 @@ export async function autoCompact(
   }
   if (options.respectReaders) {
     try {
-      const { getActiveReaders } = await import('../storage/readerRegistry');
+      const { getActiveReaders } = await import('../storage/readerRegistry.js');
       const readers = await getActiveReaders(`${dbPath}.pages`);
       if (readers.length > 0) {
         return {
@@ -71,6 +71,25 @@ export async function autoCompact(
   const selected = new Set<IndexOrder>();
   const onlyPrimaries: Partial<Record<IndexOrder, number[]>> = {};
   const hot = await readHotness(`${dbPath}.pages`).catch(() => null);
+  const getCountsForOrder = (order: IndexOrder) => {
+    if (!hot) return {} as Record<string, number>;
+    const a = hot.counts[order] ?? {};
+    const pair: Partial<Record<IndexOrder, IndexOrder>> = {
+      SPO: 'SOP',
+      SOP: 'SPO',
+      POS: 'PSO',
+      PSO: 'POS',
+      OSP: 'OPS',
+      OPS: 'OSP',
+    };
+    const bKey = pair[order];
+    if (!bKey) return a;
+    const b = hot.counts[bKey] ?? {};
+    const merged: Record<string, number> = { ...a };
+    for (const [k, v] of Object.entries(b)) merged[k] = (merged[k] ?? 0) + v;
+    return merged;
+  };
+
   for (const order of orders) {
     const lookup = manifest.lookups.find((l) => l.order === order);
     if (!lookup || lookup.pages.length === 0) continue;
@@ -84,7 +103,7 @@ export async function autoCompact(
 
     // 热度驱动（增量模式）：选取热度超过阈值且拥有多页的 primary
     if (options.mode !== 'rewrite' && hot && options.hotThreshold && options.hotThreshold > 0) {
-      const counts = hot.counts[order] ?? {};
+      const counts = getCountsForOrder(order);
       const candidates: Array<{ p: number; c: number; pages: number; score: number }> = [];
       const w = {
         hot: options.scoreWeights?.hot ?? 1,

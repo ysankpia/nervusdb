@@ -45,7 +45,6 @@ describe('LSM 段参与 compaction 合并并清理', () => {
       // 忽略所有清理错误
     }
 
-
     await rm(workspace, { recursive: true, force: true });
   });
 

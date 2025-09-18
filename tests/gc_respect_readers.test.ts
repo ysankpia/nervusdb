@@ -48,7 +48,6 @@ describe('GC 尊重有效读者', () => {
       // 忽略所有清理错误
     }
 
-
     await rm(workspace, { recursive: true, force: true });
   });
 

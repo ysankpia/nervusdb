@@ -51,7 +51,7 @@ function buildQueryString(parameters) {
         .join('&');
     return `?${query}`;
 }
-export { PersistentStore } from './storage/persistentStore';
-export { SynapseDB } from './synapseDb';
-export { QueryBuilder } from './query/queryBuilder';
+export { PersistentStore } from './storage/persistentStore.js';
+export { SynapseDB } from './synapseDb.js';
+export { QueryBuilder } from './query/queryBuilder.js';
 //# sourceMappingURL=index.js.map

@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+// 无需 path 依赖
 async function main() {
     const args = process.argv.slice(2);
     const dbPath = args[0];
@@ -6,7 +8,7 @@ async function main() {
         process.exit(1);
     }
     const dir = `${dbPath}.pages`;
-    const { readTxIdRegistry, writeTxIdRegistry } = await import('../storage/txidRegistry');
+    const { readTxIdRegistry, writeTxIdRegistry } = await import('../storage/txidRegistry.js');
     const maxArg = args.find((a) => a.startsWith('--max='));
     const setMax = maxArg ? Number(maxArg.split('=')[1]) : undefined;
     const list = args.includes('--list') || (!args.includes('--clear') && !setMax);

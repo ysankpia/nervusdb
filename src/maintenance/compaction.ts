@@ -8,7 +8,7 @@ import {
   readPagedManifest,
   writePagedManifest,
   type PagedIndexManifest,
-} from '../storage/pagedIndex';
+} from '../storage/pagedIndex.js';
 
 export type IndexOrder = 'SPO' | 'SOP' | 'POS' | 'PSO' | 'OSP' | 'OPS';
 

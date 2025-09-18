@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
-import { readPagedManifest, writePagedManifest, pageFileName } from '../storage/pagedIndex';
-import { getActiveReaders } from '../storage/readerRegistry';
+import { readPagedManifest, writePagedManifest, pageFileName, } from '../storage/pagedIndex.js';
+import { getActiveReaders } from '../storage/readerRegistry.js';
 export async function garbageCollectPages(dbPath, options) {
     const indexDir = `${dbPath}.pages`;
     const manifest = await readPagedManifest(indexDir);
@@ -10,7 +10,14 @@ export async function garbageCollectPages(dbPath, options) {
     if (options?.respectReaders) {
         const readers = await getActiveReaders(indexDir);
         if (readers.length > 0) {
-            return { orders: [], bytesBefore: 0, bytesAfter: 0, skipped: true, reason: 'active_readers', readers: readers.length };
+            return {
+                orders: [],
+                bytesBefore: 0,
+                bytesAfter: 0,
+                skipped: true,
+                reason: 'active_readers',
+                readers: readers.length,
+            };
         }
     }
     let bytesBefore = 0;
@@ -23,7 +30,12 @@ export async function garbageCollectPages(dbPath, options) {
             st = await fs.stat(file);
         }
         catch {
-            orderStats.push({ order: lookup.order, bytesBefore: 0, bytesAfter: 0, pages: lookup.pages.length });
+            orderStats.push({
+                order: lookup.order,
+                bytesBefore: 0,
+                bytesAfter: 0,
+                pages: lookup.pages.length,
+            });
             continue;
         }
         bytesBefore += st.size;
@@ -41,7 +53,13 @@ export async function garbageCollectPages(dbPath, options) {
                 const buf = Buffer.allocUnsafe(page.length);
                 await src.read(buf, 0, page.length, page.offset);
                 await dst.write(buf, 0, buf.length, offset);
-                newPages.push({ primaryValue: page.primaryValue, offset, length: page.length, rawLength: page.rawLength, crc32: page.crc32 });
+                newPages.push({
+                    primaryValue: page.primaryValue,
+                    offset,
+                    length: page.length,
+                    rawLength: page.rawLength,
+                    crc32: page.crc32,
+                });
                 offset += page.length;
             }
             await dst.sync();
@@ -55,7 +73,12 @@ export async function garbageCollectPages(dbPath, options) {
         lookup.pages = newPages;
         const stAfter = await fs.stat(file);
         bytesAfter += stAfter.size;
-        orderStats.push({ order: lookup.order, bytesBefore: st.size, bytesAfter: stAfter.size, pages: newPages.length });
+        orderStats.push({
+            order: lookup.order,
+            bytesBefore: st.size,
+            bytesAfter: stAfter.size,
+            pages: newPages.length,
+        });
     }
     const newManifest = {
         ...manifest,

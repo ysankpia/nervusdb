@@ -30,7 +30,7 @@ function parseReaderFileName(filename) {
         return null;
     return {
         pid: parseInt(match[1], 10),
-        timestamp: parseInt(match[2], 10)
+        timestamp: parseInt(match[2], 10),
     };
 }
 /**

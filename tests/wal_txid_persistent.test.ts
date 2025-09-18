@@ -44,7 +44,6 @@ describe('持久化 txId 去重（跨周期）', () => {
       // 忽略所有清理错误
     }
 
-
     await rm(workspace, { recursive: true, force: true });
   });
 

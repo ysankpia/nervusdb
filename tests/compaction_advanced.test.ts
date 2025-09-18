@@ -47,7 +47,6 @@ describe('Compaction 高级选项', () => {
       // 忽略所有清理错误
     }
 
-
     await rm(workspace, { recursive: true, force: true });
   });
 

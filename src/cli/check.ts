@@ -1,11 +1,12 @@
+#!/usr/bin/env node
 import { basename, join } from 'node:path';
 import { promises as fs } from 'node:fs';
 
-import { readStorageFile } from '../storage/fileHeader';
-import { pageFileName, readPagedManifest, writePagedManifest } from '../storage/pagedIndex';
-import { SynapseDB } from '../synapseDb';
-import { checkStrict } from '../maintenance/check';
-import { repairCorruptedOrders, repairCorruptedPagesFast } from '../maintenance/repair';
+import { readStorageFile } from '../storage/fileHeader.js';
+import { pageFileName, readPagedManifest, writePagedManifest } from '../storage/pagedIndex.js';
+import { SynapseDB } from '../synapseDb.js';
+import { checkStrict } from '../maintenance/check.js';
+import { repairCorruptedOrders, repairCorruptedPagesFast } from '../maintenance/repair.js';
 
 async function check(dbPath: string): Promise<{ ok: boolean; errors: string[] }> {
   const errors: string[] = [];

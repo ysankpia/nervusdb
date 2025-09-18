@@ -1,8 +1,8 @@
-import { readPagedManifest } from '../storage/pagedIndex';
+import { readPagedManifest } from '../storage/pagedIndex.js';
 import { promises as fsp } from 'node:fs';
-import { compactDatabase } from './compaction';
-import { readHotness } from '../storage/hotness';
-import { garbageCollectPages } from './gc';
+import { compactDatabase, } from './compaction.js';
+import { readHotness } from '../storage/hotness.js';
+import { garbageCollectPages } from './gc.js';
 export async function autoCompact(dbPath, options = {}) {
     const manifest = await readPagedManifest(`${dbPath}.pages`);
     if (!manifest) {
@@ -10,10 +10,15 @@ export async function autoCompact(dbPath, options = {}) {
     }
     if (options.respectReaders) {
         try {
-            const { getActiveReaders } = await import('../storage/readerRegistry');
+            const { getActiveReaders } = await import('../storage/readerRegistry.js');
             const readers = await getActiveReaders(`${dbPath}.pages`);
             if (readers.length > 0) {
-                return { selectedOrders: [], skipped: true, reason: 'active_readers', readers: readers.length };
+                return {
+                    selectedOrders: [],
+                    skipped: true,
+                    reason: 'active_readers',
+                    readers: readers.length,
+                };
             }
         }
         catch {
@@ -44,7 +49,11 @@ export async function autoCompact(dbPath, options = {}) {
         if (options.mode !== 'rewrite' && hot && options.hotThreshold && options.hotThreshold > 0) {
             const counts = hot.counts[order] ?? {};
             const candidates = [];
-            const w = { hot: options.scoreWeights?.hot ?? 1, pages: options.scoreWeights?.pages ?? 1, tomb: options.scoreWeights?.tomb ?? 0.5 };
+            const w = {
+                hot: options.scoreWeights?.hot ?? 1,
+                pages: options.scoreWeights?.pages ?? 1,
+                tomb: options.scoreWeights?.tomb ?? 0.5,
+            };
             const minScore = options.minScore ?? 1;
             for (const [pval, count] of cnt.entries()) {
                 if (count <= 1)
@@ -58,8 +67,10 @@ export async function autoCompact(dbPath, options = {}) {
                     candidates.push({ p: pval, c: hotCount, pages: count, score });
             }
             // 优先按分数、再按热度排序
-            const sorted = candidates.sort((a, b) => (b.score - a.score) || (b.c - a.c));
-            const topK = options.maxPrimariesPerOrder ? sorted.slice(0, options.maxPrimariesPerOrder) : sorted;
+            const sorted = candidates.sort((a, b) => b.score - a.score || b.c - a.c);
+            const topK = options.maxPrimariesPerOrder
+                ? sorted.slice(0, options.maxPrimariesPerOrder)
+                : sorted;
             if (topK.length > 0) {
                 onlyPrimaries[order] = topK.map((x) => x.p);
                 selected.add(order);
@@ -76,7 +87,7 @@ export async function autoCompact(dbPath, options = {}) {
             const segs = lsm.segments?.length ?? 0;
             const triples = (lsm.segments ?? []).reduce((a, s) => a + (s.count ?? 0), 0);
             const segTh = options.lsmSegmentsThreshold ?? 1;
-            const triTh = options.lsmTriplesThreshold ?? (options.pageSize ?? manifest.pageSize ?? 1024);
+            const triTh = options.lsmTriplesThreshold ?? options.pageSize ?? manifest.pageSize ?? 1024;
             if (segs >= segTh || triples >= triTh)
                 includeLsmSegments = true;
         }

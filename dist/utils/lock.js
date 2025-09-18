@@ -21,9 +21,15 @@ export async function acquireLock(basePath) {
         }
         catch { }
     };
-    process.once('exit', () => { void release(); });
-    process.once('SIGINT', () => { void release().then(() => process.exit(130)); });
-    process.once('SIGTERM', () => { void release().then(() => process.exit(143)); });
+    process.once('exit', () => {
+        void release();
+    });
+    process.once('SIGINT', () => {
+        void release().then(() => process.exit(130));
+    });
+    process.once('SIGTERM', () => {
+        void release().then(() => process.exit(143));
+    });
     return { release };
 }
 //# sourceMappingURL=lock.js.map

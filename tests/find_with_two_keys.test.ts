@@ -44,7 +44,6 @@ describe('find 支持双键（s+o / p+o）命中', () => {
       // 忽略所有清理错误
     }
 
-
     await rm(workspace, { recursive: true, force: true });
   });
 

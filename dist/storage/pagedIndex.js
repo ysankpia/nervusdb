@@ -74,6 +74,10 @@ export class PagedIndexReader {
         this.lookup = lookup;
         this.filePath = join(options.directory, pageFileName(lookup.order));
     }
+    // 提供受控访问：返回去重后的主键列表，避免直接触达内部 lookup
+    getPrimaryValues() {
+        return [...new Set(this.lookup.pages.map((p) => p.primaryValue))];
+    }
     async read(primaryValue) {
         const meta = this.lookup.pages.filter((page) => page.primaryValue === primaryValue);
         if (meta.length === 0) {
@@ -136,6 +140,40 @@ export class PagedIndexReader {
         const buffer = fssync.readFileSync(this.filePath);
         const raw = decompressBuffer(buffer, this.options.compression);
         return deserializeTriples(raw);
+    }
+    // 流式迭代：逐页异步读取，避免大结果集内存压力
+    async *streamByPrimaryValue(primaryValue) {
+        const meta = this.lookup.pages.filter((page) => page.primaryValue === primaryValue);
+        if (meta.length === 0) {
+            return;
+        }
+        const fd = await fs.open(this.filePath, 'r');
+        try {
+            for (const page of meta) {
+                const buffer = Buffer.allocUnsafe(page.length);
+                await fd.read(buffer, 0, page.length, page.offset);
+                if (page.crc32 !== undefined && page.crc32 !== crc32(buffer)) {
+                    // 跳过校验失败的页
+                    continue;
+                }
+                const raw = decompressBuffer(buffer, this.options.compression);
+                const triples = deserializeTriples(raw);
+                if (triples.length > 0) {
+                    yield triples;
+                }
+            }
+        }
+        finally {
+            await fd.close();
+        }
+    }
+    // 流式迭代：逐页读取所有数据，支持全量查询的流式处理
+    async *streamAll() {
+        // 按primaryValue分组，逐组流式读取
+        const primaryValues = new Set(this.lookup.pages.map((page) => page.primaryValue));
+        for (const primaryValue of primaryValues) {
+            yield* this.streamByPrimaryValue(primaryValue);
+        }
     }
 }
 export function pageFileName(order) {

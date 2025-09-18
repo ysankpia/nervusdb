@@ -45,7 +45,6 @@ describe('Auto-Compact 自动并入 LSM 段并清理', () => {
       // 忽略所有清理错误
     }
 
-
     await rm(workspace, { recursive: true, force: true });
   });
 

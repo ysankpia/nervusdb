@@ -44,7 +44,6 @@ describe('WAL 恢复', () => {
       // 忽略所有清理错误
     }
 
-
     await rm(workspace, { recursive: true, force: true });
   });
 

@@ -47,7 +47,6 @@ describe('Auto-Compact 尊重读者', () => {
       // 忽略所有清理错误
     }
 
-
     await rm(workspace, { recursive: true, force: true });
   });
 

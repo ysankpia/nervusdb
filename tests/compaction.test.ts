@@ -46,7 +46,6 @@ describe('Compaction MVP', () => {
       // 忽略所有清理错误
     }
 
-
     await rm(workspace, { recursive: true, force: true });
   });
 

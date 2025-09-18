@@ -11,6 +11,8 @@ const commonTypeScriptRules = {
       checksVoidReturn: false
     }
   ],
+  // 允许空的 catch 块以容忍脚本中的“最佳努力清理”写法
+  'no-empty': ['error', { allowEmptyCatch: true }],
   'prettier/prettier': [
     'error',
     {
@@ -43,10 +45,26 @@ export default tseslint.config(
   {
     files: ['tests/**/*.ts'],
     rules: {
+      // 测试场景放宽类型与安全性约束，便于编写断言与桩实现
       '@typescript-eslint/no-unsafe-assignment': 'off',
       '@typescript-eslint/no-unsafe-call': 'off',
       '@typescript-eslint/no-unsafe-member-access': 'off',
-      '@typescript-eslint/no-unsafe-return': 'off'
+      '@typescript-eslint/no-unsafe-return': 'off',
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-non-null-asserted-optional-chain': 'off',
+      '@typescript-eslint/no-unused-vars': 'off'
+    }
+  },
+  {
+    files: ['src/cli/**/*.ts', 'src/maintenance/**/*.ts'],
+    rules: {
+      // CLI/维护脚本偏工程化，放宽 any 与 unsafe 访问限制
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      // 容忍少量未使用变量（如预留参数/调试片段）
+      '@typescript-eslint/no-unused-vars': 'warn'
     }
   },
   prettierConfig

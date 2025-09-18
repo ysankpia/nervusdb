@@ -6,7 +6,7 @@
  */
 
 import { promises as fs } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 
 export interface ReaderInfo {
   pid: number;
@@ -126,7 +126,7 @@ export async function getActiveReaders(directory: string): Promise<ReaderInfo[]>
 
         // 读取reader信息
         const content = await fs.readFile(filePath, 'utf8');
-        const readerInfo: ReaderInfo = JSON.parse(content);
+        const readerInfo = JSON.parse(content) as unknown as ReaderInfo;
         readers.push(readerInfo);
       } catch {
         // 忽略无效文件，继续处理其他文件

@@ -1,12 +1,12 @@
 import { promises as fsp } from 'node:fs';
 import { join } from 'node:path';
 
-import { initializeIfMissing, readStorageFile, writeStorageFile } from './fileHeader';
-import { StringDictionary } from './dictionary';
-import { PropertyStore, TripleKey } from './propertyStore';
-import { TripleIndexes, getBestIndexKey, type IndexOrder } from './tripleIndexes';
-import { EncodedTriple, TripleStore } from './tripleStore';
-import { LsmLiteStaging } from './staging';
+import { initializeIfMissing, readStorageFile, writeStorageFile } from './fileHeader.js';
+import { StringDictionary } from './dictionary.js';
+import { PropertyStore, TripleKey } from './propertyStore.js';
+import { TripleIndexes, getBestIndexKey, type IndexOrder } from './tripleIndexes.js';
+import { EncodedTriple, TripleStore } from './tripleStore.js';
+import { LsmLiteStaging } from './staging.js';
 import {
   PagedIndexReader,
   PagedIndexWriter,
@@ -16,12 +16,12 @@ import {
   type PagedIndexManifest,
   type PageMeta,
   DEFAULT_PAGE_SIZE,
-} from './pagedIndex';
-import { WalReplayer, WalWriter } from './wal';
-import { readHotness, writeHotness, type HotnessData } from './hotness';
-import { addReader, removeReader, cleanupProcessReaders } from './readerRegistry';
-import { acquireLock, type LockHandle } from '../utils/lock';
-import { triggerCrash } from '../utils/fault';
+} from './pagedIndex.js';
+import { WalReplayer, WalWriter } from './wal.js';
+import { readHotness, writeHotness, type HotnessData } from './hotness.js';
+import { addReader, removeReader, cleanupProcessReaders } from './readerRegistry.js';
+import { acquireLock, type LockHandle } from '../utils/lock.js';
+import { triggerCrash } from '../utils/fault.js';
 
 export interface FactInput {
   subject: string;
@@ -112,7 +112,9 @@ export class PersistentStore {
     }
     const sections = await readStorageFile(path);
     const dictionary = StringDictionary.deserialize(sections.dictionary);
-    const triples = TripleStore.deserialize(sections.triples);
+    // 架构重构：不再加载完整TripleStore到内存，改为仅加载增量数据
+    // 历史数据通过分页索引访问，只有WAL重放数据加载到内存
+    const triples = new TripleStore(); // 创建空的TripleStore，仅用于WAL重放和新增数据
     const propertyStore = PropertyStore.deserialize(sections.properties);
     const indexes = TripleIndexes.deserialize(sections.indexes);
     // 初次打开且无 manifest 时，将以全量方式重建分页索引，无需在内存中保有全部索引
@@ -143,7 +145,7 @@ export class PersistentStore {
     store.wal = await WalWriter.open(path);
     // 持久 txId 去重：读取注册表（可选）
     const { readTxIdRegistry, writeTxIdRegistry, toSet, mergeTxIds } = await import(
-      './txidRegistry'
+      './txidRegistry.js'
     );
     const persistentTx = options.enablePersistentTxDedupe === true;
     const maxTx = options.maxRememberTxIds ?? 1000;
@@ -245,8 +247,17 @@ export class PersistentStore {
         pageSize,
         compression,
       });
-      // 初次/重建：写入“全量”三元组（当前从 TripleStore 一次性构建）
-      const triples = this.triples.list();
+      // 架构重构：重建时从原始存储文件读取数据，而不是依赖内存中的TripleStore
+      let triples: EncodedTriple[] = [];
+      try {
+        // 从主文件读取历史三元组数据用于重建分页索引
+        const sections = await readStorageFile(this.path);
+        const historicalTriples = TripleStore.deserialize(sections.triples);
+        triples = historicalTriples.list();
+      } catch {
+        // 如果无法读取历史数据，使用当前内存中的数据（主要是WAL重放后的数据）
+        triples = this.triples.list();
+      }
       const getPrimary = primarySelector(order);
       for (const t of triples) {
         writer.push(t, getPrimary(t));
@@ -441,7 +452,141 @@ export class PersistentStore {
   }
 
   listFacts(): FactRecord[] {
-    return this.resolveRecords(this.triples.list());
+    // 架构重构：优先从分页索引读取全部数据，合并内存中的增量数据
+    const allTriples = this.query({}); // 使用重构后的query方法获取所有数据
+    return this.resolveRecords(allTriples);
+  }
+
+  // 流式查询：逐批返回查询结果，避免大结果集内存压力
+  async *streamQuery(
+    criteria: Partial<EncodedTriple>,
+    batchSize = 1000,
+  ): AsyncGenerator<EncodedTriple[], void, unknown> {
+    // 检查并刷新 pagedReaders
+    const now = Date.now();
+    if (this.pinnedEpochStack.length === 0 && now - this.lastManifestCheck > 1000) {
+      void this.refreshReadersIfEpochAdvanced();
+      this.lastManifestCheck = now;
+    }
+
+    const noKeys =
+      criteria.subjectId === undefined &&
+      criteria.predicateId === undefined &&
+      criteria.objectId === undefined;
+
+    if (noKeys) {
+      // 全量查询的流式处理
+      const spoReader = this.pagedReaders.get('SPO');
+      if (spoReader) {
+        const seenKeys = new Set<string>();
+        let batch: EncodedTriple[] = [];
+
+        // 流式读取分页索引数据
+        for await (const pageTriples of spoReader.streamAll()) {
+          for (const t of pageTriples) {
+            const key = encodeTripleKey(t);
+            if (!seenKeys.has(key) && !this.tombstones.has(key)) {
+              seenKeys.add(key);
+              batch.push(t);
+
+              if (batch.length >= batchSize) {
+                yield [...batch];
+                batch = [];
+              }
+            }
+          }
+        }
+
+        // 合并内存中的增量数据
+        for (const t of this.triples.list()) {
+          const key = encodeTripleKey(t);
+          if (!seenKeys.has(key) && !this.tombstones.has(key)) {
+            batch.push(t);
+
+            if (batch.length >= batchSize) {
+              yield [...batch];
+              batch = [];
+            }
+          }
+        }
+
+        // 返回最后一批数据
+        if (batch.length > 0) {
+          yield batch;
+        }
+        return;
+      }
+    }
+
+    // 特定条件查询：先使用同步方式获取结果，然后分批yield
+    const order = getBestIndexKey(criteria);
+    const reader = this.pagedReaders.get(order);
+    const primaryValue = criteria[primaryKey(order)];
+
+    if (reader && primaryValue !== undefined) {
+      this.bumpHot(order, primaryValue);
+
+      const seenKeys = new Set<string>();
+      let batch: EncodedTriple[] = [];
+
+      // 流式读取分页索引数据
+      for await (const pageTriples of reader.streamByPrimaryValue(primaryValue)) {
+        for (const t of pageTriples) {
+          if (matchCriteria(t, criteria) && !this.tombstones.has(encodeTripleKey(t))) {
+            const key = encodeTripleKey(t);
+            if (!seenKeys.has(key)) {
+              seenKeys.add(key);
+              batch.push(t);
+
+              if (batch.length >= batchSize) {
+                yield [...batch];
+                batch = [];
+              }
+            }
+          }
+        }
+      }
+
+      // 合并内存中的增量数据
+      for (const t of this.triples.list()) {
+        if (matchCriteria(t, criteria) && !this.tombstones.has(encodeTripleKey(t))) {
+          const key = encodeTripleKey(t);
+          if (!seenKeys.has(key)) {
+            batch.push(t);
+
+            if (batch.length >= batchSize) {
+              yield [...batch];
+              batch = [];
+            }
+          }
+        }
+      }
+
+      // 返回最后一批数据
+      if (batch.length > 0) {
+        yield batch;
+      }
+      return;
+    }
+
+    // 最后回退：内存数据的分批处理
+    const memTriples = this.triples
+      .list()
+      .filter((t) => matchCriteria(t, criteria) && !this.tombstones.has(encodeTripleKey(t)));
+
+    for (let i = 0; i < memTriples.length; i += batchSize) {
+      yield memTriples.slice(i, i + batchSize);
+    }
+  }
+
+  // 流式查询记录：返回解析后的FactRecord批次
+  async *streamFactRecords(
+    criteria: Partial<EncodedTriple> = {},
+    batchSize = 1000,
+  ): AsyncGenerator<FactRecord[], void, unknown> {
+    for await (const tripleBatch of this.streamQuery(criteria, batchSize)) {
+      yield this.resolveRecords(tripleBatch);
+    }
   }
 
   getDictionarySize(): number {
@@ -543,7 +688,7 @@ export class PersistentStore {
       void (async () => {
         try {
           const { readTxIdRegistry, writeTxIdRegistry, mergeTxIds } = await import(
-            './txidRegistry'
+            './txidRegistry.js'
           );
           const reg = await readTxIdRegistry(this.indexDirectory);
           const merged = mergeTxIds(
@@ -605,34 +750,98 @@ export class PersistentStore {
       this.lastManifestCheck = now;
     }
 
-    // 快照期间（withSnapshot）优先使用内存视图，避免 GC 重写页文件导致的磁盘读取漂移或 CRC 失配
-    if (this.pinnedEpochStack.length > 0) {
-      const fromMem = this.triples
-        .list()
-        .filter((t) => matchCriteria(t, criteria) && !this.tombstones.has(encodeTripleKey(t)));
-      return fromMem;
-    }
-    // 空条件查询：返回主存中的全部三元组（并过滤 tombstones）
+    // 架构重构：所有查询统一使用PagedIndexReader，快照期间也安全使用固定epoch的readers
+    // 空条件查询：从分页索引读取全部数据，合并内存增量数据
     const noKeys =
       criteria.subjectId === undefined &&
       criteria.predicateId === undefined &&
       criteria.objectId === undefined;
     if (noKeys) {
+      // 架构重构：总是使用分页索引作为主要数据源，合并内存增量
+      if (this.pagedReaders.size > 0) {
+        const allTriples = new Set<string>();
+        const results: EncodedTriple[] = [];
+        // 从SPO索引读取所有数据作为全量查询的基础
+        const spoReader = this.pagedReaders.get('SPO');
+        if (spoReader) {
+          try {
+            // 从所有页面读取历史数据（通过受控方法获取主键集合）
+            const primaryValuesArr =
+              (spoReader as unknown as { getPrimaryValues: () => number[] }).getPrimaryValues?.() ??
+              [];
+            const primaryValues = new Set(primaryValuesArr);
+            if (primaryValues.size > 0) {
+              for (const primaryValue of primaryValues) {
+                const triples = spoReader.readSync(primaryValue);
+                for (const t of triples) {
+                  const key = encodeTripleKey(t);
+                  if (!allTriples.has(key) && !this.tombstones.has(key)) {
+                    allTriples.add(key);
+                    results.push(t);
+                  }
+                }
+              }
+            }
+            // 合并内存中的新增数据（WAL重放等）
+            for (const t of this.triples.list()) {
+              const key = encodeTripleKey(t);
+              if (!allTriples.has(key) && !this.tombstones.has(key)) {
+                results.push(t);
+              }
+            }
+            return results;
+          } catch {
+            // 如果分页索引读取失败，回退到内存数据
+          }
+        }
+      }
+      // 回退：返回内存中的全部三元组（主要是WAL重放数据和新增数据）
       return this.triples.list().filter((t) => !this.tombstones.has(encodeTripleKey(t)));
     }
+    // 特定条件查询：使用最佳索引的PagedIndexReader，合并内存增量数据
     const order = getBestIndexKey(criteria);
     const reader = this.pagedReaders.get(order);
     const primaryValue = criteria[primaryKey(order)];
 
-    if (!this.dirty && reader && primaryValue !== undefined) {
+    if (reader && primaryValue !== undefined) {
       this.bumpHot(order, primaryValue);
-      const triples = reader.readSync(primaryValue);
-      return triples.filter(
+      const pagedTriples = reader.readSync(primaryValue);
+      const pagedResults = pagedTriples.filter(
         (t) => matchCriteria(t, criteria) && !this.tombstones.has(encodeTripleKey(t)),
       );
+
+      // 合并内存中的增量数据（WAL重放和新增）
+      const memTriples = this.triples
+        .list()
+        .filter((t) => matchCriteria(t, criteria) && !this.tombstones.has(encodeTripleKey(t)));
+
+      // 去重合并：分页索引数据 + 内存增量数据
+      const seen = new Set<string>();
+      const results: EncodedTriple[] = [];
+
+      for (const t of pagedResults) {
+        const key = encodeTripleKey(t);
+        if (!seen.has(key)) {
+          seen.add(key);
+          results.push(t);
+        }
+      }
+
+      for (const t of memTriples) {
+        const key = encodeTripleKey(t);
+        if (!seen.has(key)) {
+          seen.add(key);
+          results.push(t);
+        }
+      }
+
+      return results;
     }
 
-    return this.indexes.query(criteria).filter((t) => !this.tombstones.has(encodeTripleKey(t)));
+    // 最后回退：如果没有合适的PagedIndexReader，仅使用内存数据（应该很少发生）
+    return this.triples
+      .list()
+      .filter((t) => matchCriteria(t, criteria) && !this.tombstones.has(encodeTripleKey(t)));
   }
 
   resolveRecords(triples: EncodedTriple[]): FactRecord[] {
@@ -673,17 +882,25 @@ export class PersistentStore {
       return;
     }
 
-    const sections = {
-      dictionary: this.dictionary.serialize(),
-      triples: this.triples.serialize(),
-      indexes: this.indexes.serialize(),
-      properties: this.properties.serialize(),
-    };
-    // 崩溃注入：主文件写入前
-    triggerCrash('before-main-write');
-    await writeStorageFile(this.path, sections);
+    // 架构重构：不再全量重写主文件，分页索引现在是数据的"source of truth"
+    // 仅在必要时更新字典和属性的增量部分到主文件
+    const hasDictionaryChanges = this.dictionary.size > 0;
+    const hasPropertyChanges = Object.keys(this.properties.serialize()).length > 0;
+
+    if (hasDictionaryChanges || hasPropertyChanges) {
+      const sections = {
+        dictionary: this.dictionary.serialize(),
+        triples: this.triples.serialize(), // 保持向后兼容，但主要数据来自分页索引
+        indexes: new TripleIndexes().serialize(), // 清空内存索引，数据在分页索引中
+        properties: this.properties.serialize(),
+      };
+      // 崩溃注入：增量文件写入前
+      triggerCrash('before-incremental-write');
+      await writeStorageFile(this.path, sections);
+    }
+
     this.dirty = false;
-    // 增量刷新分页索引（仅写入新增的 staging）
+    // 增量刷新分页索引：将暂存的WAL数据合并到分页索引
     triggerCrash('before-page-append');
     await this.appendPagedIndexesFromStaging();
     // 将 tombstones 写入 manifest 以便重启恢复

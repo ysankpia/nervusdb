@@ -1,7 +1,7 @@
-import { FactInput, FactRecord } from './storage/persistentStore';
-import { TripleKey } from './storage/propertyStore';
-import { FactCriteria, FrontierOrientation, QueryBuilder } from './query/queryBuilder';
-import { SynapseDBOpenOptions, CommitBatchOptions, BeginBatchOptions } from './types/openOptions';
+import { FactInput, FactRecord } from './storage/persistentStore.js';
+import { TripleKey } from './storage/propertyStore.js';
+import { FactCriteria, FrontierOrientation, QueryBuilder } from './query/queryBuilder.js';
+import { SynapseDBOpenOptions, CommitBatchOptions, BeginBatchOptions } from './types/openOptions.js';
 export interface FactOptions {
     subjectProperties?: Record<string, unknown>;
     objectProperties?: Record<string, unknown>;
@@ -57,10 +57,15 @@ export declare class SynapseDB {
     static open(path: string, options?: SynapseDBOpenOptions): Promise<SynapseDB>;
     addFact(fact: FactInput, options?: FactOptions): FactRecord;
     listFacts(): FactRecord[];
+    streamFacts(criteria?: Partial<{
+        subject: string;
+        predicate: string;
+        object: string;
+    }>, batchSize?: number): AsyncGenerator<FactRecord[], void, unknown>;
     getNodeId(value: string): number | undefined;
     getNodeValue(id: number): string | undefined;
-    getNodeProperties(nodeId: number): Record<string, unknown> | undefined;
-    getEdgeProperties(key: TripleKey): Record<string, unknown> | undefined;
+    getNodeProperties(nodeId: number): Record<string, unknown> | null;
+    getEdgeProperties(key: TripleKey): Record<string, unknown> | null;
     flush(): Promise<void>;
     find(criteria: FactCriteria, options?: {
         anchor?: FrontierOrientation;

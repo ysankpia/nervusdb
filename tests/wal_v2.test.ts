@@ -45,7 +45,6 @@ describe('WAL v2 批次提交语义', () => {
       // 忽略所有清理错误
     }
 
-
     await rm(workspace, { recursive: true, force: true });
   });
 

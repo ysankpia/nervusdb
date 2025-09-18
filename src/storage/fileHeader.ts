@@ -8,7 +8,7 @@ import {
   FileHeader,
   FileLayout,
   SectionPointer,
-} from './layout';
+} from './layout.js';
 
 const UINT32_BYTES = 4;
 

@@ -47,7 +47,6 @@ describe('WAL 尾部安全截断', () => {
       // 忽略所有清理错误
     }
 
-
     await rm(workspace, { recursive: true, force: true });
   });
 

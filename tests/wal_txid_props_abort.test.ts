@@ -44,7 +44,6 @@ describe('WAL 事务 ID：属性与 abort 语义（实验特性）', () => {
       // 忽略所有清理错误
     }
 
-
     await rm(workspace, { recursive: true, force: true });
   });
 

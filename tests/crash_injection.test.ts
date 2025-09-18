@@ -46,16 +46,15 @@ describe('崩溃注入（flush 路径）', () => {
       // 忽略所有清理错误
     }
 
-
     setCrashPoint(null);
     await rm(workspace, { recursive: true, force: true });
   });
 
-  it('before-main-write: flush 中断但 WAL 可恢复', async () => {
+  it('before-incremental-write: flush 增量写入中断但 WAL 可恢复', async () => {
     const db1 = await SynapseDB.open(dbPath);
     db1.addFact({ subject: 'S', predicate: 'R', object: 'O' });
-    setCrashPoint('before-main-write');
-    await expect(db1.flush()).rejects.toThrow(/InjectedCrash:before-main-write/);
+    setCrashPoint('before-incremental-write');
+    await expect(db1.flush()).rejects.toThrow(/InjectedCrash:before-incremental-write/);
 
     const db2 = await SynapseDB.open(dbPath);
     const facts = db2.find({ subject: 'S', predicate: 'R' }).all();

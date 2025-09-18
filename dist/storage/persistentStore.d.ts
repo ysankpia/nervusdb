@@ -1,5 +1,5 @@
-import { TripleKey } from './propertyStore';
-import { EncodedTriple } from './tripleStore';
+import { TripleKey } from './propertyStore.js';
+import { EncodedTriple } from './tripleStore.js';
 export interface FactInput {
     subject: string;
     predicate: string;
@@ -60,6 +60,8 @@ export declare class PersistentStore {
     addFact(fact: FactInput): PersistedFact;
     private addFactDirect;
     listFacts(): FactRecord[];
+    streamQuery(criteria: Partial<EncodedTriple>, batchSize?: number): AsyncGenerator<EncodedTriple[], void, unknown>;
+    streamFactRecords(criteria?: Partial<EncodedTriple>, batchSize?: number): AsyncGenerator<FactRecord[], void, unknown>;
     getDictionarySize(): number;
     getNodeIdByValue(value: string): number | undefined;
     getNodeValueById(id: number): string | undefined;

@@ -1,4 +1,4 @@
-import { type CompactStats, type IndexOrder } from './compaction';
+import { type CompactStats, type IndexOrder } from './compaction.js';
 export interface AutoCompactOptions {
     orders?: IndexOrder[];
     minMergePages?: number;

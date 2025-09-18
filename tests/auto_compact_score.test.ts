@@ -47,7 +47,6 @@ describe('Auto-Compact 多因素评分决策', () => {
       // 忽略所有清理错误
     }
 
-
     await rm(workspace, { recursive: true, force: true });
   });
 

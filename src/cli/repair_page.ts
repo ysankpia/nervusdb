@@ -1,6 +1,6 @@
-import { promises as fs } from 'node:fs';
-import { readPagedManifest } from '../storage/pagedIndex';
-import { repairCorruptedPagesFast } from '../maintenance/repair';
+#!/usr/bin/env node
+import { readPagedManifest } from '../storage/pagedIndex.js';
+import { repairCorruptedPagesFast } from '../maintenance/repair.js';
 
 async function main() {
   const [dbPath, order, primaryStr] = process.argv.slice(2);

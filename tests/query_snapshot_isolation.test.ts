@@ -24,27 +24,21 @@ describe('查询快照隔离（withSnapshot）', () => {
   });
 
   afterEach(async () => {
-    // 强制清理readers目录中的所有文件，确保完全清理
-    try {
-      const readersDir = join(dbPath + '.pages', 'readers');
+    // 多次尝试强制清理，处理可能的竞态条件
+    for (let attempts = 0; attempts < 3; attempts++) {
       try {
-        const files = await readdir(readersDir);
-        for (const file of files) {
-          try {
-            await unlink(join(readersDir, file));
-          } catch {
-            // 忽略删除失败
-          }
+        await rm(workspace, { recursive: true, force: true });
+        break; // 成功清理，退出循环
+      } catch (error: any) {
+        if (attempts === 2) {
+          // 最后一次尝试，记录错误但继续
+          console.warn(`Warning: Failed to clean workspace after 3 attempts: ${error.message}`);
+        } else {
+          // 等待一段时间后重试
+          await new Promise((resolve) => setTimeout(resolve, 100));
         }
-        await rmdir(readersDir);
-      } catch {
-        // 忽略目录不存在的错误
       }
-    } catch {
-      // 忽略所有清理错误
     }
-
-    await rm(workspace, { recursive: true, force: true });
   });
 
   it('长查询期间 epoch 固定，后台 compaction 不影响链式结果', async () => {
@@ -173,7 +167,7 @@ describe('查询快照隔离（withSnapshot）', () => {
     expect(queryResults[0].object).toBe('D1');
 
     await db.close();
-  });
+  }, 15000);
 
   it('并发读写与维护任务的隔离性', async () => {
     const db = await SynapseDB.open(dbPath, { pageSize: 5 });

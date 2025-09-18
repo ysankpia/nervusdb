@@ -1,4 +1,5 @@
-import { garbageCollectPages } from '../maintenance/gc';
+#!/usr/bin/env node
+import { garbageCollectPages } from '../maintenance/gc.js';
 async function main() {
     const [dbPath, ...args] = process.argv.slice(2);
     if (!dbPath) {

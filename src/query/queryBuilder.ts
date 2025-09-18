@@ -1,5 +1,5 @@
-import { FactInput, FactRecord } from '../storage/persistentStore';
-import { PersistentStore } from '../storage/persistentStore';
+import { FactInput, FactRecord } from '../storage/persistentStore.js';
+import { PersistentStore } from '../storage/persistentStore.js';
 
 export type FactCriteria = Partial<FactInput>;
 

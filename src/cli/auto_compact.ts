@@ -1,4 +1,5 @@
-import { autoCompact } from '../maintenance/autoCompact';
+#!/usr/bin/env node
+import { autoCompact } from '../maintenance/autoCompact.js';
 
 async function main() {
   const [dbPath, ...args] = process.argv.slice(2);

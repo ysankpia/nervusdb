@@ -47,7 +47,6 @@ describe('Compaction 增量按 primary 重写', () => {
       // 忽略所有清理错误
     }
 
-
     await rm(workspace, { recursive: true, force: true });
   });
 

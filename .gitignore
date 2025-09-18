@@ -1,0 +1,30 @@
+# Node & TypeScript
+node_modules/
+coverage/
+*.tsbuildinfo
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Editor/OS
+.DS_Store
+.idea/
+.vscode/
+
+# Build outputs (keep tracked dist if already committed)
+dist/
+
+# Local databases generated during tests/bench
+*.synapsedb
+*.synapsedb.wal
+*.synapsedb.pages/
+
+# Repomix output
+repomix-output.xml
+
+# Temp
+tmp/
+.tmp/
+*.tmp
+

@@ -1,4 +1,4 @@
-import { OrderedTriple, type IndexOrder } from './tripleIndexes';
+import { OrderedTriple, type IndexOrder } from './tripleIndexes.js';
 export interface PageMeta {
     primaryValue: number;
     offset: number;
@@ -36,10 +36,13 @@ export declare class PagedIndexReader {
     private readonly lookup;
     private readonly filePath;
     constructor(options: PagedIndexReaderOptions, lookup: PageLookup);
+    getPrimaryValues(): number[];
     read(primaryValue: number): Promise<OrderedTriple[]>;
     readAll(): Promise<OrderedTriple[]>;
     readSync(primaryValue: number): OrderedTriple[];
     readAllSync(): OrderedTriple[];
+    streamByPrimaryValue(primaryValue: number): AsyncGenerator<OrderedTriple[], void, unknown>;
+    streamAll(): AsyncGenerator<OrderedTriple[], void, unknown>;
 }
 export declare function pageFileName(order: string): string;
 export interface PagedIndexManifest {

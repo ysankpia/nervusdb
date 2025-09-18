@@ -1,4 +1,5 @@
-import { compactDatabase } from '../maintenance/compaction';
+#!/usr/bin/env node
+import { compactDatabase } from '../maintenance/compaction.js';
 async function main() {
     const [dbPath, ...args] = process.argv.slice(2);
     if (!dbPath) {
@@ -15,7 +16,9 @@ async function main() {
         : undefined;
     const pageSize = opts['page-size'] ? Number(opts['page-size']) : undefined;
     const minMergePages = opts['min-merge'] ? Number(opts['min-merge']) : undefined;
-    const tombstoneRatioThreshold = opts['tombstone-threshold'] ? Number(opts['tombstone-threshold']) : undefined;
+    const tombstoneRatioThreshold = opts['tombstone-threshold']
+        ? Number(opts['tombstone-threshold'])
+        : undefined;
     const dryRun = Boolean(opts['dry-run']);
     let compression;
     if (typeof opts['compression'] === 'string') {
@@ -37,7 +40,10 @@ async function main() {
             const [ord, list] = g.split(':');
             if (!ord || !list)
                 continue;
-            const nums = list.split(',').map((x) => Number(x.trim())).filter((n) => Number.isFinite(n));
+            const nums = list
+                .split(',')
+                .map((x) => Number(x.trim()))
+                .filter((n) => Number.isFinite(n));
             if (nums.length > 0)
                 onlyPrimaries[ord] = nums;
         }

@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
-import { PagedIndexReader, PagedIndexWriter, pageFileName, readPagedManifest, writePagedManifest, } from '../storage/pagedIndex';
+import { PagedIndexReader, PagedIndexWriter, pageFileName, readPagedManifest, writePagedManifest, } from '../storage/pagedIndex.js';
 function primarySelector(order) {
     if (order === 'SPO' || order === 'SOP')
         return (t) => t.subjectId;
@@ -29,8 +29,8 @@ export async function compactDatabase(dbPath, options = {}) {
     let removedByTombstones = 0;
     const ordersRewritten = [];
     // 实验性：读取 LSM 段，供各顺序并入
-    let lsmTriples = [];
-    let lsmSegmentFiles = [];
+    const lsmTriples = [];
+    const lsmSegmentFiles = [];
     if (options.includeLsmSegments) {
         try {
             const manPath = join(indexDir, 'lsm-manifest.json');
@@ -215,8 +215,7 @@ export async function compactDatabase(dbPath, options = {}) {
             const mergedPages = [];
             const removedPages = [];
             const rewrittenSet = new Set(newPagesByPrimary.keys());
-            lookup.pages.
-                forEach((pg) => {
+            lookup.pages.forEach((pg) => {
                 if (rewrittenSet.has(pg.primaryValue)) {
                     removedPages.push(pg);
                 }

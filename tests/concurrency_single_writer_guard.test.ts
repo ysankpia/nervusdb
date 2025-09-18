@@ -25,10 +25,7 @@ describe('并发单写者保护测试', () => {
     db1.addFact({ subject: 'Writer1', predicate: 'claims', object: 'database' });
 
     // 尝试开启第二个写者应该失败
-    await expect(async () => {
-      const db2 = await SynapseDB.open(dbPath, { enableLock: true });
-      await db2.close();
-    }).rejects.toThrow();
+    await expect(SynapseDB.open(dbPath, { enableLock: true })).rejects.toThrow();
 
     await db1.close();
   });
@@ -125,19 +122,19 @@ describe('并发单写者保护测试', () => {
     const db = await SynapseDB.open(dbPath, { enableLock: true });
 
     // 锁文件应该存在
-    await expect(async () => {
+    {
       const fs = await import('node:fs/promises');
-      await fs.access(lockFile);
-    }).not.toThrow();
+      await expect(fs.access(lockFile)).resolves.toBeUndefined();
+    }
 
     // 关闭数据库
     await db.close();
 
     // 锁文件应该被清理
-    await expect(async () => {
+    {
       const fs = await import('node:fs/promises');
-      await fs.access(lockFile);
-    }).rejects.toThrow();
+      await expect(fs.access(lockFile)).rejects.toThrow();
+    }
   });
 
   it('进程崩溃后锁文件可能残留但新实例仍可启动', async () => {

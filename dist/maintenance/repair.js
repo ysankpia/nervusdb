@@ -1,8 +1,8 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
-import { checkStrict } from './check';
-import { PagedIndexWriter, pageFileName, readPagedManifest, writePagedManifest, } from '../storage/pagedIndex';
-import { SynapseDB } from '../synapseDb';
+import { checkStrict } from './check.js';
+import { PagedIndexWriter, pageFileName, readPagedManifest, writePagedManifest, } from '../storage/pagedIndex.js';
+import { SynapseDB } from '../synapseDb.js';
 export async function repairCorruptedOrders(dbPath) {
     const indexDir = `${dbPath}.pages`;
     const manifest = await readPagedManifest(indexDir);
@@ -23,7 +23,7 @@ export async function repairCorruptedOrders(dbPath) {
             newLookups.push(lookup);
             continue;
         }
-        const primaries = [...new Set(lookup.pages.map((p) => p.primaryValue))];
+        // 直接重写整个顺序，不再单独处理 primaries
         const tmpFile = join(indexDir, `${pageFileName(lookup.order)}.tmp`);
         try {
             await fs.unlink(tmpFile);
