@@ -130,3 +130,33 @@ const largeFiles = await db.find({ type: 'File' })
 *   **与项目共生**：它就像`.git`文件夹一样，成为项目本身的一部分，无需任何外部依赖。
 
 通过这个方案，您将不仅仅是在构建一个“工具”，而是在创造一个全新的、强大的**基础设施**，为下一代AI代码分析工具（包括您自己的Repomix-Graph）提供坚实可靠的、真正理解代码内在逻辑的“大脑”。
+
+---
+
+附：实现进展补充（WAL v2、锁/读者、读快照）
+
+- WAL v2：实现 begin(0x40)/commit(0x41)/abort(0x42) 批次语义；重放时按校验计算 safeOffset，并在打开数据库时自动对 WAL 尾部不完整记录进行安全截断。
+- 恢复与幂等：flush 后 WAL 会被 reset；未 flush 的已提交批次可在重启后通过 WAL 重放恢复；未提交批次在重启后不会生效。
+- 并发控制：`SynapseDB.open(path, { enableLock?, registerReader? })` 支持进程级独占写锁与读者登记；CLI 运维指令在 `--respect-readers` 下尊重活动读者。
+
+读一致性（Snapshot）
+
+- 语义：在一次查询会话内固定 manifest `epoch`，避免中途 compaction/GC 导致 readers 重载与结果漂移。
+- API：`await db.withSnapshot(async snap => { const res = snap.find(...).follow(...).all(); })`。
+- QueryBuilder：`find/follow/followReverse/where/limit/anchor` 在链式执行期间自动 pin/unpin 当前 epoch 以保证一致性。
+
+实验性：事务 ID / 会话（P2 原型）
+
+- 动机：在发生重复写入或重放时，通过 `txId` 达到“至多一次”提交的幂等效果。
+- 编码：WAL `BEGIN(0x40)` 记录可携带可选元数据 `{ txId?, sessionId? }`；采用 1 字节掩码 + 变长字段编码，兼容历史零长度 payload。
+- 重放：`WalReplayer` 在单次重放过程中维护已提交 `txId` 集合，遇到重复 `txId` 的二次 `COMMIT` 将跳过（不再把暂存增量并入结果）。
+- 适用边界：幂等去重范围限定于“单次 WAL 重放过程”；执行 `flush()` 会重置 WAL 文件，之后的提交会在新的重放周期中重新计数。
+- 使用示例：
+  ```ts
+  db.beginBatch({ txId: 'T-123', sessionId: 'writer-A' });
+  db.addFact({ subject: 'S', predicate: 'R', object: 'O' });
+  db.commitBatch();
+  ```
+- 风险与建议：
+  - 若需要跨多个周期的强幂等（global dedupe），需引入已提交 `txId` 的持久存储（后续规划）。
+  - 对三元组写入，重复应用一般为幂等（去重检查）；属性写入属于覆盖语义，`txId` 可避免重复重放导致的意外覆盖。

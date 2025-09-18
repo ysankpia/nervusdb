@@ -23,7 +23,10 @@ export async function checkStrict(dbPath: string): Promise<StrictCheckResult> {
   const manifest = await readPagedManifest(indexDir);
   const errors: PageError[] = [];
   if (!manifest) {
-    return { ok: false, errors: [{ order: '*', primaryValue: -1, offset: 0, length: 0, reason: 'missing_manifest' }] };
+    return {
+      ok: false,
+      errors: [{ order: '*', primaryValue: -1, offset: 0, length: 0, reason: 'missing_manifest' }],
+    };
   }
 
   for (const lookup of manifest.lookups) {
@@ -61,7 +64,13 @@ export async function checkStrict(dbPath: string): Promise<StrictCheckResult> {
         }
       }
     } catch (e) {
-      errors.push({ order: lookup.order, primaryValue: -1, offset: 0, length: 0, reason: `open_failed:${(e as Error).message}` });
+      errors.push({
+        order: lookup.order,
+        primaryValue: -1,
+        offset: 0,
+        length: 0,
+        reason: `open_failed:${(e as Error).message}`,
+      });
     } finally {
       if (handle) await handle.close();
     }
@@ -76,7 +85,7 @@ const CRC32_TABLE = (() => {
   for (let i = 0; i < 256; i += 1) {
     let c = i;
     for (let k = 0; k < 8; k += 1) {
-      c = (c & 1) ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
     }
     table[i] = c >>> 0;
   }
@@ -90,4 +99,3 @@ function crc32(buf: Buffer): number {
   }
   return (c ^ 0xffffffff) >>> 0;
 }
-

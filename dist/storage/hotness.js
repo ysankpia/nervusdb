@@ -8,7 +8,11 @@ export async function readHotness(directory) {
         return JSON.parse(buf.toString('utf8'));
     }
     catch {
-        return { version: 1, updatedAt: Date.now(), counts: { SPO: {}, SOP: {}, POS: {}, PSO: {}, OSP: {}, OPS: {} } };
+        return {
+            version: 1,
+            updatedAt: Date.now(),
+            counts: { SPO: {}, SOP: {}, POS: {}, PSO: {}, OSP: {}, OPS: {} },
+        };
     }
 }
 export async function writeHotness(directory, data) {
@@ -33,6 +37,8 @@ export async function writeHotness(directory, data) {
             await dh.close();
         }
     }
-    catch { }
+    catch {
+        // 忽略目录同步失败（跨平台容忍）
+    }
 }
 //# sourceMappingURL=hotness.js.map

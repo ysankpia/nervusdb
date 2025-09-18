@@ -11,4 +11,3 @@ export function triggerCrash(point: string): void {
     throw new Error(`InjectedCrash:${point}`);
   }
 }
-

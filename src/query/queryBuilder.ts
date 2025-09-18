@@ -44,6 +44,7 @@ export class QueryBuilder {
   }
 
   where(predicate: (record: FactRecord) => boolean): QueryBuilder {
+    this.pin();
     const nextFacts = this.facts.filter((f) => {
       try {
         return Boolean(predicate(f));
@@ -51,34 +52,51 @@ export class QueryBuilder {
         return false;
       }
     });
+    this.unpin();
     const nextFrontier = rebuildFrontier(nextFacts, this.orientation);
-    return new QueryBuilder(this.store, {
-      facts: nextFacts,
-      frontier: nextFrontier,
-      orientation: this.orientation,
-    });
+    return new QueryBuilder(
+      this.store,
+      {
+        facts: nextFacts,
+        frontier: nextFrontier,
+        orientation: this.orientation,
+      },
+      this.pinnedEpoch,
+    );
   }
 
   limit(n: number): QueryBuilder {
     if (n < 0 || Number.isNaN(n)) {
       return this;
     }
+    this.pin();
     const nextFacts = this.facts.slice(0, n);
+    this.unpin();
     const nextFrontier = rebuildFrontier(nextFacts, this.orientation);
-    return new QueryBuilder(this.store, {
-      facts: nextFacts,
-      frontier: nextFrontier,
-      orientation: this.orientation,
-    });
+    return new QueryBuilder(
+      this.store,
+      {
+        facts: nextFacts,
+        frontier: nextFrontier,
+        orientation: this.orientation,
+      },
+      this.pinnedEpoch,
+    );
   }
 
   anchor(orientation: FrontierOrientation): QueryBuilder {
+    this.pin();
     const nextFrontier = buildInitialFrontier(this.facts, orientation);
-    return new QueryBuilder(this.store, {
-      facts: [...this.facts],
-      frontier: nextFrontier,
-      orientation,
-    });
+    this.unpin();
+    return new QueryBuilder(
+      this.store,
+      {
+        facts: [...this.facts],
+        frontier: nextFrontier,
+        orientation,
+      },
+      this.pinnedEpoch,
+    );
   }
 
   follow(predicate: string): QueryBuilder {
@@ -94,45 +112,58 @@ export class QueryBuilder {
       return new QueryBuilder(this.store, EMPTY_CONTEXT);
     }
 
-    const predicateId = this.store.getNodeIdByValue(predicate);
-    if (predicateId === undefined) {
-      return new QueryBuilder(this.store, EMPTY_CONTEXT);
-    }
-
-    const triples = new Map<string, FactRecord>();
-
-    for (const nodeId of this.frontier.values()) {
-      const criteria =
-        direction === 'forward'
-          ? { subjectId: nodeId, predicateId }
-          : { predicateId, objectId: nodeId };
-
-      const matches = this.store.query(criteria);
-      const records = this.store.resolveRecords(matches);
-      records.forEach((record) => {
-        triples.set(encodeTripleKey(record), record);
-      });
-    }
-
-    const nextFacts = [...triples.values()];
-    const nextFrontier = new Set<number>();
-
-    nextFacts.forEach((fact) => {
-      if (direction === 'forward') {
-        nextFrontier.add(fact.objectId);
-      } else {
-        nextFrontier.add(fact.subjectId);
+    this.pin();
+    try {
+      const predicateId = this.store.getNodeIdByValue(predicate);
+      if (predicateId === undefined) {
+        return new QueryBuilder(this.store, EMPTY_CONTEXT);
       }
-    });
 
-    return new QueryBuilder(this.store, {
-      facts: nextFacts,
-      frontier: nextFrontier,
-      orientation: direction === 'forward' ? 'object' : 'subject',
-    }, this.pinnedEpoch);
+      const triples = new Map<string, FactRecord>();
+
+      for (const nodeId of this.frontier.values()) {
+        const criteria =
+          direction === 'forward'
+            ? { subjectId: nodeId, predicateId }
+            : { predicateId, objectId: nodeId };
+
+        const matches = this.store.query(criteria);
+        const records = this.store.resolveRecords(matches);
+        records.forEach((record) => {
+          triples.set(encodeTripleKey(record), record);
+        });
+      }
+
+      const nextFacts = [...triples.values()];
+      const nextFrontier = new Set<number>();
+
+      nextFacts.forEach((fact) => {
+        if (direction === 'forward') {
+          nextFrontier.add(fact.objectId);
+        } else {
+          nextFrontier.add(fact.subjectId);
+        }
+      });
+
+      return new QueryBuilder(
+        this.store,
+        {
+          facts: nextFacts,
+          frontier: nextFrontier,
+          orientation: direction === 'forward' ? 'object' : 'subject',
+        },
+        this.pinnedEpoch,
+      );
+    } finally {
+      this.unpin();
+    }
   }
 
-  static fromFindResult(store: PersistentStore, context: QueryContext, pinnedEpoch?: number): QueryBuilder {
+  static fromFindResult(
+    store: PersistentStore,
+    context: QueryContext,
+    pinnedEpoch?: number,
+  ): QueryBuilder {
     return new QueryBuilder(store, context, pinnedEpoch);
   }
 
@@ -143,18 +174,24 @@ export class QueryBuilder {
   private pin(): void {
     if (this.pinnedEpoch !== undefined) {
       try {
-        (this.store as unknown as { pushPinnedEpoch: (e: number) => void }).pushPinnedEpoch(
+        // 只做内存级别的epoch固定，避免与withSnapshot的reader注册冲突
+        (this.store as unknown as { pinnedEpochStack: number[] }).pinnedEpochStack?.push(
           this.pinnedEpoch,
         );
-      } catch {}
+      } catch {
+        /* ignore */
+      }
     }
   }
 
   private unpin(): void {
     if (this.pinnedEpoch !== undefined) {
       try {
-        (this.store as unknown as { popPinnedEpoch: () => void }).popPinnedEpoch();
-      } catch {}
+        // 只做内存级别的epoch释放，避免与withSnapshot的reader注册冲突
+        (this.store as unknown as { pinnedEpochStack: number[] }).pinnedEpochStack?.pop();
+      } catch {
+        /* ignore */
+      }
     }
   }
 }

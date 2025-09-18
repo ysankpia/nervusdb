@@ -12,7 +12,9 @@ import {
 
 export type IndexOrder = 'SPO' | 'SOP' | 'POS' | 'PSO' | 'OSP' | 'OPS';
 
-function primarySelector(order: IndexOrder): (t: { subjectId: number; predicateId: number; objectId: number }) => number {
+function primarySelector(
+  order: IndexOrder,
+): (t: { subjectId: number; predicateId: number; objectId: number }) => number {
   if (order === 'SPO' || order === 'SOP') return (t) => t.subjectId;
   if (order === 'POS' || order === 'PSO') return (t) => t.predicateId;
   return (t) => t.objectId;
@@ -33,6 +35,7 @@ export interface CompactOptions {
   coldCompression?: { codec: 'none' | 'brotli'; level?: number }; // 重写模式下可选更高压缩（冷数据）
   mode?: 'rewrite' | 'incremental'; // rewrite：重写整个顺序文件；incremental：仅为目标 primary 追加新页并替换 manifest 映射
   onlyPrimaries?: Partial<Record<IndexOrder, number[]>>; // 限制增量模式中需要重写的 primary 集合
+  includeLsmSegments?: boolean; // 将实验性的 LSM 段并入此次合并（合并后清理段）
 }
 
 export interface CompactStats {
@@ -43,7 +46,10 @@ export interface CompactStats {
   removedByTombstones: number;
 }
 
-export async function compactDatabase(dbPath: string, options: CompactOptions = {}): Promise<CompactStats> {
+export async function compactDatabase(
+  dbPath: string,
+  options: CompactOptions = {},
+): Promise<CompactStats> {
   const indexDir = `${dbPath}.pages`;
   const manifest = await readPagedManifest(indexDir);
   if (!manifest) {
@@ -65,6 +71,33 @@ export async function compactDatabase(dbPath: string, options: CompactOptions = 
   let removedByTombstones = 0;
   const ordersRewritten: IndexOrder[] = [];
 
+  // 实验性：读取 LSM 段，供各顺序并入
+  const lsmTriples: Array<{ subjectId: number; predicateId: number; objectId: number }> = [];
+  const lsmSegmentFiles: string[] = [];
+  if (options.includeLsmSegments) {
+    try {
+      const manPath = join(indexDir, 'lsm-manifest.json');
+      const buf = await fs.readFile(manPath);
+      const lsm = JSON.parse(buf.toString('utf8')) as { segments: Array<{ file: string }> };
+      for (const seg of lsm.segments ?? []) {
+        const file = join(indexDir, seg.file);
+        try {
+          const data = await fs.readFile(file);
+          const cnt = Math.floor(data.length / 12);
+          for (let i = 0; i < cnt; i += 1) {
+            const off = i * 12;
+            lsmTriples.push({
+              subjectId: data.readUInt32LE(off),
+              predicateId: data.readUInt32LE(off + 4),
+              objectId: data.readUInt32LE(off + 8),
+            });
+          }
+          lsmSegmentFiles.push(file);
+        } catch {}
+      }
+    } catch {}
+  }
+
   for (const order of orders) {
     const lookup = manifest.lookups.find((l) => l.order === order);
     if (!lookup) {
@@ -78,7 +111,10 @@ export async function compactDatabase(dbPath: string, options: CompactOptions = 
     );
 
     // 聚合每个主键的所有三元组，并去重/去除 tombstones
-    const byPrimary = new Map<number, { subjectId: number; predicateId: number; objectId: number }[]>();
+    const byPrimary = new Map<
+      number,
+      { subjectId: number; predicateId: number; objectId: number }[]
+    >();
     const seen = new Set<string>();
     const primaries = [...new Set(lookup.pages.map((p) => p.primaryValue))];
     for (const primary of primaries) {
@@ -89,6 +125,25 @@ export async function compactDatabase(dbPath: string, options: CompactOptions = 
         if (isTomb) removedByTombstones += 1;
         if (isTomb || seen.has(`${order}|${key}`)) continue;
         seen.add(`${order}|${key}`);
+        const list = byPrimary.get(primary) ?? [];
+        if (!byPrimary.has(primary)) byPrimary.set(primary, list);
+        list.push(t);
+      }
+    }
+
+    // 并入 LSM 段（若设置 includeLsmSegments）
+    if (options.includeLsmSegments && lsmTriples.length > 0) {
+      const getPrimary = primarySelector(order);
+      for (const t of lsmTriples) {
+        const key = encodeTripleKey(t);
+        const isTomb = tombstoneSet.has(key);
+        if (isTomb) {
+          removedByTombstones += 1;
+          continue;
+        }
+        if (seen.has(`${order}|${key}`)) continue;
+        seen.add(`${order}|${key}`);
+        const primary = getPrimary(t);
         const list = byPrimary.get(primary) ?? [];
         if (!byPrimary.has(primary)) byPrimary.set(primary, list);
         list.push(t);
@@ -107,7 +162,8 @@ export async function compactDatabase(dbPath: string, options: CompactOptions = 
       if (hasMergeCandidate) return true;
       if (tombstoneThreshold > 0) {
         const totalTriples = seen.size; // 近似
-        const ratio = totalTriples === 0 ? 0 : removedByTombstones / (removedByTombstones + totalTriples);
+        const ratio =
+          totalTriples === 0 ? 0 : removedByTombstones / (removedByTombstones + totalTriples);
         if (ratio >= tombstoneThreshold) return true;
       }
       return false;
@@ -142,7 +198,10 @@ export async function compactDatabase(dbPath: string, options: CompactOptions = 
       });
       const getPrimary = primarySelector(order);
       for (const list of byPrimary.values()) {
-        list.sort((a, b) => a.subjectId - b.subjectId || a.predicateId - b.predicateId || a.objectId - b.objectId);
+        list.sort(
+          (a, b) =>
+            a.subjectId - b.subjectId || a.predicateId - b.predicateId || a.objectId - b.objectId,
+        );
         for (const t of list) writer.push(t, getPrimary(t));
       }
       const pages = await writer.finalize();
@@ -167,13 +226,14 @@ export async function compactDatabase(dbPath: string, options: CompactOptions = 
 
       // 选出需要重写的 primary（达到 minMergePages 或墓碑比例高）
       const pageCountByPrimary = new Map<number, number>();
-      for (const p of lookup.pages) pageCountByPrimary.set(p.primaryValue, (pageCountByPrimary.get(p.primaryValue) ?? 0) + 1);
+      for (const p of lookup.pages)
+        pageCountByPrimary.set(p.primaryValue, (pageCountByPrimary.get(p.primaryValue) ?? 0) + 1);
       const rewritePrimaries = new Set<number>();
       for (const [pval, count] of pageCountByPrimary.entries()) {
         if (count >= minMergePages) rewritePrimaries.add(pval);
       }
       const limitPrimaries = options.onlyPrimaries?.[order]
-        ? new Set<number>((options.onlyPrimaries as Partial<Record<IndexOrder, number[]>>)[order] as number[])
+        ? new Set<number>(options.onlyPrimaries[order])
         : null;
       if (limitPrimaries) {
         for (const p of [...rewritePrimaries]) {
@@ -185,27 +245,58 @@ export async function compactDatabase(dbPath: string, options: CompactOptions = 
         }
       }
       // 逐 primary 写入新页
-      const newPagesByPrimary = new Map<number, { primaryValue: number; offset: number; length: number; rawLength?: number; crc32?: number }[]>();
+      const newPagesByPrimary = new Map<
+        number,
+        {
+          primaryValue: number;
+          offset: number;
+          length: number;
+          rawLength?: number;
+          crc32?: number;
+        }[]
+      >();
       for (const [primary, list] of byPrimary.entries()) {
         if (!rewritePrimaries.has(primary)) continue;
         // 稳定排序
-        list.sort((a, b) => a.subjectId - b.subjectId || a.predicateId - b.predicateId || a.objectId - b.objectId);
+        list.sort(
+          (a, b) =>
+            a.subjectId - b.subjectId || a.predicateId - b.predicateId || a.objectId - b.objectId,
+        );
         for (const t of list) writer.push(t, getPrimary(t));
         const pages = await writer.finalize();
         newPagesByPrimary.set(primary, pages);
       }
       // 重建 pages 映射：替换被重写的 primary，保留其余原页
-      const mergedPages = [] as { primaryValue: number; offset: number; length: number; rawLength?: number; crc32?: number }[];
-      const removedPages: Array<{ primaryValue: number; offset: number; length: number; rawLength?: number; crc32?: number }> = [];
+      const mergedPages = [] as {
+        primaryValue: number;
+        offset: number;
+        length: number;
+        rawLength?: number;
+        crc32?: number;
+      }[];
+      const removedPages: Array<{
+        primaryValue: number;
+        offset: number;
+        length: number;
+        rawLength?: number;
+        crc32?: number;
+      }> = [];
       const rewrittenSet = new Set<number>(newPagesByPrimary.keys());
-      (lookup.pages as Array<{ primaryValue: number; offset: number; length: number; rawLength?: number; crc32?: number }>).
-        forEach((pg) => {
-          if (rewrittenSet.has(pg.primaryValue)) {
-            removedPages.push(pg);
-          } else {
-            mergedPages.push(pg);
-          }
-        });
+      (
+        lookup.pages as Array<{
+          primaryValue: number;
+          offset: number;
+          length: number;
+          rawLength?: number;
+          crc32?: number;
+        }>
+      ).forEach((pg) => {
+        if (rewrittenSet.has(pg.primaryValue)) {
+          removedPages.push(pg);
+        } else {
+          mergedPages.push(pg);
+        }
+      });
       for (const [, newp] of newPagesByPrimary.entries()) mergedPages.push(...newp);
       newLookups.push({ order, pages: mergedPages });
       // 统计：按主键数计
@@ -233,5 +324,17 @@ export async function compactDatabase(dbPath: string, options: CompactOptions = 
     orphans: manifest.orphans,
   };
   await writePagedManifest(indexDir, newManifest);
+  // 清理已并入的 LSM 段与清单
+  if (options.includeLsmSegments && lsmSegmentFiles.length > 0) {
+    try {
+      for (const f of lsmSegmentFiles) {
+        try {
+          await fs.unlink(f);
+        } catch {}
+      }
+      const manPath = join(indexDir, 'lsm-manifest.json');
+      await fs.writeFile(manPath, JSON.stringify({ version: 1, segments: [] }, null, 2), 'utf8');
+    } catch {}
+  }
   return { ordersRewritten, pagesBefore, pagesAfter, primariesMerged, removedByTombstones };
 }

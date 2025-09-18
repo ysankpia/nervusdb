@@ -12,7 +12,8 @@ export declare class QueryBuilder {
     private readonly facts;
     private readonly frontier;
     private readonly orientation;
-    constructor(store: PersistentStore, context: QueryContext);
+    private readonly pinnedEpoch?;
+    constructor(store: PersistentStore, context: QueryContext, pinnedEpoch?: number);
     all(): FactRecord[];
     where(predicate: (record: FactRecord) => boolean): QueryBuilder;
     limit(n: number): QueryBuilder;
@@ -20,8 +21,10 @@ export declare class QueryBuilder {
     follow(predicate: string): QueryBuilder;
     followReverse(predicate: string): QueryBuilder;
     private traverse;
-    static fromFindResult(store: PersistentStore, context: QueryContext): QueryBuilder;
+    static fromFindResult(store: PersistentStore, context: QueryContext, pinnedEpoch?: number): QueryBuilder;
     static empty(store: PersistentStore): QueryBuilder;
+    private pin;
+    private unpin;
 }
 export declare function buildFindContext(store: PersistentStore, criteria: FactCriteria, anchor: FrontierOrientation): QueryContext;
 export {};

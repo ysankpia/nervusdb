@@ -17,7 +17,17 @@ async function main() {
     const hotThreshold = opts['hot-threshold'] ? Number(opts['hot-threshold']) : undefined;
     const maxPrimariesPerOrder = opts['max-primary'] ? Number(opts['max-primary']) : undefined;
     const autoGC = Boolean(opts['auto-gc']);
-    const result = await autoCompact(dbPath, { mode, minMergePages, dryRun, orders: orders, hotThreshold, maxPrimariesPerOrder, autoGC });
+    const respectReaders = !Boolean(opts['no-respect-readers']);
+    const result = await autoCompact(dbPath, {
+        mode,
+        minMergePages,
+        dryRun,
+        orders: orders,
+        hotThreshold,
+        maxPrimariesPerOrder,
+        autoGC,
+        respectReaders,
+    });
     console.log(JSON.stringify(result, null, 2));
 }
 // eslint-disable-next-line @typescript-eslint/no-floating-promises

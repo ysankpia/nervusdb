@@ -3,7 +3,9 @@ import { compactDatabase, type IndexOrder } from '../maintenance/compaction';
 async function main() {
   const [dbPath, ...args] = process.argv.slice(2);
   if (!dbPath) {
-    console.log('用法: pnpm db:compact <db> [--orders=SPO,POS] [--page-size=1024] [--min-merge=2] [--tombstone-threshold=0.2] [--dry-run] [--compression=brotli:4|none]');
+    console.log(
+      '用法: pnpm db:compact <db> [--orders=SPO,POS] [--page-size=1024] [--min-merge=2] [--tombstone-threshold=0.2] [--dry-run] [--compression=brotli:4|none]',
+    );
     process.exit(1);
   }
   const opts: Record<string, string | boolean> = {};
@@ -11,12 +13,15 @@ async function main() {
     const [k, v] = a.startsWith('--') ? a.substring(2).split('=') : [a, 'true'];
     opts[k] = v === undefined ? true : v;
   }
-  const orders: IndexOrder[] | undefined = typeof opts['orders'] === 'string'
-    ? String(opts['orders']).split(',').filter(Boolean) as IndexOrder[]
-    : undefined;
+  const orders: IndexOrder[] | undefined =
+    typeof opts['orders'] === 'string'
+      ? (String(opts['orders']).split(',').filter(Boolean) as IndexOrder[])
+      : undefined;
   const pageSize = opts['page-size'] ? Number(opts['page-size']) : undefined;
   const minMergePages = opts['min-merge'] ? Number(opts['min-merge']) : undefined;
-  const tombstoneRatioThreshold = opts['tombstone-threshold'] ? Number(opts['tombstone-threshold']) : undefined;
+  const tombstoneRatioThreshold = opts['tombstone-threshold']
+    ? Number(opts['tombstone-threshold'])
+    : undefined;
   const dryRun = Boolean(opts['dry-run']);
   let compression: { codec: 'none' | 'brotli'; level?: number } | undefined;
   if (typeof opts['compression'] === 'string') {
@@ -37,7 +42,10 @@ async function main() {
     for (const g of groups) {
       const [ord, list] = g.split(':');
       if (!ord || !list) continue;
-      const nums = list.split(',').map((x) => Number(x.trim())).filter((n) => Number.isFinite(n));
+      const nums = list
+        .split(',')
+        .map((x) => Number(x.trim()))
+        .filter((n) => Number.isFinite(n));
       if (nums.length > 0) (onlyPrimaries as any)[ord] = nums;
     }
   }

@@ -36,15 +36,15 @@ export class WalWriter {
         }
         return new WalWriter(walPath, fd, offset);
     }
-    async appendAddTriple(fact) {
+    appendAddTriple(fact) {
         const payload = encodeStrings([fact.subject, fact.predicate, fact.object]);
         this.writeRecordSync(0x10, payload);
     }
-    async appendDeleteTriple(fact) {
+    appendDeleteTriple(fact) {
         const payload = encodeStrings([fact.subject, fact.predicate, fact.object]);
         this.writeRecordSync(0x20, payload);
     }
-    async appendSetNodeProps(nodeId, props) {
+    appendSetNodeProps(nodeId, props) {
         const body = Buffer.from(JSON.stringify(props ?? {}), 'utf8');
         const buf = Buffer.allocUnsafe(4 + 4 + body.length);
         buf.writeUInt32LE(nodeId, 0);
@@ -52,7 +52,7 @@ export class WalWriter {
         body.copy(buf, 8);
         this.writeRecordSync(0x30, buf);
     }
-    async appendSetEdgeProps(ids, props) {
+    appendSetEdgeProps(ids, props) {
         const body = Buffer.from(JSON.stringify(props ?? {}), 'utf8');
         const buf = Buffer.allocUnsafe(12 + 4 + body.length);
         buf.writeUInt32LE(ids.subjectId, 0);
@@ -62,13 +62,18 @@ export class WalWriter {
         body.copy(buf, 16);
         this.writeRecordSync(0x31, buf);
     }
-    async appendBegin() {
-        this.writeRecordSync(0x40, Buffer.alloc(0));
+    appendBegin(meta) {
+        const payload = encodeBeginMeta(meta);
+        this.writeRecordSync(0x40, payload);
     }
-    async appendCommit() {
+    appendCommit() {
         this.writeRecordSync(0x41, Buffer.alloc(0));
     }
-    async appendAbort() {
+    async appendCommitDurable() {
+        this.writeRecordSync(0x41, Buffer.alloc(0));
+        await this.fd.sync();
+    }
+    appendAbort() {
         this.writeRecordSync(0x42, Buffer.alloc(0));
     }
     async reset() {
@@ -100,7 +105,7 @@ export class WalReplayer {
     constructor(dbPath) {
         this.dbPath = dbPath;
     }
-    async replay() {
+    async replay(knownTxIds) {
         const walPath = `${this.dbPath}.wal`;
         let fh = null;
         const addFacts = [];
@@ -109,29 +114,58 @@ export class WalReplayer {
         const edgeProps = [];
         let safeOffset = 0;
         let version = 0;
+        // 本次重放新增提交的 txId 集
+        let newlyCommitted = [];
         try {
             fh = await fs.open(walPath, 'r');
         }
         catch {
-            return { addFacts, deleteFacts, nodeProps, edgeProps, safeOffset: 0, version: WAL_VERSION };
+            return {
+                addFacts,
+                deleteFacts,
+                nodeProps,
+                edgeProps,
+                safeOffset: 0,
+                version: WAL_VERSION,
+                committedTx: [],
+            };
         }
         try {
             const stat = await fh.stat();
             if (stat.size < 12)
-                return { addFacts, deleteFacts, nodeProps, edgeProps, safeOffset: stat.size, version };
+                return {
+                    addFacts,
+                    deleteFacts,
+                    nodeProps,
+                    edgeProps,
+                    safeOffset: stat.size,
+                    version,
+                    committedTx: [],
+                };
             const header = Buffer.alloc(12);
             await fh.read(header, 0, 12, 0);
             if (!header.subarray(0, 6).equals(MAGIC)) {
-                return { addFacts, deleteFacts, nodeProps, edgeProps, safeOffset: 0, version };
+                return {
+                    addFacts,
+                    deleteFacts,
+                    nodeProps,
+                    edgeProps,
+                    safeOffset: 0,
+                    version,
+                    committedTx: [],
+                };
             }
             version = header.readUInt32LE(6);
+            if (version !== WAL_VERSION) {
+                throw new Error(`不支持的WAL版本: ${version}，当前支持版本: ${WAL_VERSION}`);
+            }
             let offset = 12;
             safeOffset = offset;
-            let inBatch = false;
-            let stagedAdd = [];
-            let stagedDel = [];
-            let stagedNode = [];
-            let stagedEdge = [];
+            const stack = [];
+            const appliedTxIds = new Set();
+            if (knownTxIds)
+                knownTxIds.forEach((id) => appliedTxIds.add(id));
+            newlyCommitted = [];
             while (offset + 9 <= stat.size) {
                 const fixed = Buffer.alloc(9); // type(1) + len(4) + checksum(4)
                 await fh.read(fixed, 0, 9, offset);
@@ -150,43 +184,54 @@ export class WalReplayer {
                 }
                 safeOffset = offset;
                 if (type === 0x40) {
-                    inBatch = true;
-                    stagedAdd = [];
-                    stagedDel = [];
-                    stagedNode = [];
-                    stagedEdge = [];
+                    // BEGIN：创建新层，解析元信息（txId/sessionId）
+                    const meta = length > 0 ? decodeBeginMeta(payload) : undefined;
+                    stack.push({ adds: [], dels: [], node: [], edge: [], meta });
                 }
                 else if (type === 0x41) {
-                    // commit
-                    addFacts.push(...stagedAdd);
-                    deleteFacts.push(...stagedDel);
-                    nodeProps.push(...stagedNode);
-                    edgeProps.push(...stagedEdge);
-                    inBatch = false;
-                    stagedAdd = [];
-                    stagedDel = [];
-                    stagedNode = [];
-                    stagedEdge = [];
+                    // COMMIT：弹出顶层，若仍有外层则合并到外层；否则落入全局
+                    const top = stack.pop();
+                    if (top) {
+                        if (stack.length > 0) {
+                            const parent = stack[stack.length - 1];
+                            parent.adds.push(...top.adds);
+                            parent.dels.push(...top.dels);
+                            parent.node.push(...top.node);
+                            parent.edge.push(...top.edge);
+                            // 内层 commit 不进行 txId 幂等判断与记录（延至最外层）
+                        }
+                        else {
+                            // 最外层提交：若 txId 已应用则跳过；否则落入全局并记录
+                            const txId = top.meta?.txId;
+                            const sessionId = top.meta?.sessionId;
+                            if (!txId || !appliedTxIds.has(txId)) {
+                                addFacts.push(...top.adds);
+                                deleteFacts.push(...top.dels);
+                                nodeProps.push(...top.node);
+                                edgeProps.push(...top.edge);
+                                if (txId) {
+                                    appliedTxIds.add(txId);
+                                    newlyCommitted.push({ id: txId, sessionId });
+                                }
+                            }
+                        }
+                    }
                 }
                 else if (type === 0x42) {
-                    // abort，丢弃暂存
-                    inBatch = false;
-                    stagedAdd = [];
-                    stagedDel = [];
-                    stagedNode = [];
-                    stagedEdge = [];
+                    // ABORT：丢弃顶层
+                    stack.pop();
                 }
                 else if (type === 0x10) {
                     const [subject, predicate, object] = decodeStrings(payload);
-                    if (version >= 2 && inBatch)
-                        stagedAdd.push({ subject, predicate, object });
+                    if (stack.length > 0)
+                        stack[stack.length - 1].adds.push({ subject, predicate, object });
                     else
                         addFacts.push({ subject, predicate, object });
                 }
                 else if (type === 0x20) {
                     const [subject, predicate, object] = decodeStrings(payload);
-                    if (version >= 2 && inBatch)
-                        stagedDel.push({ subject, predicate, object });
+                    if (stack.length > 0)
+                        stack[stack.length - 1].dels.push({ subject, predicate, object });
                     else
                         deleteFacts.push({ subject, predicate, object });
                 }
@@ -195,8 +240,8 @@ export class WalReplayer {
                     const len = payload.readUInt32LE(4);
                     const json = payload.subarray(8, 8 + len).toString('utf8');
                     const item = { nodeId, value: safeParse(json) };
-                    if (version >= 2 && inBatch)
-                        stagedNode.push(item);
+                    if (stack.length > 0)
+                        stack[stack.length - 1].node.push(item);
                     else
                         nodeProps.push(item);
                 }
@@ -207,8 +252,8 @@ export class WalReplayer {
                     const len = payload.readUInt32LE(12);
                     const json = payload.subarray(16, 16 + len).toString('utf8');
                     const item = { ids: { subjectId, predicateId, objectId }, value: safeParse(json) };
-                    if (version >= 2 && inBatch)
-                        stagedEdge.push(item);
+                    if (stack.length > 0)
+                        stack[stack.length - 1].edge.push(item);
                     else
                         edgeProps.push(item);
                 }
@@ -217,7 +262,15 @@ export class WalReplayer {
         finally {
             await fh.close();
         }
-        return { addFacts, deleteFacts, nodeProps, edgeProps, safeOffset, version };
+        return {
+            addFacts,
+            deleteFacts,
+            nodeProps,
+            edgeProps,
+            safeOffset,
+            version,
+            committedTx: newlyCommitted,
+        };
     }
 }
 async function writeHeader(fd) {
@@ -226,8 +279,6 @@ async function writeHeader(fd) {
     header.writeUInt32LE(WAL_VERSION, 6);
     await fd.write(header, 0, header.length, 0);
 }
-// 保留空实现占位，以兼容历史引用（当前未使用）
-async function writeRecord(_fd, _type, _payload) { }
 function encodeStrings(values) {
     const parts = [];
     for (const s of values) {
@@ -237,6 +288,60 @@ function encodeStrings(values) {
         parts.push(len, b);
     }
     return Buffer.concat(parts);
+}
+function encodeBeginMeta(meta) {
+    if (!meta || (!meta.txId && !meta.sessionId))
+        return Buffer.alloc(0);
+    const hasTx = meta.txId ? 1 : 0;
+    const hasSe = meta.sessionId ? 1 : 0;
+    const mask = Buffer.alloc(1);
+    mask.writeUInt8((hasTx << 0) | (hasSe << 1), 0);
+    const parts = [mask];
+    if (meta.txId) {
+        const b = Buffer.from(meta.txId, 'utf8');
+        const len = Buffer.alloc(4);
+        len.writeUInt32LE(b.length, 0);
+        parts.push(len, b);
+    }
+    if (meta.sessionId) {
+        const b = Buffer.from(meta.sessionId, 'utf8');
+        const len = Buffer.alloc(4);
+        len.writeUInt32LE(b.length, 0);
+        parts.push(len, b);
+    }
+    return Buffer.concat(parts);
+}
+function decodeBeginMeta(buf) {
+    if (buf.length === 0)
+        return {};
+    let off = 0;
+    const mask = buf.readUInt8(off);
+    off += 1;
+    const hasTx = (mask & 1) !== 0;
+    const hasSe = (mask & 2) !== 0;
+    let txId;
+    let sessionId;
+    if (hasTx) {
+        if (off + 4 > buf.length)
+            return {};
+        const len = buf.readUInt32LE(off);
+        off += 4;
+        if (off + len > buf.length)
+            return {};
+        txId = buf.subarray(off, off + len).toString('utf8');
+        off += len;
+    }
+    if (hasSe) {
+        if (off + 4 > buf.length)
+            return { txId };
+        const len = buf.readUInt32LE(off);
+        off += 4;
+        if (off + len > buf.length)
+            return { txId };
+        sessionId = buf.subarray(off, off + len).toString('utf8');
+        off += len;
+    }
+    return { txId, sessionId };
 }
 function decodeStrings(buf) {
     const out = [];

@@ -37,7 +37,9 @@ async function check(dbPath: string): Promise<{ ok: boolean; errors: string[] }>
             errors.push(`${lookup.order} 页长度非法: ${JSON.stringify(page)}`);
           }
         } catch (e) {
-          errors.push(`${lookup.order} 页读取失败 @offset=${page.offset} length=${page.length}: ${(e as Error).message}`);
+          errors.push(
+            `${lookup.order} 页读取失败 @offset=${page.offset} length=${page.length}: ${(e as Error).message}`,
+          );
         }
       }
     } catch (e) {
@@ -89,16 +91,29 @@ async function main() {
       // 简要概览：按顺序统计页数/多页 primary 数
       const indexDir = `${dbPath}.pages`;
       const manifest = await readPagedManifest(indexDir);
-      const orders: Record<string, { pages: number; primaries: number; multiPagePrimaries: number }> = {};
+      const orders: Record<
+        string,
+        { pages: number; primaries: number; multiPagePrimaries: number }
+      > = {};
       if (manifest) {
         for (const l of manifest.lookups) {
           const cnt = new Map<number, number>();
           for (const p of l.pages) cnt.set(p.primaryValue, (cnt.get(p.primaryValue) ?? 0) + 1);
           const multi = [...cnt.values()].filter((c) => c > 1).length;
-          orders[l.order] = { pages: l.pages.length, primaries: cnt.size, multiPagePrimaries: multi };
+          orders[l.order] = {
+            pages: l.pages.length,
+            primaries: cnt.size,
+            multiPagePrimaries: multi,
+          };
         }
         const orphanCount = (manifest.orphans ?? []).reduce((acc, g) => acc + g.pages.length, 0);
-        console.log(JSON.stringify({ ok: true, epoch: manifest.epoch ?? 0, orders, orphans: orphanCount }, null, 2));
+        console.log(
+          JSON.stringify(
+            { ok: true, epoch: manifest.epoch ?? 0, orders, orphans: orphanCount },
+            null,
+            2,
+          ),
+        );
       } else {
         console.log(JSON.stringify({ ok: true, orders }, null, 2));
       }
@@ -113,7 +128,9 @@ async function main() {
     if (fast) {
       const fastRes = await repairCorruptedPagesFast(dbPath);
       if (fastRes.repaired.length > 0) {
-        console.log(`快速修复完成：${fastRes.repaired.map((r) => `${r.order}[${r.primaryValues.join(',')}]`).join('; ')}`);
+        console.log(
+          `快速修复完成：${fastRes.repaired.map((r) => `${r.order}[${r.primaryValues.join(',')}]`).join('; ')}`,
+        );
         process.exit(0);
       }
     }

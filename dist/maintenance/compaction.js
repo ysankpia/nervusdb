@@ -28,6 +28,34 @@ export async function compactDatabase(dbPath, options = {}) {
     let primariesMerged = 0;
     let removedByTombstones = 0;
     const ordersRewritten = [];
+    // 实验性：读取 LSM 段，供各顺序并入
+    let lsmTriples = [];
+    let lsmSegmentFiles = [];
+    if (options.includeLsmSegments) {
+        try {
+            const manPath = join(indexDir, 'lsm-manifest.json');
+            const buf = await fs.readFile(manPath);
+            const lsm = JSON.parse(buf.toString('utf8'));
+            for (const seg of lsm.segments ?? []) {
+                const file = join(indexDir, seg.file);
+                try {
+                    const data = await fs.readFile(file);
+                    const cnt = Math.floor(data.length / 12);
+                    for (let i = 0; i < cnt; i += 1) {
+                        const off = i * 12;
+                        lsmTriples.push({
+                            subjectId: data.readUInt32LE(off),
+                            predicateId: data.readUInt32LE(off + 4),
+                            objectId: data.readUInt32LE(off + 8),
+                        });
+                    }
+                    lsmSegmentFiles.push(file);
+                }
+                catch { }
+            }
+        }
+        catch { }
+    }
     for (const order of orders) {
         const lookup = manifest.lookups.find((l) => l.order === order);
         if (!lookup) {
@@ -56,15 +84,35 @@ export async function compactDatabase(dbPath, options = {}) {
                 list.push(t);
             }
         }
+        // 并入 LSM 段（若设置 includeLsmSegments）
+        if (options.includeLsmSegments && lsmTriples.length > 0) {
+            const getPrimary = primarySelector(order);
+            for (const t of lsmTriples) {
+                const key = encodeTripleKey(t);
+                const isTomb = tombstoneSet.has(key);
+                if (isTomb) {
+                    removedByTombstones += 1;
+                    continue;
+                }
+                if (seen.has(`${order}|${key}`))
+                    continue;
+                seen.add(`${order}|${key}`);
+                const primary = getPrimary(t);
+                const list = byPrimary.get(primary) ?? [];
+                if (!byPrimary.has(primary))
+                    byPrimary.set(primary, list);
+                list.push(t);
+            }
+        }
         // 评估是否重写该顺序：满足 minMergePages 或 tombstone 比例
         const shouldRewrite = (() => {
             if (lookup.pages.length === 0)
                 return false;
             // 任意 primary 的页数达到阈值
             const countMap = new Map();
-            for (const p of lookup.pages) {
-                countMap.set(p.primaryValue, (countMap.get(p.primaryValue) ?? 0) + 1);
-            }
+            lookup.pages.forEach((pg) => {
+                countMap.set(pg.primaryValue, (countMap.get(pg.primaryValue) ?? 0) + 1);
+            });
             const hasMergeCandidate = [...countMap.values()].some((c) => c >= minMergePages);
             if (hasMergeCandidate)
                 return true;
@@ -138,7 +186,9 @@ export async function compactDatabase(dbPath, options = {}) {
                 if (count >= minMergePages)
                     rewritePrimaries.add(pval);
             }
-            const limitPrimaries = options.onlyPrimaries?.[order] ? new Set(options.onlyPrimaries[order]) : null;
+            const limitPrimaries = options.onlyPrimaries?.[order]
+                ? new Set(options.onlyPrimaries[order])
+                : null;
             if (limitPrimaries) {
                 for (const p of [...rewritePrimaries]) {
                     if (!limitPrimaries.has(p))
@@ -163,19 +213,30 @@ export async function compactDatabase(dbPath, options = {}) {
             }
             // 重建 pages 映射：替换被重写的 primary，保留其余原页
             const mergedPages = [];
+            const removedPages = [];
             const rewrittenSet = new Set(newPagesByPrimary.keys());
-            for (const p of lookup.pages) {
-                if (rewrittenSet.has(p.primaryValue))
-                    continue; // skip old pages of rewritten primaries
-                mergedPages.push(p);
-            }
-            for (const [_, newp] of newPagesByPrimary.entries())
+            lookup.pages.
+                forEach((pg) => {
+                if (rewrittenSet.has(pg.primaryValue)) {
+                    removedPages.push(pg);
+                }
+                else {
+                    mergedPages.push(pg);
+                }
+            });
+            for (const [, newp] of newPagesByPrimary.entries())
                 mergedPages.push(...newp);
             newLookups.push({ order, pages: mergedPages });
             // 统计：按主键数计
             pagesAfter += mergedPages.length;
             primariesMerged += rewrittenSet.size;
             ordersRewritten.push(order);
+            // 记录孤页待 GC
+            if (removedPages.length > 0) {
+                const orphans = manifest.orphans ?? [];
+                orphans.push({ order, pages: removedPages });
+                manifest.orphans = orphans;
+            }
         }
     }
     const newManifest = {
@@ -186,8 +247,23 @@ export async function compactDatabase(dbPath, options = {}) {
         lookups: newLookups,
         tombstones: manifest.tombstones,
         epoch: (manifest.epoch ?? 0) + 1,
+        orphans: manifest.orphans,
     };
     await writePagedManifest(indexDir, newManifest);
+    // 清理已并入的 LSM 段与清单
+    if (options.includeLsmSegments && lsmSegmentFiles.length > 0) {
+        try {
+            for (const f of lsmSegmentFiles) {
+                try {
+                    await fs.unlink(f);
+                }
+                catch { }
+            }
+            const manPath = join(indexDir, 'lsm-manifest.json');
+            await fs.writeFile(manPath, JSON.stringify({ version: 1, segments: [] }, null, 2), 'utf8');
+        }
+        catch { }
+    }
     return { ordersRewritten, pagesBefore, pagesAfter, primariesMerged, removedByTombstones };
 }
 //# sourceMappingURL=compaction.js.map

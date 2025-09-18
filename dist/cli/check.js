@@ -96,8 +96,12 @@ async function main() {
                     const multi = [...cnt.values()].filter((c) => c > 1).length;
                     orders[l.order] = { pages: l.pages.length, primaries: cnt.size, multiPagePrimaries: multi };
                 }
+                const orphanCount = (manifest.orphans ?? []).reduce((acc, g) => acc + g.pages.length, 0);
+                console.log(JSON.stringify({ ok: true, epoch: manifest.epoch ?? 0, orders, orphans: orphanCount }, null, 2));
             }
-            console.log(JSON.stringify({ ok: true, orders }, null, 2));
+            else {
+                console.log(JSON.stringify({ ok: true, orders }, null, 2));
+            }
         }
         else {
             console.log('检查通过');

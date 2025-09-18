@@ -1,5 +1,11 @@
 import { readPagedManifest } from '../storage/pagedIndex';
-import { compactDatabase, type CompactOptions, type CompactStats, type IndexOrder } from './compaction';
+import { promises as fsp } from 'node:fs';
+import {
+  compactDatabase,
+  type CompactOptions,
+  type CompactStats,
+  type IndexOrder,
+} from './compaction';
 import { readHotness } from '../storage/hotness';
 import { garbageCollectPages } from './gc';
 
@@ -19,6 +25,10 @@ export interface AutoCompactOptions {
   scoreWeights?: { hot?: number; pages?: number; tomb?: number }; // 多因素评分权重（默认 hot=1,pages=1,tomb=0.5）
   minScore?: number; // 满足分数阈值才纳入候选（默认 1）
   respectReaders?: boolean; // 当存在读者时跳过（跨进程可见）
+  includeLsmSegments?: boolean; // 将 LSM 段并入 compaction 并清理
+  includeLsmSegmentsAuto?: boolean; // 自动评估是否并入 LSM 段
+  lsmSegmentsThreshold?: number; // 触发并入的段数量阈值（默认 1）
+  lsmTriplesThreshold?: number; // 触发并入的段三元组数量阈值（默认 pageSize 或 1024）
 }
 
 export interface AutoCompactDecision {
@@ -29,7 +39,10 @@ export interface AutoCompactDecision {
   readers?: number;
 }
 
-export async function autoCompact(dbPath: string, options: AutoCompactOptions = {}): Promise<AutoCompactDecision> {
+export async function autoCompact(
+  dbPath: string,
+  options: AutoCompactOptions = {},
+): Promise<AutoCompactDecision> {
   const manifest = await readPagedManifest(`${dbPath}.pages`);
   if (!manifest) {
     return { selectedOrders: [] };
@@ -39,7 +52,12 @@ export async function autoCompact(dbPath: string, options: AutoCompactOptions = 
       const { getActiveReaders } = await import('../storage/readerRegistry');
       const readers = await getActiveReaders(`${dbPath}.pages`);
       if (readers.length > 0) {
-        return { selectedOrders: [], skipped: true, reason: 'active_readers', readers: readers.length };
+        return {
+          selectedOrders: [],
+          skipped: true,
+          reason: 'active_readers',
+          readers: readers.length,
+        };
       }
     } catch {
       // ignore registry failures
@@ -68,7 +86,11 @@ export async function autoCompact(dbPath: string, options: AutoCompactOptions = 
     if (options.mode !== 'rewrite' && hot && options.hotThreshold && options.hotThreshold > 0) {
       const counts = hot.counts[order] ?? {};
       const candidates: Array<{ p: number; c: number; pages: number; score: number }> = [];
-      const w = { hot: options.scoreWeights?.hot ?? 1, pages: options.scoreWeights?.pages ?? 1, tomb: options.scoreWeights?.tomb ?? 0.5 };
+      const w = {
+        hot: options.scoreWeights?.hot ?? 1,
+        pages: options.scoreWeights?.pages ?? 1,
+        tomb: options.scoreWeights?.tomb ?? 0.5,
+      };
       const minScore = options.minScore ?? 1;
       for (const [pval, count] of cnt.entries()) {
         if (count <= 1) continue; // 非多页
@@ -77,11 +99,14 @@ export async function autoCompact(dbPath: string, options: AutoCompactOptions = 
         // 评分：热度*wh + (页数-1)*wp + (tombstones>0?1:0)*wt
         const tombTerm = tombstones.size > 0 ? 1 : 0;
         const score = hotCount * w.hot + (count - 1) * w.pages + tombTerm * w.tomb;
-        if (hotCount >= options.hotThreshold && score >= minScore) candidates.push({ p: pval, c: hotCount, pages: count, score });
+        if (hotCount >= options.hotThreshold && score >= minScore)
+          candidates.push({ p: pval, c: hotCount, pages: count, score });
       }
       // 优先按分数、再按热度排序
-      const sorted = candidates.sort((a, b) => (b.score - a.score) || (b.c - a.c));
-      const topK = options.maxPrimariesPerOrder ? sorted.slice(0, options.maxPrimariesPerOrder) : sorted;
+      const sorted = candidates.sort((a, b) => b.score - a.score || b.c - a.c);
+      const topK = options.maxPrimariesPerOrder
+        ? sorted.slice(0, options.maxPrimariesPerOrder)
+        : sorted;
       if (topK.length > 0) {
         (onlyPrimaries as any)[order] = topK.map((x) => x.p);
         selected.add(order);
@@ -89,7 +114,29 @@ export async function autoCompact(dbPath: string, options: AutoCompactOptions = 
     }
   }
 
-  const selectedOrders = [...selected];
+  let selectedOrders = [...selected];
+
+  // 评估是否并入 LSM 段
+  let includeLsmSegments = options.includeLsmSegments ?? false;
+  if (!includeLsmSegments && options.includeLsmSegmentsAuto) {
+    try {
+      const buf = await fsp.readFile(`${dbPath}.pages/lsm-manifest.json`);
+      const lsm = JSON.parse(buf.toString('utf8')) as { segments: Array<{ count?: number }> };
+      const segs = lsm.segments?.length ?? 0;
+      const triples = (lsm.segments ?? []).reduce((a, s) => a + (s.count ?? 0), 0);
+      const segTh = options.lsmSegmentsThreshold ?? 1;
+      const triTh = options.lsmTriplesThreshold ?? options.pageSize ?? manifest.pageSize ?? 1024;
+      if (segs >= segTh || triples >= triTh) includeLsmSegments = true;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  if (selectedOrders.length === 0 && includeLsmSegments && !(options.dryRun ?? false)) {
+    // 当仅因为 LSM 段需要并入时，至少对指定 orders 执行一次合并
+    selectedOrders = orders;
+  }
+
   if (selectedOrders.length === 0) return { selectedOrders };
 
   const compactOpts: CompactOptions = {
@@ -103,6 +150,7 @@ export async function autoCompact(dbPath: string, options: AutoCompactOptions = 
     dryRun: options.dryRun ?? false,
     mode: options.mode ?? 'incremental',
     onlyPrimaries,
+    includeLsmSegments,
   };
 
   const stats = await compactDatabase(dbPath, compactOpts);

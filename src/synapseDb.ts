@@ -6,6 +6,7 @@ import {
   QueryBuilder,
   buildFindContext,
 } from './query/queryBuilder';
+import { SynapseDBOpenOptions, CommitBatchOptions, BeginBatchOptions } from './types/openOptions';
 
 export interface FactOptions {
   subjectProperties?: Record<string, unknown>;
@@ -13,18 +14,54 @@ export interface FactOptions {
   edgeProperties?: Record<string, unknown>;
 }
 
+/**
+ * SynapseDB - 嵌入式三元组知识库
+ *
+ * 基于 TypeScript 实现的类 SQLite 单文件数据库，专门用于存储和查询 SPO 三元组数据。
+ * 支持分页索引、WAL 事务、快照一致性、自动压缩和垃圾回收。
+ *
+ * @example
+ * ```typescript
+ * const db = await SynapseDB.open('/path/to/database.synapsedb', {
+ *   pageSize: 2000,
+ *   enableLock: true,
+ *   compression: { codec: 'brotli', level: 6 }
+ * });
+ *
+ * db.addFact({ subject: 'Alice', predicate: 'knows', object: 'Bob' });
+ * await db.flush();
+ *
+ * const results = db.find({ predicate: 'knows' }).all();
+ * await db.close();
+ * ```
+ */
 export class SynapseDB {
   private constructor(private readonly store: PersistentStore) {}
 
-  static async open(
-    path: string,
-    options?: {
-      indexDirectory?: string;
-      pageSize?: number;
-      rebuildIndexes?: boolean;
-      compression?: { codec: 'none' | 'brotli'; level?: number };
-    },
-  ): Promise<SynapseDB> {
+  /**
+   * 打开或创建 SynapseDB 数据库
+   *
+   * @param path 数据库文件路径，如果不存在将自动创建
+   * @param options 数据库配置选项
+   * @returns Promise<SynapseDB> 数据库实例
+   *
+   * @example
+   * ```typescript
+   * // 基本用法
+   * const db = await SynapseDB.open('./my-database.synapsedb');
+   *
+   * // 带配置的用法
+   * const db = await SynapseDB.open('./my-database.synapsedb', {
+   *   pageSize: 1500,
+   *   enableLock: true,
+   *   registerReader: true,
+   *   compression: { codec: 'brotli', level: 4 }
+   * });
+   * ```
+   *
+   * @throws {Error} 当文件无法访问或锁定冲突时
+   */
+  static async open(path: string, options?: SynapseDBOpenOptions): Promise<SynapseDB> {
     const store = await PersistentStore.open(path, options ?? {});
     return new SynapseDB(store);
   }
@@ -74,11 +111,14 @@ export class SynapseDB {
   }
 
   getNodeProperties(nodeId: number): Record<string, unknown> | undefined {
-    return this.store.getNodeProperties(nodeId);
+    const v = this.store.getNodeProperties(nodeId);
+    // 对外 API 约定：未设置返回 null，便于测试与调用方判空
+    return (v as any) ?? null;
   }
 
   getEdgeProperties(key: TripleKey): Record<string, unknown> | undefined {
-    return this.store.getEdgeProperties(key);
+    const v = this.store.getEdgeProperties(key);
+    return (v as any) ?? null;
   }
 
   async flush(): Promise<void> {
@@ -87,8 +127,8 @@ export class SynapseDB {
 
   find(criteria: FactCriteria, options?: { anchor?: FrontierOrientation }): QueryBuilder {
     const anchor = options?.anchor ?? inferAnchor(criteria);
-    const pinned = (this.store as unknown as { getCurrentEpoch: () => number }).getCurrentEpoch?.()
-      ?? 0;
+    const pinned =
+      (this.store as unknown as { getCurrentEpoch: () => number }).getCurrentEpoch?.() ?? 0;
     // 对初始 find 也进行临时 pinned 保障
     try {
       (this.store as unknown as { pushPinnedEpoch: (e: number) => void }).pushPinnedEpoch?.(pinned);
@@ -112,12 +152,12 @@ export class SynapseDB {
   }
 
   // 事务批次控制（可选）：允许将多次写入合并为一次提交
-  beginBatch(): void {
-    this.store.beginBatch();
+  beginBatch(options?: BeginBatchOptions): void {
+    this.store.beginBatch(options);
   }
 
-  commitBatch(): void {
-    this.store.commitBatch();
+  commitBatch(options?: CommitBatchOptions): void {
+    this.store.commitBatch(options);
   }
 
   abortBatch(): void {
@@ -127,19 +167,52 @@ export class SynapseDB {
   async close(): Promise<void> {
     await this.store.close();
   }
+
+  // 读快照：在给定回调期间固定当前 epoch，避免 mid-chain 刷新 readers 造成视图漂移
+  async withSnapshot<T>(fn: (db: SynapseDB) => Promise<T> | T): Promise<T> {
+    const epoch =
+      (this.store as unknown as { getCurrentEpoch: () => number }).getCurrentEpoch?.() ?? 0;
+    try {
+      // 等待读者注册完成，确保快照安全
+      await (
+        this.store as unknown as { pushPinnedEpoch: (e: number) => Promise<void> }
+      ).pushPinnedEpoch?.(epoch);
+      return await fn(this);
+    } finally {
+      await (this.store as unknown as { popPinnedEpoch: () => Promise<void> }).popPinnedEpoch?.();
+    }
+  }
+
+  // 暂存层指标（实验性）：仅用于观测与基准
+  getStagingMetrics(): { lsmMemtable: number } {
+    return (
+      (
+        this.store as unknown as { getStagingMetrics: () => { lsmMemtable: number } }
+      ).getStagingMetrics?.() ?? { lsmMemtable: 0 }
+    );
+  }
 }
 
-export type { FactInput, FactRecord };
+export type { FactInput, FactRecord, SynapseDBOpenOptions, CommitBatchOptions, BeginBatchOptions };
 
 function inferAnchor(criteria: FactCriteria): FrontierOrientation {
   const hasSubject = criteria.subject !== undefined;
   const hasObject = criteria.object !== undefined;
+  const hasPredicate = criteria.predicate !== undefined;
 
   if (hasSubject && hasObject) {
     return 'both';
   }
   if (hasSubject) {
     return 'subject';
+  }
+  // p+o 查询通常希望锚定主语集合，便于后续正向联想
+  if (hasObject && hasPredicate) {
+    return 'subject';
+  }
+  // 仅 object 的场景保持锚定到宾语，便于 reverse follow（测试依赖）
+  if (hasObject) {
+    return 'object';
   }
   return 'object';
 }

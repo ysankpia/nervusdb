@@ -49,6 +49,10 @@ export interface PagedIndexManifest {
     compression: CompressionOptions;
     tombstones?: Array<[number, number, number]>;
     epoch?: number;
+    orphans?: Array<{
+        order: IndexOrder;
+        pages: PageMeta[];
+    }>;
     lookups: PageLookup[];
 }
 export declare function writePagedManifest(directory: string, manifest: PagedIndexManifest): Promise<void>;

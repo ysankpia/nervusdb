@@ -1,11 +1,18 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { readPagedManifest, writePagedManifest, pageFileName } from '../storage/pagedIndex';
-export async function garbageCollectPages(dbPath) {
+import { getActiveReaders } from '../storage/readerRegistry';
+export async function garbageCollectPages(dbPath, options) {
     const indexDir = `${dbPath}.pages`;
     const manifest = await readPagedManifest(indexDir);
     if (!manifest)
         throw new Error('缺少 manifest，无法进行 GC');
+    if (options?.respectReaders) {
+        const readers = await getActiveReaders(indexDir);
+        if (readers.length > 0) {
+            return { orders: [], bytesBefore: 0, bytesAfter: 0, skipped: true, reason: 'active_readers', readers: readers.length };
+        }
+    }
     let bytesBefore = 0;
     let bytesAfter = 0;
     const orderStats = [];
@@ -53,6 +60,7 @@ export async function garbageCollectPages(dbPath) {
     const newManifest = {
         ...manifest,
         epoch: (manifest.epoch ?? 0) + 1,
+        orphans: [],
     };
     await writePagedManifest(indexDir, newManifest);
     return { orders: orderStats, bytesBefore, bytesAfter };

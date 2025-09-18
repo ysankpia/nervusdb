@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { readStorageFile } from '../storage/fileHeader';
 import { readPagedManifest } from '../storage/pagedIndex';
-async function stats(dbPath) {
+async function stats(dbPath, opts) {
     const sections = await readStorageFile(dbPath);
     const dictCount = sections.dictionary.length >= 4 ? sections.dictionary.readUInt32LE(0) : 0;
     const tripleCount = sections.triples.length >= 4 ? sections.triples.readUInt32LE(0) : 0;
@@ -28,6 +28,41 @@ async function stats(dbPath) {
         walSize = st.size;
     }
     catch { }
+    // txId 注册表（若存在）
+    let txIds = 0;
+    let txIdItems;
+    let txIdsWindow = 0;
+    let txIdsBySession;
+    let lsmSegments = 0;
+    let lsmTriples = 0;
+    try {
+        const { readTxIdRegistry } = await import('../storage/txidRegistry');
+        const reg = await readTxIdRegistry(`${dbPath}.pages`);
+        txIds = reg.txIds.length;
+        if (opts.listTxIds && opts.listTxIds > 0) {
+            txIdItems = [...reg.txIds].sort((a, b) => b.ts - a.ts).slice(0, opts.listTxIds);
+        }
+        if (opts.txIdsWindowMin && opts.txIdsWindowMin > 0) {
+            const since = Date.now() - opts.txIdsWindowMin * 60_000;
+            const items = reg.txIds.filter((x) => x.ts >= since);
+            txIdsWindow = items.length;
+            const g = {};
+            for (const it of items) {
+                const key = it.sessionId ?? 'unknown';
+                g[key] = (g[key] ?? 0) + 1;
+            }
+            txIdsBySession = g;
+        }
+    }
+    catch { }
+    // LSM-Lite 段清单（实验性）
+    try {
+        const man = await fs.readFile(`${dbPath}.pages/lsm-manifest.json`);
+        const m = JSON.parse(man.toString('utf8'));
+        lsmSegments = m.segments?.length ?? 0;
+        lsmTriples = (m.segments ?? []).reduce((a, s) => a + (s.count ?? 0), 0);
+    }
+    catch { }
     const out = {
         dictionaryEntries: dictCount,
         triples: tripleCount,
@@ -36,17 +71,37 @@ async function stats(dbPath) {
         pages,
         tombstones,
         walBytes: walSize,
+        txIds,
+        lsmSegments,
+        lsmTriples,
         orders,
     };
+    if (txIdItems)
+        out.txIdItems = txIdItems;
+    if (opts.txIdsWindowMin) {
+        out.txIdsWindowMin = opts.txIdsWindowMin;
+        out.txIdsWindow = txIdsWindow;
+        if (txIdsBySession)
+            out.txIdsBySession = txIdsBySession;
+    }
     console.log(JSON.stringify(out, null, 2));
 }
 async function main() {
-    const [dbPath] = process.argv.slice(2);
+    const args = process.argv.slice(2);
+    const dbPath = args[0];
     if (!dbPath) {
         console.log('用法: pnpm db:stats <db>');
         process.exit(1);
     }
-    await stats(dbPath);
+    const listArg = args.find((a) => a.startsWith('--txids'));
+    let listTxIds;
+    if (listArg) {
+        const parts = listArg.split('=');
+        listTxIds = parts.length > 1 ? Number(parts[1]) : 50;
+    }
+    const winArg = args.find((a) => a.startsWith('--txids-window='));
+    const txIdsWindowMin = winArg ? Number(winArg.split('=')[1]) : undefined;
+    await stats(dbPath, { listTxIds, txIdsWindowMin });
 }
 // eslint-disable-next-line @typescript-eslint/no-floating-promises
 main();

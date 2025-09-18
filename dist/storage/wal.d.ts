@@ -4,23 +4,28 @@ export interface FactInput {
     predicate: string;
     object: string;
 }
+export interface WalBeginMeta {
+    txId?: string;
+    sessionId?: string;
+}
 export declare class WalWriter {
     private readonly walPath;
     private fd;
     private offset;
     private constructor();
     static open(dbPath: string): Promise<WalWriter>;
-    appendAddTriple(fact: FactInput): Promise<void>;
-    appendDeleteTriple(fact: FactInput): Promise<void>;
-    appendSetNodeProps(nodeId: number, props: unknown): Promise<void>;
+    appendAddTriple(fact: FactInput): void;
+    appendDeleteTriple(fact: FactInput): void;
+    appendSetNodeProps(nodeId: number, props: unknown): void;
     appendSetEdgeProps(ids: {
         subjectId: number;
         predicateId: number;
         objectId: number;
-    }, props: unknown): Promise<void>;
-    appendBegin(): Promise<void>;
-    appendCommit(): Promise<void>;
-    appendAbort(): Promise<void>;
+    }, props: unknown): void;
+    appendBegin(meta?: WalBeginMeta): void;
+    appendCommit(): void;
+    appendCommitDurable(): Promise<void>;
+    appendAbort(): void;
     reset(): Promise<void>;
     truncateTo(offset: number): Promise<void>;
     close(): Promise<void>;
@@ -29,7 +34,7 @@ export declare class WalWriter {
 export declare class WalReplayer {
     private readonly dbPath;
     constructor(dbPath: string);
-    replay(): Promise<{
+    replay(knownTxIds?: Set<string>): Promise<{
         addFacts: FactInput[];
         deleteFacts: FactInput[];
         nodeProps: Array<{
@@ -46,6 +51,10 @@ export declare class WalReplayer {
         }>;
         safeOffset: number;
         version: number;
+        committedTx: Array<{
+            id: string;
+            sessionId?: string;
+        }>;
     }>;
 }
 //# sourceMappingURL=wal.d.ts.map

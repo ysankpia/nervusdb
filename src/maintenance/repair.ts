@@ -88,7 +88,9 @@ export async function repairCorruptedOrders(dbPath: string): Promise<{ repairedO
   return { repairedOrders };
 }
 
-export async function repairCorruptedPagesFast(dbPath: string): Promise<{ repaired: Array<{ order: string; primaryValues: number[] }> }> {
+export async function repairCorruptedPagesFast(
+  dbPath: string,
+): Promise<{ repaired: Array<{ order: string; primaryValues: number[] }> }> {
   const indexDir = `${dbPath}.pages`;
   const manifest = await readPagedManifest(indexDir);
   if (!manifest) throw new Error('缺少 manifest，无法修复');
@@ -107,7 +109,10 @@ export async function repairCorruptedPagesFast(dbPath: string): Promise<{ repair
   const facts = db.listFacts();
   const repaired: Array<{ order: string; primaryValues: number[] }> = [];
 
-  const getPrimary = (order: string, t: { subjectId: number; predicateId: number; objectId: number }): number =>
+  const getPrimary = (
+    order: string,
+    t: { subjectId: number; predicateId: number; objectId: number },
+  ): number =>
     order === 'SPO' || order === 'SOP'
       ? t.subjectId
       : order === 'POS' || order === 'PSO'
@@ -126,8 +131,15 @@ export async function repairCorruptedPagesFast(dbPath: string): Promise<{ repair
     for (const p of primariesArr) {
       const vf = facts.filter((f) => getPrimary(order, f) === p);
       // 稳定排序
-      vf.sort((a, b) => a.subjectId - b.subjectId || a.predicateId - b.predicateId || a.objectId - b.objectId);
-      for (const f of vf) writer.push({ subjectId: f.subjectId, predicateId: f.predicateId, objectId: f.objectId }, p);
+      vf.sort(
+        (a, b) =>
+          a.subjectId - b.subjectId || a.predicateId - b.predicateId || a.objectId - b.objectId,
+      );
+      for (const f of vf)
+        writer.push(
+          { subjectId: f.subjectId, predicateId: f.predicateId, objectId: f.objectId },
+          p,
+        );
       const newPages = await writer.finalize();
       // 替换 manifest 中该 primary 的页映射
       const remained = lookup.pages.filter((pg) => pg.primaryValue !== p);

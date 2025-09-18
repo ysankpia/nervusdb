@@ -19,6 +19,7 @@ export interface CompactOptions {
     };
     mode?: 'rewrite' | 'incremental';
     onlyPrimaries?: Partial<Record<IndexOrder, number[]>>;
+    includeLsmSegments?: boolean;
 }
 export interface CompactStats {
     ordersRewritten: IndexOrder[];

@@ -17,7 +17,11 @@ export async function readHotness(directory: string): Promise<HotnessData> {
     const buf = await fs.readFile(file);
     return JSON.parse(buf.toString('utf8')) as HotnessData;
   } catch {
-    return { version: 1, updatedAt: Date.now(), counts: { SPO: {}, SOP: {}, POS: {}, PSO: {}, OSP: {}, OPS: {} } } as HotnessData;
+    return {
+      version: 1,
+      updatedAt: Date.now(),
+      counts: { SPO: {}, SOP: {}, POS: {}, PSO: {}, OSP: {}, OPS: {} },
+    } as HotnessData;
   }
 }
 
@@ -35,7 +39,12 @@ export async function writeHotness(directory: string, data: HotnessData): Promis
   await fs.rename(tmp, file);
   try {
     const dh = await fs.open(dirname(file), 'r');
-    try { await dh.sync(); } finally { await dh.close(); }
-  } catch {}
+    try {
+      await dh.sync();
+    } finally {
+      await dh.close();
+    }
+  } catch {
+    // 忽略目录同步失败（跨平台容忍）
+  }
 }
-

@@ -229,7 +229,8 @@ export async function writePagedManifest(
 ): Promise<void> {
   const file = join(directory, MANIFEST_NAME);
   const tmp = `${file}.tmp`;
-  const json = Buffer.from(JSON.stringify(manifest, null, 2), 'utf8');
+  // 写入紧凑 JSON，减少 I/O 体积并加快序列化
+  const json = Buffer.from(JSON.stringify(manifest), 'utf8');
 
   const fh = await fs.open(tmp, 'w');
   try {
@@ -295,7 +296,7 @@ const CRC32_TABLE = (() => {
   for (let i = 0; i < 256; i += 1) {
     let c = i;
     for (let k = 0; k < 8; k += 1) {
-      c = (c & 1) ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
     }
     table[i] = c >>> 0;
   }

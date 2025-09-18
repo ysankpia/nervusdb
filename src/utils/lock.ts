@@ -9,7 +9,10 @@ export async function acquireLock(basePath: string): Promise<LockHandle> {
   let fh: fs.FileHandle | null = null;
   try {
     fh = await fs.open(lockPath, 'wx'); // fail if exists
-    const payload = Buffer.from(JSON.stringify({ pid: process.pid, startedAt: Date.now() }, null, 2), 'utf8');
+    const payload = Buffer.from(
+      JSON.stringify({ pid: process.pid, startedAt: Date.now() }, null, 2),
+      'utf8',
+    );
     await fh.write(payload, 0, payload.length, 0);
     await fh.sync();
   } catch (e) {
@@ -17,14 +20,23 @@ export async function acquireLock(basePath: string): Promise<LockHandle> {
   }
 
   const release = async () => {
-    try { await fh?.close(); } catch {}
-    try { await fs.unlink(lockPath); } catch {}
+    try {
+      await fh?.close();
+    } catch {}
+    try {
+      await fs.unlink(lockPath);
+    } catch {}
   };
 
-  process.once('exit', () => { void release(); });
-  process.once('SIGINT', () => { void release().then(()=>process.exit(130)); });
-  process.once('SIGTERM', () => { void release().then(()=>process.exit(143)); });
+  process.once('exit', () => {
+    void release();
+  });
+  process.once('SIGINT', () => {
+    void release().then(() => process.exit(130));
+  });
+  process.once('SIGTERM', () => {
+    void release().then(() => process.exit(143));
+  });
 
   return { release };
 }
-

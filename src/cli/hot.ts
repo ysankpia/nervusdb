@@ -11,15 +11,16 @@ async function main() {
     const [k, v] = a.startsWith('--') ? a.substring(2).split('=') : [a, ''];
     opts[k] = v ?? '';
   }
-  const order = (opts['order'] ?? 'SPO') as 'SPO'|'SOP'|'POS'|'PSO'|'OSP'|'OPS';
+  const order = (opts['order'] ?? 'SPO') as 'SPO' | 'SOP' | 'POS' | 'PSO' | 'OSP' | 'OPS';
   const top = Number(opts['top'] ?? '10');
   const hot = await readHotness(`${dbPath}.pages`);
   const counts = hot.counts[order] ?? {};
-  const sorted = Object.entries(counts).sort((a,b) => b[1]-a[1]).slice(0, top);
+  const sorted = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, top);
   const out = sorted.map(([primary, count]) => ({ primary: Number(primary), count }));
   console.log(JSON.stringify({ order, updatedAt: hot.updatedAt, top: out }, null, 2));
 }
 
 // eslint-disable-next-line @typescript-eslint/no-floating-promises
 main();
-

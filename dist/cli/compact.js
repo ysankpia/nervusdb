@@ -28,6 +28,20 @@ async function main() {
             compression = { codec: 'brotli', level };
         }
     }
+    // 解析 only-primaries，格式：SPO:1,2;POS:3
+    let onlyPrimaries;
+    if (typeof opts['only-primaries'] === 'string') {
+        onlyPrimaries = {};
+        const groups = String(opts['only-primaries']).split(';').filter(Boolean);
+        for (const g of groups) {
+            const [ord, list] = g.split(':');
+            if (!ord || !list)
+                continue;
+            const nums = list.split(',').map((x) => Number(x.trim())).filter((n) => Number.isFinite(n));
+            if (nums.length > 0)
+                onlyPrimaries[ord] = nums;
+        }
+    }
     const stats = await compactDatabase(dbPath, {
         orders,
         pageSize,
@@ -36,6 +50,7 @@ async function main() {
         dryRun,
         compression,
         mode: opts['mode'] ?? 'rewrite',
+        onlyPrimaries: onlyPrimaries,
     });
     console.log(JSON.stringify(stats, null, 2));
 }

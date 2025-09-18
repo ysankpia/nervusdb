@@ -24,6 +24,10 @@ export interface PersistentStoreOptions {
         level?: number;
     };
     enableLock?: boolean;
+    registerReader?: boolean;
+    enablePersistentTxDedupe?: boolean;
+    maxRememberTxIds?: number;
+    stagingMode?: 'default' | 'lsm-lite';
 }
 export declare class PersistentStore {
     private readonly path;
@@ -39,6 +43,15 @@ export declare class PersistentStore {
     private hotness;
     private lock?;
     private batchDepth;
+    private batchMetaStack;
+    private txStack;
+    private currentEpoch;
+    private lastManifestCheck;
+    private pinnedEpochStack;
+    private readerRegistered;
+    private snapshotRefCount;
+    private activeReaderOperation;
+    private lsm?;
     static open(path: string, options?: PersistentStoreOptions): Promise<PersistentStore>;
     private pagedReaders;
     private hydratePagedReaders;
@@ -54,8 +67,13 @@ export declare class PersistentStore {
     private deleteFactDirect;
     setNodeProperties(nodeId: number, properties: Record<string, unknown>): void;
     setEdgeProperties(key: TripleKey, properties: Record<string, unknown>): void;
-    beginBatch(): void;
-    commitBatch(): void;
+    beginBatch(options?: {
+        txId?: string;
+        sessionId?: string;
+    }): void;
+    commitBatch(options?: {
+        durable?: boolean;
+    }): void;
     abortBatch(): void;
     private setNodePropertiesDirect;
     private setEdgePropertiesDirect;
@@ -65,7 +83,21 @@ export declare class PersistentStore {
     resolveRecords(triples: EncodedTriple[]): FactRecord[];
     private toFactRecord;
     flush(): Promise<void>;
+    private flushLsmSegments;
+    private static CRC32_TABLE;
+    private crc32;
+    private refreshReadersIfEpochAdvanced;
+    private ensureReaderRegistered;
+    pushPinnedEpoch(epoch: number): Promise<void>;
+    popPinnedEpoch(): Promise<void>;
+    getCurrentEpoch(): number;
+    getStagingMetrics(): {
+        lsmMemtable: number;
+    };
     close(): Promise<void>;
     private bumpHot;
+    private stageAdd;
+    private applyStage;
+    private peekTx;
 }
 //# sourceMappingURL=persistentStore.d.ts.map

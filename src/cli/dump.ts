@@ -13,7 +13,10 @@ async function dump(dbPath: string, order: string, primaryValue: number): Promis
     console.error('未知顺序或无页：', order);
     process.exit(2);
   }
-  const reader = new PagedIndexReader({ directory: `${dbPath}.pages`, compression: manifest.compression }, lookup);
+  const reader = new PagedIndexReader(
+    { directory: `${dbPath}.pages`, compression: manifest.compression },
+    lookup,
+  );
   const triples = await reader.read(primaryValue);
 
   // 解析字典，打印人类可读
@@ -22,7 +25,9 @@ async function dump(dbPath: string, order: string, primaryValue: number): Promis
   const toValue = (id: number) => dict.getValue(id) ?? `#${id}`;
 
   for (const t of triples) {
-    console.log(`${t.subjectId}:${t.predicateId}:${t.objectId}  // ${toValue(t.subjectId)} ${toValue(t.predicateId)} ${toValue(t.objectId)}`);
+    console.log(
+      `${t.subjectId}:${t.predicateId}:${t.objectId}  // ${toValue(t.subjectId)} ${toValue(t.predicateId)} ${toValue(t.objectId)}`,
+    );
   }
 }
 
@@ -42,4 +47,3 @@ async function main() {
 
 // eslint-disable-next-line @typescript-eslint/no-floating-promises
 main();
-

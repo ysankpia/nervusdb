@@ -21,10 +21,24 @@ export interface AutoCompactOptions {
     hotThreshold?: number;
     maxPrimariesPerOrder?: number;
     autoGC?: boolean;
+    scoreWeights?: {
+        hot?: number;
+        pages?: number;
+        tomb?: number;
+    };
+    minScore?: number;
+    respectReaders?: boolean;
+    includeLsmSegments?: boolean;
+    includeLsmSegmentsAuto?: boolean;
+    lsmSegmentsThreshold?: number;
+    lsmTriplesThreshold?: number;
 }
 export interface AutoCompactDecision {
     selectedOrders: IndexOrder[];
     compact?: CompactStats;
+    skipped?: boolean;
+    reason?: string;
+    readers?: number;
 }
 export declare function autoCompact(dbPath: string, options?: AutoCompactOptions): Promise<AutoCompactDecision>;
 //# sourceMappingURL=autoCompact.d.ts.map
