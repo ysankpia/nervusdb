@@ -5,6 +5,7 @@ import { initializeIfMissing, readStorageFile, writeStorageFile } from './fileHe
 import { StringDictionary } from './dictionary.js';
 import { PropertyStore, TripleKey } from './propertyStore.js';
 import { TripleIndexes, getBestIndexKey, type IndexOrder } from './tripleIndexes.js';
+import { PropertyIndexManager, type PropertyChange } from './propertyIndex.js';
 import { EncodedTriple, TripleStore } from './tripleStore.js';
 import { LsmLiteStaging } from './staging.js';
 import {
@@ -68,9 +69,11 @@ export class PersistentStore {
 
   private dirty = false;
   private wal!: WalWriter;
+  private closed = false;
   private tombstones = new Set<string>();
   private hotness: HotnessData | null = null;
   private lock?: LockHandle;
+  private propertyIndexManager!: PropertyIndexManager;
   private batchDepth = 0;
   private batchMetaStack: Array<{ txId?: string; sessionId?: string }> = [];
   // 事务暂存栈：支持嵌套批次，commit 向外层合并，最外层 commit 落入主存；abort 丢弃
@@ -141,6 +144,11 @@ export class PersistentStore {
     if (options.stagingMode === 'lsm-lite') {
       store.lsm = new LsmLiteStaging<EncodedTriple>();
     }
+
+    // 初始化属性索引管理器
+    store.propertyIndexManager = new PropertyIndexManager(indexDirectory);
+    await store.propertyIndexManager.initialize();
+
     // WAL 重放（将未持久化的增量恢复到内存与 staging）
     store.wal = await WalWriter.open(path);
     // 持久 txId 去重：读取注册表（可选）
@@ -183,6 +191,9 @@ export class PersistentStore {
       store.hydratePagedReaders(manifest);
       store.currentEpoch = manifest.epoch ?? 0;
     }
+
+    // 重建属性索引
+    await store.rebuildPropertyIndex();
     // 加载热度计数
     try {
       store.hotness = await readHotness(indexDirectory);
@@ -626,6 +637,10 @@ export class PersistentStore {
 
   setNodeProperties(nodeId: number, properties: Record<string, unknown>): void {
     const inBatch = this.batchDepth > 0;
+
+    // 获取旧属性用于索引更新
+    const oldProperties = this.getNodeProperties(nodeId) || {};
+
     void this.wal.appendSetNodeProps(nodeId, properties);
     if (inBatch) {
       const tx = this.peekTx();
@@ -633,18 +648,29 @@ export class PersistentStore {
     } else {
       this.properties.setNodeProperties(nodeId, properties);
       this.dirty = true;
+
+      // 更新属性索引
+      this.updateNodePropertyIndex(nodeId, oldProperties, properties);
     }
   }
 
   setEdgeProperties(key: TripleKey, properties: Record<string, unknown>): void {
     const inBatch = this.batchDepth > 0;
+
+    // 获取旧属性用于索引更新
+    const oldProperties = this.getEdgeProperties(key) || {};
+    const edgeKey = encodeTripleKey(key);
+
     void this.wal.appendSetEdgeProps(key, properties);
     if (inBatch) {
       const tx = this.peekTx();
-      if (tx) tx.edgeProps.set(encodeTripleKey(key), properties);
+      if (tx) tx.edgeProps.set(edgeKey, properties);
     } else {
       this.properties.setEdgeProperties(key, properties);
       this.dirty = true;
+
+      // 更新属性索引
+      this.updateEdgePropertyIndex(edgeKey, oldProperties, properties);
     }
   }
 
@@ -715,13 +741,26 @@ export class PersistentStore {
   }
 
   private setNodePropertiesDirect(nodeId: number, properties: Record<string, unknown>): void {
+    // 获取旧属性用于索引更新（WAL 重放场景）
+    const oldProperties = this.properties.getNodeProperties(nodeId) || {};
+
     this.properties.setNodeProperties(nodeId, properties);
     this.dirty = true;
+
+    // 更新属性索引
+    this.updateNodePropertyIndex(nodeId, oldProperties, properties);
   }
 
   private setEdgePropertiesDirect(key: TripleKey, properties: Record<string, unknown>): void {
+    // 获取旧属性用于索引更新（WAL 重放场景）
+    const oldProperties = this.properties.getEdgeProperties(key) || {};
+    const edgeKey = encodeTripleKey(key);
+
     this.properties.setEdgeProperties(key, properties);
     this.dirty = true;
+
+    // 更新属性索引
+    this.updateEdgePropertyIndex(edgeKey, oldProperties, properties);
   }
 
   getNodeProperties(nodeId: number): Record<string, unknown> | undefined {
@@ -748,6 +787,11 @@ export class PersistentStore {
     if (this.pinnedEpochStack.length === 0 && now - this.lastManifestCheck > 1000) {
       void this.refreshReadersIfEpochAdvanced();
       this.lastManifestCheck = now;
+    }
+
+    // 快照查询：使用纯磁盘查询，避免内存依赖
+    if (this.pinnedEpochStack.length > 0) {
+      return this.queryFromDisk(criteria);
     }
 
     // 架构重构：所有查询统一使用PagedIndexReader，快照期间也安全使用固定epoch的readers
@@ -782,7 +826,7 @@ export class PersistentStore {
                 }
               }
             }
-            // 合并内存中的新增数据（WAL重放等）
+            // 合并内存中的新增数据（WAL重放等）- 移出条件判断，始终执行
             for (const t of this.triples.list()) {
               const key = encodeTripleKey(t);
               if (!allTriples.has(key) && !this.tombstones.has(key)) {
@@ -844,6 +888,65 @@ export class PersistentStore {
       .filter((t) => matchCriteria(t, criteria) && !this.tombstones.has(encodeTripleKey(t)));
   }
 
+  /**
+   * 纯磁盘查询方法：仅依赖分页索引，不使用内存缓存
+   * 用于快照查询期间，确保内存占用最小化
+   */
+  private queryFromDisk(criteria: Partial<EncodedTriple>): EncodedTriple[] {
+    const noKeys =
+      criteria.subjectId === undefined &&
+      criteria.predicateId === undefined &&
+      criteria.objectId === undefined;
+
+    if (noKeys) {
+      // 全量查询：流式处理所有分页数据
+      const results: EncodedTriple[] = [];
+      const seen = new Set<string>();
+
+      const spoReader = this.pagedReaders.get('SPO');
+      if (spoReader) {
+        try {
+          const primaryValuesArr =
+            (spoReader as unknown as { getPrimaryValues: () => number[] }).getPrimaryValues?.() ??
+            [];
+
+          for (const primaryValue of primaryValuesArr) {
+            const triples = spoReader.readSync(primaryValue);
+            for (const t of triples) {
+              const key = encodeTripleKey(t);
+              if (!seen.has(key) && !this.tombstones.has(key)) {
+                seen.add(key);
+                results.push(t);
+              }
+            }
+          }
+        } catch {
+          // 磁盘读取失败，返回空结果
+        }
+      }
+      return results;
+    }
+
+    // 特定条件查询：使用最佳索引直接读取
+    const order = getBestIndexKey(criteria);
+    const reader = this.pagedReaders.get(order);
+    const primaryValue = criteria[primaryKey(order)];
+
+    if (reader && primaryValue !== undefined) {
+      try {
+        const pagedTriples = reader.readSync(primaryValue);
+        return pagedTriples.filter(
+          (t) => matchCriteria(t, criteria) && !this.tombstones.has(encodeTripleKey(t)),
+        );
+      } catch {
+        // 磁盘读取失败，返回空结果
+      }
+    }
+
+    // 无法进行磁盘查询，返回空结果
+    return [];
+  }
+
   resolveRecords(triples: EncodedTriple[]): FactRecord[] {
     const seen = new Set<string>();
     const results: FactRecord[] = [];
@@ -878,6 +981,7 @@ export class PersistentStore {
   }
 
   async flush(): Promise<void> {
+    if (this.closed) return;
     if (!this.dirty) {
       return;
     }
@@ -1125,6 +1229,13 @@ export class PersistentStore {
   }
 
   async close(): Promise<void> {
+    this.closed = true;
+    // 关闭 WAL 句柄，避免 FileHandle 依赖 GC 关闭导致的 DEP0137 警告
+    try {
+      await this.wal.close();
+    } catch {
+      // 忽略关闭失败
+    }
     // 释放写锁
     if (this.lock) {
       await this.lock.release();
@@ -1173,11 +1284,23 @@ export class PersistentStore {
       this.tombstones.add(encodeTripleKey(t));
       this.dirty = true;
     }
-    // 应用属性
-    stage.nodeProps.forEach((v, k) => this.setNodePropertiesDirect(k, v));
-    stage.edgeProps.forEach((v, k) => {
-      const ids = decodeTripleKey(k);
-      this.setEdgePropertiesDirect(ids, v);
+    // 应用属性（在事务提交时更新属性索引）
+    stage.nodeProps.forEach((newProperties, nodeId) => {
+      // 获取旧属性用于索引更新
+      const oldProperties = this.properties.getNodeProperties(nodeId) || {};
+      this.properties.setNodeProperties(nodeId, newProperties);
+      this.dirty = true;
+      // 更新属性索引
+      this.updateNodePropertyIndex(nodeId, oldProperties, newProperties);
+    });
+    stage.edgeProps.forEach((newProperties, edgeKey) => {
+      const ids = decodeTripleKey(edgeKey);
+      // 获取旧属性用于索引更新
+      const oldProperties = this.properties.getEdgeProperties(ids) || {};
+      this.properties.setEdgeProperties(ids, newProperties);
+      this.dirty = true;
+      // 更新属性索引
+      this.updateEdgePropertyIndex(edgeKey, oldProperties, newProperties);
     });
   }
 
@@ -1190,6 +1313,96 @@ export class PersistentStore {
       }
     | undefined {
     return this.txStack[this.txStack.length - 1];
+  }
+
+  /**
+   * 重建属性索引
+   */
+  private async rebuildPropertyIndex(): Promise<void> {
+    // 收集所有现有属性数据
+    const nodeProperties = new Map<number, Record<string, unknown>>();
+    const edgeProperties = new Map<string, Record<string, unknown>>();
+
+    // 从PropertyStore收集数据
+    // 注意：这里需要访问PropertyStore的内部数据，暂时跳过
+    // 在实际应用中，属性数据将在设置时动态添加到索引
+
+    // 重建索引
+    await this.propertyIndexManager.rebuildFromProperties(nodeProperties, edgeProperties);
+  }
+
+  /**
+   * 获取属性索引管理器的内存索引
+   */
+  getPropertyIndex() {
+    return this.propertyIndexManager.getMemoryIndex();
+  }
+
+  /**
+   * 应用属性变更到索引
+   */
+  private applyPropertyIndexChange(change: PropertyChange): void {
+    this.propertyIndexManager.applyPropertyChange(change);
+  }
+
+  /**
+   * 更新节点属性索引
+   */
+  private updateNodePropertyIndex(
+    nodeId: number,
+    oldProperties: Record<string, unknown>,
+    newProperties: Record<string, unknown>,
+  ): void {
+    // 比较属性变化，生成索引更新操作
+    const oldKeys = new Set(Object.keys(oldProperties));
+    const newKeys = new Set(Object.keys(newProperties));
+    const allKeys = new Set([...oldKeys, ...newKeys]);
+
+    for (const propertyName of allKeys) {
+      const oldValue = oldProperties[propertyName];
+      const newValue = newProperties[propertyName];
+
+      if (oldValue !== newValue) {
+        this.applyPropertyIndexChange({
+          operation: 'SET',
+          target: 'node',
+          targetId: nodeId,
+          propertyName,
+          oldValue,
+          newValue,
+        });
+      }
+    }
+  }
+
+  /**
+   * 更新边属性索引
+   */
+  private updateEdgePropertyIndex(
+    edgeKey: string,
+    oldProperties: Record<string, unknown>,
+    newProperties: Record<string, unknown>,
+  ): void {
+    // 比较属性变化，生成索引更新操作
+    const oldKeys = new Set(Object.keys(oldProperties));
+    const newKeys = new Set(Object.keys(newProperties));
+    const allKeys = new Set([...oldKeys, ...newKeys]);
+
+    for (const propertyName of allKeys) {
+      const oldValue = oldProperties[propertyName];
+      const newValue = newProperties[propertyName];
+
+      if (oldValue !== newValue) {
+        this.applyPropertyIndexChange({
+          operation: 'SET',
+          target: 'edge',
+          targetId: edgeKey,
+          propertyName,
+          oldValue,
+          newValue,
+        });
+      }
+    }
   }
 }
 

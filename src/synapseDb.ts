@@ -5,6 +5,8 @@ import {
   FrontierOrientation,
   QueryBuilder,
   buildFindContext,
+  buildFindContextFromProperty,
+  PropertyFilter,
 } from './query/queryBuilder.js';
 import {
   SynapseDBOpenOptions,
@@ -141,6 +143,14 @@ export class SynapseDB {
     }
   }
 
+  // 兼容别名：满足测试与直觉 API（与 streamFacts 等价）
+  findStream(
+    criteria?: Partial<{ subject: string; predicate: string; object: string }>,
+    options?: { batchSize?: number },
+  ): AsyncIterable<FactRecord[]> {
+    return this.streamFacts(criteria, options?.batchSize);
+  }
+
   getNodeId(value: string): number | undefined {
     return this.store.getNodeIdByValue(value);
   }
@@ -168,13 +178,147 @@ export class SynapseDB {
     const anchor = options?.anchor ?? inferAnchor(criteria);
     const pinned =
       (this.store as unknown as { getCurrentEpoch: () => number }).getCurrentEpoch?.() ?? 0;
-    // 对初始 find 也进行临时 pinned 保障
-    try {
-      (this.store as unknown as { pushPinnedEpoch: (e: number) => void }).pushPinnedEpoch?.(pinned);
+
+    // 检查是否有分页索引数据，如果没有则不使用快照模式
+    const pagedReaders = (
+      this.store as unknown as {
+        pagedReaders: Map<string, { getPrimaryValues?: () => number[] }>;
+      }
+    ).pagedReaders;
+    let hasPagedData = false;
+    if (pagedReaders?.size > 0) {
+      // 检查索引是否真的包含数据
+      const spoReader = pagedReaders.get('SPO');
+      if (spoReader) {
+        const primaryValues = spoReader.getPrimaryValues?.() ?? [];
+        hasPagedData = primaryValues.length > 0;
+      }
+    }
+
+    if (hasPagedData) {
+      // 有分页索引数据时，使用快照模式保证一致性
+      try {
+        (this.store as unknown as { pushPinnedEpoch: (e: number) => void }).pushPinnedEpoch?.(
+          pinned,
+        );
+        const context = buildFindContext(this.store, criteria, anchor);
+        return QueryBuilder.fromFindResult(this.store, context, pinned);
+      } finally {
+        (this.store as unknown as { popPinnedEpoch: () => void }).popPinnedEpoch?.();
+      }
+    } else {
+      // 没有分页索引数据时，直接使用常规查询（不设置快照）
       const context = buildFindContext(this.store, criteria, anchor);
-      return QueryBuilder.fromFindResult(this.store, context, pinned);
-    } finally {
-      (this.store as unknown as { popPinnedEpoch: () => void }).popPinnedEpoch?.();
+      return QueryBuilder.fromFindResult(this.store, context);
+    }
+  }
+
+  /**
+   * 基于节点属性进行查询
+   * @param propertyFilter 属性过滤条件
+   * @param options 查询选项
+   * @example
+   * ```typescript
+   * // 查找所有年龄为25的用户
+   * const users = db.findByNodeProperty(
+   *   { propertyName: 'age', value: 25 },
+   *   { anchor: 'subject' }
+   * ).all();
+   *
+   * // 查找年龄在25-35之间的用户
+   * const adults = db.findByNodeProperty({
+   *   propertyName: 'age',
+   *   range: { min: 25, max: 35, includeMin: true, includeMax: true }
+   * }).all();
+   * ```
+   */
+  findByNodeProperty(
+    propertyFilter: PropertyFilter,
+    options?: { anchor?: FrontierOrientation },
+  ): QueryBuilder {
+    const anchor = options?.anchor ?? 'subject';
+    const pinned =
+      (this.store as unknown as { getCurrentEpoch: () => number }).getCurrentEpoch?.() ?? 0;
+
+    // 检查是否有分页索引数据
+    const pagedReaders = (
+      this.store as unknown as {
+        pagedReaders: Map<string, { getPrimaryValues?: () => number[] }>;
+      }
+    ).pagedReaders;
+    let hasPagedData = false;
+    if (pagedReaders?.size > 0) {
+      const spoReader = pagedReaders.get('SPO');
+      if (spoReader) {
+        const primaryValues = spoReader.getPrimaryValues?.() ?? [];
+        hasPagedData = primaryValues.length > 0;
+      }
+    }
+
+    if (hasPagedData) {
+      try {
+        (this.store as unknown as { pushPinnedEpoch: (e: number) => void }).pushPinnedEpoch?.(
+          pinned,
+        );
+        const context = buildFindContextFromProperty(this.store, propertyFilter, anchor, 'node');
+        return QueryBuilder.fromFindResult(this.store, context, pinned);
+      } finally {
+        (this.store as unknown as { popPinnedEpoch: () => void }).popPinnedEpoch?.();
+      }
+    } else {
+      const context = buildFindContextFromProperty(this.store, propertyFilter, anchor, 'node');
+      return QueryBuilder.fromFindResult(this.store, context);
+    }
+  }
+
+  /**
+   * 基于边属性进行查询
+   * @param propertyFilter 属性过滤条件
+   * @param options 查询选项
+   * @example
+   * ```typescript
+   * // 查找所有权重为0.8的关系
+   * const strongRelations = db.findByEdgeProperty(
+   *   { propertyName: 'weight', value: 0.8 }
+   * ).all();
+   * ```
+   */
+  findByEdgeProperty(
+    propertyFilter: PropertyFilter,
+    options?: { anchor?: FrontierOrientation },
+  ): QueryBuilder {
+    const anchor = options?.anchor ?? 'subject';
+    const pinned =
+      (this.store as unknown as { getCurrentEpoch: () => number }).getCurrentEpoch?.() ?? 0;
+
+    // 检查是否有分页索引数据
+    const pagedReaders = (
+      this.store as unknown as {
+        pagedReaders: Map<string, { getPrimaryValues?: () => number[] }>;
+      }
+    ).pagedReaders;
+    let hasPagedData = false;
+    if (pagedReaders?.size > 0) {
+      const spoReader = pagedReaders.get('SPO');
+      if (spoReader) {
+        const primaryValues = spoReader.getPrimaryValues?.() ?? [];
+        hasPagedData = primaryValues.length > 0;
+      }
+    }
+
+    if (hasPagedData) {
+      try {
+        (this.store as unknown as { pushPinnedEpoch: (e: number) => void }).pushPinnedEpoch?.(
+          pinned,
+        );
+        const context = buildFindContextFromProperty(this.store, propertyFilter, anchor, 'edge');
+        return QueryBuilder.fromFindResult(this.store, context, pinned);
+      } finally {
+        (this.store as unknown as { popPinnedEpoch: () => void }).popPinnedEpoch?.();
+      }
+    } else {
+      const context = buildFindContextFromProperty(this.store, propertyFilter, anchor, 'edge');
+      return QueryBuilder.fromFindResult(this.store, context);
     }
   }
 
@@ -232,7 +376,15 @@ export class SynapseDB {
   }
 }
 
-export type { FactInput, FactRecord, SynapseDBOpenOptions, CommitBatchOptions, BeginBatchOptions };
+export type {
+  FactInput,
+  FactRecord,
+  SynapseDBOpenOptions,
+  CommitBatchOptions,
+  BeginBatchOptions,
+  PropertyFilter,
+  FrontierOrientation,
+};
 
 function inferAnchor(criteria: FactCriteria): FrontierOrientation {
   const hasSubject = criteria.subject !== undefined;
