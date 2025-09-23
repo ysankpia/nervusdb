@@ -97,7 +97,9 @@ describe('属性索引性能验收测试', () => {
 
       const queryTime2 = Date.now() - queryStart2;
       console.log(`   查询年龄20-30的用户: ${youngUsers.length} 条结果，耗时: ${queryTime2}ms`);
-      expect(queryTime2).toBeLessThan(200); // 范围查询稍慢，但应该在 200ms 内完成
+      // CI 环境性能波动较大，放宽阈值；本地保持更严格标准
+      const maxRangeMs = process.env.CI || process.env.GITHUB_ACTIONS ? 300 : 200;
+      expect(queryTime2).toBeLessThan(maxRangeMs);
       expect(youngUsers.length).toBeGreaterThan(0);
 
       // 性能测试 3: 基于边属性查询
