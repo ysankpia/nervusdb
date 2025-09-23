@@ -20,6 +20,11 @@ dist/
 *.synapsedb.wal
 *.synapsedb.pages/
 
+# Test temp databases (e.g. temp-test-snapshot-memory)
+temp-*
+temp-*.wal
+temp-*.pages/
+
 # Repomix output
 repomix-output.xml
 
@@ -27,4 +32,3 @@ repomix-output.xml
 tmp/
 .tmp/
 *.tmp
-
