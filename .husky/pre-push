@@ -1,6 +1,15 @@
 #!/usr/bin/env sh
 set -e
 
+echo "[husky] pre-push: verify docs directory tree"
+pnpm run docs:tree
+
+# 若目录树在 pre-push 阶段被刷新产生变更，阻止推送，提示先提交
+if ! git diff --quiet -- .agents/rules/base.md; then
+  echo "[husky] pre-push: 目录结构（详细）已更新，请先提交该变更后再推送"
+  exit 1
+fi
+
 echo "[husky] pre-push: full lint (strict)"
 pnpm run lint:full:strict
 

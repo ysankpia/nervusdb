@@ -1,6 +1,14 @@
 #!/usr/bin/env sh
 set -e
 
+echo "[husky] pre-commit: update docs directory tree"
+pnpm run docs:tree
+
+# 若目录树更新，则将修改加入暂存区，确保随本次提交生效
+if ! git diff --quiet -- .agents/rules/base.md; then
+  git add .agents/rules/base.md
+fi
+
 echo "[husky] pre-commit: lint-staged"
 pnpm exec lint-staged -c .lintstaged.cjs
 

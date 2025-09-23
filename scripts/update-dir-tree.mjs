@@ -1,0 +1,310 @@
+/*
+ * 自动生成并更新 `.agents/rules/base.md` 中的“目录结构（详细）”代码块
+ * 使用：pnpm run docs:tree （由 pre-commit 钩子自动调用）
+ */
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
+const ROOT = process.cwd();
+const TARGET_FILE = path.join(ROOT, '.agents/rules/base.md');
+const HEADER = '目录结构（详细）：';
+
+const COMMENTS = {
+  'src': '源码目录',
+  'src/index.ts': '顶层导出与连接工具',
+  'src/synapseDb.ts': '数据库主 API',
+  'src/query': '查询构建器与链式联想',
+  'src/query/queryBuilder.ts': '链式查询构建器',
+  'src/storage': '持久化/索引/字典/WAL 等',
+  'src/storage/dictionary.ts': '字典存储',
+  'src/storage/tripleStore.ts': '三元组存储',
+  'src/storage/tripleIndexes.ts': '六序索引入口/选择',
+  'src/storage/pagedIndex.ts': '分页化磁盘索引',
+  'src/storage/propertyStore.ts': '属性值存储',
+  'src/storage/propertyIndex.ts': '属性索引',
+  'src/storage/persistentStore.ts': '持久化抽象',
+  'src/storage/staging.ts': '暂存层/增量段',
+  'src/storage/wal.ts': '写前日志（WAL v2）',
+  'src/storage/readerRegistry.ts': '读者登记/一致性',
+  'src/storage/txidRegistry.ts': '事务批次与幂等',
+  'src/storage/hotness.ts': '热度统计与半衰',
+  'src/storage/layout.ts': '文件布局与常量',
+  'src/storage/fileHeader.ts': '主文件头部结构',
+  'src/maintenance': '维护与治理工具逻辑',
+  'src/maintenance/check.ts': '校验与诊断',
+  'src/maintenance/repair.ts': '修复器',
+  'src/maintenance/compaction.ts': '整序/增量压实',
+  'src/maintenance/autoCompact.ts': '自动压实策略',
+  'src/maintenance/gc.ts': '页面级 GC',
+  'src/cli': '命令行入口（开发期）',
+  'src/cli/synapsedb.ts': '顶层 CLI（发布后由 dist/bin 提供）',
+  'src/cli/check.ts': 'db:check 子命令',
+  'src/cli/compact.ts': 'db:compact 子命令',
+  'src/cli/dump.ts': 'db:dump 子命令',
+  'src/cli/stats.ts': 'db:stats 子命令',
+  'src/cli/txids.ts': 'db:txids 子命令',
+  'src/cli/gc.ts': 'db:gc 子命令',
+  'src/cli/readers.ts': 'db:readers 子命令',
+  'src/cli/hot.ts': 'db:hot 子命令',
+  'src/cli/bench.ts': 'bench 子命令',
+  'src/cli/repair_page.ts': 'db:repair-page 子命令',
+  'src/cli/auto_compact.ts': 'db:auto-compact 子命令',
+  'src/utils': '通用工具',
+  'src/utils/fault.ts': '自定义错误与故障注入',
+  'src/utils/lock.ts': '文件锁/进程级互斥',
+  'src/types': '公共类型声明',
+  'src/types/openOptions.ts': 'open() 选项类型',
+  'src/test': '辅助测试资源（若有）',
+  'tests': '单元与集成测试（Vitest）',
+  'docs': '文档与示例',
+  'docs/SynapseDB设计文档.md': '设计说明',
+  'docs/使用示例': '使用教程与FAQ',
+  'docs/教学文档': '系列教程与API',
+  'docs/项目发展路线图': 'Roadmap',
+  'docs/项目实施建议': '推广与落地建议',
+  'docs/项目审查文档': '多模型评审记录',
+  'dist': '构建产物（发布用）',
+  'coverage': '覆盖率报告（测试生成）',
+  '.agents': '智能体规则与协作说明',
+  '.agents/rules/base.md': '本文件（AGENTS/CLAUDE 软链接）',
+  '.github': 'CI/Issue 模板等',
+  '.husky': 'Git hooks（pre-commit/pre-push）',
+  'package.json': '脚本与依赖',
+  'tsconfig.json': 'TypeScript 编译配置',
+  'tsconfig.vitest.json': '测试 TypeScript 配置',
+  'vitest.config.ts': '测试配置',
+  'eslint.config.js': 'Lint 配置',
+  '.prettierrc': 'Prettier 配置',
+  '.prettierignore': 'Prettier 忽略',
+  '.lintstaged.cjs': '提交前 Lint 配置',
+  '.gitignore': 'Git 忽略',
+  'README.md': '仓库概览',
+  'CHANGELOG.md': '变更记录',
+  'pnpm-lock.yaml': '依赖锁',
+};
+
+const withComment = (rel) => {
+  const c = COMMENTS[rel];
+  return c ? `${rel}  ${c}` : rel;
+};
+
+const exists = async (p) => {
+  try { await fs.access(p); return true; } catch { return false; }
+};
+
+async function buildTestsSummary() {
+  const testsDir = path.join(ROOT, 'tests');
+  if (!(await exists(testsDir))) return [];
+  const entries = await fs.readdir(testsDir);
+  const has = (prefix) => entries.some((f) => f.startsWith(prefix));
+  const hasLike = (re) => entries.some((f) => re.test(f));
+  const lines = [];
+  if (has('wal_') || hasLike(/^wal.*\.test\.ts$/)) lines.push('│  ├─ wal_*.test.ts              WAL 行为/幂等/截断/事务');
+  if (has('compaction') || has('compaction_')) lines.push('│  ├─ compaction*.test.ts        压实相关测试');
+  if (has('property_index') || has('property_index_')) lines.push('│  ├─ property_index*.test.ts    属性索引功能/性能');
+  if (has('query') || has('queryBuilder') || has('query_')) lines.push('│  ├─ query*.test.ts             查询与链式联想');
+  if (has('snapshot_')) lines.push('│  ├─ snapshot_*.test.ts         快照一致性与内存占用');
+  if (has('performance_')) lines.push('│  ├─ performance_*.test.ts      基线/大数据性能');
+  lines.push('│  └─ ...                        其余主题参见文件名');
+  return lines;
+}
+
+async function buildCliFiles() {
+  const dir = path.join(ROOT, 'src/cli');
+  if (!(await exists(dir))) return [];
+  const files = (await fs.readdir(dir)).filter((f) => f.endsWith('.ts')).sort();
+  return files.map((f, i) => {
+    const rel = path.posix.join('src/cli', f);
+    const last = i === files.length - 1;
+    const tail = COMMENTS[rel] ? `${rel}  ${COMMENTS[rel]}` : rel;
+    const bar = last ? '└' : '├';
+    return `│  │  ${bar}─ ${tail}`;
+  });
+}
+
+async function buildStorageFiles() {
+  const dir = path.join(ROOT, 'src/storage');
+  if (!(await exists(dir))) return [];
+  const files = (await fs.readdir(dir)).filter((f) => f.endsWith('.ts')).sort();
+  return files.map((f, i) => {
+    const rel = path.posix.join('src/storage', f);
+    const last = i === files.length - 1;
+    const tail = COMMENTS[rel] ? `${rel}  ${COMMENTS[rel]}` : rel;
+    const bar = last ? '└' : '├';
+    return `│  │  ${bar}─ ${tail}`;
+  });
+}
+
+async function buildSrcSection() {
+  const lines = [];
+  const hasSrc = await exists(path.join(ROOT, 'src'));
+  if (!hasSrc) return lines;
+  lines.push('├─ src/                          ' + (COMMENTS['src'] || ''));
+
+  if (await exists(path.join(ROOT, 'src/index.ts')))
+    lines.push('│  ├─ ' + withComment('src/index.ts'));
+  if (await exists(path.join(ROOT, 'src/synapseDb.ts')))
+    lines.push('│  ├─ ' + withComment('src/synapseDb.ts'));
+
+  if (await exists(path.join(ROOT, 'src/query'))){
+    lines.push('│  ├─ ' + withComment('src/query') + '/');
+    if (await exists(path.join(ROOT, 'src/query/queryBuilder.ts')))
+      lines.push('│  │  └─ ' + withComment('src/query/queryBuilder.ts'));
+  }
+
+  if (await exists(path.join(ROOT, 'src/storage'))){
+    lines.push('│  ├─ ' + withComment('src/storage') + '/');
+    const storageFiles = await buildStorageFiles();
+    lines.push(...storageFiles);
+  }
+
+  if (await exists(path.join(ROOT, 'src/maintenance'))){
+    lines.push('│  ├─ ' + withComment('src/maintenance') + '/');
+    const files = ['check.ts','repair.ts','compaction.ts','autoCompact.ts','gc.ts'];
+    const present = (await Promise.all(files.map(async (f)=>({f, ok: await exists(path.join(ROOT, 'src/maintenance', f))}))))
+      .filter((x)=>x.ok)
+      .map((x)=>x.f);
+    present.forEach((f, idx) => {
+      const rel = path.posix.join('src/maintenance', f);
+      const last = idx === present.length - 1;
+      const bar = last ? '└' : '├';
+      lines.push(`│  │  ${bar}─ ${withComment(rel)}`);
+    });
+  }
+
+  if (await exists(path.join(ROOT, 'src/cli'))){
+    lines.push('│  ├─ ' + withComment('src/cli') + '/');
+    const cliFiles = await buildCliFiles();
+    lines.push(...cliFiles);
+  }
+
+  if (await exists(path.join(ROOT, 'src/utils'))){
+    lines.push('│  ├─ ' + withComment('src/utils') + '/');
+    const utils = ['fault.ts','lock.ts'];
+    const present = (await Promise.all(utils.map(async (f)=>({f, ok: await exists(path.join(ROOT, 'src/utils', f))}))))
+      .filter((x)=>x.ok)
+      .map((x)=>x.f);
+    present.forEach((f, idx) => {
+      const rel = path.posix.join('src/utils', f);
+      const last = idx === present.length - 1;
+      const bar = last ? '└' : '├';
+      lines.push(`│  │  ${bar}─ ${withComment(rel)}`);
+    });
+  }
+
+  if (await exists(path.join(ROOT, 'src/types'))){
+    lines.push('│  ├─ ' + withComment('src/types') + '/');
+    if (await exists(path.join(ROOT, 'src/types/openOptions.ts')))
+      lines.push('│  │  └─ ' + withComment('src/types/openOptions.ts'));
+  }
+
+  if (await exists(path.join(ROOT, 'src/test'))){
+    lines.push('│  └─ ' + withComment('src/test') + '/');
+  }
+
+  return lines;
+}
+
+async function buildDocsSection() {
+  const lines = [];
+  if (!(await exists(path.join(ROOT, 'docs')))) return lines;
+  lines.push('├─ docs/                         ' + (COMMENTS['docs'] || ''));
+  if (await exists(path.join(ROOT, 'docs/SynapseDB设计文档.md')))
+    lines.push('│  ├─ ' + withComment('docs/SynapseDB设计文档.md'));
+  const subdirs = ['使用示例','教学文档','项目发展路线图','项目实施建议','项目审查文档'];
+  const present = (await Promise.all(subdirs.map(async (d)=>({d, ok: await exists(path.join(ROOT, 'docs', d))}))))
+    .filter((x)=>x.ok)
+    .map((x)=>x.d);
+  present.forEach((d, idx) => {
+    const last = idx === present.length - 1;
+    const bar = last ? '└' : '├';
+    const rel = path.posix.join('docs', d);
+    lines.push(`│  ${bar}─ ${withComment(rel)}/`);
+  });
+  return lines;
+}
+
+async function buildAgentsSection() {
+  const lines = [];
+  if (!(await exists(path.join(ROOT, '.agents')))) return lines;
+  lines.push('├─ .agents/                      ' + (COMMENTS['.agents'] || ''));
+  if (await exists(path.join(ROOT, '.agents/rules/base.md')))
+    lines.push('│  └─ ' + withComment('.agents/rules/base.md'));
+  return lines;
+}
+
+async function buildRootFiles() {
+  const order = [
+    'dist','coverage','.agents','.github','.husky',
+    'package.json','tsconfig.json','tsconfig.vitest.json','vitest.config.ts','eslint.config.js',
+    '.prettierrc','.prettierignore','.lintstaged.cjs','.gitignore','README.md','CHANGELOG.md','pnpm-lock.yaml'
+  ];
+  const lines = [];
+  if (await exists(path.join(ROOT, 'dist')))
+    lines.push('├─ ' + withComment('dist') + '/');
+  if (await exists(path.join(ROOT, 'coverage')))
+    lines.push('├─ ' + withComment('coverage') + '/');
+  if (await exists(path.join(ROOT, '.github')))
+    lines.push('├─ ' + withComment('.github') + '/');
+  if (await exists(path.join(ROOT, '.husky')))
+    lines.push('├─ ' + withComment('.husky') + '/');
+  const files = order.filter((p) => !['dist','coverage','.agents','.github','.husky'].includes(p));
+  const present = [];
+  for (const f of files) {
+    if (await exists(path.join(ROOT, f))) present.push(f);
+  }
+  present.forEach((f, idx) => {
+    const last = idx === present.length - 1;
+    const bar = last ? '└' : '├';
+    lines.push(`${bar}─ ${withComment(f)}`);
+  });
+  return lines;
+}
+
+async function buildTree() {
+  const lines = [];
+  lines.push('项目根目录');
+  lines.push(...(await buildSrcSection()));
+  if (await exists(path.join(ROOT, 'tests'))){
+    lines.push('├─ tests/                        ' + (COMMENTS['tests'] || ''));
+    lines.push(...(await buildTestsSummary()));
+  }
+  lines.push(...(await buildDocsSection()));
+  lines.push(...(await buildAgentsSection()));
+  lines.push(...(await buildRootFiles()));
+  return lines.join('\n');
+}
+
+async function updateBaseMd() {
+  const content = await fs.readFile(TARGET_FILE, 'utf8');
+  const headerIdx = content.indexOf(HEADER);
+  if (headerIdx === -1) {
+    console.error(`[update-dir-tree] 未找到段落标题：${HEADER}`);
+    process.exit(2);
+  }
+  const fenceStart = content.indexOf('```', headerIdx);
+  if (fenceStart === -1) {
+    console.error('[update-dir-tree] 未找到目录结构代码块的起始 ```');
+    process.exit(2);
+  }
+  const fenceEnd = content.indexOf('```', fenceStart + 3);
+  if (fenceEnd === -1) {
+    console.error('[update-dir-tree] 未找到目录结构代码块的结束 ```');
+    process.exit(2);
+  }
+  const tree = await buildTree();
+  const newBlock = '```\n' + tree + '\n```';
+  const updated = content.slice(0, fenceStart) + newBlock + content.slice(fenceEnd + 3);
+  if (updated !== content) {
+    await fs.writeFile(TARGET_FILE, updated, 'utf8');
+    console.log('[update-dir-tree] base.md 已更新');
+  } else {
+    console.log('[update-dir-tree] 目录树无变更');
+  }
+}
+
+updateBaseMd().catch((err) => {
+  console.error('[update-dir-tree] 失败:', err);
+  process.exit(1);
+});
+
