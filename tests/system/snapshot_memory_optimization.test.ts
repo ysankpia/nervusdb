@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { SynapseDB } from '../src/synapseDb.js';
+import { SynapseDB } from '@/synapseDb';
 
 describe('快照内存优化测试', () => {
+  const isCoverage = !!process.env.VITEST_COVERAGE;
   const testDbPath = './temp-test-snapshot-memory';
 
   beforeEach(async () => {
@@ -18,8 +19,8 @@ describe('快照内存优化测试', () => {
   it('快照查询不增加内存占用', async () => {
     const db = await SynapseDB.open(testDbPath);
 
-    // 创建 10,000 条记录（减少数据量以适应测试时间限制）
-    const recordCount = 10000;
+    // 覆盖率模式下缩小数据规模，降低 V8 覆盖开销导致的超时/崩溃风险
+    const recordCount = isCoverage ? 2000 : 10000;
     console.log(`正在创建 ${recordCount} 条记录...`);
 
     // 使用批量插入优化性能，将多次 flush 合并为一次
@@ -38,8 +39,9 @@ describe('快照内存优化测试', () => {
         description: `Test node ${i}`, // 简化数据减少插入时间
       });
 
-      // 每 2000 条记录提交一次 batch 到 WAL，避免内存堆积
-      if (i > 0 && i % 2000 === 0) {
+      // 每 N 条记录提交一次 batch 到 WAL，避免内存堆积
+      const step = isCoverage ? 1000 : 2000;
+      if (i > 0 && i % step === 0) {
         db.commitBatch();
         db.beginBatch();
         console.log(`已提交 ${i} 条记录到批处理`);
@@ -121,8 +123,8 @@ describe('快照内存优化测试', () => {
   it('大数据集流式查询内存稳定', async () => {
     const db = await SynapseDB.open(testDbPath);
 
-    // 创建 12,000 条记录（减少数据量）
-    const recordCount = 12000;
+    // 覆盖率模式下缩小数据规模
+    const recordCount = isCoverage ? 3000 : 12000;
     console.log(`正在创建 ${recordCount} 条记录...`);
 
     // 使用批量插入, 将多次 flush 合并为一次
@@ -134,8 +136,9 @@ describe('快照内存优化测试', () => {
         object: `large_object_${i}`,
       });
 
-      // 每 3000 条提交一次 batch 到 WAL
-      if (i > 0 && i % 3000 === 0) {
+      // 每 N 条提交一次 batch 到 WAL
+      const step = isCoverage ? 1000 : 3000;
+      if (i > 0 && i % step === 0) {
         db.commitBatch();
         db.beginBatch();
         console.log(`已提交 ${i} 条记录到批处理`);

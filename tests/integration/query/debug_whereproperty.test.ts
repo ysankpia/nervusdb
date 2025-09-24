@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-import { SynapseDB } from './src/synapseDb.js';
+import { SynapseDB } from '@/synapseDb';
 
 describe('调试 whereProperty 问题', () => {
   let tempDir: string;

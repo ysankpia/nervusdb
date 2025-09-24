@@ -53,7 +53,11 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-argument': 'off',
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-non-null-asserted-optional-chain': 'off',
-      '@typescript-eslint/no-unused-vars': 'off'
+      '@typescript-eslint/no-unused-vars': 'off',
+      // 测试用例允许便捷地使用 async 回调（即使暂未 await）
+      '@typescript-eslint/require-await': 'off',
+      // 解析器/字符串断言中可能出现的转义写法不做强制
+      'no-useless-escape': 'off'
     }
   },
   {

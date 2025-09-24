@@ -4,13 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import {
-  TypedSynapseDB,
-  PersonNode,
-  RelationshipEdge,
-  EntityNode,
-  KnowledgeEdge,
-} from '../../src/index.js';
+import { TypedSynapseDB, PersonNode, RelationshipEdge, EntityNode, KnowledgeEdge } from '@/index';
 import { unlink } from 'fs/promises';
 
 describe('TypedSynapseDB 类型安全测试', () => {
@@ -294,7 +288,7 @@ describe('TypeSafeQueries 辅助函数测试', () => {
   });
 
   it('应该支持类型安全的属性过滤器创建', async () => {
-    const { TypeSafeQueries } = await import('../../src/index.js');
+    const { TypeSafeQueries } = await import('@/index');
 
     // 精确值过滤器
     const nameFilter = TypeSafeQueries.propertyFilter('name', 'Alice');

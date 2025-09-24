@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { PersistentStore } from '../src/storage/persistentStore.js';
-import { SynapseDB } from '../src/synapseDb.js';
+import { PersistentStore } from '@/storage/persistentStore';
+import { SynapseDB } from '@/synapseDb';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

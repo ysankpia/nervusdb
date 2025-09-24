@@ -9,7 +9,11 @@ import { mkdir, rm } from 'fs/promises';
 import { join } from 'path';
 
 import { SynapseDB } from '@/synapseDb';
-import { AStarPathBuilder, createAStarPathBuilder, createGraphDistanceHeuristic } from '@/query/path/astar';
+import {
+  AStarPathBuilder,
+  createAStarPathBuilder,
+  createGraphDistanceHeuristic,
+} from '@/query/path/astar';
 import { VariablePathBuilder } from '@/query/path/variable';
 import { SimpleBidirectionalPathBuilder } from '@/query/path/bidirectionalSimple';
 
@@ -51,14 +55,24 @@ describe('A*启发式搜索算法', () => {
     // 以及一些其他连接用于测试启发式效果
 
     const connections = [
-      ['A', 'B'], ['A', 'C'],
-      ['B', 'D'], ['C', 'E'],
-      ['D', 'E'], ['E', 'F'],
-      ['D', 'G'], ['F', 'I'],
-      ['G', 'H'], ['H', 'I'],
+      ['A', 'B'],
+      ['A', 'C'],
+      ['B', 'D'],
+      ['C', 'E'],
+      ['D', 'E'],
+      ['E', 'F'],
+      ['D', 'G'],
+      ['F', 'I'],
+      ['G', 'H'],
+      ['H', 'I'],
       // 添加一些"诱惑"路径（较长但看起来更有希望）
-      ['A', 'X'], ['X', 'Y'], ['Y', 'Z'], // 死胡同
-      ['B', 'P'], ['P', 'Q'], ['Q', 'R'], ['R', 'I'], // 较长的替代路径
+      ['A', 'X'],
+      ['X', 'Y'],
+      ['Y', 'Z'], // 死胡同
+      ['B', 'P'],
+      ['P', 'Q'],
+      ['Q', 'R'],
+      ['R', 'I'], // 较长的替代路径
     ];
 
     for (const [from, to] of connections) {
@@ -279,12 +293,10 @@ describe('A*启发式搜索算法', () => {
       const astarPath = astar.shortestPath();
 
       // 单向BFS
-      const bfs = new VariablePathBuilder(
-        store,
-        new Set([startId]),
-        predicateId,
-        { min: 1, max: 10 },
-      );
+      const bfs = new VariablePathBuilder(store, new Set([startId]), predicateId, {
+        min: 1,
+        max: 10,
+      });
       const bfsPath = bfs.shortest(targetId);
 
       expect(astarPath).not.toBeNull();
@@ -348,12 +360,10 @@ describe('A*启发式搜索算法', () => {
 
       // 测试单向BFS性能
       const bfsStart = performance.now();
-      const bfs = new VariablePathBuilder(
-        store,
-        new Set([startId]),
-        predicateId,
-        { min: 1, max: 20 },
-      );
+      const bfs = new VariablePathBuilder(store, new Set([startId]), predicateId, {
+        min: 1,
+        max: 20,
+      });
       const bfsPath = bfs.shortest(targetId);
       const bfsTime = performance.now() - bfsStart;
 
@@ -361,7 +371,9 @@ describe('A*启发式搜索算法', () => {
       console.log(`BFS搜索时间: ${bfsTime.toFixed(2)}ms`);
 
       if (astarPath && bfsPath) {
-        console.log(`性能比较: A*相对BFS的效率为 ${((bfsTime - astarTime) / bfsTime * 100).toFixed(1)}%`);
+        console.log(
+          `性能比较: A*相对BFS的效率为 ${(((bfsTime - astarTime) / bfsTime) * 100).toFixed(1)}%`,
+        );
         expect(astarPath.length).toBe(bfsPath.length);
       }
 
@@ -468,7 +480,8 @@ describe('A*启发式搜索算法', () => {
       visitedNodes.add(path!.startId);
 
       for (const edge of path!.edges) {
-        const nextNode = edge.direction === 'forward' ? edge.record.objectId : edge.record.subjectId;
+        const nextNode =
+          edge.direction === 'forward' ? edge.record.objectId : edge.record.subjectId;
         expect(visitedNodes.has(nextNode)).toBe(false);
         visitedNodes.add(nextNode);
       }

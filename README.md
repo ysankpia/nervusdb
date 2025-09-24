@@ -350,4 +350,5 @@ rm -rf repo_demo.synapsedb repo_demo.synapsedb.pages repo_demo.synapsedb.wal
 - 类型检查：`pnpm typecheck`
 - 代码规范：`pnpm lint` / `pnpm lint:fix`
 - 单元测试：`pnpm test` / `pnpm test:coverage`
+- 测试分层说明与按域运行：见 `docs/测试分层与运行指南.md`
 - 构建发布：`pnpm build`；打包分发：`pnpm pack`

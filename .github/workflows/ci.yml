@@ -7,8 +7,11 @@ on:
     branches: [main, master]
 
 jobs:
-  build-and-test:
+  test-and-coverage:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x, 22.x]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -16,12 +19,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: ${{ matrix.node-version }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          # 使用 package.json 中的 packageManager 字段锁定版本，避免与 action 的 version 冲突
           package_json_file: package.json
           run_install: false
 
@@ -45,3 +47,30 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  performance-benchmark:
+    runs-on: ubuntu-latest
+    needs: test-and-coverage
+    strategy:
+      matrix:
+        node-version: [20.x]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: package.json
+          run_install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run performance tests (no coverage)
+        run: pnpm test:perf

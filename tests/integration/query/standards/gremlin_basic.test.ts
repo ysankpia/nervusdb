@@ -3,9 +3,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { SynapseDB } from '../src/synapseDb.js';
-import { gremlin, P } from '../src/query/gremlin/index.js';
-import type { GraphTraversalSource } from '../src/query/gremlin/source.js';
+import { SynapseDB } from '@/synapseDb';
+import { gremlin, P } from '@/query/gremlin';
+import type { GraphTraversalSource } from '@/query/gremlin/source';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { unlinkSync, rmSync, existsSync } from 'fs';
@@ -112,7 +112,7 @@ describe('Gremlin 基础功能', () => {
       expect(results.length).toBeGreaterThan(0);
 
       // 每个结果都应该是顶点
-      results.forEach(result => {
+      results.forEach((result) => {
         expect(result).toHaveProperty('type', 'vertex');
       });
     });
@@ -121,7 +121,7 @@ describe('Gremlin 基础功能', () => {
       const results = await g.V().in('KNOWS').toList();
       expect(results.length).toBeGreaterThan(0);
 
-      results.forEach(result => {
+      results.forEach((result) => {
         expect(result).toHaveProperty('type', 'vertex');
       });
     });
@@ -130,7 +130,7 @@ describe('Gremlin 基础功能', () => {
       const results = await g.V().both('KNOWS').toList();
       expect(results.length).toBeGreaterThan(0);
 
-      results.forEach(result => {
+      results.forEach((result) => {
         expect(result).toHaveProperty('type', 'vertex');
       });
     });
@@ -139,7 +139,7 @@ describe('Gremlin 基础功能', () => {
       const results = await g.V().outE('KNOWS').toList();
       expect(results.length).toBeGreaterThan(0);
 
-      results.forEach(result => {
+      results.forEach((result) => {
         expect(result).toHaveProperty('type', 'edge');
         expect(result.label).toBe('KNOWS');
       });
@@ -149,7 +149,7 @@ describe('Gremlin 基础功能', () => {
       const results = await g.E().inV().toList();
       expect(results.length).toBeGreaterThan(0);
 
-      results.forEach(result => {
+      results.forEach((result) => {
         expect(result).toHaveProperty('type', 'vertex');
       });
     });
@@ -158,7 +158,7 @@ describe('Gremlin 基础功能', () => {
       const results = await g.E().outV().toList();
       expect(results.length).toBeGreaterThan(0);
 
-      results.forEach(result => {
+      results.forEach((result) => {
         expect(result).toHaveProperty('type', 'vertex');
       });
     });
@@ -170,7 +170,7 @@ describe('Gremlin 基础功能', () => {
       expect(results.length).toBeGreaterThan(0);
 
       // 每个结果都应该有名字属性
-      results.forEach(result => {
+      results.forEach((result) => {
         expect(result.properties).toHaveProperty('HAS_NAME');
       });
     });
@@ -179,7 +179,7 @@ describe('Gremlin 基础功能', () => {
       const results = await g.V().has('HAS_NAME', '张三').toList();
       expect(results.length).toBeGreaterThan(0);
 
-      results.forEach(result => {
+      results.forEach((result) => {
         expect(result.properties.HAS_NAME).toBe('张三');
       });
     });
@@ -188,7 +188,7 @@ describe('Gremlin 基础功能', () => {
       const results = await g.E().hasLabel('KNOWS').toList();
       expect(results.length).toBeGreaterThan(0);
 
-      results.forEach(result => {
+      results.forEach((result) => {
         expect(result.label).toBe('KNOWS');
       });
     });
@@ -197,7 +197,7 @@ describe('Gremlin 基础功能', () => {
       const results = await g.V().has('HAS_AGE', P.gt('26')).toList();
       expect(results.length).toBeGreaterThan(0);
 
-      results.forEach(result => {
+      results.forEach((result) => {
         const age = parseInt(result.properties.HAS_AGE as string);
         expect(age).toBeGreaterThan(26);
       });
@@ -209,7 +209,7 @@ describe('Gremlin 基础功能', () => {
       const results = await g.V().values('HAS_NAME').toList();
       expect(results.length).toBeGreaterThan(0);
 
-      results.forEach(result => {
+      results.forEach((result) => {
         expect(typeof result.properties.value).toBe('string');
       });
     });
@@ -231,18 +231,15 @@ describe('Gremlin 基础功能', () => {
   describe('链式查询', () => {
     it('应该支持复杂链式查询', async () => {
       // 查找张三认识的人认识的人
-      const results = await g.V()
-        .has('HAS_NAME', '张三')
-        .out('KNOWS')
-        .out('KNOWS')
-        .toList();
+      const results = await g.V().has('HAS_NAME', '张三').out('KNOWS').out('KNOWS').toList();
 
       expect(Array.isArray(results)).toBe(true);
     });
 
     it('应该支持带过滤的链式查询', async () => {
       // 查找年龄大于25的人认识的人
-      const results = await g.V()
+      const results = await g
+        .V()
         .has('HAS_AGE', P.gt('25'))
         .out('KNOWS')
         .values('HAS_NAME')

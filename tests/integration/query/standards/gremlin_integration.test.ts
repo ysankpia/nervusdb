@@ -5,9 +5,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { SynapseDB } from '../src/synapseDb.js';
-import { gremlin, P } from '../src/query/gremlin/index.js';
-import type { GraphTraversalSource } from '../src/query/gremlin/source.js';
+import { SynapseDB } from '@/synapseDb';
+import { gremlin, P } from '@/query/gremlin';
+import type { GraphTraversalSource } from '@/query/gremlin/source';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { unlinkSync, rmSync, existsSync } from 'fs';

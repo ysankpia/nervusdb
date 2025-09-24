@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { SynapseDB } from '../src/synapseDb.js';
+import { SynapseDB } from '@/synapseDb';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rm } from 'node:fs/promises';

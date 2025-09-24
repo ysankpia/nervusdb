@@ -3,9 +3,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { SynapseDB } from '../src/synapseDb.js';
-import { createCypherSupport, type CypherSupport } from '../src/query/cypher.js';
-import { PersistentStore } from '../src/storage/persistentStore.js';
+import { SynapseDB } from '@/synapseDb';
+import { createCypherSupport, type CypherSupport } from '@/query/cypher';
+import { PersistentStore } from '@/storage/persistentStore';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { unlinkSync, rmSync, existsSync } from 'fs';
