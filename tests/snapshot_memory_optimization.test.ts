@@ -144,6 +144,10 @@ describe('快照内存优化测试', () => {
     db.commitBatch();
 
     await db.flush();
+
+    // 等待一下确保文件系统操作完成
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
     console.log(`数据插入完成，共 ${recordCount} 条记录`);
 
     // 记录初始内存

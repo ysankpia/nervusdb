@@ -144,6 +144,34 @@ export class PropertyStore {
 
     return store;
   }
+
+  /**
+   * 获取所有节点属性数据（用于重建索引）
+   */
+  getAllNodeProperties(): Map<number, Record<string, unknown>> {
+    const result = new Map<number, Record<string, unknown>>();
+    for (const [nodeId, buffer] of this.nodeProperties.entries()) {
+      const properties = decodeJson(buffer) as Record<string, unknown>;
+      if (properties && Object.keys(properties).length > 0) {
+        result.set(nodeId, properties);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * 获取所有边属性数据（用于重建索引）
+   */
+  getAllEdgeProperties(): Map<string, Record<string, unknown>> {
+    const result = new Map<string, Record<string, unknown>>();
+    for (const [edgeKey, buffer] of this.edgeProperties.entries()) {
+      const properties = decodeJson(buffer) as Record<string, unknown>;
+      if (properties && Object.keys(properties).length > 0) {
+        result.set(edgeKey, properties);
+      }
+    }
+    return result;
+  }
 }
 
 function encodeTripleKey({ subjectId, predicateId, objectId }: TripleKey): string {

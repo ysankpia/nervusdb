@@ -12,5 +12,13 @@ export declare class PropertyStore {
     getEdgeProperties<T extends Record<string, unknown>>(key: TripleKey): T | undefined;
     serialize(): Buffer;
     static deserialize(buffer: Buffer): PropertyStore;
+    /**
+     * 获取所有节点属性数据（用于重建索引）
+     */
+    getAllNodeProperties(): Map<number, Record<string, unknown>>;
+    /**
+     * 获取所有边属性数据（用于重建索引）
+     */
+    getAllEdgeProperties(): Map<string, Record<string, unknown>>;
 }
 //# sourceMappingURL=propertyStore.d.ts.map

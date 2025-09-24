@@ -44,6 +44,7 @@ export declare class PersistentStore {
     private hotness;
     private lock?;
     private propertyIndexManager;
+    private labelManager;
     private batchDepth;
     private batchMetaStack;
     private txStack;
@@ -89,7 +90,21 @@ export declare class PersistentStore {
      * 用于快照查询期间，确保内存占用最小化
      */
     private queryFromDisk;
-    resolveRecords(triples: EncodedTriple[]): FactRecord[];
+    /**
+     * 流式查询：避免一次性加载所有数据到内存
+     */
+    queryStreaming(criteria: Partial<EncodedTriple>): AsyncIterableIterator<EncodedTriple>;
+    /**
+     * 流式查询所有数据：避免一次性加载到内存
+     */
+    private queryAllStreaming;
+    /**
+     * 快照模式下的流式查询 - 真正的流式实现
+     */
+    private queryFromDiskStreaming;
+    resolveRecords(triples: EncodedTriple[], options?: {
+        includeProperties?: boolean;
+    }): FactRecord[];
     private toFactRecord;
     flush(): Promise<void>;
     private flushLsmSegments;
@@ -117,9 +132,17 @@ export declare class PersistentStore {
      */
     getPropertyIndex(): import("./propertyIndex.js").MemoryPropertyIndex;
     /**
+     * 获取标签管理器的内存索引
+     */
+    getLabelIndex(): import("../graph/labels.js").MemoryLabelIndex;
+    /**
      * 应用属性变更到索引
      */
     private applyPropertyIndexChange;
+    /**
+     * 更新节点标签索引
+     */
+    private updateNodeLabelIndex;
     /**
      * 更新节点属性索引
      */

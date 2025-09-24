@@ -1,6 +1,14 @@
-# SynapseDB（原型）
+# SynapseDB v1.1
 
-一个用 TypeScript/Node.js 实现的嵌入式“三元组（SPO）知识库”。面向代码知识、配置/关系图谱、轻量推理与链式联想的本地/边缘嵌入式场景，强调“可恢复、可治理、可扩展”。支持分页索引、WAL v2 崩溃恢复、链式联想查询、Auto‑Compact/GC 运维工具与读快照一致性。当前处于原型/Alpha 阶段。
+一个用 TypeScript/Node.js 实现的嵌入式"三元组（SPO）知识库"。面向代码知识、配置/关系图谱、轻量推理与链式联想的本地/边缘嵌入式场景，强调"可恢复、可治理、可扩展"。支持分页索引、WAL v2 崩溃恢复、链式联想查询、Auto‑Compact/GC 运维工具与读快照一致性。
+
+🎯 **v1.1 里程碑特性**：
+
+- ✅ **性能优化**：Dijkstra 最短路径算法、双向 BFS、流式聚合执行优化
+- ✅ **TypeScript 类型增强**：完整的泛型 API，编译时类型安全，智能代码补全
+- ✅ **综合基准测试框架**：全面的性能监控和回归测试工具
+- ✅ **内存与文件句柄优化**：修复内存泄漏和文件句柄泄漏问题
+- ✅ **WAL 语义增强**：改进嵌套事务 ABORT 处理逻辑
 
 核心特性（Highlights）
 
@@ -16,6 +24,8 @@
 - CLI 全覆盖：检查/修复/治理/导出/热点/事务观测 一条龙
 
 ## 快速开始（作为库）
+
+### 基础 API
 
 ```ts
 // 生产/项目使用（ESM）：
@@ -35,6 +45,39 @@ const authors = await db.withSnapshot(async (snap) => {
 });
 
 await db.flush();
+```
+
+### TypeScript 类型增强（v1.1 新特性）
+
+```ts
+// 类型安全的 API，提供编译时类型检查和智能补全
+import { TypedSynapseDB, PersonNode, RelationshipEdge } from 'synapsedb';
+
+const socialDb = await TypedSynapseDB.open<PersonNode, RelationshipEdge>('./social.synapsedb');
+
+// 添加类型化数据 - 获得完整的类型提示
+const friendship = socialDb.addFact(
+  { subject: 'Alice', predicate: 'FRIEND_OF', object: 'Bob' },
+  {
+    subjectProperties: { name: 'Alice', age: 30, labels: ['Person'] },
+    objectProperties: { name: 'Bob', age: 25, labels: ['Person'] },
+    edgeProperties: { since: new Date(), strength: 0.8, type: 'friend' },
+  },
+);
+
+// 类型安全的查询 - TypeScript 自动推断结果类型
+const friends = socialDb
+  .find({ predicate: 'FRIEND_OF' })
+  .where((record) => record.edgeProperties?.strength! > 0.7) // 智能补全
+  .limit(10)
+  .all();
+
+// 异步迭代器支持
+for await (const record of socialDb.find({ predicate: 'FRIEND_OF' })) {
+  console.log(record.subjectProperties?.name); // 类型安全访问
+}
+
+await socialDb.close();
 ```
 
 - 读快照一致性：`withSnapshot(fn)` 在回调内固定 manifest `epoch`，避免后台 compaction/GC 导致视图漂移。
@@ -255,6 +298,11 @@ rm -rf repo_demo.synapsedb repo_demo.synapsedb.pages repo_demo.synapsedb.wal
   - docs/使用示例/09-嵌入式脚本与自动化-示例.md
   - docs/使用示例/10-消费者项目模板.md
   - docs/使用示例/99-常见问题与排错.md
+
+### v1.1 新增功能指南
+
+- **TypeScript 类型增强**：docs/使用示例/TypeScript类型系统使用指南.md
+- **性能基准测试**：docs/使用示例/性能基准测试指南.md
 
 ## 架构与存储布局（概览）
 

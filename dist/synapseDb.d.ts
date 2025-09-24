@@ -1,7 +1,9 @@
 import { FactInput, FactRecord } from './storage/persistentStore.js';
 import { TripleKey } from './storage/propertyStore.js';
-import { FactCriteria, FrontierOrientation, QueryBuilder, PropertyFilter } from './query/queryBuilder.js';
+import { FactCriteria, FrontierOrientation, QueryBuilder, StreamingQueryBuilder, PropertyFilter } from './query/queryBuilder.js';
 import { SynapseDBOpenOptions, CommitBatchOptions, BeginBatchOptions } from './types/openOptions.js';
+import { AggregationPipeline } from './query/aggregation.js';
+import { PatternBuilder } from './query/pattern/match.js';
 export interface FactOptions {
     subjectProperties?: Record<string, unknown>;
     objectProperties?: Record<string, unknown>;
@@ -74,6 +76,22 @@ export declare class SynapseDB {
     getNodeProperties(nodeId: number): Record<string, unknown> | null;
     getEdgeProperties(key: TripleKey): Record<string, unknown> | null;
     flush(): Promise<void>;
+    /**
+     * 流式查询 - 真正内存高效的大数据集查询
+     * @param criteria 查询条件
+     * @param options 查询选项
+     * @returns StreamingQueryBuilder 支持异步迭代，内存占用恒定
+     * @example
+     * ```typescript
+     * // 流式处理大数据集，内存占用恒定
+     * for await (const fact of db.findStreaming({ predicate: 'HAS_METHOD' })) {
+     *   console.log(fact);
+     * }
+     * ```
+     */
+    findStreaming(criteria: FactCriteria, options?: {
+        anchor?: FrontierOrientation;
+    }): Promise<StreamingQueryBuilder>;
     find(criteria: FactCriteria, options?: {
         anchor?: FrontierOrientation;
     }): QueryBuilder;
@@ -114,6 +132,15 @@ export declare class SynapseDB {
     findByEdgeProperty(propertyFilter: PropertyFilter, options?: {
         anchor?: FrontierOrientation;
     }): QueryBuilder;
+    /**
+     * 基于节点标签进行查询
+     * @param labels 单个或多个标签
+     * @param options 查询选项：{ mode?: 'AND' | 'OR', anchor?: 'subject'|'object'|'both' }
+     */
+    findByLabel(labels: string | string[], options?: {
+        mode?: 'AND' | 'OR';
+        anchor?: FrontierOrientation;
+    }): QueryBuilder;
     deleteFact(fact: FactInput): void;
     setNodeProperties(nodeId: number, properties: Record<string, unknown>): void;
     setEdgeProperties(key: TripleKey, properties: Record<string, unknown>): void;
@@ -125,6 +152,22 @@ export declare class SynapseDB {
     getStagingMetrics(): {
         lsmMemtable: number;
     };
+    aggregate(): AggregationPipeline;
+    match(): PatternBuilder;
+    shortestPath(from: string, to: string, options?: {
+        predicates?: string[];
+        maxHops?: number;
+        direction?: 'forward' | 'reverse' | 'both';
+    }): FactRecord[] | null;
+    shortestPathBidirectional(from: string, to: string, options?: {
+        predicates?: string[];
+        maxHops?: number;
+    }): FactRecord[] | null;
+    shortestPathWeighted(from: string, to: string, options?: {
+        predicate?: string;
+        weightProperty?: string;
+    }): FactRecord[] | null;
+    cypher(query: string): Array<Record<string, unknown>>;
 }
 export type { FactInput, FactRecord, SynapseDBOpenOptions, CommitBatchOptions, BeginBatchOptions, PropertyFilter, FrontierOrientation, };
 //# sourceMappingURL=synapseDb.d.ts.map

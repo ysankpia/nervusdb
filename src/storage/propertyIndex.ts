@@ -309,6 +309,8 @@ export class PropertyIndexManager {
   private readonly memoryIndex = new MemoryPropertyIndex();
   private readonly indexDirectory: string;
   private readonly manifestPath: string;
+  private readonly indexPaths = new Map<string, string>(); // 属性名 -> 索引文件路径
+  private manifestLoaded = false;
 
   constructor(indexDirectory: string) {
     this.indexDirectory = indexDirectory;
@@ -338,8 +340,16 @@ export class PropertyIndexManager {
     nodeProperties: Map<number, Record<string, unknown>>,
     edgeProperties: Map<string, Record<string, unknown>>,
   ): Promise<void> {
-    // 预留异步点，后续引入磁盘持久化时会包含 IO
-    await Promise.resolve();
+    // 如果已经加载了持久化索引，优先使用它
+    if (!this.manifestLoaded) {
+      try {
+        await this.load();
+        return;
+      } catch {
+        // 持久化索引不存在或损坏，继续内存重建
+      }
+    }
+
     this.memoryIndex.clear();
 
     // 重建节点属性索引
@@ -395,18 +405,314 @@ export class PropertyIndexManager {
   }
 
   /**
-   * 持久化索引到磁盘（未来实现）
+   * 持久化索引到磁盘
    */
   async flush(): Promise<void> {
-    // TODO: 实现分页 B+树持久化
-    // 当前版本仅支持内存索引
+    try {
+      await fs.mkdir(this.indexDirectory, { recursive: true });
+    } catch {}
+
+    // 收集所有属性数据并序列化
+    const indexData = this.serializeIndex();
+
+    // 写入索引文件
+    const manifest = {
+      version: 1,
+      timestamp: Date.now(),
+      nodePropertyNames: this.memoryIndex.getNodePropertyNames(),
+      edgePropertyNames: this.memoryIndex.getEdgePropertyNames(),
+      stats: this.memoryIndex.getStats(),
+      files: [] as string[],
+    };
+
+    // 为每个属性名创建独立的索引文件
+    for (const [propertyName, data] of indexData.entries()) {
+      const fileName = `property-${Buffer.from(propertyName).toString('base64url')}.idx`;
+      const filePath = path.join(this.indexDirectory, fileName);
+      await fs.writeFile(filePath, data);
+      manifest.files.push(fileName);
+      this.indexPaths.set(propertyName, filePath);
+    }
+
+    // 写入清单文件
+    await fs.writeFile(this.manifestPath, JSON.stringify(manifest, null, 2));
   }
 
   /**
-   * 从磁盘加载索引（未来实现）
+   * 从磁盘加载索引
    */
   async load(): Promise<void> {
-    // TODO: 实现从分页文件加载
-    // 当前版本仅支持内存索引
+    try {
+      // 读取清单文件
+      const manifestContent = await fs.readFile(this.manifestPath, 'utf-8');
+      const manifest = JSON.parse(manifestContent);
+
+      // 清空内存索引
+      this.memoryIndex.clear();
+
+      // 加载各个索引文件
+      for (const fileName of manifest.files) {
+        const filePath = path.join(this.indexDirectory, fileName);
+        const data = await fs.readFile(filePath);
+
+        // 从文件名还原属性名
+        const propertyName = Buffer.from(
+          fileName.replace('property-', '').replace('.idx', ''),
+          'base64url',
+        ).toString('utf-8');
+        this.indexPaths.set(propertyName, filePath);
+
+        // 反序列化索引数据
+        this.deserializeIndex(propertyName, data);
+      }
+
+      this.manifestLoaded = true;
+    } catch (error) {
+      // 文件不存在或损坏，标记为未加载
+      this.manifestLoaded = false;
+      throw new Error(
+        `属性索引加载失败: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /**
+   * 序列化索引数据
+   */
+  private serializeIndex(): Map<string, Buffer> {
+    const result = new Map<string, Buffer>();
+
+    // 序列化节点属性索引
+    const nodeProperties = this.memoryIndex.getNodePropertyNames();
+    for (const propName of nodeProperties) {
+      const data = this.serializePropertyIndex(propName, 'node');
+      if (data.length > 0) {
+        result.set(`node:${propName}`, data);
+      }
+    }
+
+    // 序列化边属性索引
+    const edgeProperties = this.memoryIndex.getEdgePropertyNames();
+    for (const propName of edgeProperties) {
+      const data = this.serializePropertyIndex(propName, 'edge');
+      if (data.length > 0) {
+        result.set(`edge:${propName}`, data);
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * 序列化单个属性索引
+   */
+  private serializePropertyIndex(propertyName: string, type: 'node' | 'edge'): Buffer {
+    const buffers: Buffer[] = [];
+
+    // 头部：类型(1字节) + 属性名长度(4字节) + 属性名
+    const typeByte = type === 'node' ? 1 : 2;
+    const nameBuffer = Buffer.from(propertyName, 'utf-8');
+    const header = Buffer.allocUnsafe(5);
+    header.writeUInt8(typeByte, 0);
+    header.writeUInt32LE(nameBuffer.length, 1);
+    buffers.push(header, nameBuffer);
+
+    // 获取属性值映射
+    const valueMap =
+      type === 'node'
+        ? this.getPrivateNodePropertyMap(propertyName)
+        : this.getPrivateEdgePropertyMap(propertyName);
+
+    if (!valueMap) return Buffer.concat([]);
+
+    // 写入值条目数量
+    const countBuffer = Buffer.allocUnsafe(4);
+    countBuffer.writeUInt32LE(valueMap.size, 0);
+    buffers.push(countBuffer);
+
+    // 序列化每个值及其对应的ID集合
+    for (const [value, idSet] of valueMap.entries()) {
+      // 序列化值
+      const valueBuffer = this.serializeValue(value);
+      const valueLength = Buffer.allocUnsafe(4);
+      valueLength.writeUInt32LE(valueBuffer.length, 0);
+      buffers.push(valueLength, valueBuffer);
+
+      // 序列化ID集合
+      const idArray = Array.from(idSet as unknown as Array<string | number>).sort((a, b) => {
+        if (typeof a === 'string' && typeof b === 'string') {
+          return a.localeCompare(b);
+        }
+        return Number(a) - Number(b);
+      });
+      const count = Buffer.allocUnsafe(4);
+      count.writeUInt32LE(idArray.length, 0);
+      buffers.push(count);
+
+      if (type === 'node') {
+        // 节点ID数组
+        for (const id of idArray) {
+          const idBuffer = Buffer.allocUnsafe(4);
+          idBuffer.writeUInt32LE(Number(id), 0);
+          buffers.push(idBuffer);
+        }
+      } else {
+        // 边键数组（字符串）
+        for (const key of idArray) {
+          const keyBuffer = Buffer.from(key as string, 'utf-8');
+          const keyLength = Buffer.allocUnsafe(4);
+          keyLength.writeUInt32LE(keyBuffer.length, 0);
+          buffers.push(keyLength, keyBuffer);
+        }
+      }
+    }
+
+    return Buffer.concat(buffers);
+  }
+
+  /**
+   * 反序列化索引数据
+   */
+  private deserializeIndex(propertyName: string, data: Buffer): void {
+    let offset = 0;
+
+    const readUInt32 = (): number => {
+      const value = data.readUInt32LE(offset);
+      offset += 4;
+      return value;
+    };
+
+    // 读取类型
+    const typeByte = data.readUInt8(offset);
+    offset += 1;
+    const type = typeByte === 1 ? 'node' : 'edge';
+
+    // 读取属性名长度和属性名
+    const nameLength = readUInt32();
+    const nameBuffer = data.subarray(offset, offset + nameLength);
+    offset += nameLength;
+    const actualPropertyName = nameBuffer.toString('utf-8');
+
+    // 读取值条目数量
+    const entryCount = readUInt32();
+
+    for (let i = 0; i < entryCount; i++) {
+      // 读取值
+      const valueLength = readUInt32();
+      const valueBuffer = data.subarray(offset, offset + valueLength);
+      offset += valueLength;
+      const value = this.deserializeValue(valueBuffer);
+
+      // 读取ID集合数量
+      const idCount = readUInt32();
+
+      if (type === 'node') {
+        // 读取节点ID
+        for (let j = 0; j < idCount; j++) {
+          const nodeId = readUInt32();
+          this.memoryIndex.indexNodeProperty(nodeId, actualPropertyName, value);
+        }
+      } else {
+        // 读取边键
+        for (let j = 0; j < idCount; j++) {
+          const keyLength = readUInt32();
+          const keyBuffer = data.subarray(offset, offset + keyLength);
+          offset += keyLength;
+          const edgeKey = keyBuffer.toString('utf-8');
+          this.memoryIndex.indexEdgeProperty(edgeKey, actualPropertyName, value);
+        }
+      }
+    }
+  }
+
+  /**
+   * 序列化值
+   */
+  private serializeValue(value: string | number | boolean | null): Buffer {
+    if (value === null) {
+      return Buffer.from([0]);
+    }
+
+    switch (typeof value) {
+      case 'string':
+        const strBuf = Buffer.from(value, 'utf-8');
+        const strHeader = Buffer.allocUnsafe(5);
+        strHeader.writeUInt8(1, 0); // 类型：字符串
+        strHeader.writeUInt32LE(strBuf.length, 1);
+        return Buffer.concat([strHeader, strBuf]);
+
+      case 'number':
+        const numHeader = Buffer.allocUnsafe(9);
+        numHeader.writeUInt8(2, 0); // 类型：数字
+        numHeader.writeDoubleLE(value, 1);
+        return numHeader;
+
+      case 'boolean':
+        const boolHeader = Buffer.allocUnsafe(2);
+        boolHeader.writeUInt8(3, 0); // 类型：布尔
+        boolHeader.writeUInt8(value ? 1 : 0, 1);
+        return boolHeader;
+
+      default:
+        // 对象或其他类型，用JSON序列化
+        const jsonStr = JSON.stringify(value);
+        const jsonBuf = Buffer.from(jsonStr, 'utf-8');
+        const jsonHeader = Buffer.allocUnsafe(5);
+        jsonHeader.writeUInt8(4, 0); // 类型：JSON
+        jsonHeader.writeUInt32LE(jsonBuf.length, 1);
+        return Buffer.concat([jsonHeader, jsonBuf]);
+    }
+  }
+
+  /**
+   * 反序列化值
+   */
+  private deserializeValue(buffer: Buffer): string | number | boolean | null {
+    if (buffer.length === 0) return null;
+
+    const type = buffer.readUInt8(0);
+
+    switch (type) {
+      case 0: // null
+        return null;
+
+      case 1: // 字符串
+        const strLength = buffer.readUInt32LE(1);
+        return buffer.subarray(5, 5 + strLength).toString('utf-8');
+
+      case 2: // 数字
+        return buffer.readDoubleLE(1);
+
+      case 3: // 布尔
+        return buffer.readUInt8(1) === 1;
+
+      case 4: // JSON
+        const jsonLength = buffer.readUInt32LE(1);
+        const jsonStr = buffer.subarray(5, 5 + jsonLength).toString('utf-8');
+        return JSON.parse(jsonStr);
+
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * 获取私有节点属性映射（用于序列化）
+   */
+  private getPrivateNodePropertyMap(
+    propertyName: string,
+  ): Map<string | number | boolean | null, Set<number>> | undefined {
+    // 通过反射获取私有字段
+    return (this.memoryIndex as any).nodeProperties.get(propertyName);
+  }
+
+  /**
+   * 获取私有边属性映射（用于序列化）
+   */
+  private getPrivateEdgePropertyMap(
+    propertyName: string,
+  ): Map<string | number | boolean | null, Set<string>> | undefined {
+    // 通过反射获取私有字段
+    return (this.memoryIndex as any).edgeProperties.get(propertyName);
   }
 }

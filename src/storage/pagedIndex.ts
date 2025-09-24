@@ -183,6 +183,34 @@ export class PagedIndexReader {
     }
   }
 
+  /**
+   * 流式读取所有数据，避免一次性加载到内存
+   */
+  async *readAllStreaming(): AsyncIterableIterator<OrderedTriple> {
+    const fd = await fs.open(this.filePath, 'r');
+    try {
+      // 按页分批读取，避免一次性加载整个文件
+      for (const page of this.lookup.pages) {
+        const buffer = Buffer.allocUnsafe(page.length);
+        await fd.read(buffer, 0, page.length, page.offset);
+
+        if (page.crc32 !== undefined && page.crc32 !== crc32(buffer)) {
+          // 跳过校验失败的页
+          continue;
+        }
+
+        const raw = decompressBuffer(buffer, this.options.compression);
+
+        // 逐条解码并 yield，避免创建中间大数组
+        for (const triple of iterateTriples(raw)) {
+          yield triple;
+        }
+      }
+    } finally {
+      await fd.close();
+    }
+  }
+
   readSync(primaryValue: number): OrderedTriple[] {
     const meta = this.lookup.pages.filter((page) => page.primaryValue === primaryValue);
     if (meta.length === 0) {
@@ -232,9 +260,13 @@ export class PagedIndexReader {
           continue;
         }
         const raw = decompressBuffer(buffer, this.options.compression);
-        const triples = deserializeTriples(raw);
-        if (triples.length > 0) {
-          yield triples;
+        // 将本页 triples 以批次返回，避免在内存中累积
+        const batch: OrderedTriple[] = [];
+        for (const t of iterateTriples(raw)) {
+          batch.push(t);
+        }
+        if (batch.length > 0) {
+          yield batch;
         }
       }
     } finally {
@@ -271,6 +303,22 @@ function deserializeTriples(buffer: Buffer): OrderedTriple[] {
     });
   }
   return triples;
+}
+
+// 仅解码迭代，不创建中间数组，降低峰值内存
+function* iterateTriples(buffer: Buffer): Generator<OrderedTriple, void, unknown> {
+  if (buffer.length === 0) {
+    return;
+  }
+  const count = buffer.length / 12;
+  for (let i = 0; i < count; i += 1) {
+    const offset = i * 12;
+    yield {
+      subjectId: buffer.readUInt32LE(offset),
+      predicateId: buffer.readUInt32LE(offset + 4),
+      objectId: buffer.readUInt32LE(offset + 8),
+    };
+  }
 }
 
 // Manifest for paged indexes

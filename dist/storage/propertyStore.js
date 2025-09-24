@@ -115,6 +115,32 @@ export class PropertyStore {
         }
         return store;
     }
+    /**
+     * 获取所有节点属性数据（用于重建索引）
+     */
+    getAllNodeProperties() {
+        const result = new Map();
+        for (const [nodeId, buffer] of this.nodeProperties.entries()) {
+            const properties = decodeJson(buffer);
+            if (properties && Object.keys(properties).length > 0) {
+                result.set(nodeId, properties);
+            }
+        }
+        return result;
+    }
+    /**
+     * 获取所有边属性数据（用于重建索引）
+     */
+    getAllEdgeProperties() {
+        const result = new Map();
+        for (const [edgeKey, buffer] of this.edgeProperties.entries()) {
+            const properties = decodeJson(buffer);
+            if (properties && Object.keys(properties).length > 0) {
+                result.set(edgeKey, properties);
+            }
+        }
+        return result;
+    }
 }
 function encodeTripleKey({ subjectId, predicateId, objectId }) {
     return `${subjectId}:${predicateId}:${objectId}`;

@@ -54,4 +54,7 @@ function buildQueryString(parameters) {
 export { PersistentStore } from './storage/persistentStore.js';
 export { SynapseDB } from './synapseDb.js';
 export { QueryBuilder } from './query/queryBuilder.js';
+export { AggregationPipeline } from './query/aggregation.js';
+// 新增：类型增强版本
+export { TypedSynapseDBFactory as TypedSynapseDB, TypeSafeQueries, TypedQueryBuilderImpl, } from './typedSynapseDb.js';
 //# sourceMappingURL=index.js.map

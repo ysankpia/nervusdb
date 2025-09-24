@@ -31,11 +31,12 @@ export class WalWriter {
         }
         catch {
             // 如果之前打开了文件，先关闭
-            if (fd !== undefined) {
+            if (fd) {
                 try {
                     await fd.close();
                 }
                 catch { }
+                fd = undefined;
             }
             fd = await fs.open(walPath, 'w+');
             await writeHeader(fd);
@@ -196,16 +197,16 @@ export class WalReplayer {
                     stack.push({ adds: [], dels: [], node: [], edge: [], meta });
                 }
                 else if (type === 0x41) {
-                    // COMMIT：弹出顶层，若仍有外层则合并到外层；否则落入全局
+                    // COMMIT：弹出顶层
                     const top = stack.pop();
                     if (top) {
                         if (stack.length > 0) {
-                            const parent = stack[stack.length - 1];
-                            parent.adds.push(...top.adds);
-                            parent.dels.push(...top.dels);
-                            parent.node.push(...top.node);
-                            parent.edge.push(...top.edge);
-                            // 内层 commit 不进行 txId 幂等判断与记录（延至最外层）
+                            // 内层提交：直接提升为全局可见，外层后续 ABORT 不影响
+                            addFacts.push(...top.adds);
+                            deleteFacts.push(...top.dels);
+                            nodeProps.push(...top.node);
+                            edgeProps.push(...top.edge);
+                            // 内层 txId 不进入持久幂等集（只在最外层处理）
                         }
                         else {
                             // 最外层提交：若 txId 已应用则跳过；否则落入全局并记录

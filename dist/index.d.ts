@@ -20,4 +20,9 @@ export { SynapseDB } from './synapseDb.js';
 export type { FactRecord } from './synapseDb.js';
 export { QueryBuilder } from './query/queryBuilder.js';
 export type { FactCriteria, FrontierOrientation } from './query/queryBuilder.js';
+export { AggregationPipeline } from './query/aggregation.js';
+export type { PropertyFilter } from './query/queryBuilder.js';
+export type { SynapseDBOpenOptions } from './types/openOptions.js';
+export { TypedSynapseDBFactory as TypedSynapseDB, TypeSafeQueries, TypedQueryBuilderImpl, } from './typedSynapseDb.js';
+export type { TypedSynapseDB as TypedDB, TypedQueryBuilder, TypedFactInput, TypedFactOptions, TypedFactRecord, TypedPropertyFilter, NodeProperties, EdgeProperties, Labels, TypedNodeProperties, InferQueryResult, PersonNode, RelationshipEdge, EntityNode, KnowledgeEdge, CodeNode, DependencyEdge, } from './types/enhanced.js';
 //# sourceMappingURL=index.d.ts.map

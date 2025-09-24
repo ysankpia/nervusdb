@@ -41,6 +41,10 @@ export declare class PagedIndexReader {
     getPrimaryValues(): number[];
     read(primaryValue: number): Promise<OrderedTriple[]>;
     readAll(): Promise<OrderedTriple[]>;
+    /**
+     * 流式读取所有数据，避免一次性加载到内存
+     */
+    readAllStreaming(): AsyncIterableIterator<OrderedTriple>;
     readSync(primaryValue: number): OrderedTriple[];
     readAllSync(): OrderedTriple[];
     streamByPrimaryValue(primaryValue: number): AsyncGenerator<OrderedTriple[], void, unknown>;

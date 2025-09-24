@@ -4,6 +4,7 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 const ROOT = process.cwd();
 const TARGET_FILE = path.join(ROOT, '.agents/rules/base.md');
@@ -88,14 +89,57 @@ const withComment = (rel) => {
   return c ? `${rel}  ${c}` : rel;
 };
 
-const exists = async (p) => {
-  try { await fs.access(p); return true; } catch { return false; }
-};
+// --- 使用 git 列表以遵循 .gitignore 规则 ---
+function toPosix(p) {
+  return p.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function readGitFiles() {
+  try {
+    const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: ROOT });
+    const others = execFileSync('git', ['ls-files', '--others', '--exclude-standard', '-z'], { cwd: ROOT });
+    const list = (tracked.toString('utf8') + others.toString('utf8'))
+      .split('\u0000')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map(toPosix);
+    const set = new Set(list);
+    return { list, set };
+  } catch (e) {
+    // 非 git 环境时降级为空集合（避免误收未跟踪且被忽略的目录）
+    return { list: [], set: new Set() };
+  }
+}
+
+const GIT = readGitFiles();
+
+function hasFile(rel) {
+  return GIT.set.has(toPosix(rel));
+}
+
+function hasDir(rel) {
+  const prefix = toPosix(rel).replace(/\/?$/, '/') ;
+  return GIT.list.some((f) => f.startsWith(prefix));
+}
+
+function listDirFiles(rel, { ext, directOnly = true } = { ext: '', directOnly: true }) {
+  const prefix = toPosix(rel).replace(/\/?$/, '/') ;
+  const out = [];
+  for (const f of GIT.list) {
+    if (!f.startsWith(prefix)) continue;
+    if (ext && !f.endsWith(ext)) continue;
+    if (directOnly) {
+      const rest = f.slice(prefix.length);
+      if (rest.includes('/')) continue;
+    }
+    out.push(f);
+  }
+  return out.sort();
+}
 
 async function buildTestsSummary() {
-  const testsDir = path.join(ROOT, 'tests');
-  if (!(await exists(testsDir))) return [];
-  const entries = await fs.readdir(testsDir);
+  if (!hasDir('tests')) return [];
+  const entries = listDirFiles('tests', { directOnly: true }).map((p) => p.split('/').pop());
   const has = (prefix) => entries.some((f) => f.startsWith(prefix));
   const hasLike = (re) => entries.some((f) => re.test(f));
   const lines = [];
@@ -110,9 +154,8 @@ async function buildTestsSummary() {
 }
 
 async function buildCliFiles() {
-  const dir = path.join(ROOT, 'src/cli');
-  if (!(await exists(dir))) return [];
-  const files = (await fs.readdir(dir)).filter((f) => f.endsWith('.ts')).sort();
+  if (!hasDir('src/cli')) return [];
+  const files = listDirFiles('src/cli', { ext: '.ts', directOnly: true }).map((p) => p.split('/').pop());
   return files.map((f, i) => {
     const rel = path.posix.join('src/cli', f);
     const last = i === files.length - 1;
@@ -123,9 +166,8 @@ async function buildCliFiles() {
 }
 
 async function buildStorageFiles() {
-  const dir = path.join(ROOT, 'src/storage');
-  if (!(await exists(dir))) return [];
-  const files = (await fs.readdir(dir)).filter((f) => f.endsWith('.ts')).sort();
+  if (!hasDir('src/storage')) return [];
+  const files = listDirFiles('src/storage', { ext: '.ts', directOnly: true }).map((p) => p.split('/').pop());
   return files.map((f, i) => {
     const rel = path.posix.join('src/storage', f);
     const last = i === files.length - 1;
@@ -137,33 +179,31 @@ async function buildStorageFiles() {
 
 async function buildSrcSection() {
   const lines = [];
-  const hasSrc = await exists(path.join(ROOT, 'src'));
+  const hasSrc = hasDir('src');
   if (!hasSrc) return lines;
   lines.push('├─ src/                          ' + (COMMENTS['src'] || ''));
 
-  if (await exists(path.join(ROOT, 'src/index.ts')))
+  if (hasFile('src/index.ts'))
     lines.push('│  ├─ ' + withComment('src/index.ts'));
-  if (await exists(path.join(ROOT, 'src/synapseDb.ts')))
+  if (hasFile('src/synapseDb.ts'))
     lines.push('│  ├─ ' + withComment('src/synapseDb.ts'));
 
-  if (await exists(path.join(ROOT, 'src/query'))){
+  if (hasDir('src/query')){
     lines.push('│  ├─ ' + withComment('src/query') + '/');
-    if (await exists(path.join(ROOT, 'src/query/queryBuilder.ts')))
+    if (hasFile('src/query/queryBuilder.ts'))
       lines.push('│  │  └─ ' + withComment('src/query/queryBuilder.ts'));
   }
 
-  if (await exists(path.join(ROOT, 'src/storage'))){
+  if (hasDir('src/storage')){
     lines.push('│  ├─ ' + withComment('src/storage') + '/');
     const storageFiles = await buildStorageFiles();
     lines.push(...storageFiles);
   }
 
-  if (await exists(path.join(ROOT, 'src/maintenance'))){
+  if (hasDir('src/maintenance')){
     lines.push('│  ├─ ' + withComment('src/maintenance') + '/');
     const files = ['check.ts','repair.ts','compaction.ts','autoCompact.ts','gc.ts'];
-    const present = (await Promise.all(files.map(async (f)=>({f, ok: await exists(path.join(ROOT, 'src/maintenance', f))}))))
-      .filter((x)=>x.ok)
-      .map((x)=>x.f);
+    const present = files.filter((f)=> hasFile(path.posix.join('src/maintenance', f)));
     present.forEach((f, idx) => {
       const rel = path.posix.join('src/maintenance', f);
       const last = idx === present.length - 1;
@@ -172,18 +212,16 @@ async function buildSrcSection() {
     });
   }
 
-  if (await exists(path.join(ROOT, 'src/cli'))){
+  if (hasDir('src/cli')){
     lines.push('│  ├─ ' + withComment('src/cli') + '/');
     const cliFiles = await buildCliFiles();
     lines.push(...cliFiles);
   }
 
-  if (await exists(path.join(ROOT, 'src/utils'))){
+  if (hasDir('src/utils')){
     lines.push('│  ├─ ' + withComment('src/utils') + '/');
     const utils = ['fault.ts','lock.ts'];
-    const present = (await Promise.all(utils.map(async (f)=>({f, ok: await exists(path.join(ROOT, 'src/utils', f))}))))
-      .filter((x)=>x.ok)
-      .map((x)=>x.f);
+    const present = utils.filter((f)=> hasFile(path.posix.join('src/utils', f)));
     present.forEach((f, idx) => {
       const rel = path.posix.join('src/utils', f);
       const last = idx === present.length - 1;
@@ -192,13 +230,13 @@ async function buildSrcSection() {
     });
   }
 
-  if (await exists(path.join(ROOT, 'src/types'))){
+  if (hasDir('src/types')){
     lines.push('│  ├─ ' + withComment('src/types') + '/');
-    if (await exists(path.join(ROOT, 'src/types/openOptions.ts')))
+    if (hasFile('src/types/openOptions.ts'))
       lines.push('│  │  └─ ' + withComment('src/types/openOptions.ts'));
   }
 
-  if (await exists(path.join(ROOT, 'src/test'))){
+  if (hasDir('src/test')){
     lines.push('│  └─ ' + withComment('src/test') + '/');
   }
 
@@ -207,14 +245,12 @@ async function buildSrcSection() {
 
 async function buildDocsSection() {
   const lines = [];
-  if (!(await exists(path.join(ROOT, 'docs')))) return lines;
+  if (!hasDir('docs')) return lines;
   lines.push('├─ docs/                         ' + (COMMENTS['docs'] || ''));
-  if (await exists(path.join(ROOT, 'docs/SynapseDB设计文档.md')))
+  if (hasFile('docs/SynapseDB设计文档.md'))
     lines.push('│  ├─ ' + withComment('docs/SynapseDB设计文档.md'));
   const subdirs = ['使用示例','教学文档','项目发展路线图','项目实施建议','项目审查文档'];
-  const present = (await Promise.all(subdirs.map(async (d)=>({d, ok: await exists(path.join(ROOT, 'docs', d))}))))
-    .filter((x)=>x.ok)
-    .map((x)=>x.d);
+  const present = subdirs.filter((d)=> hasDir(path.posix.join('docs', d)));
   present.forEach((d, idx) => {
     const last = idx === present.length - 1;
     const bar = last ? '└' : '├';
@@ -226,9 +262,9 @@ async function buildDocsSection() {
 
 async function buildAgentsSection() {
   const lines = [];
-  if (!(await exists(path.join(ROOT, '.agents')))) return lines;
+  if (!hasDir('.agents')) return lines;
   lines.push('├─ .agents/                      ' + (COMMENTS['.agents'] || ''));
-  if (await exists(path.join(ROOT, '.agents/rules/base.md')))
+  if (hasFile('.agents/rules/base.md'))
     lines.push('│  └─ ' + withComment('.agents/rules/base.md'));
   return lines;
 }
@@ -240,19 +276,16 @@ async function buildRootFiles() {
     '.prettierrc','.prettierignore','.lintstaged.cjs','.gitignore','README.md','CHANGELOG.md','pnpm-lock.yaml'
   ];
   const lines = [];
-  if (await exists(path.join(ROOT, 'dist')))
+  if (hasDir('dist'))
     lines.push('├─ ' + withComment('dist') + '/');
-  if (await exists(path.join(ROOT, 'coverage')))
+  if (hasDir('coverage'))
     lines.push('├─ ' + withComment('coverage') + '/');
-  if (await exists(path.join(ROOT, '.github')))
+  if (hasDir('.github'))
     lines.push('├─ ' + withComment('.github') + '/');
-  if (await exists(path.join(ROOT, '.husky')))
+  if (hasDir('.husky'))
     lines.push('├─ ' + withComment('.husky') + '/');
   const files = order.filter((p) => !['dist','coverage','.agents','.github','.husky'].includes(p));
-  const present = [];
-  for (const f of files) {
-    if (await exists(path.join(ROOT, f))) present.push(f);
-  }
+  const present = files.filter((f) => hasFile(f));
   present.forEach((f, idx) => {
     const last = idx === present.length - 1;
     const bar = last ? '└' : '├';
@@ -265,7 +298,7 @@ async function buildTree() {
   const lines = [];
   lines.push('项目根目录');
   lines.push(...(await buildSrcSection()));
-  if (await exists(path.join(ROOT, 'tests'))){
+  if (hasDir('tests')){
     lines.push('├─ tests/                        ' + (COMMENTS['tests'] || ''));
     lines.push(...(await buildTestsSummary()));
   }
@@ -307,4 +340,3 @@ updateBaseMd().catch((err) => {
   console.error('[update-dir-tree] 失败:', err);
   process.exit(1);
 });
-
