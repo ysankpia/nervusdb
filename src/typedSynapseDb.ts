@@ -5,6 +5,7 @@
 
 import { SynapseDB } from './synapseDb.js';
 import { QueryBuilder } from './query/queryBuilder.js';
+import type { FactRecord } from './storage/persistentStore.js';
 import type {
   TypedSynapseDB,
   TypedQueryBuilder,
@@ -48,8 +49,8 @@ class TypedQueryBuilderImpl<
   where(
     predicate: (record: TypedFactRecord<TNodeProps, TEdgeProps>) => boolean,
   ): TypedQueryBuilder<TNodeProps, TEdgeProps, TCriteria> {
-    // 类型转换：运行时实际上仍使用原始的 FactRecord
-    const untypedPredicate = predicate as (record: any) => boolean;
+    // 类型转换：运行时仍使用原始的 FactRecord（避免 any）
+    const untypedPredicate = predicate as (record: FactRecord) => boolean;
     return new TypedQueryBuilderImpl(this.queryBuilder.where(untypedPredicate));
   }
 
@@ -87,7 +88,7 @@ class TypedSynapseDBImpl<
   constructor(private readonly db: SynapseDB) {}
 
   addFact(
-    fact: TypedFactInput<TNodeProps, TEdgeProps>,
+    fact: TypedFactInput,
     options?: TypedFactOptions<TNodeProps, TEdgeProps>,
   ): TypedFactRecord<TNodeProps, TEdgeProps> {
     // 运行时转换为兼容格式

@@ -223,6 +223,24 @@ export class MemoryPropertyIndex {
   }
 
   /**
+   * 仅用于序列化：按属性名获取节点属性的内部映射
+   */
+  getNodePropertyMap(
+    propertyName: string,
+  ): Map<string | number | boolean | null, Set<number>> | undefined {
+    return this.nodeProperties.get(propertyName);
+  }
+
+  /**
+   * 仅用于序列化：按属性名获取边属性的内部映射
+   */
+  getEdgePropertyMap(
+    propertyName: string,
+  ): Map<string | number | boolean | null, Set<string>> | undefined {
+    return this.edgeProperties.get(propertyName);
+  }
+
+  /**
    * 标准化值用于索引键
    */
   private normalizeValue(value: unknown): string | number | boolean | null {
@@ -445,7 +463,15 @@ export class PropertyIndexManager {
     try {
       // 读取清单文件
       const manifestContent = await fs.readFile(this.manifestPath, 'utf-8');
-      const manifest = JSON.parse(manifestContent);
+      interface PropertyManifest {
+        version: number;
+        timestamp: number;
+        nodePropertyNames: string[];
+        edgePropertyNames: string[];
+        stats: unknown;
+        files: string[];
+      }
+      const manifest = JSON.parse(manifestContent) as PropertyManifest;
 
       // 清空内存索引
       this.memoryIndex.clear();
@@ -634,26 +660,29 @@ export class PropertyIndexManager {
     }
 
     switch (typeof value) {
-      case 'string':
+      case 'string': {
         const strBuf = Buffer.from(value, 'utf-8');
         const strHeader = Buffer.allocUnsafe(5);
         strHeader.writeUInt8(1, 0); // 类型：字符串
         strHeader.writeUInt32LE(strBuf.length, 1);
         return Buffer.concat([strHeader, strBuf]);
+      }
 
-      case 'number':
+      case 'number': {
         const numHeader = Buffer.allocUnsafe(9);
         numHeader.writeUInt8(2, 0); // 类型：数字
         numHeader.writeDoubleLE(value, 1);
         return numHeader;
+      }
 
-      case 'boolean':
+      case 'boolean': {
         const boolHeader = Buffer.allocUnsafe(2);
         boolHeader.writeUInt8(3, 0); // 类型：布尔
         boolHeader.writeUInt8(value ? 1 : 0, 1);
         return boolHeader;
+      }
 
-      default:
+      default: {
         // 对象或其他类型，用JSON序列化
         const jsonStr = JSON.stringify(value);
         const jsonBuf = Buffer.from(jsonStr, 'utf-8');
@@ -661,13 +690,14 @@ export class PropertyIndexManager {
         jsonHeader.writeUInt8(4, 0); // 类型：JSON
         jsonHeader.writeUInt32LE(jsonBuf.length, 1);
         return Buffer.concat([jsonHeader, jsonBuf]);
+      }
     }
   }
 
   /**
    * 反序列化值
    */
-  private deserializeValue(buffer: Buffer): string | number | boolean | null {
+  private deserializeValue(buffer: Buffer): unknown {
     if (buffer.length === 0) return null;
 
     const type = buffer.readUInt8(0);
@@ -676,20 +706,28 @@ export class PropertyIndexManager {
       case 0: // null
         return null;
 
-      case 1: // 字符串
+      case 1: {
+        // 字符串
         const strLength = buffer.readUInt32LE(1);
         return buffer.subarray(5, 5 + strLength).toString('utf-8');
+      }
 
-      case 2: // 数字
+      case 2: {
+        // 数字
         return buffer.readDoubleLE(1);
+      }
 
-      case 3: // 布尔
+      case 3: {
+        // 布尔
         return buffer.readUInt8(1) === 1;
+      }
 
-      case 4: // JSON
+      case 4: {
+        // JSON
         const jsonLength = buffer.readUInt32LE(1);
         const jsonStr = buffer.subarray(5, 5 + jsonLength).toString('utf-8');
-        return JSON.parse(jsonStr);
+        return JSON.parse(jsonStr) as unknown;
+      }
 
       default:
         return null;
@@ -702,8 +740,7 @@ export class PropertyIndexManager {
   private getPrivateNodePropertyMap(
     propertyName: string,
   ): Map<string | number | boolean | null, Set<number>> | undefined {
-    // 通过反射获取私有字段
-    return (this.memoryIndex as any).nodeProperties.get(propertyName);
+    return this.memoryIndex.getNodePropertyMap(propertyName);
   }
 
   /**
@@ -712,7 +749,6 @@ export class PropertyIndexManager {
   private getPrivateEdgePropertyMap(
     propertyName: string,
   ): Map<string | number | boolean | null, Set<string>> | undefined {
-    // 通过反射获取私有字段
-    return (this.memoryIndex as any).edgeProperties.get(propertyName);
+    return this.memoryIndex.getEdgePropertyMap(propertyName);
   }
 }

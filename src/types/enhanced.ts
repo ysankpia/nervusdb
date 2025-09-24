@@ -4,7 +4,7 @@
  */
 
 import { FactInput, FactRecord } from '../storage/persistentStore.js';
-import { FactCriteria, FrontierOrientation, QueryBuilder } from '../query/queryBuilder.js';
+import { FactCriteria, FrontierOrientation } from '../query/queryBuilder.js';
 
 /**
  * 节点属性约束类型
@@ -31,12 +31,8 @@ export interface TypedNodeProperties extends NodeProperties {
 /**
  * 泛型化的 Fact 输入类型
  */
-export interface TypedFactInput<
-  TNodeProps extends NodeProperties = NodeProperties,
-  TEdgeProps extends EdgeProperties = EdgeProperties,
-> extends FactInput {
-  // 继承基础的 subject/predicate/object 字符串字段
-}
+// TypedFactInput 仅为语义化别名，避免空接口报错与未用泛型
+export type TypedFactInput = FactInput;
 
 /**
  * 泛型化的 Fact 选项
@@ -66,7 +62,6 @@ export interface TypedFactRecord<
  * 条件类型：基于查询条件推断返回类型的辅助类型
  */
 export type InferQueryResult<
-  TCriteria extends FactCriteria,
   TNodeProps extends NodeProperties = NodeProperties,
   TEdgeProps extends EdgeProperties = EdgeProperties,
 > = TypedFactRecord<TNodeProps, TEdgeProps>;
@@ -152,7 +147,7 @@ export interface TypedSynapseDB<
    * 添加带类型的 Fact
    */
   addFact(
-    fact: TypedFactInput<TNodeProps, TEdgeProps>,
+    fact: TypedFactInput,
     options?: TypedFactOptions<TNodeProps, TEdgeProps>,
   ): TypedFactRecord<TNodeProps, TEdgeProps>;
 
@@ -232,7 +227,7 @@ export type TypedSynapseDBFactory = {
     TEdgeProps extends EdgeProperties = EdgeProperties,
   >(
     path: string,
-    options?: any, // 保持与原版兼容
+    options?: unknown,
   ): Promise<TypedSynapseDB<TNodeProps, TEdgeProps>>;
 };
 

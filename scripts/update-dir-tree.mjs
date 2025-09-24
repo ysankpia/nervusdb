@@ -14,8 +14,15 @@ const COMMENTS = {
   'src': '源码目录',
   'src/index.ts': '顶层导出与连接工具',
   'src/synapseDb.ts': '数据库主 API',
+  'src/typedSynapseDb.ts': '类型安全包装器',
   'src/query': '查询构建器与链式联想',
   'src/query/queryBuilder.ts': '链式查询构建器',
+  'src/query/aggregation.ts': '聚合查询',
+  'src/query/iterator.ts': '异步批量迭代器',
+  'src/query/path': '路径/变长路径',
+  'src/query/path/variable.ts': '变长路径构建器',
+  'src/query/pattern': '模式匹配',
+  'src/query/pattern/match.ts': '模式匹配执行',
   'src/storage': '持久化/索引/字典/WAL 等',
   'src/storage/dictionary.ts': '字典存储',
   'src/storage/tripleStore.ts': '三元组存储',
@@ -55,12 +62,17 @@ const COMMENTS = {
   'src/utils/lock.ts': '文件锁/进程级互斥',
   'src/types': '公共类型声明',
   'src/types/openOptions.ts': 'open() 选项类型',
+  'src/types/enhanced.ts': '类型系统增强',
+  'src/graph': '图功能/标签与路径',
+  'src/graph/labels.ts': '标签系统',
+  'src/graph/paths.ts': '图路径工具',
   'src/test': '辅助测试资源（若有）',
   'tests': '单元与集成测试（Vitest）',
   'docs': '文档与示例',
   'docs/SynapseDB设计文档.md': '设计说明',
   'docs/使用示例': '使用教程与FAQ',
   'docs/教学文档': '系列教程与API',
+  'docs/milestones': '里程碑规划',
   'docs/项目发展路线图': 'Roadmap',
   'docs/项目实施建议': '推广与落地建议',
   'docs/项目审查文档': '多模型评审记录',
@@ -187,11 +199,41 @@ async function buildSrcSection() {
     lines.push('│  ├─ ' + withComment('src/index.ts'));
   if (hasFile('src/synapseDb.ts'))
     lines.push('│  ├─ ' + withComment('src/synapseDb.ts'));
+  if (hasFile('src/typedSynapseDb.ts'))
+    lines.push('│  ├─ ' + withComment('src/typedSynapseDb.ts'));
 
   if (hasDir('src/query')){
     lines.push('│  ├─ ' + withComment('src/query') + '/');
-    if (hasFile('src/query/queryBuilder.ts'))
-      lines.push('│  │  └─ ' + withComment('src/query/queryBuilder.ts'));
+    const qFiles = ['queryBuilder.ts','aggregation.ts','iterator.ts'];
+    const presentQ = qFiles.filter((f)=> hasFile(path.posix.join('src/query', f)));
+    presentQ.forEach((f, idx) => {
+      const rel = path.posix.join('src/query', f);
+      const last = idx === presentQ.length - 1 && !hasDir('src/query/path') && !hasDir('src/query/pattern');
+      const bar = last ? '└' : '├';
+      lines.push(`│  │  ${bar}─ ${withComment(rel)}`);
+    });
+    // 子目录：path
+    if (hasDir('src/query/path')){
+      lines.push('│  │  ├─ ' + withComment('src/query/path') + '/');
+      const pFiles = listDirFiles('src/query/path', { ext: '.ts', directOnly: true }).map((p) => p.split('/').pop());
+      pFiles.forEach((f, idx) => {
+        const rel = path.posix.join('src/query/path', f);
+        const last = idx === pFiles.length - 1 && !hasDir('src/query/pattern');
+        const bar = last ? '└' : '├';
+        lines.push(`│  │  │  ${bar}─ ${withComment(rel)}`);
+      });
+    }
+    // 子目录：pattern
+    if (hasDir('src/query/pattern')){
+      lines.push('│  │  └─ ' + withComment('src/query/pattern') + '/');
+      const mFiles = listDirFiles('src/query/pattern', { ext: '.ts', directOnly: true }).map((p) => p.split('/').pop());
+      mFiles.forEach((f, idx) => {
+        const rel = path.posix.join('src/query/pattern', f);
+        const last = idx === mFiles.length - 1;
+        const bar = last ? '└' : '├';
+        lines.push(`│  │     ${bar}─ ${withComment(rel)}`);
+      });
+    }
   }
 
   if (hasDir('src/storage')){
@@ -232,8 +274,25 @@ async function buildSrcSection() {
 
   if (hasDir('src/types')){
     lines.push('│  ├─ ' + withComment('src/types') + '/');
-    if (hasFile('src/types/openOptions.ts'))
-      lines.push('│  │  └─ ' + withComment('src/types/openOptions.ts'));
+    const tFiles = ['openOptions.ts','enhanced.ts'];
+    const presentT = tFiles.filter((f)=> hasFile(path.posix.join('src/types', f)));
+    presentT.forEach((f, idx) => {
+      const rel = path.posix.join('src/types', f);
+      const last = idx === presentT.length - 1 && !hasDir('src/graph');
+      const bar = last ? '└' : '├';
+      lines.push(`│  │  ${bar}─ ${withComment(rel)}`);
+    });
+  }
+
+  if (hasDir('src/graph')){
+    lines.push('│  └─ ' + withComment('src/graph') + '/');
+    const gFiles = listDirFiles('src/graph', { ext: '.ts', directOnly: true }).map((p) => p.split('/').pop());
+    gFiles.forEach((f, idx) => {
+      const rel = path.posix.join('src/graph', f);
+      const last = idx === gFiles.length - 1;
+      const bar = last ? '└' : '├';
+      lines.push(`│     ${bar}─ ${withComment(rel)}`);
+    });
   }
 
   if (hasDir('src/test')){
@@ -249,7 +308,7 @@ async function buildDocsSection() {
   lines.push('├─ docs/                         ' + (COMMENTS['docs'] || ''));
   if (hasFile('docs/SynapseDB设计文档.md'))
     lines.push('│  ├─ ' + withComment('docs/SynapseDB设计文档.md'));
-  const subdirs = ['使用示例','教学文档','项目发展路线图','项目实施建议','项目审查文档'];
+  const subdirs = ['milestones','使用示例','教学文档','项目发展路线图','项目实施建议','项目审查文档'];
   const present = subdirs.filter((d)=> hasDir(path.posix.join('docs', d)));
   present.forEach((d, idx) => {
     const last = idx === present.length - 1;

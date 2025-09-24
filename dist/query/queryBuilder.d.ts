@@ -39,7 +39,7 @@ export declare class QueryBuilder {
     get length(): number;
     slice(start?: number, end?: number): FactRecord[];
     [Symbol.iterator](): IterableIterator<FactRecord>;
-    [Symbol.asyncIterator](): AsyncIterator<FactRecord>;
+    [Symbol.asyncIterator](): AsyncIterableIterator<FactRecord>;
     toArray(): FactRecord[];
     all(): FactRecord[];
     where(predicate: (record: FactRecord) => boolean): QueryBuilder;
@@ -59,7 +59,7 @@ export declare class QueryBuilder {
     limit(n: number): QueryBuilder;
     take(n: number): QueryBuilder;
     skip(n: number): QueryBuilder;
-    batch(size: number): AsyncIterator<FactRecord[]>;
+    batch(size: number): AsyncIterableIterator<FactRecord[]>;
     /**
      * 属性索引下推查询 - 通用接口
      * @param propertyName 属性名

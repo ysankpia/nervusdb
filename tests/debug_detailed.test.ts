@@ -21,7 +21,7 @@ describe('调试详细问题', () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it('调试字典和属性索引的交互', async () => {
+  it('调试字典和属性索引的交互', () => {
     // 插入测试数据
     const fact = db.addFact(
       {

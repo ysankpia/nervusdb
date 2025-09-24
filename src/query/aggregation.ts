@@ -431,10 +431,11 @@ function getField(r: FactRecord, path: string): unknown {
   if (path === 'object') return r.object;
 
   const segs = path.split('.');
-  let cur: any = r;
+  let cur: unknown = r as unknown as Record<string, unknown>;
   for (const s of segs) {
-    if (cur == null) return undefined;
-    cur = cur[s as keyof typeof cur];
+    if (cur == null || typeof cur !== 'object') return undefined;
+    const obj = cur as Record<string, unknown>;
+    cur = obj[s];
   }
   return cur;
 }

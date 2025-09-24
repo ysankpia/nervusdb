@@ -1,5 +1,4 @@
 import { PersistentStore } from '../../storage/persistentStore.js';
-import { QueryBuilder, buildFindContextFromLabel } from '../queryBuilder.js';
 
 type Direction = '->' | '<-' | '-';
 
@@ -151,8 +150,20 @@ export class PatternBuilder {
         if (e.variable) {
           const predId = pid ?? 0;
           if (!pid) continue; // 变长必须指定关系类型
-          const { VariablePathBuilder } = await import('../path/variable.js');
-          const vbuilder = new (VariablePathBuilder as any)(
+          const mod = (await import('../path/variable.js')) as {
+            VariablePathBuilder: new (
+              store: PersistentStore,
+              start: Set<number>,
+              predicateId: number,
+              options: {
+                min: number;
+                max: number;
+                uniqueness?: 'NODE' | 'EDGE' | 'NONE';
+                direction: 'forward' | 'reverse';
+              },
+            ) => { all(): Array<{ endId: number }> };
+          };
+          const vbuilder = new mod.VariablePathBuilder(
             this.store,
             new Set<number>([st.nodeId]),
             predId,

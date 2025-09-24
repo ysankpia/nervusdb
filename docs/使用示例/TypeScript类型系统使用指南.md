@@ -16,13 +16,13 @@ const friendship = db.addFact(
   {
     subjectProperties: { name: 'Alice', age: 30, labels: ['Person'] },
     objectProperties: { name: 'Bob', age: 25, labels: ['Person'] },
-    edgeProperties: { since: new Date(), strength: 0.8, type: 'friend' }
-  }
+    edgeProperties: { since: new Date(), strength: 0.8, type: 'friend' },
+  },
 );
 
 // TypeScript 能提供完整的类型提示
 console.log(friendship.subjectProperties?.name); // Alice
-console.log(friendship.edgeProperties?.type);    // friend
+console.log(friendship.edgeProperties?.type); // friend
 ```
 
 ## 预定义类型
@@ -63,21 +63,21 @@ knowledgeDb.addFact(
       type: 'Person',
       title: 'Albert Einstein',
       confidence: 0.99,
-      labels: ['Scientist', 'Physicist']
+      labels: ['Scientist', 'Physicist'],
     },
     objectProperties: {
       type: 'Theory',
       title: 'Theory of Relativity',
       confidence: 0.95,
-      labels: ['Physics', 'Theory']
+      labels: ['Physics', 'Theory'],
     },
     edgeProperties: {
       confidence: 0.98,
       source: 'scientific_literature',
       timestamp: Date.now(),
-      weight: 1.0
-    }
-  }
+      weight: 1.0,
+    },
+  },
 );
 ```
 
@@ -96,20 +96,20 @@ codeDb.addFact(
       type: 'file',
       language: 'typescript',
       size: 1024,
-      labels: ['utility', 'helper']
+      labels: ['utility', 'helper'],
     },
     objectProperties: {
       path: 'node_modules/lodash',
       type: 'module',
       language: 'javascript',
-      labels: ['library', 'external']
+      labels: ['library', 'external'],
     },
     edgeProperties: {
       type: 'imports',
       line: 1,
-      column: 0
-    }
-  }
+      column: 0,
+    },
+  },
 );
 ```
 
@@ -137,14 +137,14 @@ const result = customDb.addFact(
   {
     subjectProperties: { title: 'First Node', score: 100, tags: ['important'] },
     objectProperties: { title: 'Second Node', score: 85 },
-    edgeProperties: { weight: 0.7, color: 'blue', metadata: { created: Date.now() } }
-  }
+    edgeProperties: { weight: 0.7, color: 'blue', metadata: { created: Date.now() } },
+  },
 );
 
 // TypeScript 提供完整的类型安全
 result.subjectProperties?.title; // string
-result.edgeProperties?.weight;   // number
-result.edgeProperties?.color;    // 'red' | 'blue' | 'green'
+result.edgeProperties?.weight; // number
+result.edgeProperties?.color; // 'red' | 'blue' | 'green'
 ```
 
 ## 类型安全查询
@@ -157,14 +157,14 @@ const db = await TypedSynapseDB.open<PersonNode, RelationshipEdge>('./social.syn
 // 基于条件查询
 const friends = db
   .find({ predicate: 'FRIEND_OF' })
-  .where(record => record.edgeProperties?.strength! > 0.5)
+  .where((record) => record.edgeProperties?.strength! > 0.5)
   .limit(10)
   .all();
 
 // friends 的类型为 TypedFactRecord<PersonNode, RelationshipEdge>[]
-friends.forEach(friend => {
+friends.forEach((friend) => {
   console.log(friend.subjectProperties?.name); // 类型安全
-  console.log(friend.edgeProperties?.type);    // 类型安全
+  console.log(friend.edgeProperties?.type); // 类型安全
 });
 ```
 
@@ -172,15 +172,13 @@ friends.forEach(friend => {
 
 ```typescript
 // 精确值查询
-const adults = db
-  .findByNodeProperty({ propertyName: 'age', value: 30 })
-  .all();
+const adults = db.findByNodeProperty({ propertyName: 'age', value: 30 }).all();
 
 // 范围查询
 const youngAdults = db
   .findByNodeProperty({
     propertyName: 'age',
-    range: { min: 18, max: 35, includeMin: true, includeMax: false }
+    range: { min: 18, max: 35, includeMin: true, includeMax: false },
   })
   .all();
 
@@ -188,7 +186,7 @@ const youngAdults = db
 const strongConnections = db
   .findByEdgeProperty({
     propertyName: 'strength',
-    range: { min: 0.8, max: 1.0 }
+    range: { min: 0.8, max: 1.0 },
   })
   .all();
 ```
@@ -201,7 +199,7 @@ const friendsOfFriends = db
   .find({ subject: 'Alice' })
   .follow('FRIEND_OF')
   .follow('FRIEND_OF')
-  .where(record => record.object !== 'Alice') // 排除自己
+  .where((record) => record.object !== 'Alice') // 排除自己
   .all();
 ```
 
@@ -212,14 +210,10 @@ const friendsOfFriends = db
 const persons = db.findByLabel('Person').all();
 
 // 多标签 AND 查询
-const employees = db
-  .findByLabel(['Person', 'Employee'], { mode: 'AND' })
-  .all();
+const employees = db.findByLabel(['Person', 'Employee'], { mode: 'AND' }).all();
 
 // 多标签 OR 查询
-const workers = db
-  .findByLabel(['Employee', 'Manager'], { mode: 'OR' })
-  .all();
+const workers = db.findByLabel(['Employee', 'Manager'], { mode: 'OR' }).all();
 ```
 
 ## 类型安全的辅助工具
@@ -233,7 +227,7 @@ import { TypeSafeQueries } from 'synapsedb';
 const nameFilter = TypeSafeQueries.propertyFilter('name', 'Alice');
 const ageRange = TypeSafeQueries.rangeFilter('age', 20, 40, {
   includeMin: true,
-  includeMax: false
+  includeMax: false,
 });
 
 // 使用过滤器查询
@@ -270,19 +264,19 @@ if (nodeProps) {
 const edgeProps: RelationshipEdge | null = db.getEdgeProperties({
   subjectId: 1,
   predicateId: 2,
-  objectId: 3
+  objectId: 3,
 });
 
 // 设置属性（类型安全）
 db.setNodeProperties(nodeId, {
   name: 'Updated Name',
   age: 31,
-  email: 'new@example.com'
+  email: 'new@example.com',
 });
 
 db.setEdgeProperties(
   { subjectId: 1, predicateId: 2, objectId: 3 },
-  { strength: 0.9, type: 'family', since: new Date() }
+  { strength: 0.9, type: 'family', since: new Date() },
 );
 ```
 
@@ -377,10 +371,7 @@ interface TimestampedEdge {
 }
 
 // 泛型数据库工厂
-function createTypedDatabase<
-  TNode extends BaseNode,
-  TEdge extends TimestampedEdge
->(path: string) {
+function createTypedDatabase<TNode extends BaseNode, TEdge extends TimestampedEdge>(path: string) {
   return TypedSynapseDB.open<TNode, TEdge>(path);
 }
 ```
@@ -389,11 +380,7 @@ function createTypedDatabase<
 
 ```typescript
 function isPersonNode(node: unknown): node is PersonNode {
-  return (
-    typeof node === 'object' &&
-    node !== null &&
-    typeof (node as PersonNode).name === 'string'
-  );
+  return typeof node === 'object' && node !== null && typeof (node as PersonNode).name === 'string';
 }
 
 // 使用类型守卫
@@ -422,14 +409,14 @@ if (isPersonNode(nodeProps)) {
 const db = await SynapseDB.open('./db.synapsedb');
 const fact = db.addFact(
   { subject: 'Alice', predicate: 'FRIEND_OF', object: 'Bob' },
-  { subjectProperties: { name: 'Alice', age: 30 } }
+  { subjectProperties: { name: 'Alice', age: 30 } },
 );
 
 // 之后（类型化 API）
 const typedDb = await TypedSynapseDB.open<PersonNode, RelationshipEdge>('./db.synapsedb');
 const typedFact = typedDb.addFact(
   { subject: 'Alice', predicate: 'FRIEND_OF', object: 'Bob' },
-  { subjectProperties: { name: 'Alice', age: 30 } }
+  { subjectProperties: { name: 'Alice', age: 30 } },
 );
 
 // 行为完全相同，但有类型安全
@@ -438,15 +425,19 @@ const typedFact = typedDb.addFact(
 ## 常见问题
 
 ### Q: 类型化 API 与原始 API 兼容吗？
+
 A: 完全兼容。类型化 API 是原始 API 的包装器，运行时行为完全相同。
 
 ### Q: 可以混合使用类型化和原始 API 吗？
+
 A: 可以。通过 `.raw` 属性访问原始实例，或使用 `TypedSynapseDB.wrap()` 包装现有实例。
 
 ### Q: 类型检查在运行时生效吗？
+
 A: TypeScript 类型仅在编译时检查。运行时类型验证需要额外实现类型守卫。
 
 ### Q: 如何处理动态类型？
+
 A: 使用联合类型、泛型约束或 `unknown` 类型，结合运行时类型守卫。
 
 这个类型系统为 SynapseDB 带来了现代 TypeScript 开发体验，同时保持了与现有代码的完全兼容性。

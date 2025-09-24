@@ -739,11 +739,13 @@ export class SynapseDB {
       visited.add(node);
       if (node === endId) break;
 
-      const criteria = { subjectId: node, ...(predicateId ? { predicateId } : {}) } as any;
+      const criteria: { subjectId: number; predicateId?: number } =
+        predicateId !== undefined ? { subjectId: node, predicateId } : { subjectId: node };
       const enc = this.store.query(criteria);
       const edges = this.store.resolveRecords(enc);
       for (const e of edges) {
-        const w = Number((e.edgeProperties as any)?.[weightKey] ?? 1);
+        const rawWeight = e.edgeProperties ? e.edgeProperties[weightKey] : undefined;
+        const w = Number(rawWeight ?? 1);
         const alt = (dist.get(node) ?? Infinity) + (Number.isFinite(w) ? w : 1);
         const v = e.objectId;
         if (alt < (dist.get(v) ?? Infinity)) {

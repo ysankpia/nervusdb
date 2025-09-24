@@ -81,6 +81,100 @@
 - 设计文档：`docs/SynapseDB设计文档.md`
 - 测试：`tests/`（Vitest 全面覆盖）
 
+目录结构（详细）：
+
+```
+项目根目录
+├─ src/                          源码目录
+│  ├─ src/index.ts  顶层导出与连接工具
+│  ├─ src/synapseDb.ts  数据库主 API
+│  ├─ src/typedSynapseDb.ts  类型安全包装器
+│  ├─ src/query  查询构建器与链式联想/
+│  │  ├─ src/query/queryBuilder.ts  链式查询构建器
+│  │  ├─ src/query/aggregation.ts  聚合查询
+│  │  ├─ src/query/iterator.ts  异步批量迭代器
+│  │  ├─ src/query/path  路径/变长路径/
+│  │  │  ├─ src/query/path/variable.ts  变长路径构建器
+│  │  └─ src/query/pattern  模式匹配/
+│  │     └─ src/query/pattern/match.ts  模式匹配执行
+│  ├─ src/storage  持久化/索引/字典/WAL 等/
+│  │  ├─ src/storage/dictionary.ts  字典存储
+│  │  ├─ src/storage/fileHeader.ts  主文件头部结构
+│  │  ├─ src/storage/hotness.ts  热度统计与半衰
+│  │  ├─ src/storage/layout.ts  文件布局与常量
+│  │  ├─ src/storage/pagedIndex.ts  分页化磁盘索引
+│  │  ├─ src/storage/persistentStore.ts  持久化抽象
+│  │  ├─ src/storage/propertyIndex.ts  属性索引
+│  │  ├─ src/storage/propertyStore.ts  属性值存储
+│  │  ├─ src/storage/readerRegistry.ts  读者登记/一致性
+│  │  ├─ src/storage/staging.ts  暂存层/增量段
+│  │  ├─ src/storage/tripleIndexes.ts  六序索引入口/选择
+│  │  ├─ src/storage/tripleStore.ts  三元组存储
+│  │  ├─ src/storage/txidRegistry.ts  事务批次与幂等
+│  │  └─ src/storage/wal.ts  写前日志（WAL v2）
+│  ├─ src/maintenance  维护与治理工具逻辑/
+│  │  ├─ src/maintenance/check.ts  校验与诊断
+│  │  ├─ src/maintenance/repair.ts  修复器
+│  │  ├─ src/maintenance/compaction.ts  整序/增量压实
+│  │  ├─ src/maintenance/autoCompact.ts  自动压实策略
+│  │  └─ src/maintenance/gc.ts  页面级 GC
+│  ├─ src/cli  命令行入口（开发期）/
+│  │  ├─ src/cli/auto_compact.ts  db:auto-compact 子命令
+│  │  ├─ src/cli/bench.ts  bench 子命令
+│  │  ├─ src/cli/check.ts  db:check 子命令
+│  │  ├─ src/cli/compact.ts  db:compact 子命令
+│  │  ├─ src/cli/dump.ts  db:dump 子命令
+│  │  ├─ src/cli/gc.ts  db:gc 子命令
+│  │  ├─ src/cli/hot.ts  db:hot 子命令
+│  │  ├─ src/cli/readers.ts  db:readers 子命令
+│  │  ├─ src/cli/repair_page.ts  db:repair-page 子命令
+│  │  ├─ src/cli/stats.ts  db:stats 子命令
+│  │  ├─ src/cli/synapsedb.ts  顶层 CLI（发布后由 dist/bin 提供）
+│  │  └─ src/cli/txids.ts  db:txids 子命令
+│  ├─ src/utils  通用工具/
+│  │  ├─ src/utils/fault.ts  自定义错误与故障注入
+│  │  └─ src/utils/lock.ts  文件锁/进程级互斥
+│  ├─ src/types  公共类型声明/
+│  │  ├─ src/types/openOptions.ts  open() 选项类型
+│  │  ├─ src/types/enhanced.ts  类型系统增强
+│  └─ src/graph  图功能/标签与路径/
+│     ├─ src/graph/labels.ts  标签系统
+│     └─ src/graph/paths.ts  图路径工具
+├─ tests/                        单元与集成测试（Vitest）
+│  ├─ wal_*.test.ts              WAL 行为/幂等/截断/事务
+│  ├─ compaction*.test.ts        压实相关测试
+│  ├─ property_index*.test.ts    属性索引功能/性能
+│  ├─ query*.test.ts             查询与链式联想
+│  ├─ snapshot_*.test.ts         快照一致性与内存占用
+│  ├─ performance_*.test.ts      基线/大数据性能
+│  └─ ...                        其余主题参见文件名
+├─ docs/                         文档与示例
+│  ├─ docs/SynapseDB设计文档.md  设计说明
+│  ├─ docs/milestones  里程碑规划/
+│  ├─ docs/使用示例  使用教程与FAQ/
+│  ├─ docs/教学文档  系列教程与API/
+│  ├─ docs/项目发展路线图  Roadmap/
+│  ├─ docs/项目实施建议  推广与落地建议/
+│  └─ docs/项目审查文档  多模型评审记录/
+├─ .agents/                      智能体规则与协作说明
+│  └─ .agents/rules/base.md  本文件（AGENTS/CLAUDE 软链接）
+├─ dist  构建产物（发布用）/
+├─ .github  CI/Issue 模板等/
+├─ .husky  Git hooks（pre-commit/pre-push）/
+├─ package.json  脚本与依赖
+├─ tsconfig.json  TypeScript 编译配置
+├─ tsconfig.vitest.json  测试 TypeScript 配置
+├─ vitest.config.ts  测试配置
+├─ eslint.config.js  Lint 配置
+├─ .prettierrc  Prettier 配置
+├─ .prettierignore  Prettier 忽略
+├─ .lintstaged.cjs  提交前 Lint 配置
+├─ .gitignore  Git 忽略
+├─ README.md  仓库概览
+├─ CHANGELOG.md  变更记录
+└─ pnpm-lock.yaml  依赖锁
+```
+
 ---
 
 ## 4. 对外 API 摘要

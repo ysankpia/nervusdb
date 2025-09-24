@@ -23,7 +23,8 @@ export interface LabelIndex {
  */
 export interface NodeWithLabels {
   labels?: string[];
-  properties?: Record<string, any>;
+  // 节点属性使用 unknown，避免 any 带来的不安全访问
+  properties?: Record<string, unknown>;
 }
 
 /**
@@ -267,6 +268,9 @@ export class LabelManager {
   async rebuildFromNodeProperties(
     nodeProperties: Map<number, Record<string, unknown>>,
   ): Promise<void> {
+    // 保持 API 异步形态（未来可能引入异步持久化）；
+    // 为满足 require-await 规则，这里添加一个可优化的微任务等待。
+    await Promise.resolve();
     this.memoryIndex.clear();
 
     for (const [nodeId, props] of nodeProperties.entries()) {

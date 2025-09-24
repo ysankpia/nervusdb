@@ -9,6 +9,14 @@
 
 本里程碑专注于实现标准图数据库的核心查询能力，使 SynapseDB 具备与 Neo4j 等主流图数据库相当的查询表达力。
 
+## 📌 当前进展快照（2025-09-24）
+
+- ✅ 变长路径能力：`variablePath()`、唯一性约束、与模式匹配编排集成；提供加权 `shortestPathWeighted()`
+- ✅ 聚合管道：`groupBy/count/sum/avg/min/max/orderBy/limit`，提供内存优化的流式聚合 `executeStreaming()`
+- ✅ UNION/UNION ALL：`queryBuilder.union()` 与 `unionAll()` 已实现
+- 🚧 模式匹配：提供编程式 `PatternBuilder`（`.node()/.edge()/.variable()/.return()/.execute()`）；文本解析/查询计划器未落地
+- 🧪 测试现状：相关测试均通过（见 `tests/variable_path*.test.ts`、`tests/aggregation_streaming.test.ts`、`tests/pattern_match_advanced.test.ts`、`tests/streaming_iterator.test.ts`）
+
 ## 📋 功能清单
 
 ### 1. 模式匹配查询 ⭐⭐⭐⭐⭐
@@ -72,8 +80,8 @@ const result = await db
 **第5-6周：执行引擎**
 
 - [ ] 火山模型执行器
-- [ ] 节点/边匹配算法
-- [ ] 结果集构建
+- [x] 节点/边匹配算法（编程式 PatternBuilder 已实现）
+- [x] 结果集构建（`.return().execute()` 已实现）
 
 #### 1.4 验收标准
 
@@ -192,19 +200,19 @@ class VariablePathFinder {
 
 **第7-8周：基础算法**
 
-- [ ] BFS/DFS 路径遍历实现
-- [ ] 唯一性约束处理
-- [ ] 路径结果格式化
+- [x] BFS 路径遍历实现（`VariablePathBuilder`）
+- [x] 唯一性约束处理（`uniqueness: 'NODE' | 'EDGE' | 'NONE'`）
+- [x] 路径结果格式化（`all()` 返回结构）
 
 **第9-10周：优化算法**
 
 - [ ] 双向 BFS 优化
-- [ ] Dijkstra 最短路径
+- [x] Dijkstra 最短路径（支持边权 `weight`）
 - [ ] A\* 启发式搜索
 
 **第11-12周：集成与优化**
 
-- [ ] 与模式匹配集成
+- [x] 与模式匹配集成（变长路径在 PatternBuilder 中可用）
 - [ ] 性能优化和调试
 - [ ] 内存使用优化
 
@@ -263,15 +271,15 @@ const stats = db
 
 **第13-14周：聚合框架**
 
-- [ ] 聚合管道设计
-- [ ] 基础聚合函数实现
-- [ ] 分组逻辑实现
+- [x] 聚合管道设计（`AggregationPipeline`）
+- [x] 基础聚合函数实现（COUNT/SUM/AVG/MIN/MAX）
+- [x] 分组逻辑实现（`groupBy()` 多字段）
 
 **第15-16周：优化与集成**
 
-- [ ] 流式聚合优化
-- [ ] 内存使用控制
-- [ ] 与查询引擎集成
+- [x] 流式聚合优化（增量状态、部分排序 `partialSort`）
+- [x] 内存使用控制（不保留完整记录数组）
+- [x] 与查询引擎集成（`match()/matchStream()`）
 
 #### 3.4 验收标准
 
@@ -324,7 +332,7 @@ const result = db
 
 **第17-18周：基础实现**
 
-- [ ] UNION 查询实现
+- [x] UNION 查询实现（`union/unionAll`）
 - [ ] 基础子查询框架
 - [ ] EXISTS/NOT EXISTS
 

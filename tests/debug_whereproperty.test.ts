@@ -21,7 +21,7 @@ describe('调试 whereProperty 问题', () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it('whereProperty 应该能找到刚插入的数据', async () => {
+  it('whereProperty 应该能找到刚插入的数据', () => {
     // 插入测试数据
     db.addFact(
       { subject: 'alice', predicate: 'IS_PERSON', object: 'true' },
