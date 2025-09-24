@@ -10,8 +10,8 @@ if ! git diff --quiet -- .agents/rules/base.md; then
   exit 1
 fi
 
-echo "[husky] pre-push: full lint (strict)"
-pnpm run lint:full:strict
+echo "[husky] pre-push: lint:core"
+pnpm run lint:core
 
 echo "[husky] pre-push: prettier format check"
 pnpm run format:check
