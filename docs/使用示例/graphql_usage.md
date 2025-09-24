@@ -84,14 +84,14 @@ import { discoverSchema } from '@/query/graphql';
 // 独立使用 Schema 发现功能
 const entityTypes = await discoverSchema(db.store, {
   maxSampleSize: 500,
-  minEntityCount: 5
+  minEntityCount: 5,
 });
 
 console.log('发现的实体类型:');
-entityTypes.forEach(type => {
+entityTypes.forEach((type) => {
   console.log(`- ${type.typeName}: ${type.count} 个实例`);
-  console.log(`  属性: ${type.properties.map(p => p.fieldName).join(', ')}`);
-  console.log(`  关系: ${type.relations.map(r => r.fieldName).join(', ')}`);
+  console.log(`  属性: ${type.properties.map((p) => p.fieldName).join(', ')}`);
+  console.log(`  关系: ${type.relations.map((r) => r.fieldName).join(', ')}`);
 });
 ```
 
@@ -100,21 +100,25 @@ entityTypes.forEach(type => {
 ```typescript
 import { createGraphQLService } from '@/query/graphql';
 
-const gql = createGraphQLService(db.store, {
-  // Schema 生成配置
-  minEntityCount: 10,           // 最小实体数量阈值
-  fieldNaming: 'camelCase',     // 字段命名规范
-  includeReverseRelations: true, // 包含反向关系
-  maxDepth: 5,                  // 最大遍历深度
-  excludeTypes: ['InternalType'], // 排除的类型
-}, {
-  // 解析器配置
-  enablePagination: true,       // 启用分页
-  enableFiltering: true,        // 启用过滤
-  enableSorting: true,         // 启用排序
-  maxQueryDepth: 10,           // 最大查询深度
-  maxQueryComplexity: 1000     // 最大查询复杂度
-});
+const gql = createGraphQLService(
+  db.store,
+  {
+    // Schema 生成配置
+    minEntityCount: 10, // 最小实体数量阈值
+    fieldNaming: 'camelCase', // 字段命名规范
+    includeReverseRelations: true, // 包含反向关系
+    maxDepth: 5, // 最大遍历深度
+    excludeTypes: ['InternalType'], // 排除的类型
+  },
+  {
+    // 解析器配置
+    enablePagination: true, // 启用分页
+    enableFiltering: true, // 启用过滤
+    enableSorting: true, // 启用排序
+    maxQueryDepth: 10, // 最大查询深度
+    maxQueryComplexity: 1000, // 最大查询复杂度
+  },
+);
 ```
 
 ### 3. 分页查询
@@ -122,7 +126,8 @@ const gql = createGraphQLService(db.store, {
 启用分页后，可以使用 Relay 规范的连接查询：
 
 ```typescript
-const paginatedResult = await gql.executeQuery(`
+const paginatedResult = await gql.executeQuery(
+  `
   query GetPersons($first: Int, $after: String) {
     persons(first: $first, after: $after) {
       edges {
@@ -142,15 +147,18 @@ const paginatedResult = await gql.executeQuery(`
       totalCount
     }
   }
-`, {
-  first: 10
-});
+`,
+  {
+    first: 10,
+  },
+);
 ```
 
 ### 4. 过滤和排序
 
 ```typescript
-const filteredResult = await gql.executeQuery(`
+const filteredResult = await gql.executeQuery(
+  `
   query GetFilteredPersons($filter: PersonFilter, $sort: [PersonSort!]) {
     persons(filter: $filter, sort: $sort) {
       name
@@ -158,13 +166,15 @@ const filteredResult = await gql.executeQuery(`
       email
     }
   }
-`, {
-  filter: {
-    age_gt: 18,
-    name_contains: "张"
+`,
+  {
+    filter: {
+      age_gt: 18,
+      name_contains: '张',
+    },
+    sort: ['age_DESC', 'name_ASC'],
   },
-  sort: ["age_DESC", "name_ASC"]
-});
+);
 ```
 
 ## 生成的 Schema 结构
@@ -369,8 +379,8 @@ db.addFact({ subject: 'person:1', predicate: 'FRIEND_OF', object: 'person:2' });
 ```typescript
 // 配置合适的采样大小
 const gql = createGraphQLService(db.store, {
-  maxSampleSize: 1000,      // 减少大数据集的分析时间
-  minEntityCount: 5         // 过滤掉少量实例的类型
+  maxSampleSize: 1000, // 减少大数据集的分析时间
+  minEntityCount: 5, // 过滤掉少量实例的类型
 });
 
 // 使用分页避免大量数据查询
@@ -446,15 +456,15 @@ const schema = await buildSchema(store, entityTypes, resolverOptions);
 
 ```typescript
 interface SchemaGenerationConfig {
-  maxSampleSize?: number;          // 最大样本数量
-  minEntityCount?: number;         // 最小实体数量
+  maxSampleSize?: number; // 最大样本数量
+  minEntityCount?: number; // 最小实体数量
   typeMapping?: Record<string, string>; // 自定义类型映射
   fieldNaming?: 'camelCase' | 'snake_case' | 'preserve'; // 字段命名
   includeReverseRelations?: boolean; // 包含反向关系
-  maxDepth?: number;               // 最大遍历深度
-  excludeTypes?: string[];         // 排除的类型
-  includeTypes?: string[];         // 仅包含的类型
-  excludePredicates?: string[];    // 排除的谓词
+  maxDepth?: number; // 最大遍历深度
+  excludeTypes?: string[]; // 排除的类型
+  includeTypes?: string[]; // 仅包含的类型
+  excludePredicates?: string[]; // 排除的谓词
 }
 ```
 
@@ -462,12 +472,12 @@ interface SchemaGenerationConfig {
 
 ```typescript
 interface ResolverGenerationOptions {
-  enablePagination?: boolean;      // 启用分页
-  enableFiltering?: boolean;       // 启用过滤
-  enableSorting?: boolean;        // 启用排序
-  enableAggregation?: boolean;    // 启用聚合
-  maxQueryDepth?: number;         // 最大查询深度
-  maxQueryComplexity?: number;    // 最大查询复杂度
+  enablePagination?: boolean; // 启用分页
+  enableFiltering?: boolean; // 启用过滤
+  enableSorting?: boolean; // 启用排序
+  enableAggregation?: boolean; // 启用聚合
+  maxQueryDepth?: number; // 最大查询深度
+  maxQueryComplexity?: number; // 最大查询复杂度
 }
 ```
 
@@ -500,12 +510,15 @@ interface ResolverGenerationOptions {
 const gql = createGraphQLService(db.store, {
   // 使用较小的采样大小进行调试
   maxSampleSize: 100,
-  minEntityCount: 1
+  minEntityCount: 1,
 });
 
 // 检查发现的实体类型
 const entityTypes = await discoverSchema(db.store);
-console.log('发现的类型:', entityTypes.map(t => t.typeName));
+console.log(
+  '发现的类型:',
+  entityTypes.map((t) => t.typeName),
+);
 
 // 检查生成的 Schema
 const schema = await gql.getSchema();

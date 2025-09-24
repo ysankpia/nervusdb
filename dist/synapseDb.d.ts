@@ -193,7 +193,7 @@ export declare class SynapseDB {
     /** 清理 Cypher 优化器缓存 */
     clearCypherOptimizationCache(): void;
     /** 获取 Cypher 优化器统计信息 */
-    getCypherOptimizerStats(): any;
+    getCypherOptimizerStats(): unknown;
     /** 预热 Cypher 优化器 */
     warmUpCypherOptimizer(): Promise<void>;
 }

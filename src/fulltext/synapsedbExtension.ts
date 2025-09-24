@@ -4,21 +4,11 @@
  * 为 SynapseDB 添加全文搜索功能，支持三元组内容的高级文本检索
  */
 
-import { SynapseDB } from '../synapseDb';
-import { FactRecord } from '../storage/persistentStore';
+import { SynapseDB } from '../synapseDb.js';
+import { FactRecord } from '../storage/persistentStore.js';
 
-import {
-  FullTextSearchEngine,
-  FullTextConfig,
-  Document,
-  SearchOptions,
-  SearchResult,
-  IndexStats,
-  Query,
-  FullTextSearchFactory,
-  FullTextBatchProcessor,
-  SearchPerformanceMonitor
-} from './engine';
+import { FullTextSearchFactory, FullTextBatchProcessor, SearchPerformanceMonitor } from './engine.js';
+import type { FullTextSearchEngine, FullTextConfig, Document, SearchOptions, SearchResult, IndexStats, Query } from './types.js';
 
 /**
  * 全文搜索扩展配置

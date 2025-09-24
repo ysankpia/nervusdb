@@ -13,11 +13,13 @@
 ### 从 Cypher
 
 Neo4j：
+
 ```
 MATCH (p:Person)-[:KNOWS]->(f:Person) WHERE f.age > 25 RETURN p,f LIMIT 10
 ```
 
 SynapseDB：
+
 ```ts
 await db.cypherRead(
   'MATCH (p:Person)-[:KNOWS]->(f:Person) WHERE f.age > $minAge RETURN p,f LIMIT $limit',
@@ -26,6 +28,7 @@ await db.cypherRead(
 ```
 
 变长路径：
+
 ```
 MATCH (a)-[:R*2..3]->(b) RETURN a,b
 ```
@@ -33,15 +36,17 @@ MATCH (a)-[:R*2..3]->(b) RETURN a,b
 ### 从 Gremlin
 
 TinkerGraph：
+
 ```
 g.V().hasLabel('Person').has('name','Alice').out('KNOWS').values('name')
 ```
 
 SynapseDB：
+
 ```ts
 import { gremlin } from '@/query/gremlin';
 const g = gremlin(db.store);
-await g.V().hasLabel('Person').has('name','Alice').out('KNOWS').values('name').toList();
+await g.V().hasLabel('Person').has('name', 'Alice').out('KNOWS').values('name').toList();
 ```
 
 ## 性能与调优
@@ -59,4 +64,3 @@ await g.V().hasLabel('Person').has('name','Alice').out('KNOWS').values('name').t
 - Cypher 语法参考：`docs/使用示例/Cypher语法参考.md`
 - Gremlin 指南：`docs/使用示例/gremlin_usage.md`
 - GraphQL 指南：`docs/使用示例/graphql_usage.md`
-

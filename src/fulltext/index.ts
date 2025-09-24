@@ -5,7 +5,7 @@
  */
 
 // 导出类型定义
-export * from './types';
+export * from './types.js';
 
 // 导出文本分析器
 export {
@@ -13,15 +13,11 @@ export {
   KeywordAnalyzer,
   NGramAnalyzer,
   AnalyzerFactory
-} from './analyzer';
+} from './analyzer.js';
 
 // 导出倒排索引和文档语料库
-export {
-  MemoryInvertedIndex,
-  MemoryDocumentCorpus,
-  BooleanQueryProcessor,
-  PhraseQueryProcessor
-} from './index';
+export { MemoryInvertedIndex } from './invertedIndex.js';
+export { MemoryDocumentCorpus } from './corpus.js';
 
 // 导出相关性评分器
 export {
@@ -32,16 +28,18 @@ export {
   CompositeScorer,
   VectorSpaceScorer,
   ScorerFactory
-} from './scorer';
+} from './scorer.js';
 
 // 导出查询引擎
 export {
   EditDistanceCalculator,
   FuzzySearchProcessor,
+  BooleanQueryProcessor,
+  PhraseQueryProcessor,
   QueryParser,
   SearchHighlighter,
   FullTextQueryEngine
-} from './query';
+} from './query.js';
 
 // 导出主搜索引擎
 export {
@@ -50,4 +48,4 @@ export {
   FullTextSearchFactory,
   FullTextBatchProcessor,
   SearchPerformanceMonitor
-} from './engine';
+} from './engine.js';

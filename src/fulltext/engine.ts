@@ -12,29 +12,25 @@ import {
   SearchResult,
   IndexStats,
   Query
-} from './types';
+} from './types.js';
 
 import {
   StandardAnalyzer,
   KeywordAnalyzer,
   NGramAnalyzer,
   AnalyzerFactory
-} from './analyzer';
+} from './analyzer.js';
 
-import {
-  MemoryInvertedIndex,
-  MemoryDocumentCorpus
-} from './index';
+import { MemoryInvertedIndex } from './invertedIndex.js';
+import { MemoryDocumentCorpus } from './corpus.js';
 
 import {
   TFIDFScorer,
   BM25Scorer,
   ScorerFactory
-} from './scorer';
+} from './scorer.js';
 
-import {
-  FullTextQueryEngine
-} from './query';
+import { FullTextQueryEngine } from './query.js';
 
 /**
  * 全文搜索索引管理器

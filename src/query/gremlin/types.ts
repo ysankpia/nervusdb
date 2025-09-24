@@ -159,7 +159,10 @@ export interface SubGraph {
 
 // 错误类型
 export class GremlinError extends Error {
-  constructor(message: string, public readonly step?: string) {
+  constructor(
+    message: string,
+    public readonly step?: string,
+  ) {
     super(message);
     this.name = 'GremlinError';
   }
@@ -173,7 +176,10 @@ export class UnsupportedStepError extends GremlinError {
 }
 
 export class TraversalError extends GremlinError {
-  constructor(message: string, public readonly traversal?: string) {
+  constructor(
+    message: string,
+    public readonly traversal?: string,
+  ) {
     super(message);
     this.name = 'TraversalError';
   }

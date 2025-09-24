@@ -110,7 +110,7 @@ export class SimpleBidirectionalPathBuilder {
       if (current.depth >= min && this.targetNodes.has(current.nodeId)) {
         // 构建结果
         return {
-          edges: current.path.map(record => ({ record, direction })),
+          edges: current.path.map((record) => ({ record, direction })),
           length: current.path.length,
           startId: current.path.length > 0 ? current.path[0].subjectId : current.nodeId,
           endId: current.nodeId,

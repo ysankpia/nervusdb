@@ -18,9 +18,9 @@ import {
   Path,
   GraphStats,
   GraphEdge
-} from './types';
+} from './types.js';
 
-import { MemoryGraph, GraphBuilder } from './graph';
+import { MemoryGraph, GraphBuilder } from './graph.js';
 
 // 导入算法实现
 import {
@@ -30,7 +30,7 @@ import {
   DegreeCentrality,
   EigenvectorCentrality,
   CentralityAlgorithmFactory
-} from './centrality';
+} from './centrality.js';
 
 import {
   LouvainCommunityDetection,
@@ -38,7 +38,7 @@ import {
   ConnectedComponentsDetection,
   StronglyConnectedComponentsDetection,
   CommunityDetectionAlgorithmFactory
-} from './community';
+} from './community.js';
 
 import {
   DijkstraPathAlgorithm,
@@ -46,7 +46,7 @@ import {
   FloydWarshallPathAlgorithm,
   BellmanFordPathAlgorithm,
   PathAlgorithmFactory
-} from './pathfinding';
+} from './pathfinding.js';
 
 import {
   JaccardSimilarity,
@@ -54,7 +54,7 @@ import {
   AdamicAdarSimilarity,
   PreferentialAttachmentSimilarity,
   SimilarityAlgorithmFactory
-} from './similarity';
+} from './similarity.js';
 
 /**
  * 图算法套件实现类

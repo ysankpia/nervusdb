@@ -606,7 +606,7 @@ export class SpatialQueryUtils {
    * 创建圆形查询区域
    */
   static createCircle(center: Point, radius: number, segments: number = 32): Geometry {
-    const coordinates: number[][] = [];
+    const coordinates: import('./types.js').CoordinateArray[] = [];
     const centerCoords = center.coordinates as [number, number];
 
     for (let i = 0; i <= segments; i++) {

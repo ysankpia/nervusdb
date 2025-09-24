@@ -896,6 +896,9 @@ export function buildFindContext(
     return EMPTY_CONTEXT;
   }
 
+  // 注意：空条件优化在上层（SynapseDB.find）根据是否存在分页索引决定，
+  // 这里保持常规行为以兼容内存场景。
+
   const matches = store.query(query);
   if (matches.length === 0) {
     return EMPTY_CONTEXT;

@@ -14,13 +14,11 @@ import {
   InvertedIndex,
   DocumentCorpus,
   RelevanceScorer,
-  TextAnalyzer
-} from './types';
+  TextAnalyzer,
+  PostingList
+} from './types.js';
 
-import {
-  BooleanQueryProcessor,
-  PhraseQueryProcessor
-} from './index';
+// 本文件内定义布尔与短语处理器
 
 /**
  * 编辑距离计算（用于模糊搜索）
@@ -194,6 +192,84 @@ export class FuzzySearchProcessor {
     const terms: string[] = [];
     // 假设我们有方法获取所有词汇
     return terms;
+  }
+}
+
+/**
+ * 布尔查询处理器（AND/OR/NOT）
+ */
+export class BooleanQueryProcessor {
+  constructor(private index: InvertedIndex) {}
+
+  processOR(terms: string[]): Set<string> {
+    const result = new Set<string>();
+    for (const term of terms) {
+      const list = this.index.getPostingList(term);
+      if (!list) continue;
+      for (const e of list.entries) result.add(e.docId);
+    }
+    return result;
+  }
+
+  processAND(terms: string[]): Set<string> {
+    if (terms.length === 0) return new Set();
+    let current = this.processOR([terms[0]]);
+    for (let i = 1; i < terms.length; i++) {
+      const next = this.processOR([terms[i]]);
+      current = new Set([...current].filter((id) => next.has(id)));
+    }
+    return current;
+  }
+
+  processNOT(includeTerms: string[], excludeTerms: string[]): Set<string> {
+    const include = this.processOR(includeTerms);
+    const exclude = this.processOR(excludeTerms);
+    return new Set([...include].filter((id) => !exclude.has(id)));
+  }
+}
+
+/**
+ * 短语查询处理器（基于相邻位置匹配）
+ */
+export class PhraseQueryProcessor {
+  constructor(private index: InvertedIndex) {}
+
+  processPhrase(terms: string[], slop: number = 0): Set<string> {
+    if (terms.length === 0) return new Set();
+    // 取出所有 posting 列表
+    const lists = terms.map((t) => this.index.getPostingList(t)).filter(Boolean) as PostingList[];
+    if (lists.length !== terms.length) return new Set();
+
+    // 以第一个词为基准，检查其它词的位置是否连续
+    const first = lists[0];
+    const result = new Set<string>();
+
+    for (const entry of first.entries) {
+      const docId = entry.docId;
+      const basePositions = new Set(entry.positions);
+      let ok = true;
+
+      for (let i = 1; i < lists.length && ok; i++) {
+        const other = lists[i].entries.find((e) => e.docId === docId);
+        if (!other) {
+          ok = false;
+          break;
+        }
+        // 检查是否存在 pos+k == pos'
+        let matched = false;
+        for (const p of basePositions) {
+          if (other.positions.includes(p + i)) {
+            matched = true;
+            break;
+          }
+        }
+        if (!matched) ok = false;
+      }
+
+      if (ok) result.add(docId);
+    }
+
+    return result;
   }
 }
 

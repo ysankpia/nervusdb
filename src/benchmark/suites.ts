@@ -104,7 +104,7 @@ class DataGenerator {
    * 生成空间坐标数据
    */
   static generateCoordinates(count: number): Array<[number, number]> {
-    const coordinates = [];
+    const coordinates: Array<[number, number]> = [];
     for (let i = 0; i < count; i++) {
       coordinates.push([
         BenchmarkUtils.generateRandomInt(-180, 180), // 经度

@@ -222,8 +222,8 @@ export class RTree implements SpatialIndex {
     insertPath.push(node);
 
     // 插入项目
-    node.children.push(item);
-    this.extend(node, bbox);
+    (node.children as RTreeItem[]).push(item);
+    this.extend(node.bbox, bbox);
 
     // 检查是否需要分裂
     while (level >= 0) {
@@ -236,7 +236,7 @@ export class RTree implements SpatialIndex {
     }
 
     // 调整边界框
-    this.adjustParentBounds(insertPath[insertPath.length - 1], insertPath);
+    this.adjustParentBounds(insertPath[insertPath.length - 1].bbox, insertPath);
   }
 
   /**
@@ -284,7 +284,7 @@ export class RTree implements SpatialIndex {
     this.calcBBox(node);
     this.calcBBox(newNode);
 
-    if (level) insertPath[level - 1].children.push(newNode);
+    if (level) (insertPath[level - 1].children as RTreeNode[]).push(newNode);
     else this.splitRoot(node, newNode);
   }
 
@@ -430,7 +430,7 @@ export class RTree implements SpatialIndex {
       if (!node) {
         node = path.pop()!;
         parent = path[path.length - 1];
-        index = (parent?.children || []).indexOf(node);
+        index = parent ? (parent.children as RTreeNode[]).indexOf(node) : -1;
         continue;
       }
 

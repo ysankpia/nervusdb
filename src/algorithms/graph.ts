@@ -9,7 +9,7 @@ import {
   GraphNode,
   GraphEdge,
   GraphStats
-} from './types';
+} from './types.js';
 
 /**
  * 内存图实现

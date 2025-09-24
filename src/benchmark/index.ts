@@ -50,12 +50,24 @@ export {
 // 报告生成器
 export { BenchmarkReporterImpl, ReportFormatter } from './reporter.js';
 
+// 导入实现与类型
+import { BenchmarkRunnerImpl, BenchmarkUtils } from './runner.js';
+import { BenchmarkReporterImpl, BenchmarkReporterImpl as BenchmarkReporterImplType } from './reporter.js';
+import { allBenchmarkSuites } from './suites.js';
+import type {
+  BenchmarkSuite,
+  BenchmarkResult,
+  BenchmarkReport,
+  RegressionConfig,
+  RegressionResult
+} from './types.js';
+
 /**
  * 基准测试管理器 - 提供简化的API接口
  */
 export class BenchmarkManager {
   private runner: BenchmarkRunnerImpl;
-  private reporter: BenchmarkReporterImpl;
+  private reporter: BenchmarkReporterImplType;
 
   constructor() {
     this.runner = new BenchmarkRunnerImpl();
@@ -73,7 +85,7 @@ export class BenchmarkManager {
    * 运行所有预定义测试套件
    */
   async runAllSuites(): Promise<BenchmarkReport> {
-    const { allBenchmarkSuites } = await import('./suites');
+    const { allBenchmarkSuites } = await import('./suites.js');
     return this.runner.runAll(allBenchmarkSuites);
   }
 
@@ -269,7 +281,7 @@ export async function runBenchmark(options?: {
  * 快捷函数：运行核心功能基准测试
  */
 export async function runCoreBenchmark(): Promise<BenchmarkReport> {
-  const { synapseDBCoreSuite } = await import('./suites');
+  const { synapseDBCoreSuite } = await import('./suites.js');
   const manager = createBenchmarkManager();
   return manager.runSuites([synapseDBCoreSuite]);
 }
@@ -278,7 +290,7 @@ export async function runCoreBenchmark(): Promise<BenchmarkReport> {
  * 快捷函数：运行全文搜索基准测试
  */
 export async function runFullTextBenchmark(): Promise<BenchmarkReport> {
-  const { fullTextSearchSuite } = await import('./suites');
+  const { fullTextSearchSuite } = await import('./suites.js');
   const manager = createBenchmarkManager();
   return manager.runSuites([fullTextSearchSuite]);
 }
@@ -287,7 +299,7 @@ export async function runFullTextBenchmark(): Promise<BenchmarkReport> {
  * 快捷函数：运行图算法基准测试
  */
 export async function runGraphAlgorithmsBenchmark(): Promise<BenchmarkReport> {
-  const { graphAlgorithmsSuite } = await import('./suites');
+  const { graphAlgorithmsSuite } = await import('./suites.js');
   const manager = createBenchmarkManager();
   return manager.runSuites([graphAlgorithmsSuite]);
 }
@@ -296,7 +308,7 @@ export async function runGraphAlgorithmsBenchmark(): Promise<BenchmarkReport> {
  * 快捷函数：运行空间几何基准测试
  */
 export async function runSpatialBenchmark(): Promise<BenchmarkReport> {
-  const { spatialGeometrySuite } = await import('./suites');
+  const { spatialGeometrySuite } = await import('./suites.js');
   const manager = createBenchmarkManager();
   return manager.runSuites([spatialGeometrySuite]);
 }

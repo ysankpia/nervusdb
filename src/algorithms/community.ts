@@ -11,7 +11,7 @@ import {
   CommunityLevel,
   CommunityDetectionAlgorithm,
   LouvainOptions
-} from './types';
+} from './types.js';
 
 /**
  * Louvain 社区发现算法实现

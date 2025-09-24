@@ -14,7 +14,7 @@ import {
   AlgorithmOptions,
   GraphEdge,
   GraphNode
-} from './types';
+} from './types.js';
 
 /**
  * Dijkstra 最短路径算法实现

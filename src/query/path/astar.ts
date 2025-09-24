@@ -6,7 +6,13 @@
  */
 
 import { PersistentStore, FactRecord } from '../../storage/persistentStore.js';
-import type { Uniqueness, Direction, PathEdge, PathResult, VariablePathOptions } from './variable.js';
+import type {
+  Uniqueness,
+  Direction,
+  PathEdge,
+  PathResult,
+  VariablePathOptions,
+} from './variable.js';
 
 interface AStarNode {
   nodeId: number;
@@ -210,11 +216,11 @@ export class AStarPathBuilder {
           allNodes.set(neighborId, neighborNode);
 
           // 如果不在开放列表中，添加进去
-          if (!openSet.some(node => node.nodeId === neighborId)) {
+          if (!openSet.some((node) => node.nodeId === neighborId)) {
             openSet.push(neighborNode);
           } else {
             // 更新开放列表中的节点
-            const index = openSet.findIndex(node => node.nodeId === neighborId);
+            const index = openSet.findIndex((node) => node.nodeId === neighborId);
             if (index !== -1) {
               openSet[index] = neighborNode;
             }
@@ -273,7 +279,14 @@ export function createAStarPathBuilder(
   options: VariablePathOptions,
   heuristicOptions?: HeuristicOptions,
 ): AStarPathBuilder {
-  return new AStarPathBuilder(store, startNodes, targetNodes, predicateId, options, heuristicOptions);
+  return new AStarPathBuilder(
+    store,
+    startNodes,
+    targetNodes,
+    predicateId,
+    options,
+    heuristicOptions,
+  );
 }
 
 /**
@@ -297,9 +310,7 @@ export function createGraphDistanceHeuristic(
       if (depth >= maxSampleDepth) break;
 
       // 检查正向连接
-      const forwardRecords = store.resolveRecords(
-        store.query({ subjectId: nodeId, predicateId }),
-      );
+      const forwardRecords = store.resolveRecords(store.query({ subjectId: nodeId, predicateId }));
 
       for (const record of forwardRecords) {
         if (record.objectId === toNodeId) {
@@ -313,9 +324,7 @@ export function createGraphDistanceHeuristic(
       }
 
       // 检查反向连接
-      const backwardRecords = store.resolveRecords(
-        store.query({ predicateId, objectId: nodeId }),
-      );
+      const backwardRecords = store.resolveRecords(store.query({ predicateId, objectId: nodeId }));
 
       for (const record of backwardRecords) {
         if (record.subjectId === toNodeId) {

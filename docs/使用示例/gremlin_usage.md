@@ -49,47 +49,44 @@ console.log(`找到 ${allEdges.length} 条边`);
 
 ```typescript
 // 查找具有特定属性的顶点
-const peopleWithNames = await g.V()
-  .has('HAS_NAME')
-  .toList();
+const peopleWithNames = await g.V().has('HAS_NAME').toList();
 
 // 查找具有特定属性值的顶点
-const alice = await g.V()
-  .has('HAS_NAME', '爱丽丝')
-  .next();
+const alice = await g.V().has('HAS_NAME', '爱丽丝').next();
 
 console.log('爱丽丝的信息:', alice.properties);
 
 // 使用谓词进行条件过滤
-const seniors = await g.V()
-  .has('HAS_AGE', P.gte('30'))
-  .values('HAS_NAME')
-  .toList();
+const seniors = await g.V().has('HAS_AGE', P.gte('30')).values('HAS_NAME').toList();
 
-console.log('30岁及以上的人:', seniors.map(s => s.properties.value));
+console.log(
+  '30岁及以上的人:',
+  seniors.map((s) => s.properties.value),
+);
 ```
 
 ### 图遍历
 
 ```typescript
 // 查找朋友
-const aliceFriends = await g.V()
-  .has('HAS_NAME', '爱丽丝')
-  .out('KNOWS')
-  .values('HAS_NAME')
-  .toList();
+const aliceFriends = await g.V().has('HAS_NAME', '爱丽丝').out('KNOWS').values('HAS_NAME').toList();
 
-console.log('爱丽丝的朋友:', aliceFriends.map(f => f.properties.value));
+console.log(
+  '爱丽丝的朋友:',
+  aliceFriends.map((f) => f.properties.value),
+);
 
 // 双向关系查询
-const mutualConnections = await g.V()
+const mutualConnections = await g
+  .V()
   .has('HAS_NAME', '爱丽丝')
   .both('KNOWS')
   .values('HAS_NAME')
   .toList();
 
 // 多跳查询（朋友的朋友）
-const friendsOfFriends = await g.V()
+const friendsOfFriends = await g
+  .V()
   .has('HAS_NAME', '爱丽丝')
   .out('KNOWS')
   .out('KNOWS')
@@ -103,19 +100,14 @@ const friendsOfFriends = await g.V()
 
 ```typescript
 // 获取出边
-const outgoingEdges = await g.V()
-  .has('HAS_NAME', '爱丽丝')
-  .outE()
-  .toList();
+const outgoingEdges = await g.V().has('HAS_NAME', '爱丽丝').outE().toList();
 
 // 获取特定类型的边
-const knowsEdges = await g.V()
-  .has('HAS_NAME', '爱丽丝')
-  .outE('KNOWS')
-  .toList();
+const knowsEdges = await g.V().has('HAS_NAME', '爱丽丝').outE('KNOWS').toList();
 
 // 从边到顶点
-const targets = await g.V()
+const targets = await g
+  .V()
   .has('HAS_NAME', '爱丽丝')
   .outE('KNOWS')
   .inV()
@@ -129,14 +121,16 @@ const targets = await g.V()
 
 ```typescript
 // 查找年龄在特定范围内的工程师
-const engineersInRange = await g.V()
+const engineersInRange = await g
+  .V()
   .has('HAS_PROFESSION', '工程师')
   .has('HAS_AGE', P.between('25', '35'))
   .values('HAS_NAME')
   .toList();
 
 // 多条件组合
-const criteria = await g.V()
+const criteria = await g
+  .V()
   .has('HAS_PROFESSION', P.within(['工程师', '设计师']))
   .has('HAS_AGE', P.gte('25'))
   .valueMap('HAS_NAME', 'HAS_AGE', 'HAS_PROFESSION')
@@ -147,7 +141,8 @@ const criteria = await g.V()
 
 ```typescript
 // 查找特定路径
-const engineerFriends = await g.V()
+const engineerFriends = await g
+  .V()
   .has('HAS_PROFESSION', '工程师')
   .out('KNOWS')
   .has('HAS_PROFESSION', '设计师')
@@ -155,12 +150,13 @@ const engineerFriends = await g.V()
   .toList();
 
 // 复杂路径模式
-const complexPath = await g.V()
+const complexPath = await g
+  .V()
   .has('HAS_NAME', '爱丽丝')
-  .out('WORKS_AT')  // 爱丽丝的公司
-  .in('WORKS_AT')   // 同事
-  .has('HAS_NAME', P.neq('爱丽丝'))  // 排除自己
-  .out('KNOWS')     // 同事的朋友
+  .out('WORKS_AT') // 爱丽丝的公司
+  .in('WORKS_AT') // 同事
+  .has('HAS_NAME', P.neq('爱丽丝')) // 排除自己
+  .out('KNOWS') // 同事的朋友
   .dedup()
   .values('HAS_NAME')
   .toList();
@@ -170,29 +166,20 @@ const complexPath = await g.V()
 
 ```typescript
 // 计数查询
-const totalPeople = await g.V()
-  .has('HAS_PROFESSION')
-  .count()
-  .next();
+const totalPeople = await g.V().has('HAS_PROFESSION').count().next();
 
 console.log(`总共有 ${totalPeople.properties.value} 个人`);
 
 // 去重统计
-const uniqueProfessions = await g.V()
-  .values('HAS_PROFESSION')
-  .dedup()
-  .count()
-  .next();
+const uniqueProfessions = await g.V().values('HAS_PROFESSION').dedup().count().next();
 
 console.log(`有 ${uniqueProfessions.properties.value} 种不同的职业`);
 
 // 分组统计（手动实现）
-const allProfessions = await g.V()
-  .values('HAS_PROFESSION')
-  .toList();
+const allProfessions = await g.V().values('HAS_PROFESSION').toList();
 
 const professionCount = {};
-allProfessions.forEach(p => {
+allProfessions.forEach((p) => {
   const profession = p.properties.value;
   professionCount[profession] = (professionCount[profession] || 0) + 1;
 });
@@ -211,15 +198,9 @@ db.addFact({ subject: 'company:techcorp', predicate: 'TYPE', object: 'Company' }
 db.addFact({ subject: 'project:webapp', predicate: 'TYPE', object: 'Project' });
 
 // 使用类型进行过滤
-const people = await g.V()
-  .has('TYPE', 'Person')
-  .values('HAS_NAME')
-  .toList();
+const people = await g.V().has('TYPE', 'Person').values('HAS_NAME').toList();
 
-const companies = await g.V()
-  .has('TYPE', 'Company')
-  .values('HAS_NAME')
-  .toList();
+const companies = await g.V().has('TYPE', 'Company').values('HAS_NAME').toList();
 ```
 
 ### 关系建模
@@ -245,7 +226,8 @@ db.addFact({ subject: 'person:charlie', predicate: 'REPORTS_TO', object: 'person
 ```typescript
 // 1. 尽早使用过滤条件
 // 好：先过滤再遍历
-const optimized = await g.V()
+const optimized = await g
+  .V()
   .has('TYPE', 'Person')
   .has('HAS_PROFESSION', '工程师')
   .out('KNOWS')
@@ -253,7 +235,8 @@ const optimized = await g.V()
   .toList();
 
 // 不好：先遍历再过滤
-const unoptimized = await g.V()
+const unoptimized = await g
+  .V()
   .out('KNOWS')
   .has('TYPE', 'Person')
   .has('HAS_PROFESSION', '工程师')
@@ -261,18 +244,10 @@ const unoptimized = await g.V()
   .toList();
 
 // 2. 使用 limit() 控制结果数量
-const limitedResults = await g.V()
-  .has('TYPE', 'Person')
-  .limit(100)
-  .toList();
+const limitedResults = await g.V().has('TYPE', 'Person').limit(100).toList();
 
 // 3. 使用 dedup() 去除重复
-const uniqueResults = await g.V()
-  .out('KNOWS')
-  .out('KNOWS')
-  .dedup()
-  .limit(50)
-  .toList();
+const uniqueResults = await g.V().out('KNOWS').out('KNOWS').dedup().limit(50).toList();
 ```
 
 ### 批量操作
@@ -282,7 +257,7 @@ const uniqueResults = await g.V()
 const people = [
   { id: 'person:1', name: '张三', age: 25 },
   { id: 'person:2', name: '李四', age: 30 },
-  { id: 'person:3', name: '王五', age: 35 }
+  { id: 'person:3', name: '王五', age: 35 },
 ];
 
 for (const person of people) {
@@ -300,9 +275,7 @@ await db.flush();
 ```typescript
 // 处理空结果
 try {
-  const result = await g.V()
-    .has('HAS_NAME', '不存在的人')
-    .next();
+  const result = await g.V().has('HAS_NAME', '不存在的人').next();
   console.log(result);
 } catch (error) {
   if (error.message.includes('No more elements')) {
@@ -313,9 +286,7 @@ try {
 }
 
 // 安全的获取操作
-const safeResult = await g.V()
-  .has('HAS_NAME', '可能不存在的人')
-  .tryNext();
+const safeResult = await g.V().has('HAS_NAME', '可能不存在的人').tryNext();
 
 if (safeResult) {
   console.log('找到:', safeResult.properties.HAS_NAME);
@@ -324,14 +295,10 @@ if (safeResult) {
 }
 
 // 检查是否有结果
-const hasResults = await g.V()
-  .has('HAS_PROFESSION', '科学家')
-  .hasNext();
+const hasResults = await g.V().has('HAS_PROFESSION', '科学家').hasNext();
 
 if (hasResults) {
-  const scientists = await g.V()
-    .has('HAS_PROFESSION', '科学家')
-    .toList();
+  const scientists = await g.V().has('HAS_PROFESSION', '科学家').toList();
   console.log(`找到 ${scientists.length} 位科学家`);
 }
 ```
@@ -349,7 +316,8 @@ const traditionalResults = db
   .all();
 
 // Gremlin 方式（更直观）
-const gremlinResults = await g.V()
+const gremlinResults = await g
+  .V()
   .has('HAS_NAME')
   .out('KNOWS')
   .has('HAS_PROFESSION', '工程师')
@@ -362,7 +330,8 @@ const step2 = step1.follow('KNOWS').all();
 const friends = step2.map(/* 提取朋友信息 */);
 
 // Gremlin 方式：一个链式查询
-const gremlinFriends = await g.V()
+const gremlinFriends = await g
+  .V()
   .has('HAS_NAME', '爱丽丝')
   .out('KNOWS')
   .values('HAS_NAME')

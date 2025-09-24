@@ -18,7 +18,7 @@ import {
   BoundingBox,
   SpatialGeometry,
   DistanceUnit
-} from './types';
+} from './types.js';
 
 /**
  * 地球半径常量（米）
@@ -203,7 +203,7 @@ export class SpatialGeometryImpl implements SpatialGeometry {
       case 'GeometryCollection':
         const collection = geometry as GeometryCollection;
         if (collection.geometries.length > 0) {
-          return this.getRepresentativePoint(collection.geometries[0]);
+          return this.getRepresentativePoint(collection.geometries[0] as unknown as Geometry);
         }
         break;
     }
@@ -255,7 +255,7 @@ export class SpatialGeometryImpl implements SpatialGeometry {
 
       case 'GeometryCollection':
         const collection = geometry as GeometryCollection;
-        return collection.geometries.reduce((total, geom) => total + this.calculateArea(geom), 0);
+        return collection.geometries.reduce((total, geom) => total + this.calculateArea(geom as unknown as Geometry), 0);
 
       default:
         return 0; // 点和线没有面积
@@ -329,7 +329,7 @@ export class SpatialGeometryImpl implements SpatialGeometry {
 
       case 'GeometryCollection':
         const collection = geometry as GeometryCollection;
-        return collection.geometries.reduce((total, geom) => total + this.calculateLength(geom), 0);
+        return collection.geometries.reduce((total, geom) => total + this.calculateLength(geom as unknown as Geometry), 0);
 
       default:
         return 0; // 点没有长度
@@ -409,7 +409,7 @@ export class SpatialGeometryImpl implements SpatialGeometry {
           break;
 
         case 'GeometryCollection':
-          geom.geometries.forEach(g => extractCoords(g));
+          geom.geometries.forEach(g => extractCoords(g as unknown as Geometry));
           break;
       }
     };

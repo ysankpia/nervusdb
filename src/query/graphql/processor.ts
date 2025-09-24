@@ -186,7 +186,7 @@ export class GraphQLProcessor {
     let i = firstBrace;
     const readBalancedOuter = (open: string, close: string): string => {
       let depth = 0;
-      let start = i;
+      const start = i;
       if (src[i] !== open) return '';
       while (i < src.length) {
         const ch = src[i++]!;
@@ -221,7 +221,7 @@ export class GraphQLProcessor {
 
     const readBalanced = (open: string, close: string): string => {
       let depth = 0;
-      let start = i;
+      const start = i;
       if (body[i] !== open) return '';
       while (i < len) {
         const ch = body[i++]!;

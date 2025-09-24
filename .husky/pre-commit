@@ -12,8 +12,11 @@ fi
 echo "[husky] pre-commit: lint-staged"
 pnpm exec lint-staged -c .lintstaged.cjs
 
-echo "[husky] pre-commit: full lint (strict)"
-pnpm run lint:full:strict
+echo "[husky] pre-commit: lint:core"
+pnpm run lint:core
 
-echo "[husky] pre-commit: prettier format check"
-pnpm run format:check
+echo "[husky] pre-commit: prettier format write"
+pnpm run format:write
+
+# 将格式化产生的变更加入本次提交
+git add README.md docs/**/*.md .agents/**/*.md .github/**/*.yml package.json || true

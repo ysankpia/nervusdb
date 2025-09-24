@@ -194,7 +194,7 @@ export class GraphTraversal<S = Vertex | Edge, E = Vertex | Edge> {
   has(label: string, key: string, value: PropertyValue): GraphTraversal<S, E>;
   has(label: string, key: string, predicate: Predicate): GraphTraversal<S, E>;
   has(...args: unknown[]): GraphTraversal<S, E> {
-    let step: any = {
+    const step: any = {
       type: 'has',
       id: this.generateStepId(),
     };

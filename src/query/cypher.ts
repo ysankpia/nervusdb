@@ -68,12 +68,17 @@ export class CypherProcessor {
 
     try {
       // 1. 词法分析
-      const lexer = new CypherLexer(statement);
-      const tokens = lexer.tokenize();
-
-      // 2. 语法分析
-      const parser = new CypherParser();
-      const ast = parser.parseTokens(tokens);
+      let ast;
+      if (options.enableOptimization) {
+        // 优化路径：直接复用解析器的一体化入口，减少一次对象创建
+        ast = this.parser.parse(statement);
+      } else {
+        // 传统路径：分步词法+语法，便于调试与观测
+        const lexer = new CypherLexer(statement);
+        const tokens = lexer.tokenize();
+        const parser = new CypherParser();
+        ast = parser.parseTokens(tokens);
+      }
 
       const parseTime = Date.now();
 
@@ -91,7 +96,7 @@ export class CypherProcessor {
         optimizationLevel: options.optimizationLevel || 'basic',
       };
       const compileResult = this.compiler.compile(ast, parameters, compilerOptions);
-      const compileTime = Date.now();
+      // const compileTime = Date.now(); // 编译时间可用于分析，当前未使用
 
       // 6. 执行查询
       const records = await compileResult.execute();
@@ -243,7 +248,7 @@ export interface CypherSupport {
   /**
    * 获取优化器统计信息
    */
-  getOptimizerStats(): any;
+  getOptimizerStats(): unknown;
 
   /**
    * 预热查询优化器

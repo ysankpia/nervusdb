@@ -4,20 +4,20 @@
  * 提供便捷的方法将全文搜索功能集成到 SynapseDB 实例中
  */
 
-import { SynapseDB } from '../synapseDb';
+import { SynapseDB } from '../synapseDb.js';
 import {
   SynapseDBFullTextExtension,
   SynapseDBFullTextExtensionFactory,
   FullTextExtensionConfig,
   FullTextSearchResultWithFacts
-} from './synapsedbExtension';
+} from './synapsedbExtension.js';
 
-import { SearchOptions, SearchResult } from './types';
+import { SearchOptions, SearchResult } from './types.js';
 
 /**
  * 扩展 SynapseDB 类的接口，添加全文搜索方法
  */
-declare module '../synapseDb' {
+declare module '../synapseDb.js' {
   interface SynapseDB {
     /** 全文搜索扩展实例 */
     fullText?: SynapseDBFullTextExtension;
@@ -82,7 +82,7 @@ SynapseDB.prototype.searchFacts = async function(
   query: string,
   options?: SearchOptions
 ): Promise<FullTextSearchResultWithFacts[]> {
-  this.ensureFullTextEnabled();
+  (this as any).ensureFullTextEnabled();
   return await this.fullText!.searchFacts(query, options);
 };
 
@@ -91,7 +91,7 @@ SynapseDB.prototype.searchNodes = async function(
   query: string,
   options?: SearchOptions
 ): Promise<SearchResult[]> {
-  this.ensureFullTextEnabled();
+  (this as any).ensureFullTextEnabled();
   return await this.fullText!.searchNodes(query, options);
 };
 
@@ -100,7 +100,7 @@ SynapseDB.prototype.searchEdges = async function(
   query: string,
   options?: SearchOptions
 ): Promise<SearchResult[]> {
-  this.ensureFullTextEnabled();
+  (this as any).ensureFullTextEnabled();
   return await this.fullText!.searchEdges(query, options);
 };
 
@@ -113,7 +113,7 @@ SynapseDB.prototype.globalSearch = async function(
   nodes: SearchResult[];
   edges: SearchResult[];
 }> {
-  this.ensureFullTextEnabled();
+  (this as any).ensureFullTextEnabled();
   return await this.fullText!.globalSearch(query, options);
 };
 
@@ -126,14 +126,14 @@ SynapseDB.prototype.getSearchSuggestions = async function(
   nodes: string[];
   edges: string[];
 }> {
-  this.ensureFullTextEnabled();
+  (this as any).ensureFullTextEnabled();
   return await this.fullText!.getSuggestions(prefix, count);
 };
 
 SynapseDB.prototype.getFullTextStats = async function(
   this: SynapseDB
 ): Promise<any> {
-  this.ensureFullTextEnabled();
+  (this as any).ensureFullTextEnabled();
   const [indexStats, performanceReport] = await Promise.all([
     this.fullText!.getIndexStats(),
     Promise.resolve(this.fullText!.getPerformanceReport())
@@ -148,7 +148,7 @@ SynapseDB.prototype.getFullTextStats = async function(
 SynapseDB.prototype.rebuildFullTextIndexes = async function(
   this: SynapseDB
 ): Promise<void> {
-  this.ensureFullTextEnabled();
+  (this as any).ensureFullTextEnabled();
   await this.fullText!.rebuildIndexes();
 };
 

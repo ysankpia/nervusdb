@@ -266,10 +266,7 @@ export function createGraphQLService(
  * console.log('发现的实体类型:', entityTypes.map(t => t.typeName));
  * ```
  */
-export async function discoverSchema(
-  store: PersistentStore,
-  config?: any,
-): Promise<any[]> {
+export async function discoverSchema(store: PersistentStore, config?: any): Promise<any[]> {
   const discovery = new SchemaDiscovery(store, config);
   return await discovery.discoverEntityTypes();
 }

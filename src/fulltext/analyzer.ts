@@ -4,7 +4,7 @@
  * 提供多语言文本分析功能，包括分词、词干提取、N-gram生成等
  */
 
-import { Token, TextAnalyzer } from './types';
+import { Token, TextAnalyzer } from './types.js';
 
 // 英文停用词列表
 const ENGLISH_STOP_WORDS = new Set([

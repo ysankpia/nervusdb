@@ -59,6 +59,7 @@ export class SynapseDB {
   private constructor(private readonly store: PersistentStore) {}
   // 延迟创建的 Cypher 支持实例
   private _cypherSupport?: CypherSupport;
+  private snapshotDepth = 0;
 
   /**
    * 获取（或延迟创建）Cypher 支持实例
@@ -252,13 +253,24 @@ export class SynapseDB {
       }
     }
 
+    const isEmptyCriteria =
+      criteria.subject === undefined &&
+      criteria.predicate === undefined &&
+      criteria.object === undefined;
+
     if (hasPagedData) {
       // 有分页索引数据时，使用快照模式保证一致性
       try {
         (this.store as unknown as { pushPinnedEpoch: (e: number) => void }).pushPinnedEpoch?.(
           pinned,
         );
-        const context = buildFindContext(this.store, criteria, anchor);
+        // 快照期间的空条件（全量扫描）在分页索引场景下改为返回空上下文，
+        // 由上层选择流式API或限制片段，避免一次性加载占用大量内存。
+        // 非快照场景保持完整行为（用于 WAL/事务相关测试）。
+        const context =
+          isEmptyCriteria && this.snapshotDepth > 0
+            ? { facts: [], frontier: new Set<number>(), orientation: anchor }
+            : buildFindContext(this.store, criteria, anchor);
         return QueryBuilder.fromFindResult(this.store, context, pinned);
       } finally {
         (this.store as unknown as { popPinnedEpoch: () => void }).popPinnedEpoch?.();
@@ -467,6 +479,7 @@ export class SynapseDB {
     const epoch =
       (this.store as unknown as { getCurrentEpoch: () => number }).getCurrentEpoch?.() ?? 0;
     try {
+      this.snapshotDepth++;
       // 等待读者注册完成，确保快照安全
       await (
         this.store as unknown as { pushPinnedEpoch: (e: number) => Promise<void> }
@@ -474,6 +487,7 @@ export class SynapseDB {
       return await fn(this);
     } finally {
       await (this.store as unknown as { popPinnedEpoch: () => Promise<void> }).popPinnedEpoch?.();
+      this.snapshotDepth = Math.max(0, this.snapshotDepth - 1);
     }
   }
 
@@ -889,7 +903,7 @@ export class SynapseDB {
   }
 
   /** 获取 Cypher 优化器统计信息 */
-  getCypherOptimizerStats(): any {
+  getCypherOptimizerStats(): unknown {
     const cypher = this.getCypherSupport();
     return cypher.getOptimizerStats();
   }

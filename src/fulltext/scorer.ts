@@ -10,7 +10,7 @@ import {
   RelevanceScorer,
   PostingList,
   InvertedIndex
-} from './types';
+} from './types.js';
 
 /**
  * TF-IDF相关性评分器

@@ -5,13 +5,13 @@
  */
 
 // 导出类型定义
-export * from './types';
+export * from './types.js';
 
 // 导出图数据结构
 export {
   MemoryGraph,
   GraphBuilder
-} from './graph';
+} from './graph.js';
 
 // 导出中心性算法
 export {
@@ -21,7 +21,7 @@ export {
   DegreeCentrality,
   EigenvectorCentrality,
   CentralityAlgorithmFactory
-} from './centrality';
+} from './centrality.js';
 
 // 导出社区发现算法
 export {
@@ -30,7 +30,7 @@ export {
   ConnectedComponentsDetection,
   StronglyConnectedComponentsDetection,
   CommunityDetectionAlgorithmFactory
-} from './community';
+} from './community.js';
 
 // 导出路径算法
 export {
@@ -39,7 +39,7 @@ export {
   FloydWarshallPathAlgorithm,
   BellmanFordPathAlgorithm,
   PathAlgorithmFactory
-} from './pathfinding';
+} from './pathfinding.js';
 
 // 导出相似度算法
 export {
@@ -50,7 +50,7 @@ export {
   SimRankSimilarity,
   NodeAttributeSimilarity,
   SimilarityAlgorithmFactory
-} from './similarity';
+} from './similarity.js';
 
 // 导出统一算法套件
 export {
@@ -58,7 +58,7 @@ export {
   GraphAlgorithmFactoryImpl,
   GraphAlgorithmUtils,
   GraphAlgorithms
-} from './suite';
+} from './suite.js';
 
 // 便捷API
 export const createGraph = () => new (require('./graph').MemoryGraph)();

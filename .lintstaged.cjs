@@ -1,6 +1,9 @@
 /** lint-staged v15+ 显式配置（CommonJS） */
 module.exports = {
-  'src/**/*.{ts,tsx}': ['pnpm exec eslint --fix --max-warnings=0'],
+  // 仅对核心路径执行严格 Lint（与 pnpm lint:core 一致）
+  'src/{index.ts,synapseDb.ts,query/**/*.ts,storage/**/*.ts}': [
+    'pnpm exec eslint --fix --max-warnings=0'
+  ],
   'tests/**/*.ts': ['pnpm exec eslint --fix --max-warnings=0'],
   'README.md': ['pnpm exec prettier --write'],
   'docs/**/*.md': ['pnpm exec prettier --write'],

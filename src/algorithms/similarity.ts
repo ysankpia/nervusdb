@@ -11,7 +11,7 @@ import {
   AlgorithmOptions,
   GraphNode,
   GraphEdge
-} from './types';
+} from './types.js';
 
 /**
  * Jaccard相似度算法实现

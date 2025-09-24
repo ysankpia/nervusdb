@@ -12,6 +12,7 @@
 - 参数化查询：`$param`
 
 不支持或规划中：
+
 - CREATE/SET/DELETE/MERGE（计划逐步开放写路径）
 
 ## 快速上手
@@ -54,4 +55,3 @@ synapsedb cypher data.synapsedb --file query.cql --optimize=aggressive --params 
 
 - 写操作默认禁用；只读模式下强制检查（`cypherRead`）。
 - 大结果建议配合 LIMIT 与分页策略；或改用编程式查询流式返回。
-

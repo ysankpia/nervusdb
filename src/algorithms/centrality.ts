@@ -11,7 +11,7 @@ import {
   CentralityAlgorithm,
   PageRankOptions,
   AlgorithmContext
-} from './types';
+} from './types.js';
 
 /**
  * PageRank 算法实现

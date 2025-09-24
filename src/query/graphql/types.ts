@@ -48,7 +48,11 @@ export interface GraphQLType {
 
 // GraphQL 解析器函数
 export interface GraphQLResolver {
-  (parent: unknown, args: Record<string, unknown>, context: GraphQLContext): Promise<unknown> | unknown;
+  (
+    parent: unknown,
+    args: Record<string, unknown>,
+    context: GraphQLContext,
+  ): Promise<unknown> | unknown;
 }
 
 // GraphQL 上下文
@@ -211,7 +215,18 @@ export interface SortArgs {
 // 过滤参数
 export interface FilterArgs {
   field: string;
-  operator: 'EQ' | 'NEQ' | 'LT' | 'LTE' | 'GT' | 'GTE' | 'IN' | 'NOT_IN' | 'CONTAINS' | 'STARTS_WITH' | 'ENDS_WITH';
+  operator:
+    | 'EQ'
+    | 'NEQ'
+    | 'LT'
+    | 'LTE'
+    | 'GT'
+    | 'GTE'
+    | 'IN'
+    | 'NOT_IN'
+    | 'CONTAINS'
+    | 'STARTS_WITH'
+    | 'ENDS_WITH';
   value: unknown;
 }
 
