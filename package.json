@@ -1,7 +1,7 @@
 {
   "name": "synapsedb",
-  "version": "1.0.0",
-  "description": "SynapseDB 原型代码与实验场",
+  "version": "1.1.0",
+  "description": "SynapseDB v1.1 - 高性能类人脑图知识库，支持流式查询、类型安全、属性索引与变长路径",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
