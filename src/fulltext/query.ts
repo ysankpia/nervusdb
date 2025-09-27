@@ -15,7 +15,7 @@ import {
   DocumentCorpus,
   RelevanceScorer,
   TextAnalyzer,
-  PostingList
+  PostingList,
 } from './types.js';
 
 // 本文件内定义布尔与短语处理器
@@ -32,7 +32,9 @@ export class EditDistanceCalculator {
     const n = str2.length;
 
     // 创建距离矩阵
-    const dp: number[][] = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+    const dp: number[][] = Array(m + 1)
+      .fill(null)
+      .map(() => Array(n + 1).fill(0));
 
     // 初始化边界
     for (let i = 0; i <= m; i++) dp[i][0] = i;
@@ -44,11 +46,13 @@ export class EditDistanceCalculator {
         if (str1[i - 1] === str2[j - 1]) {
           dp[i][j] = dp[i - 1][j - 1];
         } else {
-          dp[i][j] = 1 + Math.min(
-            dp[i - 1][j],     // 删除
-            dp[i][j - 1],     // 插入
-            dp[i - 1][j - 1]  // 替换
-          );
+          dp[i][j] =
+            1 +
+            Math.min(
+              dp[i - 1][j], // 删除
+              dp[i][j - 1], // 插入
+              dp[i - 1][j - 1], // 替换
+            );
         }
       }
     }
@@ -160,7 +164,8 @@ export class FuzzySearchProcessor {
 
     for (const indexTerm of allTerms) {
       const distance = EditDistanceCalculator.calculate(term, indexTerm);
-      if (distance <= 3) {  // 最大距离阈值
+      if (distance <= 3) {
+        // 最大距离阈值
         suggestions.push({ term: indexTerm, distance });
       }
     }
@@ -168,7 +173,7 @@ export class FuzzySearchProcessor {
     // 按距离排序，距离越小排在前面
     suggestions.sort((a, b) => a.distance - b.distance);
 
-    return suggestions.slice(0, maxSuggestions).map(s => s.term);
+    return suggestions.slice(0, maxSuggestions).map((s) => s.term);
   }
 
   /**
@@ -176,9 +181,9 @@ export class FuzzySearchProcessor {
    */
   private convertWildcardToRegex(pattern: string): RegExp {
     const escaped = pattern
-      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')  // 转义特殊字符
-      .replace(/\\\*/g, '.*')                  // * 转换为 .*
-      .replace(/\\\?/g, '.');                  // ? 转换为 .
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&') // 转义特殊字符
+      .replace(/\\\*/g, '.*') // * 转换为 .*
+      .replace(/\\\?/g, '.'); // ? 转换为 .
 
     return new RegExp(`^${escaped}$`, 'i');
   }
@@ -336,34 +341,34 @@ export class QueryParser {
       const parts = query.split(/\s+AND\s+/i);
       const booleanQuery: BooleanQuery = {
         operator: 'AND',
-        queries: parts.map(part => part.trim())
+        queries: parts.map((part) => part.trim()),
       };
 
       return {
         type: 'boolean',
-        value: booleanQuery
+        value: booleanQuery,
       };
     } else if (normalizedQuery.includes(' OR ')) {
       const parts = query.split(/\s+OR\s+/i);
       const booleanQuery: BooleanQuery = {
         operator: 'OR',
-        queries: parts.map(part => part.trim())
+        queries: parts.map((part) => part.trim()),
       };
 
       return {
         type: 'boolean',
-        value: booleanQuery
+        value: booleanQuery,
       };
     } else if (normalizedQuery.startsWith('NOT ')) {
       const term = query.substring(4).trim();
       const booleanQuery: BooleanQuery = {
         operator: 'NOT',
-        queries: ['*', term]  // 所有文档 - 包含该词的文档
+        queries: ['*', term], // 所有文档 - 包含该词的文档
       };
 
       return {
         type: 'boolean',
-        value: booleanQuery
+        value: booleanQuery,
       };
     }
 
@@ -375,11 +380,11 @@ export class QueryParser {
    * 解析短语查询
    */
   private parsePhraseQuery(query: string): Query {
-    const phrase = query.replace(/^"|"$/g, '');  // 移除引号
+    const phrase = query.replace(/^"|"$/g, ''); // 移除引号
 
     return {
       type: 'phrase',
-      value: phrase
+      value: phrase,
     };
   }
 
@@ -389,7 +394,7 @@ export class QueryParser {
   private parseWildcardQuery(query: string): Query {
     return {
       type: 'wildcard',
-      value: query
+      value: query,
     };
   }
 
@@ -399,7 +404,7 @@ export class QueryParser {
   private parseTermQuery(query: string): Query {
     return {
       type: 'term',
-      value: query
+      value: query,
     };
   }
 }
@@ -420,13 +425,13 @@ export class SearchHighlighter {
       maxFragments?: number;
       preTag?: string;
       postTag?: string;
-    } = {}
+    } = {},
   ): SearchHighlight[] {
     const {
       fragmentSize = 150,
       maxFragments = 3,
       preTag = '<mark>',
-      postTag = '</mark>'
+      postTag = '</mark>',
     } = options;
 
     const document = corpus.getDocument(docId);
@@ -442,13 +447,13 @@ export class SearchHighlighter {
         fragmentSize,
         maxFragments,
         preTag,
-        postTag
+        postTag,
       );
 
       if (fragments.length > 0) {
         highlights.push({
           field: fieldName,
-          fragments
+          fragments,
         });
       }
     }
@@ -465,7 +470,7 @@ export class SearchHighlighter {
     fragmentSize: number,
     maxFragments: number,
     preTag: string,
-    postTag: string
+    postTag: string,
   ): string[] {
     const fragments: string[] = [];
     const lowercaseContent = content.toLowerCase();
@@ -484,7 +489,7 @@ export class SearchHighlighter {
         matches.push({
           start: index,
           end: index + term.length,
-          term: term
+          term: term,
         });
 
         index += term.length;
@@ -501,7 +506,10 @@ export class SearchHighlighter {
       if (fragments.length >= maxFragments) break;
 
       const fragmentStart = Math.max(0, match.start - fragmentSize / 2);
-      const fragmentEnd = Math.min(content.length, match.start + match.term.length + fragmentSize / 2);
+      const fragmentEnd = Math.min(
+        content.length,
+        match.start + match.term.length + fragmentSize / 2,
+      );
 
       const rangeKey = `${fragmentStart}-${fragmentEnd}`;
       if (processedRanges.has(rangeKey)) continue;
@@ -552,7 +560,7 @@ export class FullTextQueryEngine {
     index: InvertedIndex,
     corpus: DocumentCorpus,
     scorer: RelevanceScorer,
-    analyzer: TextAnalyzer
+    analyzer: TextAnalyzer,
   ) {
     this.index = index;
     this.corpus = corpus;
@@ -568,10 +576,7 @@ export class FullTextQueryEngine {
   /**
    * 执行搜索查询
    */
-  async search(
-    queryString: string,
-    options: SearchOptions = {}
-  ): Promise<SearchResult[]> {
+  async search(queryString: string, options: SearchOptions = {}): Promise<SearchResult[]> {
     const {
       fields = [],
       fuzzy = false,
@@ -580,7 +585,7 @@ export class FullTextQueryEngine {
       maxResults = 100,
       sortBy = 'relevance',
       highlight = false,
-      highlightFragments = 3
+      highlightFragments = 3,
     } = options;
 
     // 解析查询
@@ -595,12 +600,12 @@ export class FullTextQueryEngine {
         candidateDocIds = docIds;
       } else {
         // 求交集（AND语义）
-        candidateDocIds = new Set([...candidateDocIds].filter(id => docIds.has(id)));
+        candidateDocIds = new Set([...candidateDocIds].filter((id) => docIds.has(id)));
       }
     }
 
     // 分析查询词
-    const queryTerms = this.analyzer.analyze(queryString).map(token => token.value);
+    const queryTerms = this.analyzer.analyze(queryString).map((token) => token.value);
 
     // 计算评分
     const results: SearchResult[] = [];
@@ -611,7 +616,7 @@ export class FullTextQueryEngine {
 
       // 字段过滤
       if (fields.length > 0) {
-        const hasMatchingField = fields.some(field => document.fields.has(field));
+        const hasMatchingField = fields.some((field) => document.fields.has(field));
         if (!hasMatchingField) continue;
       }
 
@@ -624,7 +629,7 @@ export class FullTextQueryEngine {
       // 生成高亮
       const highlights = highlight
         ? this.highlighter.generateHighlights(docId, queryTerms, this.corpus, {
-            maxFragments: highlightFragments
+            maxFragments: highlightFragments,
           })
         : [];
 
@@ -632,7 +637,7 @@ export class FullTextQueryEngine {
         docId,
         score,
         fields: Array.from(document.fields.keys()),
-        highlights: highlights.length > 0 ? highlights : undefined
+        highlights: highlights.length > 0 ? highlights : undefined,
       });
     }
 
@@ -649,7 +654,7 @@ export class FullTextQueryEngine {
   private async processQuery(
     query: Query,
     fuzzy: boolean,
-    maxEditDistance: number
+    maxEditDistance: number,
   ): Promise<Set<string>> {
     switch (query.type) {
       case 'term':
@@ -675,17 +680,13 @@ export class FullTextQueryEngine {
   /**
    * 处理词匹配查询
    */
-  private processTermQuery(
-    term: string,
-    fuzzy: boolean,
-    maxEditDistance: number
-  ): Set<string> {
+  private processTermQuery(term: string, fuzzy: boolean, maxEditDistance: number): Set<string> {
     if (fuzzy) {
       return this.fuzzyProcessor.fuzzySearch(term, maxEditDistance);
     }
 
     const tokens = this.analyzer.analyze(term);
-    const termValues = tokens.map(token => token.value);
+    const termValues = tokens.map((token) => token.value);
 
     return this.booleanProcessor.processOR(termValues);
   }
@@ -695,9 +696,9 @@ export class FullTextQueryEngine {
    */
   private processPhraseQuery(phrase: string): Set<string> {
     const tokens = this.analyzer.analyze(phrase);
-    const termValues = tokens.map(token => token.value);
+    const termValues = tokens.map((token) => token.value);
 
-    return this.phraseProcessor.processPhrase(termValues, 0);  // 精确短语匹配
+    return this.phraseProcessor.processPhrase(termValues, 0); // 精确短语匹配
   }
 
   /**
@@ -709,7 +710,7 @@ export class FullTextQueryEngine {
     for (const subQuery of booleanQuery.queries) {
       if (typeof subQuery === 'string') {
         const tokens = this.analyzer.analyze(subQuery);
-        termQueries.push(...tokens.map(token => token.value));
+        termQueries.push(...tokens.map((token) => token.value));
       }
     }
 
@@ -723,7 +724,7 @@ export class FullTextQueryEngine {
       case 'NOT':
         const [includeTerms, excludeTerms] = [
           termQueries.slice(0, termQueries.length / 2),
-          termQueries.slice(termQueries.length / 2)
+          termQueries.slice(termQueries.length / 2),
         ];
         return this.booleanProcessor.processNOT(includeTerms, excludeTerms);
 
@@ -757,7 +758,7 @@ export class FullTextQueryEngine {
           const timeA = docA?.timestamp?.getTime() || 0;
           const timeB = docB?.timestamp?.getTime() || 0;
 
-          return timeB - timeA;  // 最新的在前
+          return timeB - timeA; // 最新的在前
         });
         break;
 

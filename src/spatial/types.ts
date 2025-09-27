@@ -97,7 +97,14 @@ export interface GeometryCollection extends Omit<GeoJSONGeometry, 'coordinates'>
 /**
  * 联合几何类型
  */
-export type Geometry = Point | LineString | Polygon | MultiPoint | MultiLineString | MultiPolygon | GeometryCollection;
+export type Geometry =
+  | Point
+  | LineString
+  | Polygon
+  | MultiPoint
+  | MultiLineString
+  | MultiPolygon
+  | GeometryCollection;
 
 /**
  * GeoJSON要素对象
@@ -128,14 +135,14 @@ export type GeoJSON = Geometry | Feature | FeatureCollection;
  * 空间关系类型
  */
 export type SpatialRelation =
-  | 'intersects'    // 相交
-  | 'contains'      // 包含
-  | 'within'        // 在内部
-  | 'touches'       // 相切
-  | 'crosses'       // 穿过
-  | 'overlaps'      // 重叠
-  | 'disjoint'      // 分离
-  | 'equals';       // 相等
+  | 'intersects' // 相交
+  | 'contains' // 包含
+  | 'within' // 在内部
+  | 'touches' // 相切
+  | 'crosses' // 穿过
+  | 'overlaps' // 重叠
+  | 'disjoint' // 分离
+  | 'equals'; // 相等
 
 /**
  * 距离单位
@@ -192,13 +199,21 @@ export interface SpatialIndex {
   queryBoundingBox(bbox: BoundingBox, options?: SpatialQueryOptions): SpatialQueryResult[];
 
   /** 几何对象查询 */
-  queryGeometry(geometry: Geometry, relation: SpatialRelation, options?: SpatialQueryOptions): SpatialQueryResult[];
+  queryGeometry(
+    geometry: Geometry,
+    relation: SpatialRelation,
+    options?: SpatialQueryOptions,
+  ): SpatialQueryResult[];
 
   /** 最近邻查询 */
   queryNearest(point: Point, count: number, options?: SpatialQueryOptions): SpatialQueryResult[];
 
   /** 范围查询 */
-  queryWithinDistance(point: Point, distance: number, options?: SpatialQueryOptions): SpatialQueryResult[];
+  queryWithinDistance(
+    point: Point,
+    distance: number,
+    options?: SpatialQueryOptions,
+  ): SpatialQueryResult[];
 
   /** 获取索引统计信息 */
   getStats(): SpatialIndexStats;
@@ -428,13 +443,25 @@ export interface RoutingService {
  */
 export interface SpatialAnalysis {
   /** 空间聚类 */
-  cluster(points: Point[], algorithm?: 'dbscan' | 'kmeans', options?: Record<string, any>): Point[][];
+  cluster(
+    points: Point[],
+    algorithm?: 'dbscan' | 'kmeans',
+    options?: Record<string, any>,
+  ): Point[][];
 
   /** 热力图生成 */
-  heatmap(points: Point[], weights?: number[], options?: { radius: number; blur: number }): Geometry;
+  heatmap(
+    points: Point[],
+    weights?: number[],
+    options?: { radius: number; blur: number },
+  ): Geometry;
 
   /** 空间插值 */
-  interpolate(points: Point[], values: number[], method?: 'idw' | 'kriging'): (point: Point) => number;
+  interpolate(
+    points: Point[],
+    values: number[],
+    method?: 'idw' | 'kriging',
+  ): (point: Point) => number;
 
   /** 空间统计 */
   spatialStats(geometries: Geometry[]): {

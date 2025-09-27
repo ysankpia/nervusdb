@@ -210,7 +210,7 @@ export class RTree implements SpatialIndex {
 
     // 寻找插入位置
     let node = this.root;
-    let bbox = item.bbox;
+    const bbox = item.bbox;
 
     while (node.height > level) {
       insertPath.push(node);

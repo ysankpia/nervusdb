@@ -10,7 +10,7 @@ import {
   SimilarityResult,
   AlgorithmOptions,
   GraphNode,
-  GraphEdge
+  GraphEdge,
 } from './types.js';
 
 /**
@@ -21,11 +21,11 @@ export class JaccardSimilarity implements SimilarityAlgorithm {
   computeSimilarity(graph: Graph, node1: string, node2: string): number {
     if (node1 === node2) return 1.0;
 
-    const neighbors1 = new Set(graph.getNeighbors(node1).map(n => n.id));
-    const neighbors2 = new Set(graph.getNeighbors(node2).map(n => n.id));
+    const neighbors1 = new Set(graph.getNeighbors(node1).map((n) => n.id));
+    const neighbors2 = new Set(graph.getNeighbors(node2).map((n) => n.id));
 
     // 计算交集大小
-    const intersection = new Set([...neighbors1].filter(n => neighbors2.has(n)));
+    const intersection = new Set([...neighbors1].filter((n) => neighbors2.has(n)));
 
     // 计算并集大小
     const union = new Set([...neighbors1, ...neighbors2]);
@@ -41,7 +41,7 @@ export class JaccardSimilarity implements SimilarityAlgorithm {
     const topPairs: Array<{ node1: string; node2: string; similarity: number }> = [];
 
     // 初始化相似度矩阵
-    nodes.forEach(node => {
+    nodes.forEach((node) => {
       similarities.set(node.id, new Map());
     });
 
@@ -67,7 +67,11 @@ export class JaccardSimilarity implements SimilarityAlgorithm {
     return { similarities, topPairs };
   }
 
-  findMostSimilar(graph: Graph, targetNode: string, k: number): Array<{ nodeId: string; similarity: number }> {
+  findMostSimilar(
+    graph: Graph,
+    targetNode: string,
+    k: number,
+  ): Array<{ nodeId: string; similarity: number }> {
     const nodes = graph.getNodes();
     const similarities: Array<{ nodeId: string; similarity: number }> = [];
 
@@ -79,9 +83,7 @@ export class JaccardSimilarity implements SimilarityAlgorithm {
     }
 
     // 按相似度降序排序并返回前k个
-    return similarities
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, k);
+    return similarities.sort((a, b) => b.similarity - a.similarity).slice(0, k);
   }
 }
 
@@ -95,7 +97,7 @@ export class CosineSimilarity implements SimilarityAlgorithm {
 
     // 获取所有可能的谓词（边类型）
     const allPredicates = new Set<string>();
-    graph.getEdges().forEach(edge => allPredicates.add(edge.type));
+    graph.getEdges().forEach((edge) => allPredicates.add(edge.type));
 
     // 构建特征向量（基于每种谓词类型的度数）
     const vector1 = this.buildFeatureVector(graph, node1, allPredicates);
@@ -107,10 +109,10 @@ export class CosineSimilarity implements SimilarityAlgorithm {
   private buildFeatureVector(graph: Graph, nodeId: string, predicates: Set<string>): number[] {
     const vector: number[] = [];
 
-    predicates.forEach(predicate => {
+    predicates.forEach((predicate) => {
       // 计算该节点在特定谓词类型上的度数
-      const outEdges = graph.getOutEdges(nodeId).filter(e => e.type === predicate);
-      const inEdges = graph.getInEdges(nodeId).filter(e => e.type === predicate);
+      const outEdges = graph.getOutEdges(nodeId).filter((e) => e.type === predicate);
+      const inEdges = graph.getInEdges(nodeId).filter((e) => e.type === predicate);
       vector.push(outEdges.length + inEdges.length);
     });
 
@@ -141,16 +143,16 @@ export class CosineSimilarity implements SimilarityAlgorithm {
 
     // 预计算所有谓词类型
     const allPredicates = new Set<string>();
-    graph.getEdges().forEach(edge => allPredicates.add(edge.type));
+    graph.getEdges().forEach((edge) => allPredicates.add(edge.type));
 
     // 预计算所有节点的特征向量
     const featureVectors = new Map<string, number[]>();
-    nodes.forEach(node => {
+    nodes.forEach((node) => {
       featureVectors.set(node.id, this.buildFeatureVector(graph, node.id, allPredicates));
     });
 
     // 初始化相似度矩阵
-    nodes.forEach(node => {
+    nodes.forEach((node) => {
       similarities.set(node.id, new Map());
     });
 
@@ -178,7 +180,11 @@ export class CosineSimilarity implements SimilarityAlgorithm {
     return { similarities, topPairs };
   }
 
-  findMostSimilar(graph: Graph, targetNode: string, k: number): Array<{ nodeId: string; similarity: number }> {
+  findMostSimilar(
+    graph: Graph,
+    targetNode: string,
+    k: number,
+  ): Array<{ nodeId: string; similarity: number }> {
     const nodes = graph.getNodes();
     const similarities: Array<{ nodeId: string; similarity: number }> = [];
 
@@ -189,9 +195,7 @@ export class CosineSimilarity implements SimilarityAlgorithm {
       }
     }
 
-    return similarities
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, k);
+    return similarities.sort((a, b) => b.similarity - a.similarity).slice(0, k);
   }
 }
 
@@ -203,11 +207,11 @@ export class AdamicAdarSimilarity implements SimilarityAlgorithm {
   computeSimilarity(graph: Graph, node1: string, node2: string): number {
     if (node1 === node2) return 1.0;
 
-    const neighbors1 = new Set(graph.getNeighbors(node1).map(n => n.id));
-    const neighbors2 = new Set(graph.getNeighbors(node2).map(n => n.id));
+    const neighbors1 = new Set(graph.getNeighbors(node1).map((n) => n.id));
+    const neighbors2 = new Set(graph.getNeighbors(node2).map((n) => n.id));
 
     // 找到共同邻居
-    const commonNeighbors = [...neighbors1].filter(n => neighbors2.has(n));
+    const commonNeighbors = [...neighbors1].filter((n) => neighbors2.has(n));
 
     if (commonNeighbors.length === 0) return 0;
 
@@ -229,7 +233,7 @@ export class AdamicAdarSimilarity implements SimilarityAlgorithm {
     const topPairs: Array<{ node1: string; node2: string; similarity: number }> = [];
 
     // 初始化相似度矩阵
-    nodes.forEach(node => {
+    nodes.forEach((node) => {
       similarities.set(node.id, new Map());
     });
 
@@ -253,7 +257,11 @@ export class AdamicAdarSimilarity implements SimilarityAlgorithm {
     return { similarities, topPairs };
   }
 
-  findMostSimilar(graph: Graph, targetNode: string, k: number): Array<{ nodeId: string; similarity: number }> {
+  findMostSimilar(
+    graph: Graph,
+    targetNode: string,
+    k: number,
+  ): Array<{ nodeId: string; similarity: number }> {
     const nodes = graph.getNodes();
     const similarities: Array<{ nodeId: string; similarity: number }> = [];
 
@@ -264,9 +272,7 @@ export class AdamicAdarSimilarity implements SimilarityAlgorithm {
       }
     }
 
-    return similarities
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, k);
+    return similarities.sort((a, b) => b.similarity - a.similarity).slice(0, k);
   }
 }
 
@@ -291,7 +297,7 @@ export class PreferentialAttachmentSimilarity implements SimilarityAlgorithm {
     const topPairs: Array<{ node1: string; node2: string; similarity: number }> = [];
 
     // 初始化相似度矩阵
-    nodes.forEach(node => {
+    nodes.forEach((node) => {
       similarities.set(node.id, new Map());
     });
 
@@ -315,7 +321,11 @@ export class PreferentialAttachmentSimilarity implements SimilarityAlgorithm {
     return { similarities, topPairs };
   }
 
-  findMostSimilar(graph: Graph, targetNode: string, k: number): Array<{ nodeId: string; similarity: number }> {
+  findMostSimilar(
+    graph: Graph,
+    targetNode: string,
+    k: number,
+  ): Array<{ nodeId: string; similarity: number }> {
     const nodes = graph.getNodes();
     const similarities: Array<{ nodeId: string; similarity: number }> = [];
 
@@ -326,9 +336,7 @@ export class PreferentialAttachmentSimilarity implements SimilarityAlgorithm {
       }
     }
 
-    return similarities
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, k);
+    return similarities.sort((a, b) => b.similarity - a.similarity).slice(0, k);
   }
 }
 
@@ -341,7 +349,9 @@ export class SimRankSimilarity implements SimilarityAlgorithm {
   private maxIterations: number;
   private tolerance: number;
 
-  constructor(options: { dampingFactor?: number; maxIterations?: number; tolerance?: number } = {}) {
+  constructor(
+    options: { dampingFactor?: number; maxIterations?: number; tolerance?: number } = {},
+  ) {
     this.dampingFactor = options.dampingFactor ?? 0.8;
     this.maxIterations = options.maxIterations ?? 100;
     this.tolerance = options.tolerance ?? 1e-6;
@@ -357,18 +367,18 @@ export class SimRankSimilarity implements SimilarityAlgorithm {
 
   private computeAllSimRankSimilarities(graph: Graph): Map<string, Map<string, number>> {
     const nodes = graph.getNodes();
-    const nodeIds = nodes.map(n => n.id);
+    const nodeIds = nodes.map((n) => n.id);
     const n = nodeIds.length;
 
     // 初始化相似度矩阵
     let similarities = new Map<string, Map<string, number>>();
     let newSimilarities = new Map<string, Map<string, number>>();
 
-    nodeIds.forEach(nodeId => {
+    nodeIds.forEach((nodeId) => {
       similarities.set(nodeId, new Map());
       newSimilarities.set(nodeId, new Map());
 
-      nodeIds.forEach(otherId => {
+      nodeIds.forEach((otherId) => {
         const initialSim = nodeId === otherId ? 1.0 : 0.0;
         similarities.get(nodeId)!.set(otherId, initialSim);
         newSimilarities.get(nodeId)!.set(otherId, initialSim);
@@ -390,8 +400,8 @@ export class SimRankSimilarity implements SimilarityAlgorithm {
           }
 
           // 获取入邻居
-          const inNeighborsI = graph.getInEdges(nodeI).map(e => e.source);
-          const inNeighborsJ = graph.getInEdges(nodeJ).map(e => e.source);
+          const inNeighborsI = graph.getInEdges(nodeI).map((e) => e.source);
+          const inNeighborsJ = graph.getInEdges(nodeJ).map((e) => e.source);
 
           if (inNeighborsI.length === 0 || inNeighborsJ.length === 0) {
             newSimilarities.get(nodeI)!.set(nodeJ, 0);
@@ -445,7 +455,11 @@ export class SimRankSimilarity implements SimilarityAlgorithm {
     return { similarities, topPairs };
   }
 
-  findMostSimilar(graph: Graph, targetNode: string, k: number): Array<{ nodeId: string; similarity: number }> {
+  findMostSimilar(
+    graph: Graph,
+    targetNode: string,
+    k: number,
+  ): Array<{ nodeId: string; similarity: number }> {
     const allSimilarities = this.computeAllSimRankSimilarities(graph);
     const targetSimilarities = allSimilarities.get(targetNode);
 
@@ -458,9 +472,7 @@ export class SimRankSimilarity implements SimilarityAlgorithm {
       }
     });
 
-    return similarities
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, k);
+    return similarities.sort((a, b) => b.similarity - a.similarity).slice(0, k);
   }
 }
 
@@ -515,7 +527,9 @@ export class NodeAttributeSimilarity implements SimilarityAlgorithm {
   }
 
   private levenshteinDistance(str1: string, str2: string): number {
-    const matrix = Array(str2.length + 1).fill(null).map(() => Array(str1.length + 1).fill(null));
+    const matrix = Array(str2.length + 1)
+      .fill(null)
+      .map(() => Array(str1.length + 1).fill(null));
 
     for (let i = 0; i <= str1.length; i++) matrix[0][i] = i;
     for (let j = 0; j <= str2.length; j++) matrix[j][0] = j;
@@ -526,7 +540,7 @@ export class NodeAttributeSimilarity implements SimilarityAlgorithm {
         matrix[j][i] = Math.min(
           matrix[j][i - 1] + 1,
           matrix[j - 1][i] + 1,
-          matrix[j - 1][i - 1] + indicator
+          matrix[j - 1][i - 1] + indicator,
         );
       }
     }
@@ -562,7 +576,7 @@ export class NodeAttributeSimilarity implements SimilarityAlgorithm {
   private arraySimilarity(arr1: any[], arr2: any[]): number {
     const set1 = new Set(arr1);
     const set2 = new Set(arr2);
-    const intersection = new Set([...set1].filter(x => set2.has(x)));
+    const intersection = new Set([...set1].filter((x) => set2.has(x)));
     const union = new Set([...set1, ...set2]);
 
     return union.size > 0 ? intersection.size / union.size : 0;
@@ -573,7 +587,7 @@ export class NodeAttributeSimilarity implements SimilarityAlgorithm {
     const similarities = new Map<string, Map<string, number>>();
     const topPairs: Array<{ node1: string; node2: string; similarity: number }> = [];
 
-    nodes.forEach(node => {
+    nodes.forEach((node) => {
       similarities.set(node.id, new Map());
     });
 
@@ -596,7 +610,11 @@ export class NodeAttributeSimilarity implements SimilarityAlgorithm {
     return { similarities, topPairs };
   }
 
-  findMostSimilar(graph: Graph, targetNode: string, k: number): Array<{ nodeId: string; similarity: number }> {
+  findMostSimilar(
+    graph: Graph,
+    targetNode: string,
+    k: number,
+  ): Array<{ nodeId: string; similarity: number }> {
     const nodes = graph.getNodes();
     const similarities: Array<{ nodeId: string; similarity: number }> = [];
 
@@ -607,9 +625,7 @@ export class NodeAttributeSimilarity implements SimilarityAlgorithm {
       }
     }
 
-    return similarities
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, k);
+    return similarities.sort((a, b) => b.similarity - a.similarity).slice(0, k);
   }
 }
 
@@ -648,7 +664,11 @@ export class SimilarityAlgorithmFactory {
   /**
    * 创建SimRank相似度算法实例
    */
-  static createSimRank(options?: { dampingFactor?: number; maxIterations?: number; tolerance?: number }): SimRankSimilarity {
+  static createSimRank(options?: {
+    dampingFactor?: number;
+    maxIterations?: number;
+    tolerance?: number;
+  }): SimRankSimilarity {
     return new SimRankSimilarity(options);
   }
 
@@ -662,7 +682,15 @@ export class SimilarityAlgorithmFactory {
   /**
    * 根据类型创建算法实例
    */
-  static create(type: 'jaccard' | 'cosine' | 'adamic' | 'preferential_attachment' | 'simrank' | 'node_attribute'): SimilarityAlgorithm {
+  static create(
+    type:
+      | 'jaccard'
+      | 'cosine'
+      | 'adamic'
+      | 'preferential_attachment'
+      | 'simrank'
+      | 'node_attribute',
+  ): SimilarityAlgorithm {
     switch (type) {
       case 'jaccard':
         return this.createJaccard();
@@ -685,7 +713,7 @@ export class SimilarityAlgorithmFactory {
    * 创建组合相似度算法，结合多种相似度计算方法
    */
   static createComposite(
-    algorithms: Array<{ algorithm: SimilarityAlgorithm; weight: number }>
+    algorithms: Array<{ algorithm: SimilarityAlgorithm; weight: number }>,
   ): SimilarityAlgorithm {
     return new CompositeSimilarityAlgorithm(algorithms);
   }
@@ -696,9 +724,7 @@ export class SimilarityAlgorithmFactory {
  * 结合多种相似度算法的加权结果
  */
 class CompositeSimilarityAlgorithm implements SimilarityAlgorithm {
-  constructor(
-    private algorithms: Array<{ algorithm: SimilarityAlgorithm; weight: number }>
-  ) {}
+  constructor(private algorithms: Array<{ algorithm: SimilarityAlgorithm; weight: number }>) {}
 
   computeSimilarity(graph: Graph, node1: string, node2: string): number {
     let totalScore = 0;
@@ -718,7 +744,7 @@ class CompositeSimilarityAlgorithm implements SimilarityAlgorithm {
     const similarities = new Map<string, Map<string, number>>();
     const topPairs: Array<{ node1: string; node2: string; similarity: number }> = [];
 
-    nodes.forEach(node => {
+    nodes.forEach((node) => {
       similarities.set(node.id, new Map());
     });
 
@@ -741,7 +767,11 @@ class CompositeSimilarityAlgorithm implements SimilarityAlgorithm {
     return { similarities, topPairs };
   }
 
-  findMostSimilar(graph: Graph, targetNode: string, k: number): Array<{ nodeId: string; similarity: number }> {
+  findMostSimilar(
+    graph: Graph,
+    targetNode: string,
+    k: number,
+  ): Array<{ nodeId: string; similarity: number }> {
     const nodes = graph.getNodes();
     const similarities: Array<{ nodeId: string; similarity: number }> = [];
 
@@ -752,8 +782,6 @@ class CompositeSimilarityAlgorithm implements SimilarityAlgorithm {
       }
     }
 
-    return similarities
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, k);
+    return similarities.sort((a, b) => b.similarity - a.similarity).slice(0, k);
   }
 }

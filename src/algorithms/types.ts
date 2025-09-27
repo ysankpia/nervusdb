@@ -238,7 +238,12 @@ export interface CentralityAlgorithm {
 // 路径算法接口
 export interface PathAlgorithm {
   /** 查找两点间的最短路径 */
-  findShortestPath(graph: Graph, source: string, target: string, options?: PathOptions): Path | null;
+  findShortestPath(
+    graph: Graph,
+    source: string,
+    target: string,
+    options?: PathOptions,
+  ): Path | null;
 
   /** 查找单源最短路径 */
   findShortestPaths(graph: Graph, source: string, options?: PathOptions): ShortestPathResult;
@@ -265,7 +270,11 @@ export interface SimilarityAlgorithm {
   computeAllSimilarities(graph: Graph, threshold?: number): SimilarityResult;
 
   /** 找到与目标节点最相似的k个节点 */
-  findMostSimilar(graph: Graph, targetNode: string, k: number): Array<{
+  findMostSimilar(
+    graph: Graph,
+    targetNode: string,
+    k: number,
+  ): Array<{
     nodeId: string;
     similarity: number;
   }>;
@@ -285,7 +294,12 @@ export interface GraphAlgorithmSuite {
   /** 路径算法 */
   path: {
     dijkstra(source: string, target?: string, options?: PathOptions): ShortestPathResult;
-    astar(source: string, target: string, heuristic?: (nodeId: string) => number, options?: PathOptions): Path | null;
+    astar(
+      source: string,
+      target: string,
+      heuristic?: (nodeId: string) => number,
+      options?: PathOptions,
+    ): Path | null;
     floydWarshall(options?: PathOptions): Map<string, Map<string, number>>;
     bellmanFord(source: string, options?: PathOptions): ShortestPathResult;
   };
@@ -358,7 +372,9 @@ export interface GraphAlgorithmFactory {
   createAlgorithmSuite(graph: Graph): GraphAlgorithmSuite;
 
   /** 创建特定算法实例 */
-  createCentralityAlgorithm(type: 'pagerank' | 'betweenness' | 'closeness' | 'degree'): CentralityAlgorithm;
+  createCentralityAlgorithm(
+    type: 'pagerank' | 'betweenness' | 'closeness' | 'degree',
+  ): CentralityAlgorithm;
   createPathAlgorithm(type: 'dijkstra' | 'astar' | 'floyd' | 'bellman'): PathAlgorithm;
   createCommunityAlgorithm(type: 'louvain' | 'label_propagation'): CommunityDetectionAlgorithm;
   createSimilarityAlgorithm(type: 'jaccard' | 'cosine' | 'adamic'): SimilarityAlgorithm;

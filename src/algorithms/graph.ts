@@ -4,12 +4,7 @@
  * 提供内存图存储和基础图操作功能
  */
 
-import {
-  Graph,
-  GraphNode,
-  GraphEdge,
-  GraphStats
-} from './types.js';
+import { Graph, GraphNode, GraphEdge, GraphStats } from './types.js';
 
 /**
  * 内存图实现
@@ -63,7 +58,7 @@ export class MemoryGraph implements Graph {
     const edgeWithDefaults = {
       weight: 1.0,
       directed: true,
-      ...edge
+      ...edge,
     };
 
     this.edges.set(edgeId, edgeWithDefaults);
@@ -94,7 +89,7 @@ export class MemoryGraph implements Graph {
       const reverseEdge = {
         ...edgeWithDefaults,
         source: edge.target,
-        target: edge.source
+        target: edge.source,
       };
 
       this.edges.set(reverseEdgeId, reverseEdge);
@@ -165,7 +160,7 @@ export class MemoryGraph implements Graph {
     if (!adjacency) return [];
 
     return Array.from(adjacency.keys())
-      .map(neighborId => this.nodes.get(neighborId))
+      .map((neighborId) => this.nodes.get(neighborId))
       .filter((node): node is GraphNode => node !== undefined);
   }
 
@@ -260,7 +255,7 @@ export class MemoryGraph implements Graph {
       averageDegree,
       density,
       isConnected,
-      componentCount
+      componentCount,
     };
   }
 
@@ -285,7 +280,7 @@ export class MemoryGraph implements Graph {
       newGraph.addNode({
         ...node,
         properties: node.properties ? { ...node.properties } : undefined,
-        labels: node.labels ? [...node.labels] : undefined
+        labels: node.labels ? [...node.labels] : undefined,
       });
     }
 
@@ -293,7 +288,7 @@ export class MemoryGraph implements Graph {
     for (const edge of this.edges.values()) {
       newGraph.addEdge({
         ...edge,
-        properties: edge.properties ? { ...edge.properties } : undefined
+        properties: edge.properties ? { ...edge.properties } : undefined,
       });
     }
 
@@ -323,7 +318,7 @@ export class MemoryGraph implements Graph {
 
     return {
       isConnected: componentCount <= 1,
-      componentCount
+      componentCount,
     };
   }
 
@@ -468,19 +463,21 @@ export class MemoryGraph implements Graph {
     if (degree < 2) return 0;
 
     let edgeCount = 0;
-    const neighborSet = new Set(neighbors.map(n => n.id));
+    const neighborSet = new Set(neighbors.map((n) => n.id));
 
     // 计算邻居间的边数
     for (let i = 0; i < neighbors.length; i++) {
       for (let j = i + 1; j < neighbors.length; j++) {
-        if (this.hasEdge(neighbors[i].id, neighbors[j].id) ||
-            this.hasEdge(neighbors[j].id, neighbors[i].id)) {
+        if (
+          this.hasEdge(neighbors[i].id, neighbors[j].id) ||
+          this.hasEdge(neighbors[j].id, neighbors[i].id)
+        ) {
           edgeCount++;
         }
       }
     }
 
-    const maxPossibleEdges = degree * (degree - 1) / 2;
+    const maxPossibleEdges = (degree * (degree - 1)) / 2;
     return maxPossibleEdges > 0 ? edgeCount / maxPossibleEdges : 0;
   }
 }
@@ -498,7 +495,7 @@ export class GraphBuilder {
     this.graph.addNode({
       id,
       value: value || id,
-      properties
+      properties,
     });
     return this;
   }
@@ -506,13 +503,19 @@ export class GraphBuilder {
   /**
    * 添加边
    */
-  addEdge(source: string, target: string, type?: string, weight?: number, properties?: Record<string, any>): this {
+  addEdge(
+    source: string,
+    target: string,
+    type?: string,
+    weight?: number,
+    properties?: Record<string, any>,
+  ): this {
     this.graph.addEdge({
       source,
       target,
       type: type || 'CONNECTED',
       weight,
-      properties
+      properties,
     });
     return this;
   }

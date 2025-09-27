@@ -34,17 +34,17 @@ function parseArgs(argv: string[]): Args {
   args.dbPath = first.value;
 
   for (let cur = next(); !cur.done; cur = next()) {
-    const a = cur.value as string;
+    const a = cur.value;
     if (a === '--query' || a === '-q') {
       const v = next();
       if (v.done) throw new Error('--query 需要参数');
-      args.query = v.value as string;
+      args.query = v.value;
     } else if (a.startsWith('--query=')) {
       args.query = a.slice('--query='.length);
     } else if (a === '--file') {
       const v = next();
       if (v.done) throw new Error('--file 需要参数');
-      args.file = v.value as string;
+      args.file = v.value;
     } else if (a.startsWith('--file=')) {
       args.file = a.slice('--file='.length);
     } else if (a === '--readonly') {
@@ -60,7 +60,7 @@ function parseArgs(argv: string[]): Args {
       const v = next();
       if (v.done) throw new Error('--params 需要 JSON 参数');
       try {
-        args.params = JSON.parse(v.value as string);
+        args.params = JSON.parse(v.value);
       } catch (e) {
         throw new Error(`无法解析 --params: ${(e as Error).message}`);
       }
@@ -73,7 +73,7 @@ function parseArgs(argv: string[]): Args {
     } else if (a === '--format') {
       const v = next();
       if (v.done) throw new Error('--format 需要参数');
-      const f = (v.value as string).toLowerCase();
+      const f = v.value.toLowerCase();
       args.format = f === 'json' ? 'json' : 'table';
     } else if (a.startsWith('--format=')) {
       const f = a.slice('--format='.length).toLowerCase();
@@ -101,7 +101,7 @@ function usage(): void {
     '',
     '示例:',
     "  synapsedb cypher data.synapsedb -q 'MATCH (n) RETURN n LIMIT 5' --readonly",
-    "  synapsedb cypher data.synapsedb --file query.cql --optimize=aggressive --params '{\"minAge\":25}'",
+    '  synapsedb cypher data.synapsedb --file query.cql --optimize=aggressive --params \'{"minAge":25}\'',
   ];
   console.log(lines.join('\n'));
 }
@@ -162,4 +162,3 @@ async function main() {
 
 // eslint-disable-next-line @typescript-eslint/no-floating-promises
 main();
-

@@ -8,10 +8,7 @@
 export * from './types.js';
 
 // 导出图数据结构
-export {
-  MemoryGraph,
-  GraphBuilder
-} from './graph.js';
+export { MemoryGraph, GraphBuilder } from './graph.js';
 
 // 导出中心性算法
 export {
@@ -20,7 +17,7 @@ export {
   ClosenessCentrality,
   DegreeCentrality,
   EigenvectorCentrality,
-  CentralityAlgorithmFactory
+  CentralityAlgorithmFactory,
 } from './centrality.js';
 
 // 导出社区发现算法
@@ -29,7 +26,7 @@ export {
   LabelPropagationCommunityDetection,
   ConnectedComponentsDetection,
   StronglyConnectedComponentsDetection,
-  CommunityDetectionAlgorithmFactory
+  CommunityDetectionAlgorithmFactory,
 } from './community.js';
 
 // 导出路径算法
@@ -38,7 +35,7 @@ export {
   AStarPathAlgorithm,
   FloydWarshallPathAlgorithm,
   BellmanFordPathAlgorithm,
-  PathAlgorithmFactory
+  PathAlgorithmFactory,
 } from './pathfinding.js';
 
 // 导出相似度算法
@@ -49,7 +46,7 @@ export {
   PreferentialAttachmentSimilarity,
   SimRankSimilarity,
   NodeAttributeSimilarity,
-  SimilarityAlgorithmFactory
+  SimilarityAlgorithmFactory,
 } from './similarity.js';
 
 // 导出统一算法套件
@@ -57,10 +54,11 @@ export {
   GraphAlgorithmSuiteImpl,
   GraphAlgorithmFactoryImpl,
   GraphAlgorithmUtils,
-  GraphAlgorithms
+  GraphAlgorithms,
 } from './suite.js';
 
 // 便捷API
 export const createGraph = () => new (require('./graph').MemoryGraph)();
 export const createGraphBuilder = () => new (require('./graph').GraphBuilder)();
-export const createAlgorithmSuite = (graph: any) => new (require('./suite').GraphAlgorithmSuiteImpl)(graph);
+export const createAlgorithmSuite = (graph: any) =>
+  new (require('./suite').GraphAlgorithmSuiteImpl)(graph);

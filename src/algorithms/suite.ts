@@ -17,7 +17,7 @@ import {
   ShortestPathResult,
   Path,
   GraphStats,
-  GraphEdge
+  GraphEdge,
 } from './types.js';
 
 import { MemoryGraph, GraphBuilder } from './graph.js';
@@ -29,7 +29,7 @@ import {
   ClosenessCentrality,
   DegreeCentrality,
   EigenvectorCentrality,
-  CentralityAlgorithmFactory
+  CentralityAlgorithmFactory,
 } from './centrality.js';
 
 import {
@@ -37,7 +37,7 @@ import {
   LabelPropagationCommunityDetection,
   ConnectedComponentsDetection,
   StronglyConnectedComponentsDetection,
-  CommunityDetectionAlgorithmFactory
+  CommunityDetectionAlgorithmFactory,
 } from './community.js';
 
 import {
@@ -45,7 +45,7 @@ import {
   AStarPathAlgorithm,
   FloydWarshallPathAlgorithm,
   BellmanFordPathAlgorithm,
-  PathAlgorithmFactory
+  PathAlgorithmFactory,
 } from './pathfinding.js';
 
 import {
@@ -53,7 +53,7 @@ import {
   CosineSimilarity,
   AdamicAdarSimilarity,
   PreferentialAttachmentSimilarity,
-  SimilarityAlgorithmFactory
+  SimilarityAlgorithmFactory,
 } from './similarity.js';
 
 /**
@@ -87,7 +87,7 @@ export class GraphAlgorithmSuiteImpl implements GraphAlgorithmSuite {
     eigenvector: (options?: AlgorithmOptions): CentralityResult => {
       const algorithm = CentralityAlgorithmFactory.createEigenvector();
       return algorithm.compute(this.graph, options);
-    }
+    },
   };
 
   // 路径算法
@@ -107,13 +107,18 @@ export class GraphAlgorithmSuiteImpl implements GraphAlgorithmSuite {
         return {
           distances,
           paths,
-          stats: { nodesVisited: 0, edgesExamined: 0, executionTime: 0 }
+          stats: { nodesVisited: 0, edgesExamined: 0, executionTime: 0 },
         };
       }
       return algorithm.findShortestPaths(this.graph, source, options);
     },
 
-    astar: (source: string, target: string, heuristic?: (nodeId: string) => number, options?: PathOptions): Path | null => {
+    astar: (
+      source: string,
+      target: string,
+      heuristic?: (nodeId: string) => number,
+      options?: PathOptions,
+    ): Path | null => {
       const algorithm = PathAlgorithmFactory.createAStar();
       const extendedOptions = { ...options, heuristic };
       return algorithm.findShortestPath(this.graph, source, target, extendedOptions);
@@ -127,7 +132,7 @@ export class GraphAlgorithmSuiteImpl implements GraphAlgorithmSuite {
     bellmanFord: (source: string, options?: PathOptions): ShortestPathResult => {
       const algorithm = PathAlgorithmFactory.createBellmanFord();
       return algorithm.findShortestPaths(this.graph, source, options);
-    }
+    },
   };
 
   // 社区发现算法
@@ -150,7 +155,7 @@ export class GraphAlgorithmSuiteImpl implements GraphAlgorithmSuite {
     stronglyConnectedComponents: (): CommunityResult => {
       const algorithm = CommunityDetectionAlgorithmFactory.createStronglyConnectedComponents();
       return algorithm.detectCommunities(this.graph);
-    }
+    },
   };
 
   // 相似度算法
@@ -173,7 +178,7 @@ export class GraphAlgorithmSuiteImpl implements GraphAlgorithmSuite {
     preferentialAttachment: (node1: string, node2: string): number => {
       const algorithm = SimilarityAlgorithmFactory.createPreferentialAttachment();
       return algorithm.computeSimilarity(this.graph, node1, node2);
-    }
+    },
   };
 
   // 图分析
@@ -196,7 +201,7 @@ export class GraphAlgorithmSuiteImpl implements GraphAlgorithmSuite {
 
     topologicalSort: (): string[] | null => {
       return this.performTopologicalSort();
-    }
+    },
   };
 
   /**
@@ -229,10 +234,9 @@ export class GraphAlgorithmSuiteImpl implements GraphAlgorithmSuite {
 
           // 如果 low[v] > disc[u]，则 (u,v) 是桥边
           if (low.get(neighborId)! > disc.get(nodeId)!) {
-            const edge = this.graph.getOutEdges(nodeId)
-              .find(e => e.target === neighborId) ||
-              this.graph.getInEdges(nodeId)
-              .find(e => e.source === neighborId);
+            const edge =
+              this.graph.getOutEdges(nodeId).find((e) => e.target === neighborId) ||
+              this.graph.getInEdges(nodeId).find((e) => e.source === neighborId);
 
             if (edge) {
               bridges.push(edge);
@@ -333,14 +337,14 @@ export class GraphAlgorithmSuiteImpl implements GraphAlgorithmSuite {
           }
         } else if (recStack.has(neighborId)) {
           // 找到环路，构建路径
-          const cycleStartIndex = pathStack.findIndex(item => item.nodeId === neighborId);
+          const cycleStartIndex = pathStack.findIndex((item) => item.nodeId === neighborId);
           if (cycleStartIndex !== -1) {
             const cyclePath = pathStack.slice(cycleStartIndex);
             cycles.push({
-              nodes: cyclePath.map(item => item.nodeId),
-              edges: cyclePath.slice(1).map(item => item.edge!),
+              nodes: cyclePath.map((item) => item.nodeId),
+              edges: cyclePath.slice(1).map((item) => item.edge!),
               length: cyclePath.length - 1,
-              weight: cyclePath.slice(1).reduce((sum, item) => sum + (item.edge?.weight || 1), 0)
+              weight: cyclePath.slice(1).reduce((sum, item) => sum + (item.edge?.weight || 1), 0),
             });
           }
           return true;
@@ -442,7 +446,9 @@ export class GraphAlgorithmUtils {
   /**
    * 从边列表创建图
    */
-  static fromEdgeList(edges: Array<{ source: string; target: string; type?: string; weight?: number }>): Graph {
+  static fromEdgeList(
+    edges: Array<{ source: string; target: string; type?: string; weight?: number }>,
+  ): Graph {
     const graph = new MemoryGraph();
     const builder = new GraphBuilder();
 
@@ -520,7 +526,10 @@ export class GraphAlgorithmUtils {
     }
 
     // 只对小图进行Dijkstra测试（避免超时）
-    if ((algorithms.length === 0 || algorithms.includes('dijkstra')) && graph.getNodes().length < 100) {
+    if (
+      (algorithms.length === 0 || algorithms.includes('dijkstra')) &&
+      graph.getNodes().length < 100
+    ) {
       const nodes = graph.getNodes();
       if (nodes.length > 0) {
         benchmarkAlgorithm('dijkstra', () => suite.path.dijkstra(nodes[0].id));

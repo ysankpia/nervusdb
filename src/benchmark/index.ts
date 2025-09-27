@@ -52,14 +52,17 @@ export { BenchmarkReporterImpl, ReportFormatter } from './reporter.js';
 
 // 导入实现与类型
 import { BenchmarkRunnerImpl, BenchmarkUtils } from './runner.js';
-import { BenchmarkReporterImpl, BenchmarkReporterImpl as BenchmarkReporterImplType } from './reporter.js';
+import {
+  BenchmarkReporterImpl,
+  BenchmarkReporterImpl as BenchmarkReporterImplType,
+} from './reporter.js';
 import { allBenchmarkSuites } from './suites.js';
 import type {
   BenchmarkSuite,
   BenchmarkResult,
   BenchmarkReport,
   RegressionConfig,
-  RegressionResult
+  RegressionResult,
 } from './types.js';
 
 /**
@@ -217,8 +220,8 @@ export class BenchmarkManager {
       for (const metric of metricsToCheck) {
         if (!(metric in currentResult) || !(metric in baselineResult)) continue;
 
-        const currentValue = currentResult[metric as keyof BenchmarkResult] as number;
-        const baselineValue = baselineResult[metric as keyof BenchmarkResult] as number;
+        const currentValue = currentResult[metric] as number;
+        const baselineValue = baselineResult[metric] as number;
 
         if (baselineValue === 0) continue;
 

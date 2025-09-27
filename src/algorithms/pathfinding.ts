@@ -13,7 +13,7 @@ import {
   ShortestPathResult,
   AlgorithmOptions,
   GraphEdge,
-  GraphNode
+  GraphNode,
 } from './types.js';
 
 /**
@@ -21,7 +21,12 @@ import {
  * 适用于有权图的单源最短路径问题
  */
 export class DijkstraPathAlgorithm implements PathAlgorithm {
-  findShortestPath(graph: Graph, source: string, target: string, options: PathOptions = {}): Path | null {
+  findShortestPath(
+    graph: Graph,
+    source: string,
+    target: string,
+    options: PathOptions = {},
+  ): Path | null {
     const result = this.findShortestPaths(graph, source, options);
     const targetPath = result.paths.get(target);
 
@@ -37,10 +42,7 @@ export class DijkstraPathAlgorithm implements PathAlgorithm {
   }
 
   findShortestPaths(graph: Graph, source: string, options: PathOptions = {}): ShortestPathResult {
-    const {
-      maxHops = Infinity,
-      weightFunction = (edge: GraphEdge) => edge.weight || 1
-    } = options;
+    const { maxHops = Infinity, weightFunction = (edge: GraphEdge) => edge.weight || 1 } = options;
 
     const distances = new Map<string, number>();
     const paths = new Map<string, Path>();
@@ -50,7 +52,7 @@ export class DijkstraPathAlgorithm implements PathAlgorithm {
 
     // 优先队列实现（使用最小堆）
     const priorityQueue = new PriorityQueue<{ nodeId: string; distance: number }>(
-      (a, b) => a.distance - b.distance
+      (a, b) => a.distance - b.distance,
     );
 
     // 初始化
@@ -112,7 +114,7 @@ export class DijkstraPathAlgorithm implements PathAlgorithm {
             nodes: [...currentPath.nodes, neighborId],
             edges: [...currentPath.edges, edge],
             length: currentPath.length + 1,
-            weight: newDistance
+            weight: newDistance,
           };
           paths.set(neighborId, newPath);
 
@@ -129,8 +131,8 @@ export class DijkstraPathAlgorithm implements PathAlgorithm {
       stats: {
         nodesVisited,
         edgesExamined,
-        executionTime
-      }
+        executionTime,
+      },
     };
   }
 
@@ -156,12 +158,12 @@ export class AStarPathAlgorithm implements PathAlgorithm {
     graph: Graph,
     source: string,
     target: string,
-    options: PathOptions & { heuristic?: (nodeId: string) => number } = {}
+    options: PathOptions & { heuristic?: (nodeId: string) => number } = {},
   ): Path | null {
     const {
       maxHops = Infinity,
       weightFunction = (edge: GraphEdge) => edge.weight || 1,
-      heuristic = () => 0
+      heuristic = () => 0,
     } = options;
 
     const openSet = new PriorityQueue<AStarNode>((a, b) => a.fScore - b.fScore);
@@ -176,7 +178,7 @@ export class AStarPathAlgorithm implements PathAlgorithm {
       gScore: 0,
       hScore: heuristic(source),
       fScore: heuristic(source),
-      path: { nodes: [source], edges: [], length: 0, weight: 0 }
+      path: { nodes: [source], edges: [], length: 0, weight: 0 },
     });
 
     let nodesVisited = 0;
@@ -228,7 +230,7 @@ export class AStarPathAlgorithm implements PathAlgorithm {
             nodes: [...current.path.nodes, neighborId],
             edges: [...current.path.edges, edge],
             length: current.path.length + 1,
-            weight: tentativeGScore
+            weight: tentativeGScore,
           };
 
           openSet.enqueue({
@@ -236,7 +238,7 @@ export class AStarPathAlgorithm implements PathAlgorithm {
             gScore: tentativeGScore,
             hScore,
             fScore,
-            path: newPath
+            path: newPath,
           });
         }
       }
@@ -248,7 +250,7 @@ export class AStarPathAlgorithm implements PathAlgorithm {
   private reconstructAStarPath(
     goalNode: AStarNode,
     cameFrom: Map<string, { nodeId: string; edge: GraphEdge }>,
-    source: string
+    source: string,
   ): Path {
     return goalNode.path;
   }
@@ -269,7 +271,12 @@ export class AStarPathAlgorithm implements PathAlgorithm {
  * Floyd-Warshall算法实现，适用于稠密图的所有点对最短路径
  */
 export class FloydWarshallPathAlgorithm implements PathAlgorithm {
-  findShortestPath(graph: Graph, source: string, target: string, options: PathOptions = {}): Path | null {
+  findShortestPath(
+    graph: Graph,
+    source: string,
+    target: string,
+    options: PathOptions = {},
+  ): Path | null {
     const allPairs = this.findAllShortestPaths(graph, options);
     const distances = allPairs.get(source);
 
@@ -287,7 +294,7 @@ export class FloydWarshallPathAlgorithm implements PathAlgorithm {
       nodes: [source, target],
       edges: [], // 实际实现中需要重建路径
       length: 1,
-      weight: distance
+      weight: distance,
     };
   }
 
@@ -303,7 +310,7 @@ export class FloydWarshallPathAlgorithm implements PathAlgorithm {
           nodes: [source, target],
           edges: [],
           length: 1,
-          weight: distance
+          weight: distance,
         });
       }
     });
@@ -314,22 +321,22 @@ export class FloydWarshallPathAlgorithm implements PathAlgorithm {
       stats: {
         nodesVisited: 0,
         edgesExamined: 0,
-        executionTime: 0
-      }
+        executionTime: 0,
+      },
     };
   }
 
   findAllShortestPaths(graph: Graph, options: PathOptions = {}): Map<string, Map<string, number>> {
-    const {
-      weightFunction = (edge: GraphEdge) => edge.weight || 1
-    } = options;
+    const { weightFunction = (edge: GraphEdge) => edge.weight || 1 } = options;
 
     const nodes = graph.getNodes();
-    const nodeList = nodes.map(n => n.id);
+    const nodeList = nodes.map((n) => n.id);
     const n = nodeList.length;
 
     // 初始化距离矩阵
-    const dist: number[][] = Array(n).fill(null).map(() => Array(n).fill(Infinity));
+    const dist: number[][] = Array(n)
+      .fill(null)
+      .map(() => Array(n).fill(Infinity));
     const nodeIndexMap = new Map<string, number>();
 
     nodeList.forEach((nodeId, index) => {
@@ -381,16 +388,19 @@ export class FloydWarshallPathAlgorithm implements PathAlgorithm {
  * Bellman-Ford算法实现，支持负权重边的单源最短路径
  */
 export class BellmanFordPathAlgorithm implements PathAlgorithm {
-  findShortestPath(graph: Graph, source: string, target: string, options: PathOptions = {}): Path | null {
+  findShortestPath(
+    graph: Graph,
+    source: string,
+    target: string,
+    options: PathOptions = {},
+  ): Path | null {
     const result = this.findShortestPaths(graph, source, options);
     return result.paths.get(target) || null;
   }
 
   findShortestPaths(graph: Graph, source: string, options: PathOptions = {}): ShortestPathResult {
-    const {
-      maxIterations = 1000,
-      weightFunction = (edge: GraphEdge) => edge.weight || 1
-    } = options;
+    const { maxIterations = 1000, weightFunction = (edge: GraphEdge) => edge.weight || 1 } =
+      options;
 
     const nodes = graph.getNodes();
     const edges = graph.getEdges();
@@ -402,7 +412,7 @@ export class BellmanFordPathAlgorithm implements PathAlgorithm {
     const startTime = performance.now();
 
     // 初始化距离
-    nodes.forEach(node => {
+    nodes.forEach((node) => {
       distances.set(node.id, node.id === source ? 0 : Infinity);
     });
 
@@ -430,7 +440,10 @@ export class BellmanFordPathAlgorithm implements PathAlgorithm {
           const reverseSourceDistance = distances.get(edge.target)!;
           const reverseTargetDistance = distances.get(edge.source)!;
 
-          if (reverseSourceDistance !== Infinity && reverseSourceDistance + weight < reverseTargetDistance) {
+          if (
+            reverseSourceDistance !== Infinity &&
+            reverseSourceDistance + weight < reverseTargetDistance
+          ) {
             distances.set(edge.source, reverseSourceDistance + weight);
             predecessors.set(edge.source, { nodeId: edge.target, edge });
             hasUpdate = true;
@@ -475,15 +488,15 @@ export class BellmanFordPathAlgorithm implements PathAlgorithm {
       stats: {
         nodesVisited,
         edgesExamined,
-        executionTime
-      }
+        executionTime,
+      },
     };
   }
 
   private reconstructBellmanFordPath(
     target: string,
     source: string,
-    predecessors: Map<string, { nodeId: string; edge: GraphEdge }>
+    predecessors: Map<string, { nodeId: string; edge: GraphEdge }>,
   ): Path | null {
     const pathNodes: string[] = [];
     const pathEdges: GraphEdge[] = [];
@@ -507,7 +520,7 @@ export class BellmanFordPathAlgorithm implements PathAlgorithm {
       nodes: pathNodes,
       edges: pathEdges,
       length: pathEdges.length,
-      weight: 0 // 将在调用处设置
+      weight: 0, // 将在调用处设置
     };
   }
 
@@ -594,13 +607,17 @@ class PriorityQueue<T> {
       const rightChild = 2 * index + 2;
       let smallest = index;
 
-      if (leftChild < this.heap.length &&
-          this.compare(this.heap[leftChild], this.heap[smallest]) < 0) {
+      if (
+        leftChild < this.heap.length &&
+        this.compare(this.heap[leftChild], this.heap[smallest]) < 0
+      ) {
         smallest = leftChild;
       }
 
-      if (rightChild < this.heap.length &&
-          this.compare(this.heap[rightChild], this.heap[smallest]) < 0) {
+      if (
+        rightChild < this.heap.length &&
+        this.compare(this.heap[rightChild], this.heap[smallest]) < 0
+      ) {
         smallest = rightChild;
       }
 
@@ -669,7 +686,7 @@ export class PathAlgorithmFactory {
     graph: Graph,
     sourceCount: number = 1,
     targetCount: number = 1,
-    hasNegativeWeights: boolean = false
+    hasNegativeWeights: boolean = false,
   ): PathAlgorithm {
     const nodeCount = graph.getNodes().length;
     const edgeCount = graph.getEdges().length;

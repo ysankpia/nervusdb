@@ -4,13 +4,7 @@
  * 提供TF-IDF、BM25等经典相关性评分算法
  */
 
-import {
-  Document,
-  DocumentCorpus,
-  RelevanceScorer,
-  PostingList,
-  InvertedIndex
-} from './types.js';
+import { Document, DocumentCorpus, RelevanceScorer, PostingList, InvertedIndex } from './types.js';
 
 /**
  * TF-IDF相关性评分器
@@ -19,11 +13,7 @@ export class TFIDFScorer implements RelevanceScorer {
   /**
    * 计算查询与文档的相关性评分
    */
-  calculateScore(
-    query: string[],
-    document: Document,
-    corpus: DocumentCorpus
-  ): number {
+  calculateScore(query: string[], document: Document, corpus: DocumentCorpus): number {
     let score = 0;
 
     for (const term of query) {
@@ -43,11 +33,7 @@ export class TFIDFScorer implements RelevanceScorer {
   /**
    * 计算单个词元的TF-IDF评分
    */
-  calculateTFIDF(
-    term: string,
-    document: Document,
-    corpus: DocumentCorpus
-  ): number {
+  calculateTFIDF(term: string, document: Document, corpus: DocumentCorpus): number {
     const tf = this.calculateTF(term, document);
     const idf = this.calculateIDF(term, corpus);
 
@@ -58,7 +44,7 @@ export class TFIDFScorer implements RelevanceScorer {
    * 计算词频 (Term Frequency)
    */
   private calculateTF(term: string, document: Document): number {
-    const termCount = document.tokens.filter(token => token.value === term).length;
+    const termCount = document.tokens.filter((token) => token.value === term).length;
     const totalTokens = document.tokens.length;
 
     if (totalTokens === 0) return 0;
@@ -88,7 +74,7 @@ export class TFIDFScorer implements RelevanceScorer {
     document: Document,
     corpus: DocumentCorpus,
     k1?: number,
-    b?: number
+    b?: number,
   ): number {
     // 使用TF-IDF作为fallback
     return this.calculateScore(query, document, corpus);
@@ -100,8 +86,8 @@ export class TFIDFScorer implements RelevanceScorer {
  * BM25是目前最优秀的概率检索模型之一
  */
 export class BM25Scorer implements RelevanceScorer {
-  private k1: number;  // 控制词频饱和度
-  private b: number;   // 控制文档长度归一化程度
+  private k1: number; // 控制词频饱和度
+  private b: number; // 控制文档长度归一化程度
 
   constructor(k1: number = 1.2, b: number = 0.75) {
     this.k1 = k1;
@@ -111,11 +97,7 @@ export class BM25Scorer implements RelevanceScorer {
   /**
    * 计算BM25评分
    */
-  calculateScore(
-    query: string[],
-    document: Document,
-    corpus: DocumentCorpus
-  ): number {
+  calculateScore(query: string[], document: Document, corpus: DocumentCorpus): number {
     return this.calculateBM25(query, document, corpus, this.k1, this.b);
   }
 
@@ -127,7 +109,7 @@ export class BM25Scorer implements RelevanceScorer {
     document: Document,
     corpus: DocumentCorpus,
     k1: number = this.k1,
-    b: number = this.b
+    b: number = this.b,
   ): number {
     let score = 0;
     const docLength = document.tokens.length;
@@ -151,7 +133,7 @@ export class BM25Scorer implements RelevanceScorer {
    * 获取词频
    */
   private getTermFrequency(term: string, document: Document): number {
-    return document.tokens.filter(token => token.value === term).length;
+    return document.tokens.filter((token) => token.value === term).length;
   }
 
   /**
@@ -170,11 +152,7 @@ export class BM25Scorer implements RelevanceScorer {
   /**
    * TF-IDF评分（存根实现）
    */
-  calculateTFIDF(
-    term: string,
-    document: Document,
-    corpus: DocumentCorpus
-  ): number {
+  calculateTFIDF(term: string, document: Document, corpus: DocumentCorpus): number {
     // BM25不使用传统TF-IDF，返回BM25单词得分
     const tf = this.getTermFrequency(term, document);
     const idf = this.calculateIDF(term, corpus);
@@ -196,10 +174,7 @@ export class FieldWeightedScorer implements RelevanceScorer {
   private baseScorer: RelevanceScorer;
   private fieldWeights: Map<string, number>;
 
-  constructor(
-    baseScorer: RelevanceScorer,
-    fieldWeights: Map<string, number> = new Map()
-  ) {
+  constructor(baseScorer: RelevanceScorer, fieldWeights: Map<string, number> = new Map()) {
     this.baseScorer = baseScorer;
     this.fieldWeights = fieldWeights;
 
@@ -215,11 +190,7 @@ export class FieldWeightedScorer implements RelevanceScorer {
   /**
    * 计算带字段权重的评分
    */
-  calculateScore(
-    query: string[],
-    document: Document,
-    corpus: DocumentCorpus
-  ): number {
+  calculateScore(query: string[], document: Document, corpus: DocumentCorpus): number {
     let totalScore = 0;
 
     // 为每个字段计算评分并应用权重
@@ -240,25 +211,21 @@ export class FieldWeightedScorer implements RelevanceScorer {
   private createFieldDocument(
     document: Document,
     fieldName: string,
-    fieldContent: string
+    fieldContent: string,
   ): Document {
     // 只包含该字段的tokens
-    const fieldTokens = document.tokens.filter(token =>
-      fieldContent.toLowerCase().includes(token.value.toLowerCase())
+    const fieldTokens = document.tokens.filter((token) =>
+      fieldContent.toLowerCase().includes(token.value.toLowerCase()),
     );
 
     return {
       ...document,
       tokens: fieldTokens,
-      fields: new Map([[fieldName, fieldContent]])
+      fields: new Map([[fieldName, fieldContent]]),
     };
   }
 
-  calculateTFIDF(
-    term: string,
-    document: Document,
-    corpus: DocumentCorpus
-  ): number {
+  calculateTFIDF(term: string, document: Document, corpus: DocumentCorpus): number {
     return this.baseScorer.calculateTFIDF(term, document, corpus);
   }
 
@@ -267,7 +234,7 @@ export class FieldWeightedScorer implements RelevanceScorer {
     document: Document,
     corpus: DocumentCorpus,
     k1?: number,
-    b?: number
+    b?: number,
   ): number {
     return this.baseScorer.calculateBM25(query, document, corpus, k1, b);
   }
@@ -279,13 +246,13 @@ export class FieldWeightedScorer implements RelevanceScorer {
  */
 export class TimeDecayScorer implements RelevanceScorer {
   private baseScorer: RelevanceScorer;
-  private decayRate: number;  // 衰减率
-  private timeUnit: number;   // 时间单位（毫秒）
+  private decayRate: number; // 衰减率
+  private timeUnit: number; // 时间单位（毫秒）
 
   constructor(
     baseScorer: RelevanceScorer,
     decayRate: number = 0.1,
-    timeUnit: number = 24 * 60 * 60 * 1000  // 1天
+    timeUnit: number = 24 * 60 * 60 * 1000, // 1天
   ) {
     this.baseScorer = baseScorer;
     this.decayRate = decayRate;
@@ -295,11 +262,7 @@ export class TimeDecayScorer implements RelevanceScorer {
   /**
    * 计算带时间衰减的评分
    */
-  calculateScore(
-    query: string[],
-    document: Document,
-    corpus: DocumentCorpus
-  ): number {
+  calculateScore(query: string[], document: Document, corpus: DocumentCorpus): number {
     const baseScore = this.baseScorer.calculateScore(query, document, corpus);
     const timeBoost = this.calculateTimeBoost(document);
 
@@ -321,11 +284,7 @@ export class TimeDecayScorer implements RelevanceScorer {
     return Math.exp(-this.decayRate * timeUnits);
   }
 
-  calculateTFIDF(
-    term: string,
-    document: Document,
-    corpus: DocumentCorpus
-  ): number {
+  calculateTFIDF(term: string, document: Document, corpus: DocumentCorpus): number {
     return this.baseScorer.calculateTFIDF(term, document, corpus);
   }
 
@@ -334,7 +293,7 @@ export class TimeDecayScorer implements RelevanceScorer {
     document: Document,
     corpus: DocumentCorpus,
     k1?: number,
-    b?: number
+    b?: number,
   ): number {
     return this.baseScorer.calculateBM25(query, document, corpus, k1, b);
   }
@@ -365,11 +324,7 @@ export class CompositeScorer implements RelevanceScorer {
   /**
    * 计算组合评分
    */
-  calculateScore(
-    query: string[],
-    document: Document,
-    corpus: DocumentCorpus
-  ): number {
+  calculateScore(query: string[], document: Document, corpus: DocumentCorpus): number {
     let totalScore = 0;
 
     for (const { scorer, weight } of this.scorers) {
@@ -393,11 +348,7 @@ export class CompositeScorer implements RelevanceScorer {
     }
   }
 
-  calculateTFIDF(
-    term: string,
-    document: Document,
-    corpus: DocumentCorpus
-  ): number {
+  calculateTFIDF(term: string, document: Document, corpus: DocumentCorpus): number {
     if (this.scorers.length === 0) return 0;
 
     // 使用第一个评分器的TF-IDF
@@ -409,7 +360,7 @@ export class CompositeScorer implements RelevanceScorer {
     document: Document,
     corpus: DocumentCorpus,
     k1?: number,
-    b?: number
+    b?: number,
   ): number {
     if (this.scorers.length === 0) return 0;
 
@@ -426,11 +377,7 @@ export class VectorSpaceScorer implements RelevanceScorer {
   /**
    * 计算向量空间模型评分
    */
-  calculateScore(
-    query: string[],
-    document: Document,
-    corpus: DocumentCorpus
-  ): number {
+  calculateScore(query: string[], document: Document, corpus: DocumentCorpus): number {
     const queryVector = this.buildQueryVector(query, corpus);
     const docVector = this.buildDocumentVector(document, corpus);
 
@@ -442,10 +389,10 @@ export class VectorSpaceScorer implements RelevanceScorer {
    */
   private buildQueryVector(query: string[], corpus: DocumentCorpus): Map<string, number> {
     const vector = new Map<string, number>();
-    const queryTerms = [...new Set(query)];  // 去重
+    const queryTerms = [...new Set(query)]; // 去重
 
     for (const term of queryTerms) {
-      const tf = query.filter(t => t === term).length / query.length;
+      const tf = query.filter((t) => t === term).length / query.length;
       const idf = this.calculateIDF(term, corpus);
       vector.set(term, tf * idf);
     }
@@ -458,10 +405,10 @@ export class VectorSpaceScorer implements RelevanceScorer {
    */
   private buildDocumentVector(document: Document, corpus: DocumentCorpus): Map<string, number> {
     const vector = new Map<string, number>();
-    const uniqueTerms = [...new Set(document.tokens.map(t => t.value))];
+    const uniqueTerms = [...new Set(document.tokens.map((t) => t.value))];
 
     for (const term of uniqueTerms) {
-      const tf = document.tokens.filter(t => t.value === term).length / document.tokens.length;
+      const tf = document.tokens.filter((t) => t.value === term).length / document.tokens.length;
       const idf = this.calculateIDF(term, corpus);
       vector.set(term, tf * idf);
     }
@@ -472,14 +419,8 @@ export class VectorSpaceScorer implements RelevanceScorer {
   /**
    * 计算余弦相似度
    */
-  private cosineSimilarity(
-    vectorA: Map<string, number>,
-    vectorB: Map<string, number>
-  ): number {
-    const commonTerms = new Set([
-      ...Array.from(vectorA.keys()),
-      ...Array.from(vectorB.keys())
-    ]);
+  private cosineSimilarity(vectorA: Map<string, number>, vectorB: Map<string, number>): number {
+    const commonTerms = new Set([...Array.from(vectorA.keys()), ...Array.from(vectorB.keys())]);
 
     let dotProduct = 0;
     let normA = 0;
@@ -510,12 +451,8 @@ export class VectorSpaceScorer implements RelevanceScorer {
     return Math.log(totalDocs / docsContainingTerm);
   }
 
-  calculateTFIDF(
-    term: string,
-    document: Document,
-    corpus: DocumentCorpus
-  ): number {
-    const tf = document.tokens.filter(t => t.value === term).length / document.tokens.length;
+  calculateTFIDF(term: string, document: Document, corpus: DocumentCorpus): number {
+    const tf = document.tokens.filter((t) => t.value === term).length / document.tokens.length;
     const idf = this.calculateIDF(term, corpus);
     return tf * idf;
   }
@@ -525,7 +462,7 @@ export class VectorSpaceScorer implements RelevanceScorer {
     document: Document,
     corpus: DocumentCorpus,
     k1?: number,
-    b?: number
+    b?: number,
   ): number {
     // 向量空间模型不使用BM25，返回向量相似度
     return this.calculateScore(query, document, corpus);
@@ -541,7 +478,7 @@ export class ScorerFactory {
    */
   static createScorer(
     type: 'tfidf' | 'bm25' | 'vector' | 'composite',
-    options?: any
+    options?: any,
   ): RelevanceScorer {
     switch (type) {
       case 'tfidf':
@@ -573,7 +510,7 @@ export class ScorerFactory {
       ['title', 3.0],
       ['content', 1.0],
       ['tags', 2.0],
-      ['description', 1.5]
+      ['description', 1.5],
     ]);
 
     const fieldWeightedScorer = new FieldWeightedScorer(bm25Scorer, fieldWeights);

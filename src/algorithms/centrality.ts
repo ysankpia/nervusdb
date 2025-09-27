@@ -10,7 +10,6 @@ import {
   CentralityResult,
   CentralityAlgorithm,
   PageRankOptions,
-  AlgorithmContext
 } from './types.js';
 
 /**
@@ -22,7 +21,7 @@ export class PageRankCentrality implements CentralityAlgorithm {
       dampingFactor = 0.85,
       maxIterations = 100,
       tolerance = 1e-6,
-      personalization
+      personalization,
     } = options;
 
     const nodes = graph.getNodes();
@@ -32,7 +31,7 @@ export class PageRankCentrality implements CentralityAlgorithm {
       return {
         values: new Map(),
         ranking: [],
-        stats: { mean: 0, max: 0, min: 0, standardDeviation: 0 }
+        stats: { mean: 0, max: 0, min: 0, standardDeviation: 0 },
       };
     }
 
@@ -41,14 +40,14 @@ export class PageRankCentrality implements CentralityAlgorithm {
     const newPageRank = new Map<string, number>();
     const initialValue = 1.0 / nodeCount;
 
-    nodes.forEach(node => {
+    nodes.forEach((node) => {
       pageRank.set(node.id, initialValue);
       newPageRank.set(node.id, 0);
     });
 
     // 计算出度
     const outDegree = new Map<string, number>();
-    nodes.forEach(node => {
+    nodes.forEach((node) => {
       outDegree.set(node.id, graph.getOutDegree(node.id));
     });
 
@@ -57,12 +56,12 @@ export class PageRankCentrality implements CentralityAlgorithm {
       let totalDiff = 0;
 
       // 重置新值
-      nodes.forEach(node => {
+      nodes.forEach((node) => {
         newPageRank.set(node.id, 0);
       });
 
       // 计算新的 PageRank 值
-      nodes.forEach(node => {
+      nodes.forEach((node) => {
         const nodeId = node.id;
         let rank = (1 - dampingFactor) / nodeCount;
 
@@ -84,7 +83,7 @@ export class PageRankCentrality implements CentralityAlgorithm {
       });
 
       // 更新值
-      nodes.forEach(node => {
+      nodes.forEach((node) => {
         pageRank.set(node.id, newPageRank.get(node.id)!);
       });
 
@@ -112,13 +111,14 @@ export class PageRankCentrality implements CentralityAlgorithm {
     const max = Math.max(...valueArray);
     const min = Math.min(...valueArray);
 
-    const variance = valueArray.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / valueArray.length;
+    const variance =
+      valueArray.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / valueArray.length;
     const standardDeviation = Math.sqrt(variance);
 
     return {
       values,
       ranking,
-      stats: { mean, max, min, standardDeviation }
+      stats: { mean, max, min, standardDeviation },
     };
   }
 }
@@ -128,12 +128,12 @@ export class PageRankCentrality implements CentralityAlgorithm {
  * 基于 Brandes 算法的高效实现
  */
 export class BetweennessCentrality implements CentralityAlgorithm {
-  compute(graph: Graph, options: AlgorithmOptions = {}): CentralityResult {
+  compute(graph: Graph): CentralityResult {
     const nodes = graph.getNodes();
     const betweenness = new Map<string, number>();
 
     // 初始化中介中心性值
-    nodes.forEach(node => {
+    nodes.forEach((node) => {
       betweenness.set(node.id, 0);
     });
 
@@ -161,11 +161,7 @@ export class BetweennessCentrality implements CentralityAlgorithm {
   /**
    * Brandes 算法实现
    */
-  private brandesAlgorithm(
-    graph: Graph,
-    sourceId: string,
-    betweenness: Map<string, number>
-  ): void {
+  private brandesAlgorithm(graph: Graph, sourceId: string, betweenness: Map<string, number>): void {
     const nodes = graph.getNodes();
     const stack: string[] = [];
     const paths = new Map<string, number>();
@@ -174,7 +170,7 @@ export class BetweennessCentrality implements CentralityAlgorithm {
     const dependency = new Map<string, number>();
 
     // 初始化
-    nodes.forEach(node => {
+    nodes.forEach((node) => {
       paths.set(node.id, 0);
       distances.set(node.id, -1);
       predecessors.set(node.id, []);
@@ -230,7 +226,7 @@ export class BetweennessCentrality implements CentralityAlgorithm {
   private isDirectedGraph(graph: Graph): boolean {
     // 检查是否存在有向边
     const edges = graph.getEdges();
-    return edges.some(edge => edge.directed !== false);
+    return edges.some((edge) => edge.directed !== false);
   }
 
   private buildCentralityResult(values: Map<string, number>): CentralityResult {
@@ -243,13 +239,14 @@ export class BetweennessCentrality implements CentralityAlgorithm {
     const max = Math.max(...valueArray);
     const min = Math.min(...valueArray);
 
-    const variance = valueArray.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / valueArray.length;
+    const variance =
+      valueArray.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / valueArray.length;
     const standardDeviation = Math.sqrt(variance);
 
     return {
       values,
       ranking,
-      stats: { mean, max, min, standardDeviation }
+      stats: { mean, max, min, standardDeviation },
     };
   }
 }
@@ -265,8 +262,9 @@ export class ClosenessCentrality implements CentralityAlgorithm {
     // 计算每个节点的接近中心性
     for (const node of nodes) {
       const distances = this.dijkstraDistances(graph, node.id);
-      const reachableDistances = Array.from(distances.values())
-        .filter(d => d > 0 && d !== Infinity);
+      const reachableDistances = Array.from(distances.values()).filter(
+        (d) => d > 0 && d !== Infinity,
+      );
 
       if (reachableDistances.length === 0) {
         closeness.set(node.id, 0);
@@ -275,8 +273,8 @@ export class ClosenessCentrality implements CentralityAlgorithm {
         const reachableNodes = reachableDistances.length;
 
         // 标准化接近中心性：可达节点数 / 总距离
-        const normalizedCloseness = (reachableNodes * reachableNodes) /
-          (totalDistance * (nodes.length - 1));
+        const normalizedCloseness =
+          (reachableNodes * reachableNodes) / (totalDistance * (nodes.length - 1));
 
         closeness.set(node.id, normalizedCloseness);
       }
@@ -299,7 +297,7 @@ export class ClosenessCentrality implements CentralityAlgorithm {
     const priorityQueue = new MinHeap<{ nodeId: string; distance: number }>();
 
     // 初始化距离
-    graph.getNodes().forEach(node => {
+    graph.getNodes().forEach((node) => {
       distances.set(node.id, node.id === sourceId ? 0 : Infinity);
     });
 
@@ -324,7 +322,7 @@ export class ClosenessCentrality implements CentralityAlgorithm {
 
         // 获取边权重
         const outEdges = graph.getOutEdges(current.nodeId);
-        const edge = outEdges.find(e => e.target === neighbor.id);
+        const edge = outEdges.find((e) => e.target === neighbor.id);
         const weight = edge?.weight || 1;
 
         const newDistance = currentDistance + weight;
@@ -350,13 +348,14 @@ export class ClosenessCentrality implements CentralityAlgorithm {
     const max = Math.max(...valueArray);
     const min = Math.min(...valueArray);
 
-    const variance = valueArray.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / valueArray.length;
+    const variance =
+      valueArray.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / valueArray.length;
     const standardDeviation = Math.sqrt(variance);
 
     return {
       values,
       ranking,
-      stats: { mean, max, min, standardDeviation }
+      stats: { mean, max, min, standardDeviation },
     };
   }
 }
@@ -364,20 +363,19 @@ export class ClosenessCentrality implements CentralityAlgorithm {
 /**
  * 度中心性算法实现
  */
-export class DegreeCentrality implements CentralityAlgorithm {
-  compute(graph: Graph, options: AlgorithmOptions = {}): CentralityResult {
+  compute(graph: Graph): CentralityResult {
     const nodes = graph.getNodes();
     const degree = new Map<string, number>();
 
     // 计算每个节点的度数
-    nodes.forEach(node => {
+    nodes.forEach((node) => {
       degree.set(node.id, graph.getDegree(node.id));
     });
 
     return this.buildCentralityResult(degree);
   }
 
-  computeNode(graph: Graph, nodeId: string, options?: AlgorithmOptions): number {
+  computeNode(graph: Graph, nodeId: string): number {
     return graph.getDegree(nodeId);
   }
 
@@ -391,13 +389,14 @@ export class DegreeCentrality implements CentralityAlgorithm {
     const max = Math.max(...valueArray);
     const min = Math.min(...valueArray);
 
-    const variance = valueArray.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / valueArray.length;
+    const variance =
+      valueArray.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / valueArray.length;
     const standardDeviation = Math.sqrt(variance);
 
     return {
       values,
       ranking,
-      stats: { mean, max, min, standardDeviation }
+      stats: { mean, max, min, standardDeviation },
     };
   }
 }
@@ -407,10 +406,7 @@ export class DegreeCentrality implements CentralityAlgorithm {
  */
 export class EigenvectorCentrality implements CentralityAlgorithm {
   compute(graph: Graph, options: AlgorithmOptions = {}): CentralityResult {
-    const {
-      maxIterations = 1000,
-      tolerance = 1e-6
-    } = options;
+    const { maxIterations = 1000, tolerance = 1e-6 } = options;
 
     const nodes = graph.getNodes();
     const nodeCount = nodes.length;
@@ -419,7 +415,7 @@ export class EigenvectorCentrality implements CentralityAlgorithm {
       return {
         values: new Map(),
         ranking: [],
-        stats: { mean: 0, max: 0, min: 0, standardDeviation: 0 }
+        stats: { mean: 0, max: 0, min: 0, standardDeviation: 0 },
       };
     }
 
@@ -429,12 +425,12 @@ export class EigenvectorCentrality implements CentralityAlgorithm {
       nodeIndexMap.set(node.id, index);
     });
 
-    const adjacencyMatrix: number[][] = Array(nodeCount)
-      .fill(null)
-      .map(() => Array(nodeCount).fill(0));
+    const adjacencyMatrix: number[][] = Array.from({ length: nodeCount }, () =>
+      Array(nodeCount).fill(0),
+    );
 
     const edges = graph.getEdges();
-    edges.forEach(edge => {
+    edges.forEach((edge) => {
       const sourceIndex = nodeIndexMap.get(edge.source)!;
       const targetIndex = nodeIndexMap.get(edge.target)!;
       adjacencyMatrix[sourceIndex][targetIndex] = edge.weight || 1;
@@ -459,9 +455,7 @@ export class EigenvectorCentrality implements CentralityAlgorithm {
       }
 
       // 归一化
-      const norm = Math.sqrt(
-        newEigenvector.reduce((sum, val) => sum + val * val, 0)
-      );
+      const norm = Math.sqrt(newEigenvector.reduce((sum, val) => sum + val * val, 0));
 
       if (norm === 0) break;
 
@@ -470,10 +464,7 @@ export class EigenvectorCentrality implements CentralityAlgorithm {
       }
 
       // 检查收敛
-      const diff = newEigenvector.reduce(
-        (sum, val, i) => sum + Math.abs(val - eigenvector[i]),
-        0
-      );
+      const diff = newEigenvector.reduce((sum, val, i) => sum + Math.abs(val - eigenvector[i]), 0);
 
       eigenvector = newEigenvector;
 
@@ -506,13 +497,14 @@ export class EigenvectorCentrality implements CentralityAlgorithm {
     const max = Math.max(...valueArray);
     const min = Math.min(...valueArray);
 
-    const variance = valueArray.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / valueArray.length;
+    const variance =
+      valueArray.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / valueArray.length;
     const standardDeviation = Math.sqrt(variance);
 
     return {
       values,
       ranking,
-      stats: { mean, max, min, standardDeviation }
+      stats: { mean, max, min, standardDeviation },
     };
   }
 }
@@ -570,13 +562,17 @@ class MinHeap<T> {
       const rightChild = 2 * index + 2;
       let smallest = index;
 
-      if (leftChild < this.heap.length &&
-          this.compare(this.heap[leftChild], this.heap[smallest]) < 0) {
+      if (
+        leftChild < this.heap.length &&
+        this.compare(this.heap[leftChild], this.heap[smallest]) < 0
+      ) {
         smallest = leftChild;
       }
 
-      if (rightChild < this.heap.length &&
-          this.compare(this.heap[rightChild], this.heap[smallest]) < 0) {
+      if (
+        rightChild < this.heap.length &&
+        this.compare(this.heap[rightChild], this.heap[smallest]) < 0
+      ) {
         smallest = rightChild;
       }
 
@@ -631,7 +627,7 @@ export class CentralityAlgorithmFactory {
    * 根据类型创建算法实例
    */
   static create(
-    type: 'pagerank' | 'betweenness' | 'closeness' | 'degree' | 'eigenvector'
+    type: 'pagerank' | 'betweenness' | 'closeness' | 'degree' | 'eigenvector',
   ): CentralityAlgorithm {
     switch (type) {
       case 'pagerank':

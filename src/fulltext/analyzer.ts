@@ -8,23 +8,139 @@ import { Token, TextAnalyzer } from './types.js';
 
 // 英文停用词列表
 const ENGLISH_STOP_WORDS = new Set([
-  'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of',
-  'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have',
-  'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should',
-  'may', 'might', 'can', 'this', 'that', 'these', 'those', 'i', 'you', 'he',
-  'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them', 'my', 'your',
-  'his', 'its', 'our', 'their', 'what', 'which', 'who', 'when', 'where',
-  'why', 'how', 'not', 'no', 'yes'
+  'the',
+  'a',
+  'an',
+  'and',
+  'or',
+  'but',
+  'in',
+  'on',
+  'at',
+  'to',
+  'for',
+  'of',
+  'with',
+  'by',
+  'is',
+  'are',
+  'was',
+  'were',
+  'be',
+  'been',
+  'being',
+  'have',
+  'has',
+  'had',
+  'do',
+  'does',
+  'did',
+  'will',
+  'would',
+  'could',
+  'should',
+  'may',
+  'might',
+  'can',
+  'this',
+  'that',
+  'these',
+  'those',
+  'i',
+  'you',
+  'he',
+  'she',
+  'it',
+  'we',
+  'they',
+  'me',
+  'him',
+  'her',
+  'us',
+  'them',
+  'my',
+  'your',
+  'his',
+  'its',
+  'our',
+  'their',
+  'what',
+  'which',
+  'who',
+  'when',
+  'where',
+  'why',
+  'how',
+  'not',
+  'no',
+  'yes',
 ]);
 
 // 中文停用词列表
 const CHINESE_STOP_WORDS = new Set([
-  '的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一',
-  '一个', '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有',
-  '看', '好', '自己', '这', '那', '来', '可以', '还', '什么', '让', '把',
-  '被', '从', '给', '对', '向', '以', '过', '又', '用', '就是', '这个',
-  '那个', '这些', '那些', '这样', '那样', '因为', '所以', '但是', '如果',
-  '虽然', '然而', '而且', '或者', '既然', '除了', '关于', '根据'
+  '的',
+  '了',
+  '在',
+  '是',
+  '我',
+  '有',
+  '和',
+  '就',
+  '不',
+  '人',
+  '都',
+  '一',
+  '一个',
+  '上',
+  '也',
+  '很',
+  '到',
+  '说',
+  '要',
+  '去',
+  '你',
+  '会',
+  '着',
+  '没有',
+  '看',
+  '好',
+  '自己',
+  '这',
+  '那',
+  '来',
+  '可以',
+  '还',
+  '什么',
+  '让',
+  '把',
+  '被',
+  '从',
+  '给',
+  '对',
+  '向',
+  '以',
+  '过',
+  '又',
+  '用',
+  '就是',
+  '这个',
+  '那个',
+  '这些',
+  '那些',
+  '这样',
+  '那样',
+  '因为',
+  '所以',
+  '但是',
+  '如果',
+  '虽然',
+  '然而',
+  '而且',
+  '或者',
+  '既然',
+  '除了',
+  '关于',
+  '根据',
 ]);
 
 /**
@@ -86,13 +202,26 @@ class PorterStemmer {
 
   private static step2(word: string): string {
     const suffixes = [
-      ['ational', 'ate'], ['tional', 'tion'], ['enci', 'ence'],
-      ['anci', 'ance'], ['izer', 'ize'], ['abli', 'able'],
-      ['alli', 'al'], ['entli', 'ent'], ['eli', 'e'],
-      ['ousli', 'ous'], ['ization', 'ize'], ['ation', 'ate'],
-      ['ator', 'ate'], ['alism', 'al'], ['iveness', 'ive'],
-      ['fulness', 'ful'], ['ousness', 'ous'], ['aliti', 'al'],
-      ['iviti', 'ive'], ['biliti', 'ble']
+      ['ational', 'ate'],
+      ['tional', 'tion'],
+      ['enci', 'ence'],
+      ['anci', 'ance'],
+      ['izer', 'ize'],
+      ['abli', 'able'],
+      ['alli', 'al'],
+      ['entli', 'ent'],
+      ['eli', 'e'],
+      ['ousli', 'ous'],
+      ['ization', 'ize'],
+      ['ation', 'ate'],
+      ['ator', 'ate'],
+      ['alism', 'al'],
+      ['iveness', 'ive'],
+      ['fulness', 'ful'],
+      ['ousness', 'ous'],
+      ['aliti', 'al'],
+      ['iviti', 'ive'],
+      ['biliti', 'ble'],
     ];
 
     for (const [suffix, replacement] of suffixes) {
@@ -109,9 +238,13 @@ class PorterStemmer {
 
   private static step3(word: string): string {
     const suffixes = [
-      ['icate', 'ic'], ['ative', ''], ['alize', 'al'],
-      ['iciti', 'ic'], ['ical', 'ic'], ['ful', ''],
-      ['ness', '']
+      ['icate', 'ic'],
+      ['ative', ''],
+      ['alize', 'al'],
+      ['iciti', 'ic'],
+      ['ical', 'ic'],
+      ['ful', ''],
+      ['ness', ''],
     ];
 
     for (const [suffix, replacement] of suffixes) {
@@ -131,8 +264,12 @@ class PorterStemmer {
       return word + 'e';
     }
 
-    if (this.endsWithDoubleCons(word) && !word.endsWith('l') &&
-        !word.endsWith('s') && !word.endsWith('z')) {
+    if (
+      this.endsWithDoubleCons(word) &&
+      !word.endsWith('l') &&
+      !word.endsWith('s') &&
+      !word.endsWith('z')
+    ) {
       return word.slice(0, -1);
     }
 
@@ -189,10 +326,12 @@ class PorterStemmer {
   private static cvc(word: string): boolean {
     if (word.length < 3) return false;
     const len = word.length;
-    return !this.isVowel(word[len - 3], len - 3, word) &&
-           this.isVowel(word[len - 2], len - 2, word) &&
-           !this.isVowel(word[len - 1], len - 1, word) &&
-           !['w', 'x', 'y'].includes(word[len - 1]);
+    return (
+      !this.isVowel(word[len - 3], len - 3, word) &&
+      this.isVowel(word[len - 2], len - 2, word) &&
+      !this.isVowel(word[len - 1], len - 1, word) &&
+      !['w', 'x', 'y'].includes(word[len - 1])
+    );
   }
 }
 
@@ -204,11 +343,13 @@ export class StandardAnalyzer implements TextAnalyzer {
   private enableStopWords: boolean;
   private ngramSize: number;
 
-  constructor(options: {
-    stemming?: boolean;
-    stopWords?: boolean;
-    ngramSize?: number;
-  } = {}) {
+  constructor(
+    options: {
+      stemming?: boolean;
+      stopWords?: boolean;
+      ngramSize?: number;
+    } = {},
+  ) {
     this.enableStemming = options.stemming ?? true;
     this.enableStopWords = options.stopWords ?? true;
     this.ngramSize = options.ngramSize ?? 2;
@@ -228,18 +369,14 @@ export class StandardAnalyzer implements TextAnalyzer {
     const lowercased = words.map((token, index) => ({
       ...token,
       value: token.value.toLowerCase(),
-      position: index
+      position: index,
     }));
 
     // 4. 过滤停用词
-    const filtered = this.enableStopWords
-      ? this.removeStopWords(lowercased, language)
-      : lowercased;
+    const filtered = this.enableStopWords ? this.removeStopWords(lowercased, language) : lowercased;
 
     // 5. 词干提取
-    const stemmed = this.enableStemming
-      ? this.applyStemming(filtered, language)
-      : filtered;
+    const stemmed = this.enableStemming ? this.applyStemming(filtered, language) : filtered;
 
     // 6. 生成N-gram
     const ngrams = this.generateNGramTokens(stemmed);
@@ -253,9 +390,9 @@ export class StandardAnalyzer implements TextAnalyzer {
   normalize(text: string): string {
     return text
       .trim()
-      .replace(/\s+/g, ' ')  // 合并多个空格
-      .replace(/[^\w\s\u4e00-\u9fa5]/g, ' ')  // 移除标点符号，保留中文
-      .replace(/\s+/g, ' ')  // 再次合并空格
+      .replace(/\s+/g, ' ') // 合并多个空格
+      .replace(/[^\w\s\u4e00-\u9fa5]/g, ' ') // 移除标点符号，保留中文
+      .replace(/\s+/g, ' ') // 再次合并空格
       .trim();
   }
 
@@ -273,18 +410,18 @@ export class StandardAnalyzer implements TextAnalyzer {
           value: word,
           type: 'word',
           position: index,
-          length: word.length
+          length: word.length,
         });
       });
     } else {
       // 英文分词
-      const words = text.split(/\s+/).filter(word => word.length > 0);
+      const words = text.split(/\s+/).filter((word) => word.length > 0);
       words.forEach((word, index) => {
         tokens.push({
           value: word,
           type: 'word',
           position: index,
-          length: word.length
+          length: word.length,
         });
       });
     }
@@ -321,7 +458,7 @@ export class StandardAnalyzer implements TextAnalyzer {
         // 简单的双字词处理
         if (currentWord.length === 2) {
           words.push(currentWord);
-          currentWord = char;  // 保留最后一个字符作为下一个词的开始
+          currentWord = char; // 保留最后一个字符作为下一个词的开始
         }
       } else if (/[a-zA-Z0-9]/.test(char)) {
         // 英文字母或数字
@@ -343,7 +480,7 @@ export class StandardAnalyzer implements TextAnalyzer {
       words.push(currentWord);
     }
 
-    return words.filter(word => word.length > 0);
+    return words.filter((word) => word.length > 0);
   }
 
   /**
@@ -352,7 +489,7 @@ export class StandardAnalyzer implements TextAnalyzer {
   private removeStopWords(tokens: Token[], language: string): Token[] {
     const stopWords = language === 'zh' ? CHINESE_STOP_WORDS : ENGLISH_STOP_WORDS;
 
-    return tokens.filter(token => !stopWords.has(token.value));
+    return tokens.filter((token) => !stopWords.has(token.value));
   }
 
   /**
@@ -364,9 +501,9 @@ export class StandardAnalyzer implements TextAnalyzer {
       return tokens;
     }
 
-    return tokens.map(token => ({
+    return tokens.map((token) => ({
       ...token,
-      value: PorterStemmer.stem(token.value)
+      value: PorterStemmer.stem(token.value),
     }));
   }
 
@@ -377,7 +514,7 @@ export class StandardAnalyzer implements TextAnalyzer {
     if (tokens.length < this.ngramSize) return [];
 
     const ngramTokens: Token[] = [];
-    const words = tokens.map(t => t.value);
+    const words = tokens.map((t) => t.value);
     const ngrams = this.generateNGrams(words, this.ngramSize);
 
     ngrams.forEach((ngram, index) => {
@@ -385,7 +522,7 @@ export class StandardAnalyzer implements TextAnalyzer {
         value: ngram,
         type: 'ngram',
         position: index,
-        length: ngram.length
+        length: ngram.length,
       });
     });
 
@@ -413,12 +550,14 @@ export class StandardAnalyzer implements TextAnalyzer {
 export class KeywordAnalyzer implements TextAnalyzer {
   analyze(text: string): Token[] {
     const normalized = this.normalize(text);
-    return [{
-      value: normalized,
-      type: 'word',
-      position: 0,
-      length: normalized.length
-    }];
+    return [
+      {
+        value: normalized,
+        type: 'word',
+        position: 0,
+        length: normalized.length,
+      },
+    ];
   }
 
   normalize(text: string): string {
@@ -426,7 +565,7 @@ export class KeywordAnalyzer implements TextAnalyzer {
   }
 
   generateNGrams(tokens: string[], n: number): string[] {
-    return [];  // 关键词分析器不生成N-gram
+    return []; // 关键词分析器不生成N-gram
   }
 }
 
@@ -442,14 +581,14 @@ export class NGramAnalyzer implements TextAnalyzer {
 
   analyze(text: string): Token[] {
     const normalized = this.normalize(text);
-    const chars = Array.from(normalized);  // 支持Unicode字符
+    const chars = Array.from(normalized); // 支持Unicode字符
     const ngrams = this.generateCharNGrams(chars, this.ngramSize);
 
     return ngrams.map((ngram, index) => ({
       value: ngram,
       type: 'ngram',
       position: index,
-      length: ngram.length
+      length: ngram.length,
     }));
   }
 
@@ -477,10 +616,7 @@ export class NGramAnalyzer implements TextAnalyzer {
  * 分析器工厂
  */
 export class AnalyzerFactory {
-  static createAnalyzer(
-    type: 'standard' | 'keyword' | 'ngram',
-    options?: any
-  ): TextAnalyzer {
+  static createAnalyzer(type: 'standard' | 'keyword' | 'ngram', options?: any): TextAnalyzer {
     switch (type) {
       case 'standard':
         return new StandardAnalyzer(options);

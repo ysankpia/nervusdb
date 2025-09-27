@@ -7,8 +7,20 @@
 import { SynapseDB } from '../synapseDb.js';
 import { FactRecord } from '../storage/persistentStore.js';
 
-import { FullTextSearchFactory, FullTextBatchProcessor, SearchPerformanceMonitor } from './engine.js';
-import type { FullTextSearchEngine, FullTextConfig, Document, SearchOptions, SearchResult, IndexStats, Query } from './types.js';
+import {
+  FullTextSearchFactory,
+  FullTextBatchProcessor,
+  SearchPerformanceMonitor,
+} from './engine.js';
+import type {
+  FullTextSearchEngine,
+  FullTextConfig,
+  Document,
+  SearchOptions,
+  SearchResult,
+  IndexStats,
+  Query,
+} from './types.js';
 
 /**
  * 全文搜索扩展配置
@@ -51,14 +63,14 @@ export class SynapseDBFullTextExtension {
 
   constructor(
     private db: SynapseDB,
-    config: FullTextExtensionConfig = {}
+    config: FullTextExtensionConfig = {},
   ) {
     this.config = {
       defaultIndexName: 'default',
       enablePerformanceMonitoring: false,
       autoIndexTriples: true,
       batchSize: 1000,
-      ...config
+      ...config,
     };
 
     this.searchEngine = FullTextSearchFactory.createEngine();
@@ -78,19 +90,19 @@ export class SynapseDBFullTextExtension {
     // 三元组事实索引
     await this.searchEngine.createIndex(
       this.FACT_INDEX_NAME,
-      FullTextSearchFactory.createDefaultConfig(['subject', 'predicate', 'object'])
+      FullTextSearchFactory.createDefaultConfig(['subject', 'predicate', 'object']),
     );
 
     // 节点属性索引
     await this.searchEngine.createIndex(
       this.NODE_INDEX_NAME,
-      FullTextSearchFactory.createDefaultConfig(['nodeValue', 'properties'])
+      FullTextSearchFactory.createDefaultConfig(['nodeValue', 'properties']),
     );
 
     // 边属性索引
     await this.searchEngine.createIndex(
       this.EDGE_INDEX_NAME,
-      FullTextSearchFactory.createDefaultConfig(['properties'])
+      FullTextSearchFactory.createDefaultConfig(['properties']),
     );
 
     // 如果启用自动索引，索引现有数据
@@ -128,7 +140,11 @@ export class SynapseDBFullTextExtension {
 
       // 批量索引
       if (documents.length > 0) {
-        await this.batchProcessor.batchIndex(this.FACT_INDEX_NAME, documents, this.config.batchSize);
+        await this.batchProcessor.batchIndex(
+          this.FACT_INDEX_NAME,
+          documents,
+          this.config.batchSize,
+        );
       }
 
       console.log(`Successfully indexed ${documents.length} documents`);
@@ -147,10 +163,10 @@ export class SynapseDBFullTextExtension {
         ['subject', fact.subject],
         ['predicate', fact.predicate],
         ['object', fact.object],
-        ['factType', 'triple']
+        ['factType', 'triple'],
       ]),
-      tokens: [],  // 将由分析器生成
-      timestamp: new Date()
+      tokens: [], // 将由分析器生成
+      timestamp: new Date(),
     };
   }
 
@@ -165,10 +181,10 @@ export class SynapseDBFullTextExtension {
       fields: new Map([
         ['nodeValue', nodeValue],
         ['properties', propertiesText],
-        ['nodeType', 'node']
+        ['nodeType', 'node'],
       ]),
       tokens: [],
-      timestamp: new Date()
+      timestamp: new Date(),
     };
   }
 
@@ -185,10 +201,10 @@ export class SynapseDBFullTextExtension {
         ['predicate', fact.predicate],
         ['object', fact.object],
         ['properties', propertiesText],
-        ['edgeType', 'edge']
+        ['edgeType', 'edge'],
       ]),
       tokens: [],
-      timestamp: new Date()
+      timestamp: new Date(),
     };
   }
 
@@ -197,7 +213,7 @@ export class SynapseDBFullTextExtension {
    */
   async searchFacts(
     query: string,
-    options: SearchOptions = {}
+    options: SearchOptions = {},
   ): Promise<FullTextSearchResultWithFacts[]> {
     const searchFn = () => this.searchEngine.search(this.FACT_INDEX_NAME, query, options);
 
@@ -215,7 +231,7 @@ export class SynapseDBFullTextExtension {
       results.push({
         searchResult: result,
         facts,
-        matchedContent
+        matchedContent,
       });
     }
 
@@ -225,10 +241,7 @@ export class SynapseDBFullTextExtension {
   /**
    * 搜索节点
    */
-  async searchNodes(
-    query: string,
-    options: SearchOptions = {}
-  ): Promise<SearchResult[]> {
+  async searchNodes(query: string, options: SearchOptions = {}): Promise<SearchResult[]> {
     const searchFn = () => this.searchEngine.search(this.NODE_INDEX_NAME, query, options);
 
     return this.performanceMonitor
@@ -239,10 +252,7 @@ export class SynapseDBFullTextExtension {
   /**
    * 搜索边
    */
-  async searchEdges(
-    query: string,
-    options: SearchOptions = {}
-  ): Promise<SearchResult[]> {
+  async searchEdges(query: string, options: SearchOptions = {}): Promise<SearchResult[]> {
     const searchFn = () => this.searchEngine.search(this.EDGE_INDEX_NAME, query, options);
 
     return this.performanceMonitor
@@ -255,7 +265,7 @@ export class SynapseDBFullTextExtension {
    */
   async globalSearch(
     query: string,
-    options: SearchOptions = {}
+    options: SearchOptions = {},
   ): Promise<{
     facts: FullTextSearchResultWithFacts[];
     nodes: SearchResult[];
@@ -264,7 +274,7 @@ export class SynapseDBFullTextExtension {
     const [facts, nodes, edges] = await Promise.all([
       this.searchFacts(query, options),
       this.searchNodes(query, options),
-      this.searchEdges(query, options)
+      this.searchEdges(query, options),
     ]);
 
     return { facts, nodes, edges };
@@ -310,14 +320,17 @@ export class SynapseDBFullTextExtension {
     await Promise.all([
       this.searchEngine.removeDocument(this.NODE_INDEX_NAME, nodeIdSubject),
       this.searchEngine.removeDocument(this.NODE_INDEX_NAME, nodeIdObject),
-      this.searchEngine.removeDocument(this.EDGE_INDEX_NAME, edgeId)
+      this.searchEngine.removeDocument(this.EDGE_INDEX_NAME, edgeId),
     ]);
   }
 
   /**
    * 获取搜索建议
    */
-  async getSuggestions(prefix: string, count: number = 10): Promise<{
+  async getSuggestions(
+    prefix: string,
+    count: number = 10,
+  ): Promise<{
     facts: string[];
     nodes: string[];
     edges: string[];
@@ -325,7 +338,7 @@ export class SynapseDBFullTextExtension {
     const [facts, nodes, edges] = await Promise.all([
       this.searchEngine.suggest(this.FACT_INDEX_NAME, prefix, count),
       this.searchEngine.suggest(this.NODE_INDEX_NAME, prefix, count),
-      this.searchEngine.suggest(this.EDGE_INDEX_NAME, prefix, count)
+      this.searchEngine.suggest(this.EDGE_INDEX_NAME, prefix, count),
     ]);
 
     return { facts, nodes, edges };
@@ -342,7 +355,7 @@ export class SynapseDBFullTextExtension {
     const [facts, nodes, edges] = await Promise.all([
       this.searchEngine.getIndexStats(this.FACT_INDEX_NAME),
       this.searchEngine.getIndexStats(this.NODE_INDEX_NAME),
-      this.searchEngine.getIndexStats(this.EDGE_INDEX_NAME)
+      this.searchEngine.getIndexStats(this.EDGE_INDEX_NAME),
     ]);
 
     return { facts, nodes, edges };
@@ -359,7 +372,7 @@ export class SynapseDBFullTextExtension {
     return {
       facts: this.performanceMonitor.getPerformanceReport(this.FACT_INDEX_NAME),
       nodes: this.performanceMonitor.getPerformanceReport(this.NODE_INDEX_NAME),
-      edges: this.performanceMonitor.getPerformanceReport(this.EDGE_INDEX_NAME)
+      edges: this.performanceMonitor.getPerformanceReport(this.EDGE_INDEX_NAME),
     };
   }
 
@@ -371,7 +384,7 @@ export class SynapseDBFullTextExtension {
     await Promise.all([
       this.searchEngine.dropIndex(this.FACT_INDEX_NAME),
       this.searchEngine.dropIndex(this.NODE_INDEX_NAME),
-      this.searchEngine.dropIndex(this.EDGE_INDEX_NAME)
+      this.searchEngine.dropIndex(this.EDGE_INDEX_NAME),
     ]);
 
     // 重新初始化
@@ -390,10 +403,11 @@ export class SynapseDBFullTextExtension {
 
         // 从数据库中查找对应的事实
         const facts = this.db.listFacts();
-        return facts.filter(fact =>
-          fact.subjectId === subjectId &&
-          fact.predicateId === predicateId &&
-          fact.objectId === objectId
+        return facts.filter(
+          (fact) =>
+            fact.subjectId === subjectId &&
+            fact.predicateId === predicateId &&
+            fact.objectId === objectId,
         );
       }
     }
@@ -426,37 +440,33 @@ export class SynapseDBFullTextExtensionFactory {
    */
   static async create(
     db: SynapseDB,
-    config?: FullTextExtensionConfig
+    config?: FullTextExtensionConfig,
   ): Promise<SynapseDBFullTextExtension> {
     const extension = new SynapseDBFullTextExtension(db, config);
     // 等待初始化完成
-    await new Promise(resolve => setTimeout(resolve, 100)); // 简单延迟，实际应该等待初始化
+    await new Promise((resolve) => setTimeout(resolve, 100)); // 简单延迟，实际应该等待初始化
     return extension;
   }
 
   /**
    * 创建高性能配置的扩展
    */
-  static async createHighPerformance(
-    db: SynapseDB
-  ): Promise<SynapseDBFullTextExtension> {
+  static async createHighPerformance(db: SynapseDB): Promise<SynapseDBFullTextExtension> {
     return this.create(db, {
       enablePerformanceMonitoring: true,
       autoIndexTriples: true,
-      batchSize: 2000
+      batchSize: 2000,
     });
   }
 
   /**
    * 创建最小配置的扩展
    */
-  static async createMinimal(
-    db: SynapseDB
-  ): Promise<SynapseDBFullTextExtension> {
+  static async createMinimal(db: SynapseDB): Promise<SynapseDBFullTextExtension> {
     return this.create(db, {
       autoIndexTriples: false,
       enablePerformanceMonitoring: false,
-      batchSize: 500
+      batchSize: 500,
     });
   }
 }

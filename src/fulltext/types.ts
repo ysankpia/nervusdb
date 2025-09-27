@@ -144,18 +144,10 @@ export interface InvertedIndex {
 // 相关性评分器接口
 export interface RelevanceScorer {
   /** 计算查询与文档的相关性评分 */
-  calculateScore(
-    query: string[],
-    document: Document,
-    corpus: DocumentCorpus
-  ): number;
+  calculateScore(query: string[], document: Document, corpus: DocumentCorpus): number;
 
   /** 计算TF-IDF评分 */
-  calculateTFIDF(
-    term: string,
-    document: Document,
-    corpus: DocumentCorpus
-  ): number;
+  calculateTFIDF(term: string, document: Document, corpus: DocumentCorpus): number;
 
   /** 计算BM25评分 */
   calculateBM25(
@@ -163,7 +155,7 @@ export interface RelevanceScorer {
     document: Document,
     corpus: DocumentCorpus,
     k1?: number,
-    b?: number
+    b?: number,
   ): number;
 }
 
@@ -192,12 +184,12 @@ export interface BooleanQuery {
 
 // 查询类型
 export type QueryType =
-  | 'term'        // 精确词匹配
-  | 'phrase'      // 短语查询
-  | 'wildcard'    // 通配符查询
-  | 'fuzzy'       // 模糊查询
-  | 'boolean'     // 布尔查询
-  | 'range';      // 范围查询
+  | 'term' // 精确词匹配
+  | 'phrase' // 短语查询
+  | 'wildcard' // 通配符查询
+  | 'fuzzy' // 模糊查询
+  | 'boolean' // 布尔查询
+  | 'range'; // 范围查询
 
 export interface Query {
   type: QueryType;
@@ -224,15 +216,11 @@ export interface FullTextSearchEngine {
   search(
     indexName: string,
     query: string | Query,
-    options?: SearchOptions
+    options?: SearchOptions,
   ): Promise<SearchResult[]>;
 
   /** 搜索建议 */
-  suggest(
-    indexName: string,
-    prefix: string,
-    count: number
-  ): Promise<string[]>;
+  suggest(indexName: string, prefix: string, count: number): Promise<string[]>;
 
   /** 获取索引统计信息 */
   getIndexStats(indexName: string): Promise<IndexStats>;

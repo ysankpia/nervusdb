@@ -9,7 +9,7 @@ import {
   SynapseDBFullTextExtension,
   SynapseDBFullTextExtensionFactory,
   FullTextExtensionConfig,
-  FullTextSearchResultWithFacts
+  FullTextSearchResultWithFacts,
 } from './synapsedbExtension.js';
 
 import { SearchOptions, SearchResult } from './types.js';
@@ -35,14 +35,20 @@ declare module '../synapseDb.js' {
     searchEdges(query: string, options?: SearchOptions): Promise<SearchResult[]>;
 
     /** 全局搜索 */
-    globalSearch(query: string, options?: SearchOptions): Promise<{
+    globalSearch(
+      query: string,
+      options?: SearchOptions,
+    ): Promise<{
       facts: FullTextSearchResultWithFacts[];
       nodes: SearchResult[];
       edges: SearchResult[];
     }>;
 
     /** 获取搜索建议 */
-    getSearchSuggestions(prefix: string, count?: number): Promise<{
+    getSearchSuggestions(
+      prefix: string,
+      count?: number,
+    ): Promise<{
       facts: string[];
       nodes: string[];
       edges: string[];
@@ -59,9 +65,9 @@ declare module '../synapseDb.js' {
 /**
  * 为 SynapseDB 添加全文搜索方法
  */
-SynapseDB.prototype.enableFullTextSearch = async function(
+SynapseDB.prototype.enableFullTextSearch = async function (
   this: SynapseDB,
-  config?: FullTextExtensionConfig
+  config?: FullTextExtensionConfig,
 ): Promise<void> {
   if (this.fullText) {
     console.warn('Full-text search is already enabled for this SynapseDB instance');
@@ -77,37 +83,37 @@ SynapseDB.prototype.enableFullTextSearch = async function(
   }
 };
 
-SynapseDB.prototype.searchFacts = async function(
+SynapseDB.prototype.searchFacts = async function (
   this: SynapseDB,
   query: string,
-  options?: SearchOptions
+  options?: SearchOptions,
 ): Promise<FullTextSearchResultWithFacts[]> {
   (this as any).ensureFullTextEnabled();
   return await this.fullText!.searchFacts(query, options);
 };
 
-SynapseDB.prototype.searchNodes = async function(
+SynapseDB.prototype.searchNodes = async function (
   this: SynapseDB,
   query: string,
-  options?: SearchOptions
+  options?: SearchOptions,
 ): Promise<SearchResult[]> {
   (this as any).ensureFullTextEnabled();
   return await this.fullText!.searchNodes(query, options);
 };
 
-SynapseDB.prototype.searchEdges = async function(
+SynapseDB.prototype.searchEdges = async function (
   this: SynapseDB,
   query: string,
-  options?: SearchOptions
+  options?: SearchOptions,
 ): Promise<SearchResult[]> {
   (this as any).ensureFullTextEnabled();
   return await this.fullText!.searchEdges(query, options);
 };
 
-SynapseDB.prototype.globalSearch = async function(
+SynapseDB.prototype.globalSearch = async function (
   this: SynapseDB,
   query: string,
-  options?: SearchOptions
+  options?: SearchOptions,
 ): Promise<{
   facts: FullTextSearchResultWithFacts[];
   nodes: SearchResult[];
@@ -117,10 +123,10 @@ SynapseDB.prototype.globalSearch = async function(
   return await this.fullText!.globalSearch(query, options);
 };
 
-SynapseDB.prototype.getSearchSuggestions = async function(
+SynapseDB.prototype.getSearchSuggestions = async function (
   this: SynapseDB,
   prefix: string,
-  count: number = 10
+  count: number = 10,
 ): Promise<{
   facts: string[];
   nodes: string[];
@@ -130,24 +136,20 @@ SynapseDB.prototype.getSearchSuggestions = async function(
   return await this.fullText!.getSuggestions(prefix, count);
 };
 
-SynapseDB.prototype.getFullTextStats = async function(
-  this: SynapseDB
-): Promise<any> {
+SynapseDB.prototype.getFullTextStats = async function (this: SynapseDB): Promise<any> {
   (this as any).ensureFullTextEnabled();
   const [indexStats, performanceReport] = await Promise.all([
     this.fullText!.getIndexStats(),
-    Promise.resolve(this.fullText!.getPerformanceReport())
+    Promise.resolve(this.fullText!.getPerformanceReport()),
   ]);
 
   return {
     indexes: indexStats,
-    performance: performanceReport
+    performance: performanceReport,
   };
 };
 
-SynapseDB.prototype.rebuildFullTextIndexes = async function(
-  this: SynapseDB
-): Promise<void> {
+SynapseDB.prototype.rebuildFullTextIndexes = async function (this: SynapseDB): Promise<void> {
   (this as any).ensureFullTextEnabled();
   await this.fullText!.rebuildIndexes();
 };
@@ -155,7 +157,7 @@ SynapseDB.prototype.rebuildFullTextIndexes = async function(
 /**
  * 添加私有辅助方法检查全文搜索是否启用
  */
-(SynapseDB.prototype as any).ensureFullTextEnabled = function(this: SynapseDB): void {
+(SynapseDB.prototype as any).ensureFullTextEnabled = function (this: SynapseDB): void {
   if (!this.fullText) {
     throw new Error('Full-text search is not enabled. Call enableFullTextSearch() first.');
   }
@@ -170,9 +172,9 @@ export class FullTextSearchUtils {
    */
   static async enableForMultiple(
     databases: SynapseDB[],
-    config?: FullTextExtensionConfig
+    config?: FullTextExtensionConfig,
   ): Promise<void> {
-    const promises = databases.map(db => db.enableFullTextSearch(config));
+    const promises = databases.map((db) => db.enableFullTextSearch(config));
     await Promise.all(promises);
   }
 
@@ -182,18 +184,20 @@ export class FullTextSearchUtils {
   static async searchAcrossDatabases(
     databases: SynapseDB[],
     query: string,
-    options?: SearchOptions
-  ): Promise<Array<{
-    database: SynapseDB;
-    results: {
-      facts: FullTextSearchResultWithFacts[];
-      nodes: SearchResult[];
-      edges: SearchResult[];
-    };
-  }>> {
-    const promises = databases.map(async db => ({
+    options?: SearchOptions,
+  ): Promise<
+    Array<{
+      database: SynapseDB;
+      results: {
+        facts: FullTextSearchResultWithFacts[];
+        nodes: SearchResult[];
+        edges: SearchResult[];
+      };
+    }>
+  > {
+    const promises = databases.map(async (db) => ({
       database: db,
-      results: await db.globalSearch(query, options)
+      results: await db.globalSearch(query, options),
     }));
 
     return await Promise.all(promises);
@@ -215,18 +219,17 @@ export class FullTextSearchUtils {
     avgScore: number;
   } {
     const allScores = [
-      ...results.facts.map(r => r.searchResult.score),
-      ...results.nodes.map(r => r.score),
-      ...results.edges.map(r => r.score)
+      ...results.facts.map((r) => r.searchResult.score),
+      ...results.nodes.map((r) => r.score),
+      ...results.edges.map((r) => r.score),
     ];
 
-    const topScores = allScores
-      .sort((a, b) => b - a)
-      .slice(0, 5);
+    const topScores = allScores.sort((a, b) => b - a).slice(0, 5);
 
-    const avgScore = allScores.length > 0
-      ? allScores.reduce((sum, score) => sum + score, 0) / allScores.length
-      : 0;
+    const avgScore =
+      allScores.length > 0
+        ? allScores.reduce((sum, score) => sum + score, 0) / allScores.length
+        : 0;
 
     return {
       totalResults: results.facts.length + results.nodes.length + results.edges.length,
@@ -234,7 +237,7 @@ export class FullTextSearchUtils {
       nodeCount: results.nodes.length,
       edgeCount: results.edges.length,
       topScores,
-      avgScore
+      avgScore,
     };
   }
 
@@ -248,13 +251,9 @@ export class FullTextSearchUtils {
       preTag?: string;
       postTag?: string;
       caseSensitive?: boolean;
-    } = {}
+    } = {},
   ): string {
-    const {
-      preTag = '<mark>',
-      postTag = '</mark>',
-      caseSensitive = false
-    } = options;
+    const { preTag = '<mark>', postTag = '</mark>', caseSensitive = false } = options;
 
     let highlightedText = text;
 
@@ -280,9 +279,9 @@ export class FullTextSearchUtils {
   static parseQueryKeywords(query: string): string[] {
     return query
       .toLowerCase()
-      .replace(/[^\w\s\u4e00-\u9fa5]/g, ' ')  // 保留中文字符
+      .replace(/[^\w\s\u4e00-\u9fa5]/g, ' ') // 保留中文字符
       .split(/\s+/)
-      .filter(word => word.length > 0);
+      .filter((word) => word.length > 0);
   }
 
   /**
@@ -298,7 +297,7 @@ export class FullTextSearchUtils {
       sortBy: 'relevance',
       highlight: true,
       highlightFragments: 3,
-      ...overrides
+      ...overrides,
     };
   }
 
@@ -310,7 +309,7 @@ export class FullTextSearchUtils {
       fuzzy: false,
       minScore: 0.5,
       maxResults: 50,
-      sortBy: 'relevance'
+      sortBy: 'relevance',
     });
   }
 
@@ -323,7 +322,7 @@ export class FullTextSearchUtils {
       maxEditDistance: 2,
       minScore: 0.1,
       maxResults: 200,
-      sortBy: 'relevance'
+      sortBy: 'relevance',
     });
   }
 }
@@ -331,7 +330,4 @@ export class FullTextSearchUtils {
 /**
  * 导出集成相关的功能
  */
-export {
-  SynapseDBFullTextExtension,
-  SynapseDBFullTextExtensionFactory
-};
+export { SynapseDBFullTextExtension, SynapseDBFullTextExtensionFactory };

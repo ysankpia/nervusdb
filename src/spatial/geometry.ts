@@ -17,16 +17,16 @@ import {
   CoordinateArray,
   BoundingBox,
   SpatialGeometry,
-  DistanceUnit
+  DistanceUnit,
 } from './types.js';
 
 /**
  * 地球半径常量（米）
  */
 const EARTH_RADIUS = {
-  MEAN: 6371000,      // 平均半径
+  MEAN: 6371000, // 平均半径
   EQUATORIAL: 6378137, // 赤道半径
-  POLAR: 6356752.314245 // 极半径
+  POLAR: 6356752.314245, // 极半径
 };
 
 /**
@@ -38,7 +38,7 @@ const UNIT_CONVERSIONS: Record<DistanceUnit, number> = {
   feet: 0.3048,
   miles: 1609.344,
   nautical_miles: 1852,
-  degrees: 111320 // 大约1度经纬度对应的米数（赤道附近）
+  degrees: 111320, // 大约1度经纬度对应的米数（赤道附近）
 };
 
 /**
@@ -86,9 +86,7 @@ export class GeometryUtils {
     // 纬度限制在 [-90, 90]
     const normalizedLat = Math.max(-90, Math.min(90, lat));
 
-    return alt !== undefined
-      ? [normalizedLon, normalizedLat, alt]
-      : [normalizedLon, normalizedLat];
+    return alt !== undefined ? [normalizedLon, normalizedLat, alt] : [normalizedLon, normalizedLat];
   }
 
   /**
@@ -117,8 +115,9 @@ export class GeometryUtils {
     const lat2Rad = this.toRadians(lat2);
 
     const y = Math.sin(dLon) * Math.cos(lat2Rad);
-    const x = Math.cos(lat1Rad) * Math.sin(lat2Rad) -
-              Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dLon);
+    const x =
+      Math.cos(lat1Rad) * Math.sin(lat2Rad) -
+      Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dLon);
 
     const bearing = Math.atan2(y, x);
     return (this.toDegrees(bearing) + 360) % 360;
@@ -137,13 +136,15 @@ export class GeometryUtils {
 
     const lat2Rad = Math.asin(
       Math.sin(lat1Rad) * Math.cos(distanceRad) +
-      Math.cos(lat1Rad) * Math.sin(distanceRad) * Math.cos(bearingRad)
+        Math.cos(lat1Rad) * Math.sin(distanceRad) * Math.cos(bearingRad),
     );
 
-    const lon2Rad = lon1Rad + Math.atan2(
-      Math.sin(bearingRad) * Math.sin(distanceRad) * Math.cos(lat1Rad),
-      Math.cos(distanceRad) - Math.sin(lat1Rad) * Math.sin(lat2Rad)
-    );
+    const lon2Rad =
+      lon1Rad +
+      Math.atan2(
+        Math.sin(bearingRad) * Math.sin(distanceRad) * Math.cos(lat1Rad),
+        Math.cos(distanceRad) - Math.sin(lat1Rad) * Math.sin(lat2Rad),
+      );
 
     return [this.toDegrees(lon2Rad), this.toDegrees(lat2Rad)];
   }
@@ -172,10 +173,10 @@ export class SpatialGeometryImpl implements SpatialGeometry {
   private getRepresentativePoint(geometry: Geometry): Point {
     switch (geometry.type) {
       case 'Point':
-        return geometry as Point;
+        return geometry;
 
       case 'LineString':
-        const lineString = geometry as LineString;
+        const lineString = geometry;
         const midIndex = Math.floor(lineString.coordinates.length / 2);
         return { type: 'Point', coordinates: lineString.coordinates[midIndex] };
 
@@ -183,25 +184,25 @@ export class SpatialGeometryImpl implements SpatialGeometry {
         return this.centroid(geometry);
 
       case 'MultiPoint':
-        const multiPoint = geometry as MultiPoint;
+        const multiPoint = geometry;
         return { type: 'Point', coordinates: multiPoint.coordinates[0] };
 
       case 'MultiLineString':
-        const multiLineString = geometry as MultiLineString;
+        const multiLineString = geometry;
         return this.getRepresentativePoint({
           type: 'LineString',
-          coordinates: multiLineString.coordinates[0]
+          coordinates: multiLineString.coordinates[0],
         });
 
       case 'MultiPolygon':
-        const multiPolygon = geometry as MultiPolygon;
+        const multiPolygon = geometry;
         return this.getRepresentativePoint({
           type: 'Polygon',
-          coordinates: multiPolygon.coordinates[0]
+          coordinates: multiPolygon.coordinates[0],
         });
 
       case 'GeometryCollection':
-        const collection = geometry as GeometryCollection;
+        const collection = geometry;
         if (collection.geometries.length > 0) {
           return this.getRepresentativePoint(collection.geometries[0] as unknown as Geometry);
         }
@@ -225,9 +226,9 @@ export class SpatialGeometryImpl implements SpatialGeometry {
     const lat1Rad = GeometryUtils.toRadians(lat1);
     const lat2Rad = GeometryUtils.toRadians(lat2);
 
-    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-              Math.cos(lat1Rad) * Math.cos(lat2Rad) *
-              Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1Rad) * Math.cos(lat2Rad) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
 
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return EARTH_RADIUS.MEAN * c;
@@ -245,17 +246,20 @@ export class SpatialGeometryImpl implements SpatialGeometry {
   private calculateArea(geometry: Geometry): number {
     switch (geometry.type) {
       case 'Polygon':
-        return this.polygonArea(geometry as Polygon);
+        return this.polygonArea(geometry);
 
       case 'MultiPolygon':
-        const multiPolygon = geometry as MultiPolygon;
+        const multiPolygon = geometry;
         return multiPolygon.coordinates.reduce((total, polygonCoords) => {
           return total + this.polygonArea({ type: 'Polygon', coordinates: polygonCoords });
         }, 0);
 
       case 'GeometryCollection':
-        const collection = geometry as GeometryCollection;
-        return collection.geometries.reduce((total, geom) => total + this.calculateArea(geom as unknown as Geometry), 0);
+        const collection = geometry;
+        return collection.geometries.reduce(
+          (total, geom) => total + this.calculateArea(geom as unknown as Geometry),
+          0,
+        );
 
       default:
         return 0; // 点和线没有面积
@@ -284,7 +288,7 @@ export class SpatialGeometryImpl implements SpatialGeometry {
       area += dLon * (2 + Math.sin(lat1Rad) + Math.sin(lat2Rad));
     }
 
-    area = Math.abs(area * radius * radius / 2);
+    area = Math.abs((area * radius * radius) / 2);
 
     // 减去内环（洞）的面积
     for (let i = 1; i < polygon.coordinates.length; i++) {
@@ -306,30 +310,33 @@ export class SpatialGeometryImpl implements SpatialGeometry {
   private calculateLength(geometry: Geometry): number {
     switch (geometry.type) {
       case 'LineString':
-        return this.lineStringLength(geometry as LineString);
+        return this.lineStringLength(geometry);
 
       case 'MultiLineString':
-        const multiLineString = geometry as MultiLineString;
+        const multiLineString = geometry;
         return multiLineString.coordinates.reduce((total, lineCoords) => {
           return total + this.lineStringLength({ type: 'LineString', coordinates: lineCoords });
         }, 0);
 
       case 'Polygon':
-        const polygon = geometry as Polygon;
+        const polygon = geometry;
         // 计算边界长度
         return polygon.coordinates.reduce((total, ring) => {
           return total + this.lineStringLength({ type: 'LineString', coordinates: ring });
         }, 0);
 
       case 'MultiPolygon':
-        const multiPolygon = geometry as MultiPolygon;
+        const multiPolygon = geometry;
         return multiPolygon.coordinates.reduce((total, polygonCoords) => {
           return total + this.calculateLength({ type: 'Polygon', coordinates: polygonCoords });
         }, 0);
 
       case 'GeometryCollection':
-        const collection = geometry as GeometryCollection;
-        return collection.geometries.reduce((total, geom) => total + this.calculateLength(geom as unknown as Geometry), 0);
+        const collection = geometry;
+        return collection.geometries.reduce(
+          (total, geom) => total + this.calculateLength(geom as unknown as Geometry),
+          0,
+        );
 
       default:
         return 0; // 点没有长度
@@ -360,8 +367,10 @@ export class SpatialGeometryImpl implements SpatialGeometry {
       return [0, 0, 0, 0];
     }
 
-    let minX = Infinity, minY = Infinity;
-    let maxX = -Infinity, maxY = -Infinity;
+    let minX = Infinity,
+      minY = Infinity;
+    let maxX = -Infinity,
+      maxY = -Infinity;
 
     for (const coord of allCoords) {
       const [x, y] = coord;
@@ -391,7 +400,7 @@ export class SpatialGeometryImpl implements SpatialGeometry {
           break;
 
         case 'Polygon':
-          geom.coordinates.forEach(ring => coords.push(...ring));
+          geom.coordinates.forEach((ring) => coords.push(...ring));
           break;
 
         case 'MultiPoint':
@@ -399,17 +408,15 @@ export class SpatialGeometryImpl implements SpatialGeometry {
           break;
 
         case 'MultiLineString':
-          geom.coordinates.forEach(line => coords.push(...line));
+          geom.coordinates.forEach((line) => coords.push(...line));
           break;
 
         case 'MultiPolygon':
-          geom.coordinates.forEach(polygon =>
-            polygon.forEach(ring => coords.push(...ring))
-          );
+          geom.coordinates.forEach((polygon) => polygon.forEach((ring) => coords.push(...ring)));
           break;
 
         case 'GeometryCollection':
-          geom.geometries.forEach(g => extractCoords(g as unknown as Geometry));
+          geom.geometries.forEach((g) => extractCoords(g as unknown as Geometry));
           break;
       }
     };
@@ -427,7 +434,7 @@ export class SpatialGeometryImpl implements SpatialGeometry {
 
     return {
       type: 'Point',
-      coordinates: [(minX + maxX) / 2, (minY + maxY) / 2]
+      coordinates: [(minX + maxX) / 2, (minY + maxY) / 2],
     };
   }
 
@@ -437,16 +444,16 @@ export class SpatialGeometryImpl implements SpatialGeometry {
   centroid(geometry: Geometry): Point {
     switch (geometry.type) {
       case 'Point':
-        return geometry as Point;
+        return geometry;
 
       case 'LineString':
-        return this.lineStringCentroid(geometry as LineString);
+        return this.lineStringCentroid(geometry);
 
       case 'Polygon':
-        return this.polygonCentroid(geometry as Polygon);
+        return this.polygonCentroid(geometry);
 
       case 'MultiPoint':
-        return this.multiPointCentroid(geometry as MultiPoint);
+        return this.multiPointCentroid(geometry);
 
       default:
         // 对于复杂几何类型，返回边界框中心
@@ -476,7 +483,7 @@ export class SpatialGeometryImpl implements SpatialGeometry {
 
     return {
       type: 'Point',
-      coordinates: [weightedX / totalLength, weightedY / totalLength]
+      coordinates: [weightedX / totalLength, weightedY / totalLength],
     };
   }
 
@@ -503,8 +510,8 @@ export class SpatialGeometryImpl implements SpatialGeometry {
       return { type: 'Point', coordinates: coords[0] };
     }
 
-    centroidX /= (6 * area);
-    centroidY /= (6 * area);
+    centroidX /= 6 * area;
+    centroidY /= 6 * area;
 
     return { type: 'Point', coordinates: [centroidX, centroidY] };
   }
@@ -520,7 +527,7 @@ export class SpatialGeometryImpl implements SpatialGeometry {
 
     return {
       type: 'Point',
-      coordinates: [sumX / coords.length, sumY / coords.length]
+      coordinates: [sumX / coords.length, sumY / coords.length],
     };
   }
 
@@ -530,7 +537,7 @@ export class SpatialGeometryImpl implements SpatialGeometry {
   contains(container: Geometry, contained: Geometry): boolean {
     // 简化实现：检查contained的所有点是否都在container内
     const containedCoords = this.extractAllCoordinates(contained);
-    return containedCoords.every(coord => this.pointInGeometry(coord, container));
+    return containedCoords.every((coord) => this.pointInGeometry(coord, container));
   }
 
   /**
@@ -539,16 +546,16 @@ export class SpatialGeometryImpl implements SpatialGeometry {
   private pointInGeometry(point: CoordinateArray, geometry: Geometry): boolean {
     switch (geometry.type) {
       case 'Point':
-        const geomPoint = geometry as Point;
+        const geomPoint = geometry;
         return point[0] === geomPoint.coordinates[0] && point[1] === geomPoint.coordinates[1];
 
       case 'Polygon':
-        return this.pointInPolygon(point, geometry as Polygon);
+        return this.pointInPolygon(point, geometry);
 
       case 'MultiPolygon':
-        const multiPolygon = geometry as MultiPolygon;
-        return multiPolygon.coordinates.some(polygonCoords =>
-          this.pointInPolygon(point, { type: 'Polygon', coordinates: polygonCoords })
+        const multiPolygon = geometry;
+        return multiPolygon.coordinates.some((polygonCoords) =>
+          this.pointInPolygon(point, { type: 'Polygon', coordinates: polygonCoords }),
         );
 
       default:
@@ -568,7 +575,7 @@ export class SpatialGeometryImpl implements SpatialGeometry {
       const [xi, yi] = coords[i];
       const [xj, yj] = coords[j];
 
-      if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) {
         inside = !inside;
       }
     }
@@ -651,13 +658,15 @@ export class SpatialGeometryImpl implements SpatialGeometry {
     const [minX, minY, maxX, maxY] = intersectionBbox;
     return {
       type: 'Polygon',
-      coordinates: [[
-        [minX, minY],
-        [maxX, minY],
-        [maxX, maxY],
-        [minX, maxY],
-        [minX, minY]
-      ]]
+      coordinates: [
+        [
+          [minX, minY],
+          [maxX, minY],
+          [maxX, maxY],
+          [minX, maxY],
+          [minX, minY],
+        ],
+      ],
     };
   }
 
@@ -695,13 +704,15 @@ export class SpatialGeometryImpl implements SpatialGeometry {
 
     return {
       type: 'Polygon',
-      coordinates: [[
-        [minX, minY],
-        [maxX, minY],
-        [maxX, maxY],
-        [minX, maxY],
-        [minX, minY]
-      ]]
+      coordinates: [
+        [
+          [minX, minY],
+          [maxX, minY],
+          [maxX, maxY],
+          [minX, maxY],
+          [minX, minY],
+        ],
+      ],
     };
   }
 
@@ -720,13 +731,15 @@ export class SpatialGeometryImpl implements SpatialGeometry {
 
     return {
       type: 'Polygon',
-      coordinates: [[
-        [minX - bufferDegrees, minY - bufferDegrees],
-        [maxX + bufferDegrees, minY - bufferDegrees],
-        [maxX + bufferDegrees, maxY + bufferDegrees],
-        [minX - bufferDegrees, maxY + bufferDegrees],
-        [minX - bufferDegrees, minY - bufferDegrees]
-      ]]
+      coordinates: [
+        [
+          [minX - bufferDegrees, minY - bufferDegrees],
+          [maxX + bufferDegrees, minY - bufferDegrees],
+          [maxX + bufferDegrees, maxY + bufferDegrees],
+          [minX - bufferDegrees, maxY + bufferDegrees],
+          [minX - bufferDegrees, minY - bufferDegrees],
+        ],
+      ],
     };
   }
 
@@ -737,13 +750,13 @@ export class SpatialGeometryImpl implements SpatialGeometry {
     // Douglas-Peucker算法的简化实现
     switch (geometry.type) {
       case 'LineString':
-        const simplified = this.simplifyLineString(geometry as LineString, tolerance);
+        const simplified = this.simplifyLineString(geometry, tolerance);
         return simplified;
 
       case 'Polygon':
-        const polygon = geometry as Polygon;
-        const simplifiedRings = polygon.coordinates.map(ring =>
-          this.simplifyRing(ring, tolerance)
+        const polygon = geometry;
+        const simplifiedRings = polygon.coordinates.map((ring) =>
+          this.simplifyRing(ring, tolerance),
         );
         return { type: 'Polygon', coordinates: simplifiedRings };
 
@@ -791,7 +804,11 @@ export class SpatialGeometryImpl implements SpatialGeometry {
     }
   }
 
-  private pointToLineDistance(point: CoordinateArray, lineStart: CoordinateArray, lineEnd: CoordinateArray): number {
+  private pointToLineDistance(
+    point: CoordinateArray,
+    lineStart: CoordinateArray,
+    lineEnd: CoordinateArray,
+  ): number {
     const [px, py] = point;
     const [x1, y1] = lineStart;
     const [x2, y2] = lineEnd;
@@ -836,18 +853,23 @@ export class SpatialGeometryImpl implements SpatialGeometry {
           return GeometryUtils.isValidCoordinate(geometry.coordinates);
 
         case 'LineString':
-          const lineString = geometry as LineString;
-          return lineString.coordinates.length >= 2 &&
-                 lineString.coordinates.every(coord => GeometryUtils.isValidCoordinate(coord));
+          const lineString = geometry;
+          return (
+            lineString.coordinates.length >= 2 &&
+            lineString.coordinates.every((coord) => GeometryUtils.isValidCoordinate(coord))
+          );
 
         case 'Polygon':
-          const polygon = geometry as Polygon;
-          return polygon.coordinates.length > 0 &&
-                 polygon.coordinates.every(ring =>
-                   ring.length >= 4 && // 至少4个点（闭合）
-                   ring.every(coord => GeometryUtils.isValidCoordinate(coord)) &&
-                   this.isRingClosed(ring)
-                 );
+          const polygon = geometry;
+          return (
+            polygon.coordinates.length > 0 &&
+            polygon.coordinates.every(
+              (ring) =>
+                ring.length >= 4 && // 至少4个点（闭合）
+                ring.every((coord) => GeometryUtils.isValidCoordinate(coord)) &&
+                this.isRingClosed(ring),
+            )
+          );
 
         default:
           return true; // 其他类型暂认为有效
@@ -875,15 +897,15 @@ export class SpatialGeometryImpl implements SpatialGeometry {
     // 基本修复
     switch (geometry.type) {
       case 'Point':
-        const point = geometry as Point;
+        const point = geometry;
         return {
           ...point,
-          coordinates: GeometryUtils.normalizeCoordinate(point.coordinates)
+          coordinates: GeometryUtils.normalizeCoordinate(point.coordinates),
         };
 
       case 'Polygon':
-        const polygon = geometry as Polygon;
-        const fixedRings = polygon.coordinates.map(ring => {
+        const polygon = geometry;
+        const fixedRings = polygon.coordinates.map((ring) => {
           if (!this.isRingClosed(ring) && ring.length >= 3) {
             return [...ring, ring[0]]; // 闭合环
           }

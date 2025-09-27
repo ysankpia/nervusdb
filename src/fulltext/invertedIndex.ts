@@ -84,4 +84,3 @@ export class MemoryInvertedIndex implements InvertedIndex {
     return { terms: this.postings.size, indexSize: entries };
   }
 }
-

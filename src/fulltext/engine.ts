@@ -11,24 +11,15 @@ import {
   SearchOptions,
   SearchResult,
   IndexStats,
-  Query
+  Query,
 } from './types.js';
 
-import {
-  StandardAnalyzer,
-  KeywordAnalyzer,
-  NGramAnalyzer,
-  AnalyzerFactory
-} from './analyzer.js';
+import { StandardAnalyzer, KeywordAnalyzer, NGramAnalyzer, AnalyzerFactory } from './analyzer.js';
 
 import { MemoryInvertedIndex } from './invertedIndex.js';
 import { MemoryDocumentCorpus } from './corpus.js';
 
-import {
-  TFIDFScorer,
-  BM25Scorer,
-  ScorerFactory
-} from './scorer.js';
+import { TFIDFScorer, BM25Scorer, ScorerFactory } from './scorer.js';
 
 import { FullTextQueryEngine } from './query.js';
 
@@ -58,14 +49,14 @@ class FullTextIndex {
     this.analyzer = AnalyzerFactory.createAnalyzer(config.analyzer, {
       stemming: config.stemming,
       stopWords: config.stopWords,
-      ngramSize: config.ngramSize
+      ngramSize: config.ngramSize,
     });
     this.scorer = ScorerFactory.createDefaultScorer();
     this.queryEngine = new FullTextQueryEngine(
       this.invertedIndex,
       this.corpus,
       this.scorer,
-      this.analyzer
+      this.analyzer,
     );
   }
 
@@ -96,10 +87,7 @@ class FullTextIndex {
   /**
    * 搜索
    */
-  async search(
-    query: string | Query,
-    options?: SearchOptions
-  ): Promise<SearchResult[]> {
+  async search(query: string | Query, options?: SearchOptions): Promise<SearchResult[]> {
     const queryString = typeof query === 'string' ? query : this.queryToString(query);
     return await this.queryEngine.search(queryString, options);
   }
@@ -122,7 +110,7 @@ class FullTextIndex {
       documentCount: this.documentCount,
       uniqueTerms: indexStats.terms,
       indexSize: indexStats.indexSize,
-      lastUpdated: this.lastUpdated
+      lastUpdated: this.lastUpdated,
     };
   }
 
@@ -143,7 +131,7 @@ class FullTextIndex {
 
     return {
       ...doc,
-      tokens: allTokens
+      tokens: allTokens,
     };
   }
 
@@ -207,7 +195,7 @@ export class FullTextSearchEngineImpl implements FullTextSearchEngine {
   async search(
     indexName: string,
     query: string | Query,
-    options?: SearchOptions
+    options?: SearchOptions,
   ): Promise<SearchResult[]> {
     const index = this.getIndex(indexName);
     return await index.search(query, options);
@@ -216,11 +204,7 @@ export class FullTextSearchEngineImpl implements FullTextSearchEngine {
   /**
    * 搜索建议
    */
-  async suggest(
-    indexName: string,
-    prefix: string,
-    count: number
-  ): Promise<string[]> {
+  async suggest(indexName: string, prefix: string, count: number): Promise<string[]> {
     const index = this.getIndex(indexName);
     return await index.suggest(prefix, count);
   }
@@ -280,7 +264,7 @@ export class FullTextSearchFactory {
       analyzer: 'standard',
       stemming: true,
       stopWords: true,
-      ngramSize: 2
+      ngramSize: 2,
     };
   }
 
@@ -292,9 +276,9 @@ export class FullTextSearchFactory {
       fields,
       language: 'zh',
       analyzer: 'standard',
-      stemming: false,  // 中文不需要词干提取
+      stemming: false, // 中文不需要词干提取
       stopWords: true,
-      ngramSize: 2
+      ngramSize: 2,
     };
   }
 
@@ -308,7 +292,7 @@ export class FullTextSearchFactory {
       analyzer: 'standard',
       stemming: true,
       stopWords: true,
-      ngramSize: 2
+      ngramSize: 2,
     };
   }
 
@@ -319,10 +303,10 @@ export class FullTextSearchFactory {
     return {
       fields,
       language: 'auto',
-      analyzer: 'keyword',  // 使用更快的关键词分析器
-      stemming: false,      // 禁用词干提取以提高速度
-      stopWords: false,     // 禁用停用词过滤
-      ngramSize: 1         // 减少N-gram大小
+      analyzer: 'keyword', // 使用更快的关键词分析器
+      stemming: false, // 禁用词干提取以提高速度
+      stopWords: false, // 禁用停用词过滤
+      ngramSize: 1, // 减少N-gram大小
     };
   }
 }
@@ -343,17 +327,19 @@ export class FullTextBatchProcessor {
   async batchIndex(
     indexName: string,
     documents: Document[],
-    batchSize: number = 1000
+    batchSize: number = 1000,
   ): Promise<void> {
     for (let i = 0; i < documents.length; i += batchSize) {
       const batch = documents.slice(i, i + batchSize);
 
       // 批量处理
-      const promises = batch.map(doc => this.engine.indexDocument(indexName, doc));
+      const promises = batch.map((doc) => this.engine.indexDocument(indexName, doc));
       await Promise.all(promises);
 
       // 进度反馈
-      console.log(`Indexed ${Math.min(i + batchSize, documents.length)} of ${documents.length} documents`);
+      console.log(
+        `Indexed ${Math.min(i + batchSize, documents.length)} of ${documents.length} documents`,
+      );
     }
   }
 
@@ -363,11 +349,9 @@ export class FullTextBatchProcessor {
   async batchSearch(
     indexName: string,
     queries: string[],
-    options?: SearchOptions
+    options?: SearchOptions,
   ): Promise<SearchResult[][]> {
-    const promises = queries.map(query =>
-      this.engine.search(indexName, query, options)
-    );
+    const promises = queries.map((query) => this.engine.search(indexName, query, options));
 
     return await Promise.all(promises);
   }
@@ -377,21 +361,20 @@ export class FullTextBatchProcessor {
  * 搜索性能监控器
  */
 export class SearchPerformanceMonitor {
-  private metrics = new Map<string, {
-    totalQueries: number;
-    totalTime: number;
-    averageTime: number;
-    slowQueries: Array<{ query: string; time: number; timestamp: Date }>;
-  }>();
+  private metrics = new Map<
+    string,
+    {
+      totalQueries: number;
+      totalTime: number;
+      averageTime: number;
+      slowQueries: Array<{ query: string; time: number; timestamp: Date }>;
+    }
+  >();
 
   /**
    * 监控搜索性能
    */
-  async monitorSearch<T>(
-    indexName: string,
-    query: string,
-    searchFn: () => Promise<T>
-  ): Promise<T> {
+  async monitorSearch<T>(indexName: string, query: string, searchFn: () => Promise<T>): Promise<T> {
     const startTime = Date.now();
 
     try {
@@ -415,14 +398,14 @@ export class SearchPerformanceMonitor {
     indexName: string,
     query: string,
     duration: number,
-    isError: boolean = false
+    isError: boolean = false,
   ): void {
     if (!this.metrics.has(indexName)) {
       this.metrics.set(indexName, {
         totalQueries: 0,
         totalTime: 0,
         averageTime: 0,
-        slowQueries: []
+        slowQueries: [],
       });
     }
 
@@ -436,7 +419,7 @@ export class SearchPerformanceMonitor {
       metrics.slowQueries.push({
         query,
         time: duration,
-        timestamp: new Date()
+        timestamp: new Date(),
       });
 
       // 只保留最近的100条慢查询
@@ -466,7 +449,4 @@ export class SearchPerformanceMonitor {
 }
 
 // 导出主要类和工厂
-export {
-  FullTextIndex,
-  FullTextSearchEngineImpl as FullTextSearchEngine
-};
+export { FullTextIndex, FullTextSearchEngineImpl as FullTextSearchEngine };

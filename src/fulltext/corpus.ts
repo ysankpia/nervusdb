@@ -38,4 +38,3 @@ export class MemoryDocumentCorpus implements DocumentCorpus {
     return this.docs.get(docId);
   }
 }
-

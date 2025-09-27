@@ -8,12 +8,7 @@
 export * from './types.js';
 
 // 导出文本分析器
-export {
-  StandardAnalyzer,
-  KeywordAnalyzer,
-  NGramAnalyzer,
-  AnalyzerFactory
-} from './analyzer.js';
+export { StandardAnalyzer, KeywordAnalyzer, NGramAnalyzer, AnalyzerFactory } from './analyzer.js';
 
 // 导出倒排索引和文档语料库
 export { MemoryInvertedIndex } from './invertedIndex.js';
@@ -27,7 +22,7 @@ export {
   TimeDecayScorer,
   CompositeScorer,
   VectorSpaceScorer,
-  ScorerFactory
+  ScorerFactory,
 } from './scorer.js';
 
 // 导出查询引擎
@@ -38,7 +33,7 @@ export {
   PhraseQueryProcessor,
   QueryParser,
   SearchHighlighter,
-  FullTextQueryEngine
+  FullTextQueryEngine,
 } from './query.js';
 
 // 导出主搜索引擎
@@ -47,5 +42,5 @@ export {
   FullTextSearchEngine,
   FullTextSearchFactory,
   FullTextBatchProcessor,
-  SearchPerformanceMonitor
+  SearchPerformanceMonitor,
 } from './engine.js';

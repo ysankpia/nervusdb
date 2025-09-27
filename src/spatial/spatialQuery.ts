@@ -548,9 +548,7 @@ export class SpatialQueryManager {
    * 字段最小值
    */
   private minField(results: SpatialQueryResult[], field: string): number | null {
-    const values = results
-      .map((r) => r.properties?.[field])
-      .filter((v) => typeof v === 'number') as number[];
+    const values = results.map((r) => r.properties?.[field]).filter((v) => typeof v === 'number');
 
     return values.length > 0 ? Math.min(...values) : null;
   }
@@ -559,9 +557,7 @@ export class SpatialQueryManager {
    * 字段最大值
    */
   private maxField(results: SpatialQueryResult[], field: string): number | null {
-    const values = results
-      .map((r) => r.properties?.[field])
-      .filter((v) => typeof v === 'number') as number[];
+    const values = results.map((r) => r.properties?.[field]).filter((v) => typeof v === 'number');
 
     return values.length > 0 ? Math.max(...values) : null;
   }

@@ -10,7 +10,7 @@ import {
   CommunityResult,
   CommunityLevel,
   CommunityDetectionAlgorithm,
-  LouvainOptions
+  LouvainOptions,
 } from './types.js';
 
 /**
@@ -19,12 +19,7 @@ import {
  */
 export class LouvainCommunityDetection implements CommunityDetectionAlgorithm {
   detectCommunities(graph: Graph, options: LouvainOptions = {}): CommunityResult {
-    const {
-      resolution = 1.0,
-      maxIterations = 100,
-      tolerance = 1e-6,
-      randomness = 0.01
-    } = options;
+    const { resolution = 1.0, maxIterations = 100, randomness = 0.01 } = options;
 
     const nodes = graph.getNodes();
     if (nodes.length === 0) {
@@ -32,7 +27,7 @@ export class LouvainCommunityDetection implements CommunityDetectionAlgorithm {
         communities: new Map(),
         hierarchy: [],
         modularity: 0,
-        communityCount: 0
+        communityCount: 0,
       };
     }
 
@@ -55,7 +50,7 @@ export class LouvainCommunityDetection implements CommunityDetectionAlgorithm {
         resolution,
         maxIterations,
         tolerance,
-        randomness
+        randomness,
       );
 
       if (!improved) {
@@ -69,7 +64,7 @@ export class LouvainCommunityDetection implements CommunityDetectionAlgorithm {
       hierarchy.push({
         level,
         communities: new Map(communities),
-        modularity
+        modularity,
       });
 
       // 第二阶段：图折叠
@@ -95,9 +90,10 @@ export class LouvainCommunityDetection implements CommunityDetectionAlgorithm {
     }
 
     // 计算最终结果
-    const finalModularity = hierarchy.length > 0
-      ? hierarchy[hierarchy.length - 1].modularity
-      : this.calculateModularity(graph, communities);
+    const finalModularity =
+      hierarchy.length > 0
+        ? hierarchy[hierarchy.length - 1].modularity
+        : this.calculateModularity(graph, communities);
 
     const communityCount = new Set(communities.values()).size;
 
@@ -105,7 +101,7 @@ export class LouvainCommunityDetection implements CommunityDetectionAlgorithm {
       communities,
       hierarchy,
       modularity: finalModularity,
-      communityCount
+      communityCount,
     };
   }
 
@@ -120,16 +116,17 @@ export class LouvainCommunityDetection implements CommunityDetectionAlgorithm {
     const nodeWeights = new Map<string, number>();
 
     // 计算节点权重
-    graph.getNodes().forEach(node => {
+    graph.getNodes().forEach((node) => {
       const outEdges = graph.getOutEdges(node.id);
       const inEdges = graph.getInEdges(node.id);
-      const weight = outEdges.reduce((sum, edge) => sum + (edge.weight || 1), 0) +
-                    inEdges.reduce((sum, edge) => sum + (edge.weight || 1), 0);
+      const weight =
+        outEdges.reduce((sum, edge) => sum + (edge.weight || 1), 0) +
+        inEdges.reduce((sum, edge) => sum + (edge.weight || 1), 0);
       nodeWeights.set(node.id, weight);
     });
 
     // 计算社区内部权重
-    edges.forEach(edge => {
+    edges.forEach((edge) => {
       const sourceCommunity = communities.get(edge.source);
       const targetCommunity = communities.get(edge.target);
       const weight = edge.weight || 1;
@@ -146,7 +143,7 @@ export class LouvainCommunityDetection implements CommunityDetectionAlgorithm {
     });
 
     // 减去期望值
-    communityWeights.forEach(weight => {
+    communityWeights.forEach((weight) => {
       modularity -= (weight * weight) / (4 * totalWeight);
     });
 
@@ -162,11 +159,11 @@ export class LouvainCommunityDetection implements CommunityDetectionAlgorithm {
     resolution: number,
     maxIterations: number,
     tolerance: number,
-    randomness: number
+    randomness: number,
   ): { newCommunities: Map<string, number>; improved: boolean } {
     console.log('[DEBUG] Louvain: Entering phase one...');
     const nodes = graph.getNodes();
-    let communities = new Map(initialCommunities);
+    const communities = new Map(initialCommunities);
     let improved = false;
 
     for (let iteration = 0; iteration < maxIterations; iteration++) {
@@ -183,7 +180,7 @@ export class LouvainCommunityDetection implements CommunityDetectionAlgorithm {
         const neighborCommunities = new Set<number>();
         const neighbors = graph.getNeighbors(nodeId);
 
-        neighbors.forEach(neighbor => {
+        neighbors.forEach((neighbor) => {
           neighborCommunities.add(communities.get(neighbor.id)!);
         });
 
@@ -200,7 +197,7 @@ export class LouvainCommunityDetection implements CommunityDetectionAlgorithm {
             currentCommunity,
             targetCommunity,
             communities,
-            resolution
+            resolution,
           );
 
           if (gain > bestGain + randomness * Math.random()) {
@@ -235,7 +232,7 @@ export class LouvainCommunityDetection implements CommunityDetectionAlgorithm {
     fromCommunity: number,
     toCommunity: number,
     communities: Map<string, number>,
-    resolution: number
+    resolution: number,
   ): number {
     // 简化的模块度增益计算
     let gain = 0;
@@ -243,8 +240,9 @@ export class LouvainCommunityDetection implements CommunityDetectionAlgorithm {
 
     for (const neighbor of neighbors) {
       const neighborCommunity = communities.get(neighbor.id)!;
-      const edge = graph.getOutEdges(nodeId).find(e => e.target === neighbor.id) ||
-                   graph.getInEdges(nodeId).find(e => e.source === neighbor.id);
+      const edge =
+        graph.getOutEdges(nodeId).find((e) => e.target === neighbor.id) ||
+        graph.getInEdges(nodeId).find((e) => e.source === neighbor.id);
       const weight = edge?.weight || 1;
 
       if (neighborCommunity === toCommunity) {
@@ -272,12 +270,8 @@ export class LouvainCommunityDetection implements CommunityDetectionAlgorithm {
 /**
  * 标签传播算法实现
  */
-export class LabelPropagationCommunityDetection implements CommunityDetectionAlgorithm {
-  detectCommunities(graph: Graph, options: AlgorithmOptions = {}): CommunityResult {
-    const {
-      maxIterations = 100,
-      tolerance = 1e-6
-    } = options;
+  detectCommunities(graph: Graph): CommunityResult {
+    const { maxIterations = 100 } = options;
 
     const nodes = graph.getNodes();
     if (nodes.length === 0) {
@@ -285,7 +279,7 @@ export class LabelPropagationCommunityDetection implements CommunityDetectionAlg
         communities: new Map(),
         hierarchy: [],
         modularity: 0,
-        communityCount: 0
+        communityCount: 0,
       };
     }
 
@@ -314,8 +308,9 @@ export class LabelPropagationCommunityDetection implements CommunityDetectionAlg
           const neighborLabel = labels.get(neighbor.id)!;
 
           // 获取边权重
-          const edge = graph.getOutEdges(nodeId).find(e => e.target === neighbor.id) ||
-                       graph.getInEdges(nodeId).find(e => e.source === neighbor.id);
+          const edge =
+            graph.getOutEdges(nodeId).find((e) => e.target === neighbor.id) ||
+            graph.getInEdges(nodeId).find((e) => e.source === neighbor.id);
           const weight = edge?.weight || 1;
 
           labelCounts.set(neighborLabel, (labelCounts.get(neighborLabel) || 0) + weight);
@@ -367,13 +362,15 @@ export class LabelPropagationCommunityDetection implements CommunityDetectionAlg
 
     return {
       communities,
-      hierarchy: [{
-        level: 0,
-        communities: new Map(communities),
-        modularity
-      }],
+      hierarchy: [
+        {
+          level: 0,
+          communities: new Map(communities),
+          modularity,
+        },
+      ],
       modularity,
-      communityCount
+      communityCount,
     };
   }
 
@@ -394,7 +391,7 @@ export class ConnectedComponentsDetection implements CommunityDetectionAlgorithm
         communities: new Map(),
         hierarchy: [],
         modularity: 0,
-        communityCount: 0
+        communityCount: 0,
       };
     }
 
@@ -414,13 +411,15 @@ export class ConnectedComponentsDetection implements CommunityDetectionAlgorithm
 
     return {
       communities,
-      hierarchy: [{
-        level: 0,
-        communities: new Map(communities),
-        modularity
-      }],
+      hierarchy: [
+        {
+          level: 0,
+          communities: new Map(communities),
+          modularity,
+        },
+      ],
       modularity,
-      communityCount: componentId
+      communityCount: componentId,
     };
   }
 
@@ -434,7 +433,7 @@ export class ConnectedComponentsDetection implements CommunityDetectionAlgorithm
     nodeId: string,
     visited: Set<string>,
     communities: Map<string, number>,
-    componentId: number
+    componentId: number,
   ): void {
     visited.add(nodeId);
     communities.set(nodeId, componentId);
@@ -459,7 +458,7 @@ export class StronglyConnectedComponentsDetection implements CommunityDetectionA
         communities: new Map(),
         hierarchy: [],
         modularity: 0,
-        communityCount: 0
+        communityCount: 0,
       };
     }
 
@@ -493,13 +492,15 @@ export class StronglyConnectedComponentsDetection implements CommunityDetectionA
 
     return {
       communities,
-      hierarchy: [{
-        level: 0,
-        communities: new Map(communities),
-        modularity
-      }],
+      hierarchy: [
+        {
+          level: 0,
+          communities: new Map(communities),
+          modularity,
+        },
+      ],
       modularity,
-      communityCount: componentId
+      communityCount: componentId,
     };
   }
 
@@ -512,15 +513,16 @@ export class StronglyConnectedComponentsDetection implements CommunityDetectionA
     graph: Graph,
     nodeId: string,
     visited: Set<string>,
-    finishOrder: string[]
+    finishOrder: string[],
   ): void {
     visited.add(nodeId);
 
     const neighbors = graph.getNeighbors(nodeId);
     for (const neighbor of neighbors) {
       // 只考虑有向边的出邻居
-      const hasDirectedEdge = graph.getOutEdges(nodeId)
-        .some(edge => edge.target === neighbor.id && edge.directed !== false);
+      const hasDirectedEdge = graph
+        .getOutEdges(nodeId)
+        .some((edge) => edge.target === neighbor.id && edge.directed !== false);
 
       if (hasDirectedEdge && !visited.has(neighbor.id)) {
         this.dfsFinishTime(graph, neighbor.id, visited, finishOrder);
@@ -535,17 +537,17 @@ export class StronglyConnectedComponentsDetection implements CommunityDetectionA
     transposeGraph.clear();
 
     // 添加节点
-    graph.getNodes().forEach(node => {
+    graph.getNodes().forEach((node) => {
       transposeGraph.addNode(node);
     });
 
     // 添加反向边
-    graph.getEdges().forEach(edge => {
+    graph.getEdges().forEach((edge) => {
       if (edge.directed !== false) {
         transposeGraph.addEdge({
           ...edge,
           source: edge.target,
-          target: edge.source
+          target: edge.source,
         });
       } else {
         // 无向边保持不变
@@ -561,7 +563,7 @@ export class StronglyConnectedComponentsDetection implements CommunityDetectionA
     nodeId: string,
     visited: Set<string>,
     communities: Map<string, number>,
-    componentId: number
+    componentId: number,
   ): void {
     visited.add(nodeId);
     communities.set(nodeId, componentId);
@@ -611,7 +613,11 @@ export class CommunityDetectionAlgorithmFactory {
    * 根据类型创建算法实例
    */
   static create(
-    type: 'louvain' | 'label_propagation' | 'connected_components' | 'strongly_connected_components'
+    type:
+      | 'louvain'
+      | 'label_propagation'
+      | 'connected_components'
+      | 'strongly_connected_components',
   ): CommunityDetectionAlgorithm {
     switch (type) {
       case 'louvain':
