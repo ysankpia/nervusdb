@@ -34,7 +34,7 @@ export type BoundingBox3D = [number, number, number, number, number, number]; //
  */
 export interface GeoJSONGeometry {
   type: GeoJSONGeometryType;
-  coordinates: any;
+  coordinates: unknown;
   bbox?: BoundingBox | BoundingBox3D;
 }
 
@@ -112,7 +112,7 @@ export type Geometry =
 export interface Feature {
   type: 'Feature';
   geometry: Geometry | null;
-  properties: Record<string, any> | null;
+  properties: Record<string, unknown> | null;
   id?: string | number;
   bbox?: BoundingBox | BoundingBox3D;
 }
@@ -178,7 +178,7 @@ export interface SpatialQueryResult {
   /** 匹配的几何对象 */
   geometry: Geometry;
   /** 关联的属性 */
-  properties?: Record<string, any>;
+  properties?: Record<string, unknown>;
   /** 距离（如果请求） */
   distance?: number;
   /** 匹配的空间关系 */
@@ -190,7 +190,7 @@ export interface SpatialQueryResult {
  */
 export interface SpatialIndex {
   /** 插入几何对象 */
-  insert(geometry: Geometry, properties?: Record<string, any>): void;
+  insert(geometry: Geometry, properties?: Record<string, unknown>): void;
 
   /** 删除几何对象 */
   remove(geometry: Geometry): boolean;
@@ -263,7 +263,7 @@ export interface RTreeItem {
   /** 关联的几何对象 */
   geometry: Geometry;
   /** 关联的属性 */
-  properties?: Record<string, any>;
+  properties?: Record<string, unknown>;
   /** 唯一标识 */
   id?: string;
 }
@@ -334,16 +334,16 @@ export interface CoordinateReferenceSystem {
  */
 export interface SpatialStore {
   /** 存储空间对象 */
-  store(id: string, geometry: Geometry, properties?: Record<string, any>): void;
+  store(id: string, geometry: Geometry, properties?: Record<string, unknown>): void;
 
   /** 获取空间对象 */
-  get(id: string): { geometry: Geometry; properties?: Record<string, any> } | null;
+  get(id: string): { geometry: Geometry; properties?: Record<string, unknown> } | null;
 
   /** 删除空间对象 */
   delete(id: string): boolean;
 
   /** 更新空间对象 */
-  update(id: string, geometry: Geometry, properties?: Record<string, any>): boolean;
+  update(id: string, geometry: Geometry, properties?: Record<string, unknown>): boolean;
 
   /** 查询所有对象ID */
   keys(): string[];
@@ -383,7 +383,7 @@ export interface GeocodingResult {
   /** 边界框 */
   bbox?: BoundingBox;
   /** 附加属性 */
-  properties?: Record<string, any>;
+  properties?: Record<string, unknown>;
 }
 
 /**
@@ -446,7 +446,7 @@ export interface SpatialAnalysis {
   cluster(
     points: Point[],
     algorithm?: 'dbscan' | 'kmeans',
-    options?: Record<string, any>,
+    options?: Record<string, unknown>,
   ): Point[][];
 
   /** 热力图生成 */

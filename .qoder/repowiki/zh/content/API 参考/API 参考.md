@@ -10,14 +10,23 @@
 - [query/cypher.ts](file://src/query/cypher.ts)
 - [query/graphql/index.ts](file://src/query/graphql/index.ts)
 - [query/gremlin/index.ts](file://src/query/gremlin/index.ts)
+- [types/openOptions.ts](file://src/types/openOptions.ts) - *新增事务与快照相关选项*
 </cite>
+
+## 更新摘要
+**变更内容**   
+- 新增“事务与快照API”章节，详细说明 `beginBatch`、`commitBatch`、`abortBatch` 和 `withSnapshot` 方法
+- 在“核心数据库类 SynapseDB”中补充了事务批次和幂等性配置说明
+- 更新“接口定义摘要”以包含新的事务和快照相关接口
+- 添加 `SynapseDBOpenOptions` 配置项的完整文档
 
 ## 目录
 1. [核心数据库类 SynapseDB](#核心数据库类-synapsedb)
 2. [查询构建器 QueryBuilder](#查询构建器-querybuilder)
 3. [类型安全数据库 TypedSynapseDB](#类型安全数据库-typedsynapsedb)
 4. [高级查询语言支持](#高级查询语言支持)
-5. [接口定义摘要](#接口定义摘要)
+5. [事务与快照API](#事务与快照api)
+6. [接口定义摘要](#接口定义摘要)
 
 ## 核心数据库类 SynapseDB
 
@@ -36,7 +45,7 @@ const db = await SynapseDB.open('./my-database.synapsedb');
 await db.close();
 ```
 
-**Section sources**
+**节来源**
 - [synapseDb.ts](file://src/synapseDb.ts#L57-L915)
 
 ### 添加和删除事实
@@ -58,7 +67,7 @@ db.addFact(
 db.deleteFact({ subject: 'Alice', predicate: 'knows', object: 'Bob' });
 ```
 
-**Section sources**
+**节来源**
 - [synapseDb.ts](file://src/synapseDb.ts#L57-L915)
 
 ### 基本查询操作
@@ -84,8 +93,77 @@ const strongRelations = db.findByEdgeProperty({ propertyName: 'weight', value: 0
 const persons = db.findByLabel('Person').all();
 ```
 
-**Section sources**
+**节来源**
 - [synapseDb.ts](file://src/synapseDb.ts#L57-L915)
+
+### 数据库打开选项
+`SynapseDBOpenOptions` 接口提供了丰富的数据库配置选项：
+
+```typescript
+interface SynapseDBOpenOptions {
+  /**
+   * 索引目录路径
+   * @default `${dbPath}.pages`
+   */
+  indexDirectory?: string;
+
+  /**
+   * 页面大小（三元组数量）
+   * @default 1000
+   */
+  pageSize?: number;
+
+  /**
+   * 是否重建索引
+   * @default false
+   */
+  rebuildIndexes?: boolean;
+
+  /**
+   * 压缩选项
+   * @default { codec: 'none' }
+   */
+  compression?: {
+    codec: 'none' | 'brotli';
+    level?: number;
+  };
+
+  /**
+   * 启用进程级独占写锁
+   * @default false
+   */
+  enableLock?: boolean;
+
+  /**
+   * 注册为读者
+   * @default true（自 v2 起）
+   */
+  registerReader?: boolean;
+
+  /**
+   * 暂存模式
+   * @default 'default'
+   */
+  stagingMode?: 'default' | 'lsm-lite';
+
+  /**
+   * 启用跨周期 txId 幂等去重
+   * @default false
+   */
+  enablePersistentTxDedupe?: boolean;
+
+  /**
+   * 记忆的最大事务 ID 数量
+   * @default 1000
+   */
+  maxRememberTxIds?: number;
+}
+```
+
+这些选项允许精细控制数据库的行为、性能和并发特性。
+
+**节来源**
+- [types/openOptions.ts](file://src/types/openOptions.ts#L1-L153)
 
 ## 查询构建器 QueryBuilder
 
@@ -141,7 +219,7 @@ const employees = db.find({})
   .whereLabel(['Person', 'Employee'], { mode: 'AND', on: 'subject' });
 ```
 
-**Section sources**
+**节来源**
 - [queryBuilder.ts](file://src/query/queryBuilder.ts#L38-L812)
 
 ## 类型安全数据库 TypedSynapseDB
@@ -178,7 +256,7 @@ const result = typedDb.find({ subject: 'Alice' })
 
 这避免了运行时因属性名错误或类型不符导致的问题，提升了开发效率和代码可靠性。
 
-**Section sources**
+**节来源**
 - [typedSynapseDb.ts](file://src/typedSynapseDb.ts#L0-L291)
 - [types/enhanced.ts](file://src/types/enhanced.ts#L141-L215)
 
@@ -235,10 +313,93 @@ const results = await g.V()
   .toList();
 ```
 
-**Section sources**
+**节来源**
 - [query/cypher.ts](file://src/query/cypher.ts#L0-L286)
 - [query/graphql/index.ts](file://src/query/graphql/index.ts#L0-L331)
 - [query/gremlin/index.ts](file://src/query/gremlin/index.ts#L0-L283)
+
+## 事务与快照API
+
+### 事务批次控制
+`SynapseDB` 支持显式的事务批次控制，允许将多个写入操作组合成一个原子批次。
+
+#### 开始批次
+`beginBatch` 方法开始一个新的事务批次，可选地指定 `txId` 和 `sessionId` 用于幂等性控制。
+
+```typescript
+db.beginBatch({ 
+  txId: 'transaction-001', 
+  sessionId: 'writer-instance-A' 
+});
+```
+
+#### 提交批次
+`commitBatch` 方法提交当前批次的所有更改。可通过 `durable` 选项控制持久性保证。
+
+```typescript
+// 提交并确保数据持久化到磁盘
+db.commitBatch({ durable: true });
+```
+
+#### 中止批次
+`abortBatch` 方法回滚当前批次的所有更改。
+
+```typescript
+// 如果发生错误，回滚所有更改
+try {
+  db.beginBatch();
+  db.addFact({ subject: 'A', predicate: 'R', object: 'B' });
+  db.setNodeProperties(nodeId, { status: 'active' });
+  db.commitBatch();
+} catch (error) {
+  db.abortBatch(); // 回滚所有更改
+  throw error;
+}
+```
+
+**节来源**
+- [synapseDb.ts](file://src/synapseDb.ts#L460-L470)
+
+### 读快照一致性
+`withSnapshot` 方法提供读取快照一致性，确保在回调执行期间视图不会漂移。
+
+```typescript
+// 在快照内执行复杂的查询链路
+const result = await db.withSnapshot(async (snap) => {
+  const step1 = snap.find({ predicate: 'knows' }).all();
+  const step2 = snap.find({ predicate: 'worksAt' }).follow('locatedIn').all();
+  return {
+    knowsCount: step1.length,
+    locations: step2.map(r => r.object)
+  };
+});
+```
+
+此机制通过固定 manifest `epoch` 来防止后台 compaction/GC 导致的视图漂移，特别适用于需要一致视图的复杂查询场景。
+
+**节来源**
+- [synapseDb.ts](file://src/synapseDb.ts#L477-L491)
+- [tests/system/snapshot_memory_basic.test.ts](file://tests/system/snapshot_memory_basic.test.ts#L0-L42)
+
+### 事务幂等性（实验性）
+通过配置选项和事务ID实现跨周期的幂等性控制。
+
+```typescript
+// 打开数据库时启用持久化事务ID去重
+const db = await SynapseDB.open('tx.synapsedb', {
+  enablePersistentTxDedupe: true,
+  maxRememberTxIds: 2000
+});
+
+// 使用相同的 txId 进行重试，确保"至多一次"效果
+db.beginBatch({ txId: 'retryable-operation-123' });
+db.addFact({ subject: 'A', predicate: 'R', object: 'X' });
+db.commitBatch();
+```
+
+**节来源**
+- [types/openOptions.ts](file://src/types/openOptions.ts#L120-L153)
+- [README.md](file://README.md#L124-L174)
 
 ## 接口定义摘要
 
@@ -256,6 +417,14 @@ class SynapseDB {
   findByLabel(labels: string | string[]): QueryBuilder;
   cypherQuery(statement: string, parameters?: Record<string, unknown>): Promise<CypherResult>;
   async close(): Promise<void>;
+  
+  // 事务控制
+  beginBatch(options?: BeginBatchOptions): void;
+  commitBatch(options?: CommitBatchOptions): void;
+  abortBatch(): void;
+  
+  // 快照控制
+  async withSnapshot<T>(fn: (db: SynapseDB) => Promise<T> | T): Promise<T>;
 }
 ```
 
@@ -285,8 +454,32 @@ interface TypedSynapseDB<TNodeProps, TEdgeProps> {
 }
 ```
 
+### 批次选项接口
+```typescript
+interface BeginBatchOptions {
+  /** 事务 ID，用于幂等性控制 */
+  txId?: string;
+  /** 会话 ID，用于审计和调试 */
+  sessionId?: string;
+}
+
+interface CommitBatchOptions {
+  /** 持久性保证，true 表示强制同步到磁盘 */
+  durable?: boolean;
+}
+
+interface SynapseDBOpenOptions {
+  /** 启用跨周期 txId 幂等去重 */
+  enablePersistentTxDedupe?: boolean;
+  /** 记忆的最大事务 ID 数量 */
+  maxRememberTxIds?: number;
+  // ... 其他选项
+}
+```
+
 这些接口定义可在对应源码文件中查阅详细信息。
 
-**Section sources**
+**节来源**
 - [index.ts](file://src/index.ts#L0-L113)
 - [types/enhanced.ts](file://src/types/enhanced.ts#L141-L215)
+- [types/openOptions.ts](file://src/types/openOptions.ts#L1-L153)

@@ -463,7 +463,7 @@ export class MemoryGraph implements Graph {
     if (degree < 2) return 0;
 
     let edgeCount = 0;
-    const neighborSet = new Set(neighbors.map((n) => n.id));
+    // const neighborSet = new Set(neighbors.map((n) => n.id)); // 未使用
 
     // 计算邻居间的边数
     for (let i = 0; i < neighbors.length; i++) {
@@ -491,7 +491,7 @@ export class GraphBuilder {
   /**
    * 添加节点
    */
-  addNode(id: string, value?: string, properties?: Record<string, any>): this {
+  addNode(id: string, value?: string, properties?: Record<string, unknown>): this {
     this.graph.addNode({
       id,
       value: value || id,
@@ -508,7 +508,7 @@ export class GraphBuilder {
     target: string,
     type?: string,
     weight?: number,
-    properties?: Record<string, any>,
+    properties?: Record<string, unknown>,
   ): this {
     this.graph.addEdge({
       source,

@@ -110,6 +110,25 @@ docs/
 
 ---
 
+## 子系统 TODO 索引（严格规则下的后续实现）
+
+为便于跟踪“简化/未实现”的技术债，以下子系统增加了细分 TODO：
+
+- 全文检索（fulltext）
+  - [engine.md](./fulltext/engine.md) — Query 序列化完善与性能指标结构化
+  - [synapsedbExtension.md](./fulltext/synapsedbExtension.md) — 扩展初始化显式等待/ready()
+  - [scorer.md](./fulltext/scorer.md) — 评分器组合与配置化增强
+  - [query.md](./fulltext/query.md) — 短语 slop、wildcard/fuzzy、布尔增强
+
+- 空间几何（spatial）
+  - [geometry.md](./spatial/geometry.md) — 严格几何计算、buffer、保拓扑简化
+
+- 图算法（algorithms）
+  - [community.md](./algorithms/community.md) — Louvain 第二阶段折叠图构建
+  - [pathfinding.md](./algorithms/pathfinding.md) — A\* 路径重建与启发式策略
+
+> 说明：上述 TODO 为增量实现计划，均保证对外 API 不破坏；默认行为与现状等价，通过可选参数开启严格/增强模式。
+
 ### 算法优化
 
 - **[ ] 实现 Louvain 算法的图折叠功能 (`buildCommunityGraph`)**

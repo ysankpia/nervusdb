@@ -5,21 +5,20 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { TypedSynapseDB, PersonNode, RelationshipEdge, EntityNode, KnowledgeEdge } from '@/index';
-import { unlink } from 'fs/promises';
+import { join } from 'node:path';
+import { cleanupWorkspace, makeWorkspace } from '../helpers/tempfs';
 
 describe('TypedSynapseDB 类型安全测试', () => {
+  let testDir: string;
   let testDbPath: string;
 
-  beforeEach(() => {
-    testDbPath = `./test-typed-db-${Date.now()}-${Math.random()}.synapsedb`;
+  beforeEach(async () => {
+    testDir = await makeWorkspace('typed');
+    testDbPath = join(testDir, 'db.synapsedb');
   });
 
   afterEach(async () => {
-    try {
-      await unlink(testDbPath);
-    } catch {
-      // 忽略文件不存在的错误
-    }
+    await cleanupWorkspace(testDir);
   });
 
   it('应该支持带类型的数据库创建和基本操作', async () => {
@@ -273,18 +272,16 @@ describe('TypedSynapseDB 类型安全测试', () => {
 });
 
 describe('TypeSafeQueries 辅助函数测试', () => {
+  let testDir: string;
   let testDbPath: string;
 
-  beforeEach(() => {
-    testDbPath = `./test-queries-db-${Date.now()}-${Math.random()}.synapsedb`;
+  beforeEach(async () => {
+    testDir = await makeWorkspace('queries');
+    testDbPath = join(testDir, 'db.synapsedb');
   });
 
   afterEach(async () => {
-    try {
-      await unlink(testDbPath);
-    } catch {
-      // 忽略文件不存在的错误
-    }
+    await cleanupWorkspace(testDir);
   });
 
   it('应该支持类型安全的属性过滤器创建', async () => {

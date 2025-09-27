@@ -4,7 +4,7 @@
  * 提供TF-IDF、BM25等经典相关性评分算法
  */
 
-import { Document, DocumentCorpus, RelevanceScorer, PostingList, InvertedIndex } from './types.js';
+import { Document, DocumentCorpus, RelevanceScorer } from './types.js';
 
 /**
  * TF-IDF相关性评分器
@@ -73,9 +73,11 @@ export class TFIDFScorer implements RelevanceScorer {
     query: string[],
     document: Document,
     corpus: DocumentCorpus,
-    k1?: number,
-    b?: number,
+    _k1?: number,
+    _b?: number,
   ): number {
+    void _k1;
+    void _b;
     // 使用TF-IDF作为fallback
     return this.calculateScore(query, document, corpus);
   }
@@ -461,9 +463,11 @@ export class VectorSpaceScorer implements RelevanceScorer {
     query: string[],
     document: Document,
     corpus: DocumentCorpus,
-    k1?: number,
-    b?: number,
+    _k1?: number,
+    _b?: number,
   ): number {
+    void _k1;
+    void _b;
     // 向量空间模型不使用BM25，返回向量相似度
     return this.calculateScore(query, document, corpus);
   }
@@ -478,7 +482,7 @@ export class ScorerFactory {
    */
   static createScorer(
     type: 'tfidf' | 'bm25' | 'vector' | 'composite',
-    options?: any,
+    options?: { k1?: number; b?: number; scorers?: { scorer: RelevanceScorer; weight: number }[] },
   ): RelevanceScorer {
     switch (type) {
       case 'tfidf':
@@ -494,7 +498,8 @@ export class ScorerFactory {
         return new CompositeScorer(options?.scorers || []);
 
       default:
-        throw new Error(`Unknown scorer type: ${type}`);
+        // 类型已穷尽
+        throw new Error('Unknown scorer type');
     }
   }
 

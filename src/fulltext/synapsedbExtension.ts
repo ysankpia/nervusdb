@@ -14,12 +14,10 @@ import {
 } from './engine.js';
 import type {
   FullTextSearchEngine,
-  FullTextConfig,
   Document,
   SearchOptions,
   SearchResult,
   IndexStats,
-  Query,
 } from './types.js';
 
 /**
@@ -80,7 +78,7 @@ export class SynapseDBFullTextExtension {
       this.performanceMonitor = new SearchPerformanceMonitor();
     }
 
-    this.initializeIndexes();
+    void this.initializeIndexes();
   }
 
   /**
@@ -364,7 +362,7 @@ export class SynapseDBFullTextExtension {
   /**
    * 获取性能报告
    */
-  getPerformanceReport(): any {
+  getPerformanceReport(): { facts: unknown; nodes: unknown; edges: unknown } | null {
     if (!this.performanceMonitor) {
       return null;
     }

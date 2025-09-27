@@ -1,19 +1,20 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { existsSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { join } from 'node:path';
+import { cleanupWorkspace, makeWorkspace } from '../helpers/tempfs';
 import { SynapseDB } from '@/synapseDb';
 
 describe('快照内存优化测试', () => {
   const isCoverage = !!process.env.VITEST_COVERAGE;
-  const testDbPath = './temp-test-snapshot-memory';
+  let testDir: string;
+  let testDbPath: string;
 
   beforeEach(async () => {
-    if (existsSync(testDbPath)) {
-      await rm(testDbPath, { recursive: true, force: true });
-    }
-    if (existsSync(`${testDbPath}.pages`)) {
-      await rm(`${testDbPath}.pages`, { recursive: true, force: true });
-    }
+    testDir = await makeWorkspace('snapshot-memory');
+    testDbPath = join(testDir, 'memdb.synapsedb');
+  });
+
+  afterEach(async () => {
+    await cleanupWorkspace(testDir);
   });
 
   it('快照查询不增加内存占用', async () => {

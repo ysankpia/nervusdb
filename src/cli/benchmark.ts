@@ -8,7 +8,8 @@
 import { Command } from 'commander';
 import { promises as fs } from 'fs';
 import { join } from 'path';
-import { BenchmarkManager, createBenchmarkManager } from '../benchmark/index.js';
+import { createBenchmarkManager } from '../benchmark/index.js';
+import type { BenchmarkReport } from '../benchmark/index.js';
 import {
   allBenchmarkSuites,
   synapseDBCoreSuite,
@@ -32,7 +33,7 @@ function createBenchmarkCLI(): Command {
     .option('-o, --output <dir>', '输出目录', './benchmark-reports')
     .option('-f, --format <formats>', '报告格式 (console,html,json,csv)', 'console,html')
     .option('--no-console', '不显示控制台输出')
-    .action(async (options) => {
+    .action(async (options: { output: string; format: string; console?: boolean }) => {
       try {
         console.log('🚀 启动 SynapseDB 完整基准测试...\n');
 
@@ -76,7 +77,7 @@ function createBenchmarkCLI(): Command {
     .description('运行 SynapseDB 核心功能基准测试')
     .option('-o, --output <dir>', '输出目录', './benchmark-reports')
     .option('-f, --format <formats>', '报告格式 (console,html,json,csv)', 'console')
-    .action(async (options) => {
+    .action(async (options: { output: string; format: string }) => {
       try {
         console.log('🧠 运行 SynapseDB 核心功能测试...\n');
         await runSuiteCommand([synapseDBCoreSuite], options);
@@ -92,7 +93,7 @@ function createBenchmarkCLI(): Command {
     .description('运行全文搜索引擎基准测试')
     .option('-o, --output <dir>', '输出目录', './benchmark-reports')
     .option('-f, --format <formats>', '报告格式 (console,html,json,csv)', 'console')
-    .action(async (options) => {
+    .action(async (options: { output: string; format: string }) => {
       try {
         console.log('🔍 运行全文搜索引擎测试...\n');
         await runSuiteCommand([fullTextSearchSuite], options);
@@ -108,7 +109,7 @@ function createBenchmarkCLI(): Command {
     .description('运行图算法库基准测试')
     .option('-o, --output <dir>', '输出目录', './benchmark-reports')
     .option('-f, --format <formats>', '报告格式 (console,html,json,csv)', 'console')
-    .action(async (options) => {
+    .action(async (options: { output: string; format: string }) => {
       try {
         console.log('📊 运行图算法库测试...\n');
         await runSuiteCommand([graphAlgorithmsSuite], options);
@@ -124,7 +125,7 @@ function createBenchmarkCLI(): Command {
     .description('运行空间几何计算基准测试')
     .option('-o, --output <dir>', '输出目录', './benchmark-reports')
     .option('-f, --format <formats>', '报告格式 (console,html,json,csv)', 'console')
-    .action(async (options) => {
+    .action(async (options: { output: string; format: string }) => {
       try {
         console.log('🗺️ 运行空间几何计算测试...\n');
         await runSuiteCommand([spatialGeometrySuite], options);
@@ -141,17 +142,17 @@ function createBenchmarkCLI(): Command {
     .requiredOption('-b, --baseline <file>', '基线报告文件 (JSON格式)')
     .option('-t, --threshold <percent>', '性能退化阈值 (百分比)', '10')
     .option('-o, --output <dir>', '输出目录', './benchmark-reports')
-    .action(async (options) => {
+    .action(async (options: { baseline: string; threshold?: string; output: string }) => {
       try {
         console.log('📈 运行性能回归检测...\n');
 
         // 读取基线报告
         const baselineContent = await fs.readFile(options.baseline, 'utf8');
-        const baselineReport = JSON.parse(baselineContent);
+        const baselineReport = JSON.parse(baselineContent) as unknown as BenchmarkReport;
 
         const manager = createBenchmarkManager();
         const regressions = await manager.runRegressionTest(baselineReport, {
-          regressionThreshold: parseFloat(options.threshold),
+          regressionThreshold: parseFloat(options.threshold ?? '10'),
         });
 
         // 分析回归结果
@@ -221,86 +222,93 @@ function createBenchmarkCLI(): Command {
     .option('-o, --operations <count>', '每次迭代的操作数', '1000')
     .option('-t, --threshold <bytes>', '内存增长阈值 (字节)', '10485760') // 10MB
     .option('--force-gc', '强制垃圾回收')
-    .action(async (options) => {
-      try {
-        console.log('🧠 运行内存泄漏检测...\n');
+    .action(
+      async (options: {
+        iterations: string;
+        operations: string;
+        threshold: string;
+        forceGc?: boolean;
+      }) => {
+        try {
+          console.log('🧠 运行内存泄漏检测...\n');
 
-        const iterations = parseInt(options.iterations);
-        const operationsPerIteration = parseInt(options.operations);
-        const memoryGrowthThreshold = parseInt(options.threshold);
-        const forceGC = options.forceGc;
+          const iterations = parseInt(options.iterations);
+          const operationsPerIteration = parseInt(options.operations);
+          const memoryGrowthThreshold = parseInt(options.threshold);
+          const forceGC = options.forceGc;
 
-        console.log(`配置: ${iterations} 迭代, 每次 ${operationsPerIteration} 操作`);
-        console.log(`内存增长阈值: ${(memoryGrowthThreshold / 1024 / 1024).toFixed(1)}MB\n`);
+          console.log(`配置: ${iterations} 迭代, 每次 ${operationsPerIteration} 操作`);
+          console.log(`内存增长阈值: ${(memoryGrowthThreshold / 1024 / 1024).toFixed(1)}MB\n`);
 
-        const memoryProgression: number[] = [];
+          const memoryProgression: number[] = [];
 
-        // 强制垃圾回收
-        if (forceGC && global.gc) {
-          global.gc();
-        }
-
-        const initialMemory = process.memoryUsage().heapUsed;
-        memoryProgression.push(initialMemory);
-
-        // 模拟内存泄漏检测（这里需要实际的测试逻辑）
-        for (let i = 0; i < iterations; i++) {
-          // 这里应该运行实际的操作
-          // 暂时使用模拟数据
-          await new Promise((resolve) => setTimeout(resolve, 10));
-
+          // 强制垃圾回收
           if (forceGC && global.gc) {
             global.gc();
           }
 
-          const currentMemory = process.memoryUsage().heapUsed;
-          memoryProgression.push(currentMemory);
+          const initialMemory = process.memoryUsage().heapUsed;
+          memoryProgression.push(initialMemory);
 
-          if ((i + 1) % 10 === 0) {
-            const memoryIncrease = currentMemory - initialMemory;
-            console.log(
-              `迭代 ${i + 1}/${iterations}: 内存增长 ${(memoryIncrease / 1024 / 1024).toFixed(2)}MB`,
-            );
+          // 模拟内存泄漏检测（这里需要实际的测试逻辑）
+          for (let i = 0; i < iterations; i++) {
+            // 这里应该运行实际的操作
+            // 暂时使用模拟数据
+            await new Promise((resolve) => setTimeout(resolve, 10));
+
+            if (forceGC && global.gc) {
+              global.gc();
+            }
+
+            const currentMemory = process.memoryUsage().heapUsed;
+            memoryProgression.push(currentMemory);
+
+            if ((i + 1) % 10 === 0) {
+              const memoryIncrease = currentMemory - initialMemory;
+              console.log(
+                `迭代 ${i + 1}/${iterations}: 内存增长 ${(memoryIncrease / 1024 / 1024).toFixed(2)}MB`,
+              );
+            }
           }
-        }
 
-        const finalMemory = memoryProgression[memoryProgression.length - 1];
-        const memoryGrowth = finalMemory - initialMemory;
-        const hasLeak = memoryGrowth > memoryGrowthThreshold;
+          const finalMemory = memoryProgression[memoryProgression.length - 1];
+          const memoryGrowth = finalMemory - initialMemory;
+          const hasLeak = memoryGrowth > memoryGrowthThreshold;
 
-        // 分析增长趋势
-        let growthTrend: 'increasing' | 'stable' | 'decreasing' = 'stable';
-        if (memoryProgression.length > 10) {
-          const firstHalf = memoryProgression.slice(0, Math.floor(memoryProgression.length / 2));
-          const secondHalf = memoryProgression.slice(Math.floor(memoryProgression.length / 2));
+          // 分析增长趋势
+          let growthTrend: 'increasing' | 'stable' | 'decreasing' = 'stable';
+          if (memoryProgression.length > 10) {
+            const firstHalf = memoryProgression.slice(0, Math.floor(memoryProgression.length / 2));
+            const secondHalf = memoryProgression.slice(Math.floor(memoryProgression.length / 2));
 
-          const firstHalfAvg = firstHalf.reduce((sum, val) => sum + val, 0) / firstHalf.length;
-          const secondHalfAvg = secondHalf.reduce((sum, val) => sum + val, 0) / secondHalf.length;
+            const firstHalfAvg = firstHalf.reduce((sum, val) => sum + val, 0) / firstHalf.length;
+            const secondHalfAvg = secondHalf.reduce((sum, val) => sum + val, 0) / secondHalf.length;
 
-          if (secondHalfAvg > firstHalfAvg * 1.1) {
-            growthTrend = 'increasing';
-          } else if (secondHalfAvg < firstHalfAvg * 0.9) {
-            growthTrend = 'decreasing';
+            if (secondHalfAvg > firstHalfAvg * 1.1) {
+              growthTrend = 'increasing';
+            } else if (secondHalfAvg < firstHalfAvg * 0.9) {
+              growthTrend = 'decreasing';
+            }
           }
-        }
 
-        console.log('\n📊 内存泄漏检测结果:');
-        console.log(`初始内存: ${(initialMemory / 1024 / 1024).toFixed(2)}MB`);
-        console.log(`最终内存: ${(finalMemory / 1024 / 1024).toFixed(2)}MB`);
-        console.log(`内存增长: ${(memoryGrowth / 1024 / 1024).toFixed(2)}MB`);
-        console.log(
-          `增长趋势: ${growthTrend === 'increasing' ? '📈 递增' : growthTrend === 'decreasing' ? '📉 递减' : '📊 稳定'}`,
-        );
-        console.log(`检测结果: ${hasLeak ? '⚠️ 检测到可能的内存泄漏' : '✅ 未检测到内存泄漏'}`);
+          console.log('\n📊 内存泄漏检测结果:');
+          console.log(`初始内存: ${(initialMemory / 1024 / 1024).toFixed(2)}MB`);
+          console.log(`最终内存: ${(finalMemory / 1024 / 1024).toFixed(2)}MB`);
+          console.log(`内存增长: ${(memoryGrowth / 1024 / 1024).toFixed(2)}MB`);
+          console.log(
+            `增长趋势: ${growthTrend === 'increasing' ? '📈 递增' : growthTrend === 'decreasing' ? '📉 递减' : '📊 稳定'}`,
+          );
+          console.log(`检测结果: ${hasLeak ? '⚠️ 检测到可能的内存泄漏' : '✅ 未检测到内存泄漏'}`);
 
-        if (hasLeak) {
+          if (hasLeak) {
+            process.exit(1);
+          }
+        } catch (error) {
+          console.error('❌ 内存泄漏检测失败:', error);
           process.exit(1);
         }
-      } catch (error) {
-        console.error('❌ 内存泄漏检测失败:', error);
-        process.exit(1);
-      }
-    });
+      },
+    );
 
   return program;
 }
@@ -308,11 +316,14 @@ function createBenchmarkCLI(): Command {
 /**
  * 运行测试套件的通用函数
  */
-async function runSuiteCommand(suites: any[], options: any) {
+async function runSuiteCommand(
+  suites: import('../benchmark/types.js').BenchmarkSuite[],
+  options: { output: string; format: string },
+) {
   const formats = options.format.split(',') as ('console' | 'html' | 'json' | 'csv')[];
 
   const manager = createBenchmarkManager();
-  const { report, outputs } = await manager.benchmark({
+  const { outputs } = await manager.benchmark({
     suites,
     outputFormats: formats,
     outputDir: options.output,

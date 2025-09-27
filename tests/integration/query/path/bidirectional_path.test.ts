@@ -5,8 +5,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdir, rm } from 'fs/promises';
-import { join } from 'path';
+import { join } from 'node:path';
+import { cleanupWorkspace, makeWorkspace } from '../../../helpers/tempfs';
 
 import { SynapseDB } from '@/synapseDb';
 import { SimpleBidirectionalPathBuilder } from '@/query/path/bidirectionalSimple';
@@ -18,13 +18,7 @@ describe('双向 BFS 路径查询', () => {
   let store: any;
 
   beforeEach(async () => {
-    testDir = join(
-      process.cwd(),
-      'temp',
-      `bidirectional-test-${Date.now()}-${Math.random().toString(36).substring(7)}`,
-    );
-    await mkdir(testDir, { recursive: true });
-
+    testDir = await makeWorkspace('bibfs');
     db = await SynapseDB.open(join(testDir, 'test.synapsedb'));
     store = (db as any).store;
 
@@ -34,7 +28,7 @@ describe('双向 BFS 路径查询', () => {
 
   afterEach(async () => {
     await db.close();
-    await rm(testDir, { recursive: true });
+    await cleanupWorkspace(testDir);
   });
 
   async function setupLinearGraph() {

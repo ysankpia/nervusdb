@@ -5,8 +5,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdir, rm } from 'fs/promises';
-import { join } from 'path';
+import { join } from 'node:path';
+import { cleanupWorkspace, makeWorkspace } from '../../../helpers/tempfs';
 
 import { SynapseDB } from '@/synapseDb';
 import {
@@ -23,13 +23,8 @@ describe('A*启发式搜索算法', () => {
   let store: any;
 
   beforeEach(async () => {
-    testDir = join(
-      process.cwd(),
-      'temp',
-      `astar-test-${Date.now()}-${Math.random().toString(36).substring(7)}`,
-    );
-    await mkdir(testDir, { recursive: true });
-
+    // 统一使用测试助手创建临时工作区
+    testDir = await makeWorkspace('astar');
     db = await SynapseDB.open(join(testDir, 'test.synapsedb'));
     store = (db as any).store;
 
@@ -39,7 +34,7 @@ describe('A*启发式搜索算法', () => {
 
   afterEach(async () => {
     await db.close();
-    await rm(testDir, { recursive: true });
+    await cleanupWorkspace(testDir);
   });
 
   async function setupTestGraph() {

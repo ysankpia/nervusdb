@@ -177,7 +177,11 @@ export class RTree implements SpatialIndex {
   /**
    * 创建新节点
    */
-  private createNode(children: any[], height: number, leaf: boolean): RTreeNode {
+  private createNode(
+    children: RTreeNode[] | RTreeItem[],
+    height: number,
+    leaf: boolean,
+  ): RTreeNode {
     return {
       bbox: [Infinity, Infinity, -Infinity, -Infinity],
       children,
@@ -189,7 +193,7 @@ export class RTree implements SpatialIndex {
   /**
    * 插入几何对象
    */
-  insert(geometry: Geometry, properties?: Record<string, any>): void {
+  insert(geometry: Geometry, properties?: Record<string, unknown>): void {
     const bbox = BboxUtils.fromGeometry(geometry);
     const item: RTreeItem = {
       bbox,
@@ -794,7 +798,11 @@ export class RTree implements SpatialIndex {
    * 反序列化索引（用于加载）
    */
   static deserialize(data: string): RTree {
-    const parsed = JSON.parse(data);
+    const parsed = JSON.parse(data) as {
+      root: RTreeNode;
+      config: RTreeConfig;
+      itemCount: number;
+    };
     const rtree = new RTree(parsed.config);
     rtree.root = parsed.root;
     rtree.itemCount = parsed.itemCount;

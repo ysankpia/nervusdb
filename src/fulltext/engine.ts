@@ -14,12 +14,12 @@ import {
   Query,
 } from './types.js';
 
-import { StandardAnalyzer, KeywordAnalyzer, NGramAnalyzer, AnalyzerFactory } from './analyzer.js';
+import { AnalyzerFactory } from './analyzer.js';
 
 import { MemoryInvertedIndex } from './invertedIndex.js';
 import { MemoryDocumentCorpus } from './corpus.js';
 
-import { TFIDFScorer, BM25Scorer, ScorerFactory } from './scorer.js';
+import { ScorerFactory } from './scorer.js';
 
 import { FullTextQueryEngine } from './query.js';
 
@@ -31,8 +31,8 @@ class FullTextIndex {
   public readonly config: FullTextConfig;
   public readonly invertedIndex: MemoryInvertedIndex;
   public readonly corpus: MemoryDocumentCorpus;
-  public readonly analyzer: any;
-  public readonly scorer: any;
+  public readonly analyzer: import('./types.js').TextAnalyzer;
+  public readonly scorer: import('./types.js').RelevanceScorer;
   public readonly queryEngine: FullTextQueryEngine;
 
   private documentCount = 0;
@@ -87,9 +87,9 @@ class FullTextIndex {
   /**
    * 搜索
    */
-  async search(query: string | Query, options?: SearchOptions): Promise<SearchResult[]> {
+  search(query: string | Query, options?: SearchOptions): Promise<SearchResult[]> {
     const queryString = typeof query === 'string' ? query : this.queryToString(query);
-    return await this.queryEngine.search(queryString, options);
+    return Promise.resolve(this.queryEngine.search(queryString, options));
   }
 
   /**
@@ -118,7 +118,7 @@ class FullTextIndex {
    * 分析文档内容
    */
   private analyzeDocument(doc: Document): Document {
-    const allTokens: any[] = [];
+    const allTokens: import('./types.js').Token[] = [];
 
     // 分析每个字段
     for (const [fieldName, fieldContent] of doc.fields) {
@@ -153,68 +153,72 @@ export class FullTextSearchEngineImpl implements FullTextSearchEngine {
   /**
    * 创建全文索引
    */
-  async createIndex(name: string, config: FullTextConfig): Promise<void> {
+  createIndex(name: string, config: FullTextConfig): Promise<void> {
     if (this.indexes.has(name)) {
       throw new Error(`Index '${name}' already exists`);
     }
 
     const index = new FullTextIndex(name, config);
     this.indexes.set(name, index);
+    return Promise.resolve();
   }
 
   /**
    * 删除全文索引
    */
-  async dropIndex(name: string): Promise<void> {
+  dropIndex(name: string): Promise<void> {
     if (!this.indexes.has(name)) {
       throw new Error(`Index '${name}' does not exist`);
     }
 
     this.indexes.delete(name);
+    return Promise.resolve();
   }
 
   /**
    * 添加文档到索引
    */
-  async indexDocument(indexName: string, doc: Document): Promise<void> {
+  indexDocument(indexName: string, doc: Document): Promise<void> {
     const index = this.getIndex(indexName);
     index.indexDocument(doc);
+    return Promise.resolve();
   }
 
   /**
    * 从索引中删除文档
    */
-  async removeDocument(indexName: string, docId: string): Promise<void> {
+  removeDocument(indexName: string, docId: string): Promise<void> {
     const index = this.getIndex(indexName);
     index.removeDocument(docId);
+    return Promise.resolve();
   }
 
   /**
    * 执行搜索
    */
-  async search(
+  search(
     indexName: string,
     query: string | Query,
     options?: SearchOptions,
   ): Promise<SearchResult[]> {
     const index = this.getIndex(indexName);
-    return await index.search(query, options);
+    return Promise.resolve(index.search(query, options));
   }
 
   /**
    * 搜索建议
    */
-  async suggest(indexName: string, prefix: string, count: number): Promise<string[]> {
+  suggest(indexName: string, prefix: string, count: number): Promise<string[]> {
     const index = this.getIndex(indexName);
-    return await index.suggest(prefix, count);
+    return Promise.resolve(index.suggest(prefix, count));
   }
 
   /**
    * 获取索引统计信息
    */
-  async getIndexStats(indexName: string): Promise<IndexStats> {
+  getIndexStats(indexName: string): Promise<IndexStats> {
     const index = this.getIndex(indexName);
-    return index.getStats();
+    return Promise.resolve(index.getStats());
   }
 
   /**
@@ -400,6 +404,7 @@ export class SearchPerformanceMonitor {
     duration: number,
     isError: boolean = false,
   ): void {
+    void isError;
     if (!this.metrics.has(indexName)) {
       this.metrics.set(indexName, {
         totalQueries: 0,
@@ -432,7 +437,7 @@ export class SearchPerformanceMonitor {
   /**
    * 获取性能报告
    */
-  getPerformanceReport(indexName: string): any {
+  getPerformanceReport(indexName: string): unknown {
     return this.metrics.get(indexName) || null;
   }
 

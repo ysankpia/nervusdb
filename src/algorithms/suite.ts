@@ -23,38 +23,13 @@ import {
 import { MemoryGraph, GraphBuilder } from './graph.js';
 
 // 导入算法实现
-import {
-  PageRankCentrality,
-  BetweennessCentrality,
-  ClosenessCentrality,
-  DegreeCentrality,
-  EigenvectorCentrality,
-  CentralityAlgorithmFactory,
-} from './centrality.js';
+import { CentralityAlgorithmFactory } from './centrality.js';
 
-import {
-  LouvainCommunityDetection,
-  LabelPropagationCommunityDetection,
-  ConnectedComponentsDetection,
-  StronglyConnectedComponentsDetection,
-  CommunityDetectionAlgorithmFactory,
-} from './community.js';
+import { CommunityDetectionAlgorithmFactory } from './community.js';
 
-import {
-  DijkstraPathAlgorithm,
-  AStarPathAlgorithm,
-  FloydWarshallPathAlgorithm,
-  BellmanFordPathAlgorithm,
-  PathAlgorithmFactory,
-} from './pathfinding.js';
+import { PathAlgorithmFactory } from './pathfinding.js';
 
-import {
-  JaccardSimilarity,
-  CosineSimilarity,
-  AdamicAdarSimilarity,
-  PreferentialAttachmentSimilarity,
-  SimilarityAlgorithmFactory,
-} from './similarity.js';
+import { SimilarityAlgorithmFactory } from './similarity.js';
 
 /**
  * 图算法套件实现类
@@ -69,7 +44,8 @@ export class GraphAlgorithmSuiteImpl implements GraphAlgorithmSuite {
       return algorithm.compute(this.graph, options);
     },
 
-    betweenness: (options?: AlgorithmOptions): CentralityResult => {
+    betweenness: (_options?: AlgorithmOptions): CentralityResult => {
+      void _options;
       const algorithm = CentralityAlgorithmFactory.createBetweenness();
       return algorithm.compute(this.graph);
     },
@@ -79,7 +55,8 @@ export class GraphAlgorithmSuiteImpl implements GraphAlgorithmSuite {
       return algorithm.compute(this.graph, options);
     },
 
-    degree: (options?: AlgorithmOptions): CentralityResult => {
+    degree: (_options?: AlgorithmOptions): CentralityResult => {
+      void _options;
       const algorithm = CentralityAlgorithmFactory.createDegree();
       return algorithm.compute(this.graph);
     },
@@ -263,7 +240,6 @@ export class GraphAlgorithmSuiteImpl implements GraphAlgorithmSuite {
    * 寻找关节点（割点）
    */
   private findArticulationNodes(): string[] {
-    const articulationPoints: string[] = [];
     const visited = new Set<string>();
     const disc = new Map<string, number>();
     const low = new Map<string, number>();
@@ -449,7 +425,6 @@ export class GraphAlgorithmUtils {
   static fromEdgeList(
     edges: Array<{ source: string; target: string; type?: string; weight?: number }>,
   ): Graph {
-    const graph = new MemoryGraph();
     const builder = new GraphBuilder();
 
     for (const edge of edges) {
@@ -506,7 +481,7 @@ export class GraphAlgorithmUtils {
     const suite = new GraphAlgorithmSuiteImpl(graph);
     const results: Record<string, number> = {};
 
-    const benchmarkAlgorithm = (name: string, fn: () => any) => {
+    const benchmarkAlgorithm = (name: string, fn: () => unknown) => {
       const start = performance.now();
       fn();
       const end = performance.now();

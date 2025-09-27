@@ -5,16 +5,7 @@
  * 以及针对SynapseDB优化的路径搜索实现
  */
 
-import {
-  Graph,
-  PathAlgorithm,
-  PathOptions,
-  Path,
-  ShortestPathResult,
-  AlgorithmOptions,
-  GraphEdge,
-  GraphNode,
-} from './types.js';
+import { Graph, PathAlgorithm, PathOptions, Path, ShortestPathResult, GraphEdge } from './types.js';
 
 /**
  * Dijkstra 最短路径算法实现
@@ -67,6 +58,7 @@ export class DijkstraPathAlgorithm implements PathAlgorithm {
     paths.set(source, { nodes: [source], edges: [], length: 0, weight: 0 });
     priorityQueue.enqueue({ nodeId: source, distance: 0 });
 
+    // 统计信息（用于返回）
     let nodesVisited = 0;
     let edgesExamined = 0;
     const startTime = performance.now();
@@ -181,13 +173,10 @@ export class AStarPathAlgorithm implements PathAlgorithm {
       path: { nodes: [source], edges: [], length: 0, weight: 0 },
     });
 
-    let nodesVisited = 0;
-    let edgesExamined = 0;
-    const startTime = performance.now();
+    // 统计信息由上层统一计算，此处不单独记录
 
     while (!openSet.isEmpty()) {
       const current = openSet.dequeue()!;
-      nodesVisited++;
 
       if (current.nodeId === target) {
         // 找到目标，重建路径
@@ -208,7 +197,7 @@ export class AStarPathAlgorithm implements PathAlgorithm {
       // 检查邻居节点
       const outEdges = graph.getOutEdges(current.nodeId);
       for (const edge of outEdges) {
-        edgesExamined++;
+        // 处理邻居
         const neighborId = edge.target;
 
         if (closedSet.has(neighborId)) {
@@ -252,6 +241,9 @@ export class AStarPathAlgorithm implements PathAlgorithm {
     cameFrom: Map<string, { nodeId: string; edge: GraphEdge }>,
     source: string,
   ): Path {
+    // 当前实现直接返回构建中的路径，参数保留用于后续真实重建
+    void cameFrom;
+    void source;
     return goalNode.path;
   }
 
@@ -300,7 +292,7 @@ export class FloydWarshallPathAlgorithm implements PathAlgorithm {
 
   findShortestPaths(graph: Graph, source: string, options: PathOptions = {}): ShortestPathResult {
     const allPairs = this.findAllShortestPaths(graph, options);
-    const distances = allPairs.get(source) || new Map();
+    const distances: Map<string, number> = allPairs.get(source) || new Map<string, number>();
     const paths = new Map<string, Path>();
 
     // 构建路径映射
@@ -334,9 +326,7 @@ export class FloydWarshallPathAlgorithm implements PathAlgorithm {
     const n = nodeList.length;
 
     // 初始化距离矩阵
-    const dist: number[][] = Array(n)
-      .fill(null)
-      .map(() => Array(n).fill(Infinity));
+    const dist: number[][] = Array.from({ length: n }, () => new Array<number>(n).fill(Infinity));
     const nodeIndexMap = new Map<string, number>();
 
     nodeList.forEach((nodeId, index) => {
@@ -530,13 +520,8 @@ export class BellmanFordPathAlgorithm implements PathAlgorithm {
 
     // 对每个节点运行Bellman-Ford算法
     for (const node of nodes) {
-      try {
-        const result = this.findShortestPaths(graph, node.id, options);
-        allPairsDistances.set(node.id, result.distances);
-      } catch (error) {
-        // 如果检测到负权重回路，可以选择跳过或抛出错误
-        throw error;
-      }
+      const result = this.findShortestPaths(graph, node.id, options);
+      allPairsDistances.set(node.id, result.distances);
     }
 
     return allPairsDistances;
@@ -675,7 +660,8 @@ export class PathAlgorithmFactory {
       case 'bellman':
         return this.createBellmanFord();
       default:
-        throw new Error(`未知的路径算法类型: ${type}`);
+        // 理论上不可达，类型已穷尽
+        throw new Error('未知的路径算法类型');
     }
   }
 

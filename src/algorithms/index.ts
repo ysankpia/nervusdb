@@ -57,8 +57,17 @@ export {
   GraphAlgorithms,
 } from './suite.js';
 
-// 便捷API
-export const createGraph = () => new (require('./graph').MemoryGraph)();
-export const createGraphBuilder = () => new (require('./graph').GraphBuilder)();
-export const createAlgorithmSuite = (graph: any) =>
-  new (require('./suite').GraphAlgorithmSuiteImpl)(graph);
+// 便捷API（使用 ESM 静态导入，提供类型安全）
+import { MemoryGraph, GraphBuilder } from './graph.js';
+import type { Graph } from './types.js';
+import { GraphAlgorithmSuiteImpl } from './suite.js';
+
+/** 创建内存图实例 */
+export const createGraph = (): MemoryGraph => new MemoryGraph();
+
+/** 创建图构建器 */
+export const createGraphBuilder = (): GraphBuilder => new GraphBuilder();
+
+/** 创建算法套件（绑定图实例） */
+export const createAlgorithmSuite = (graph: Graph): GraphAlgorithmSuiteImpl =>
+  new GraphAlgorithmSuiteImpl(graph);

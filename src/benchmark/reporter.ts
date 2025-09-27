@@ -4,14 +4,7 @@
  * 提供多种格式的性能测试报告输出
  */
 
-import {
-  BenchmarkReport,
-  BenchmarkResult,
-  BenchmarkReporter,
-  RegressionResult,
-  BenchmarkSummary,
-  EnvironmentInfo,
-} from './types.js';
+import { BenchmarkReport, BenchmarkResult, BenchmarkReporter } from './types.js';
 import { BenchmarkUtils } from './runner.js';
 
 /**

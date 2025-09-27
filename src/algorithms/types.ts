@@ -11,7 +11,7 @@ export interface GraphNode {
   /** 节点值/标签 */
   value: string;
   /** 节点属性 */
-  properties?: Record<string, any>;
+  properties?: Record<string, unknown>;
   /** 节点标签 */
   labels?: string[];
 }
@@ -27,7 +27,7 @@ export interface GraphEdge {
   /** 边权重 */
   weight?: number;
   /** 边属性 */
-  properties?: Record<string, any>;
+  properties?: Record<string, unknown>;
   /** 是否有向边 */
   directed?: boolean;
 }
@@ -195,7 +195,7 @@ export interface AlgorithmOptions {
   /** 随机种子 */
   seed?: number;
   /** 算法特定参数 */
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 // PageRank 算法选项
@@ -359,7 +359,7 @@ export interface AlgorithmResult<T> {
   metadata: {
     algorithm: string;
     version: string;
-    parameters: Record<string, any>;
+    parameters: Record<string, unknown>;
   };
 }
 

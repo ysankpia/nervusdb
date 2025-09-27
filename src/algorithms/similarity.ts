@@ -4,14 +4,7 @@
  * 提供各种图节点相似度计算方法，包括结构相似度和语义相似度
  */
 
-import {
-  Graph,
-  SimilarityAlgorithm,
-  SimilarityResult,
-  AlgorithmOptions,
-  GraphNode,
-  GraphEdge,
-} from './types.js';
+import { Graph, SimilarityAlgorithm, SimilarityResult } from './types.js';
 
 /**
  * Jaccard相似度算法实现
@@ -495,8 +488,10 @@ export class NodeAttributeSimilarity implements SimilarityAlgorithm {
     }
 
     // 基于属性计算相似度
-    const props1 = nodeObj1.properties || {};
-    const props2 = nodeObj2.properties || {};
+    let props1: Record<string, unknown> = {};
+    let props2: Record<string, unknown> = {};
+    if (nodeObj1.properties) props1 = nodeObj1.properties;
+    if (nodeObj2.properties) props2 = nodeObj2.properties;
 
     const allKeys = new Set([...Object.keys(props1), ...Object.keys(props2)]);
     if (allKeys.size === 0) return 0;
@@ -527,9 +522,9 @@ export class NodeAttributeSimilarity implements SimilarityAlgorithm {
   }
 
   private levenshteinDistance(str1: string, str2: string): number {
-    const matrix = Array(str2.length + 1)
-      .fill(null)
-      .map(() => Array(str1.length + 1).fill(null));
+    const rows = str2.length + 1;
+    const cols = str1.length + 1;
+    const matrix: number[][] = Array.from({ length: rows }, () => new Array<number>(cols).fill(0));
 
     for (let i = 0; i <= str1.length; i++) matrix[0][i] = i;
     for (let j = 0; j <= str2.length; j++) matrix[j][0] = j;
@@ -548,7 +543,7 @@ export class NodeAttributeSimilarity implements SimilarityAlgorithm {
     return matrix[str2.length][str1.length];
   }
 
-  private valueSimilarity(val1: any, val2: any): number {
+  private valueSimilarity(val1: unknown, val2: unknown): number {
     if (val1 === val2) return 1.0;
 
     const type1 = typeof val1;
@@ -556,24 +551,26 @@ export class NodeAttributeSimilarity implements SimilarityAlgorithm {
 
     if (type1 !== type2) return 0;
 
-    if (type1 === 'string') {
-      return this.stringSimilarity(val1, val2);
+    if (type1 === 'string' && type2 === 'string') {
+      return this.stringSimilarity(val1 as string, val2 as string);
     }
 
-    if (type1 === 'number') {
-      const maxVal = Math.max(Math.abs(val1), Math.abs(val2));
+    if (type1 === 'number' && type2 === 'number') {
+      const v1 = val1 as number;
+      const v2 = val2 as number;
+      const maxVal = Math.max(Math.abs(v1), Math.abs(v2));
       if (maxVal === 0) return 1.0;
-      return 1 - Math.abs(val1 - val2) / maxVal;
+      return 1 - Math.abs(v1 - v2) / maxVal;
     }
 
     if (Array.isArray(val1) && Array.isArray(val2)) {
-      return this.arraySimilarity(val1, val2);
+      return this.arraySimilarity(val1 as unknown[], val2 as unknown[]);
     }
 
     return 0;
   }
 
-  private arraySimilarity(arr1: any[], arr2: any[]): number {
+  private arraySimilarity(arr1: unknown[], arr2: unknown[]): number {
     const set1 = new Set(arr1);
     const set2 = new Set(arr2);
     const intersection = new Set([...set1].filter((x) => set2.has(x)));
@@ -705,7 +702,8 @@ export class SimilarityAlgorithmFactory {
       case 'node_attribute':
         return this.createNodeAttribute();
       default:
-        throw new Error(`未知的相似度算法类型: ${type}`);
+        // 理论上不可达，类型已穷尽
+        throw new Error('未知的相似度算法类型');
     }
   }
 

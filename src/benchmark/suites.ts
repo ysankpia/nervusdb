@@ -9,13 +9,7 @@ import { MemoryGraph } from '../algorithms/graph.js';
 import { GraphAlgorithmSuiteImpl } from '../algorithms/suite.js';
 import { FullTextSearchFactory } from '../fulltext/engine.js';
 import { SpatialGeometryImpl } from '../spatial/geometry.js';
-import {
-  BenchmarkSuite,
-  BenchmarkTest,
-  BenchmarkConfig,
-  BenchmarkResult,
-  DataGenerationConfig,
-} from './types.js';
+import { BenchmarkSuite } from './types.js';
 import { BenchmarkUtils } from './runner.js';
 
 /**
@@ -399,9 +393,9 @@ export const graphAlgorithmsSuite: BenchmarkSuite = {
     {
       name: 'PageRank计算',
       description: '测试PageRank算法性能',
-      test: async (config) => {
-        const nodeCount = config.dataGeneration?.params?.nodeCount || 1000;
-        const edgeCount = config.dataGeneration?.params?.edgeCount || 3000;
+      test: (config) => {
+        const nodeCount = Number((config.dataGeneration?.params as Record<string, unknown> | undefined)?.nodeCount ?? 1000);
+        const edgeCount = Number((config.dataGeneration?.params as Record<string, unknown> | undefined)?.edgeCount ?? 3000);
 
         const graph = new MemoryGraph();
         const { nodes, edges } = DataGenerator.generateGraph(nodeCount, edgeCount);
@@ -456,9 +450,9 @@ export const graphAlgorithmsSuite: BenchmarkSuite = {
     {
       name: 'Dijkstra路径查找',
       description: '测试Dijkstra最短路径算法性能',
-      test: async (config) => {
-        const nodeCount = config.dataGeneration?.params?.nodeCount || 500;
-        const edgeCount = config.dataGeneration?.params?.edgeCount || 1500;
+      test: (config) => {
+        const nodeCount = Number((config.dataGeneration?.params as Record<string, unknown> | undefined)?.nodeCount ?? 500);
+        const edgeCount = Number((config.dataGeneration?.params as Record<string, unknown> | undefined)?.edgeCount ?? 1500);
 
         const graph = new MemoryGraph();
         const { nodes, edges } = DataGenerator.generateGraph(nodeCount, edgeCount);
@@ -517,9 +511,9 @@ export const graphAlgorithmsSuite: BenchmarkSuite = {
     {
       name: '社区发现',
       description: '测试Louvain社区发现算法性能',
-      test: async (config) => {
-        const nodeCount = config.dataGeneration?.params?.nodeCount || 800;
-        const edgeCount = config.dataGeneration?.params?.edgeCount || 2400;
+      test: (config) => {
+        const nodeCount = Number((config.dataGeneration?.params as Record<string, unknown> | undefined)?.nodeCount ?? 800);
+        const edgeCount = Number((config.dataGeneration?.params as Record<string, unknown> | undefined)?.edgeCount ?? 2400);
 
         const graph = new MemoryGraph();
         const { nodes, edges } = DataGenerator.generateGraph(nodeCount, edgeCount);
@@ -589,7 +583,7 @@ export const spatialGeometrySuite: BenchmarkSuite = {
     {
       name: '距离计算',
       description: '测试两点间距离计算性能',
-      test: async (config) => {
+      test: (config) => {
         const dataSize = config.dataGeneration?.size || 10000;
         const coordinates = DataGenerator.generateCoordinates(dataSize);
         const spatial = new SpatialGeometryImpl();
@@ -630,7 +624,7 @@ export const spatialGeometrySuite: BenchmarkSuite = {
     {
       name: '边界框计算',
       description: '测试几何对象边界框计算性能',
-      test: async (config) => {
+      test: (config) => {
         const dataSize = config.dataGeneration?.size || 5000;
         const coordinates = DataGenerator.generateCoordinates(dataSize);
         const spatial = new SpatialGeometryImpl();

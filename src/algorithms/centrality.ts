@@ -154,6 +154,8 @@ export class BetweennessCentrality implements CentralityAlgorithm {
   }
 
   computeNode(graph: Graph, nodeId: string, options?: AlgorithmOptions): number {
+    // 该算法不使用 options，但接口要求保留
+    void options;
     const result = this.compute(graph);
     return result.values.get(nodeId) || 0;
   }
@@ -256,6 +258,8 @@ export class BetweennessCentrality implements CentralityAlgorithm {
  */
 export class ClosenessCentrality implements CentralityAlgorithm {
   compute(graph: Graph, options: AlgorithmOptions = {}): CentralityResult {
+    // 当前实现未使用 options，保留以兼容接口
+    void options;
     const nodes = graph.getNodes();
     const closeness = new Map<string, number>();
 
@@ -427,7 +431,7 @@ export class EigenvectorCentrality implements CentralityAlgorithm {
     });
 
     const adjacencyMatrix: number[][] = Array.from({ length: nodeCount }, () =>
-      Array(nodeCount).fill(0),
+      new Array<number>(nodeCount).fill(0),
     );
 
     const edges = graph.getEdges();
@@ -443,10 +447,10 @@ export class EigenvectorCentrality implements CentralityAlgorithm {
     });
 
     // 幂迭代算法求解特征向量
-    let eigenvector = Array(nodeCount).fill(1.0 / Math.sqrt(nodeCount));
+    let eigenvector: number[] = new Array<number>(nodeCount).fill(1.0 / Math.sqrt(nodeCount));
 
     for (let iteration = 0; iteration < maxIterations; iteration++) {
-      const newEigenvector = Array(nodeCount).fill(0);
+      const newEigenvector: number[] = new Array<number>(nodeCount).fill(0);
 
       // 矩阵向量乘法
       for (let i = 0; i < nodeCount; i++) {
@@ -513,12 +517,12 @@ export class EigenvectorCentrality implements CentralityAlgorithm {
 /**
  * 最小堆实现（用于 Dijkstra 算法）
  */
-class MinHeap<T> {
+class MinHeap<T extends { distance: number }> {
   private heap: T[] = [];
   private compare: (a: T, b: T) => number;
 
   constructor(compareFn?: (a: T, b: T) => number) {
-    this.compare = compareFn || ((a: any, b: any) => a.distance - b.distance);
+    this.compare = compareFn || ((a: T, b: T) => a.distance - b.distance);
   }
 
   insert(item: T): void {
@@ -642,7 +646,8 @@ export class CentralityAlgorithmFactory {
       case 'eigenvector':
         return this.createEigenvector();
       default:
-        throw new Error(`未知的中心性算法类型: ${type}`);
+        // 理论上不可达，类型已穷尽
+        throw new Error('未知的中心性算法类型');
     }
   }
 }

@@ -565,6 +565,8 @@ export class KeywordAnalyzer implements TextAnalyzer {
   }
 
   generateNGrams(tokens: string[], n: number): string[] {
+    void tokens;
+    void n;
     return []; // 关键词分析器不生成N-gram
   }
 }
@@ -616,7 +618,10 @@ export class NGramAnalyzer implements TextAnalyzer {
  * 分析器工厂
  */
 export class AnalyzerFactory {
-  static createAnalyzer(type: 'standard' | 'keyword' | 'ngram', options?: any): TextAnalyzer {
+  static createAnalyzer(
+    type: 'standard' | 'keyword' | 'ngram',
+    options?: { stemming?: boolean; stopWords?: boolean; ngramSize?: number },
+  ): TextAnalyzer {
     switch (type) {
       case 'standard':
         return new StandardAnalyzer(options);
@@ -625,7 +630,8 @@ export class AnalyzerFactory {
       case 'ngram':
         return new NGramAnalyzer(options?.ngramSize);
       default:
-        throw new Error(`Unknown analyzer type: ${type}`);
+        // 类型已穷尽
+        throw new Error('Unknown analyzer type');
     }
   }
 }

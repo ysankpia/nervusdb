@@ -7,7 +7,6 @@
 import {
   Query,
   BooleanQuery,
-  QueryType,
   SearchOptions,
   SearchResult,
   SearchHighlight,
@@ -32,9 +31,7 @@ export class EditDistanceCalculator {
     const n = str2.length;
 
     // 创建距离矩阵
-    const dp: number[][] = Array(m + 1)
-      .fill(null)
-      .map(() => Array(n + 1).fill(0));
+    const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
 
     // 初始化边界
     for (let i = 0; i <= m; i++) dp[i][0] = i;
@@ -241,6 +238,8 @@ export class PhraseQueryProcessor {
 
   processPhrase(terms: string[], slop: number = 0): Set<string> {
     if (terms.length === 0) return new Set();
+    // 当前实现未使用 slop，保留参数兼容接口
+    void slop;
     // 取出所有 posting 列表
     const lists = terms.map((t) => this.index.getPostingList(t)).filter(Boolean) as PostingList[];
     if (lists.length !== terms.length) return new Set();
@@ -576,7 +575,7 @@ export class FullTextQueryEngine {
   /**
    * 执行搜索查询
    */
-  async search(queryString: string, options: SearchOptions = {}): Promise<SearchResult[]> {
+  search(queryString: string, options: SearchOptions = {}): SearchResult[] {
     const {
       fields = [],
       fuzzy = false,
@@ -594,7 +593,7 @@ export class FullTextQueryEngine {
 
     // 处理每个查询
     for (const query of queries) {
-      const docIds = await this.processQuery(query, fuzzy, maxEditDistance);
+      const docIds = this.processQuery(query, fuzzy, maxEditDistance);
 
       if (candidateDocIds.size === 0) {
         candidateDocIds = docIds;
@@ -651,11 +650,7 @@ export class FullTextQueryEngine {
   /**
    * 处理单个查询
    */
-  private async processQuery(
-    query: Query,
-    fuzzy: boolean,
-    maxEditDistance: number,
-  ): Promise<Set<string>> {
+  private processQuery(query: Query, fuzzy: boolean, maxEditDistance: number): Set<string> {
     switch (query.type) {
       case 'term':
         return this.processTermQuery(query.value as string, fuzzy, maxEditDistance);
@@ -721,12 +716,13 @@ export class FullTextQueryEngine {
       case 'OR':
         return this.booleanProcessor.processOR(termQueries);
 
-      case 'NOT':
+      case 'NOT': {
         const [includeTerms, excludeTerms] = [
           termQueries.slice(0, termQueries.length / 2),
           termQueries.slice(termQueries.length / 2),
         ];
         return this.booleanProcessor.processNOT(includeTerms, excludeTerms);
+      }
 
       default:
         return new Set();
@@ -774,7 +770,7 @@ export class FullTextQueryEngine {
   /**
    * 获取搜索建议
    */
-  async suggest(prefix: string, maxSuggestions: number = 10): Promise<string[]> {
-    return this.fuzzyProcessor.getSuggestions(prefix, maxSuggestions);
+  suggest(prefix: string, maxSuggestions: number = 10): Promise<string[]> {
+    return Promise.resolve(this.fuzzyProcessor.getSuggestions(prefix, maxSuggestions));
   }
 }

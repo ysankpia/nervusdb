@@ -10,9 +10,6 @@ import {
   LineString,
   Polygon,
   MultiPoint,
-  MultiLineString,
-  MultiPolygon,
-  GeometryCollection,
   Coordinate,
   CoordinateArray,
   BoundingBox,
@@ -175,38 +172,43 @@ export class SpatialGeometryImpl implements SpatialGeometry {
       case 'Point':
         return geometry;
 
-      case 'LineString':
+      case 'LineString': {
         const lineString = geometry;
         const midIndex = Math.floor(lineString.coordinates.length / 2);
         return { type: 'Point', coordinates: lineString.coordinates[midIndex] };
+      }
 
       case 'Polygon':
         return this.centroid(geometry);
 
-      case 'MultiPoint':
+      case 'MultiPoint': {
         const multiPoint = geometry;
         return { type: 'Point', coordinates: multiPoint.coordinates[0] };
+      }
 
-      case 'MultiLineString':
+      case 'MultiLineString': {
         const multiLineString = geometry;
         return this.getRepresentativePoint({
           type: 'LineString',
           coordinates: multiLineString.coordinates[0],
         });
+      }
 
-      case 'MultiPolygon':
+      case 'MultiPolygon': {
         const multiPolygon = geometry;
         return this.getRepresentativePoint({
           type: 'Polygon',
           coordinates: multiPolygon.coordinates[0],
         });
+      }
 
-      case 'GeometryCollection':
+      case 'GeometryCollection': {
         const collection = geometry;
         if (collection.geometries.length > 0) {
           return this.getRepresentativePoint(collection.geometries[0] as unknown as Geometry);
         }
         break;
+      }
     }
 
     // 默认返回原点
@@ -247,20 +249,19 @@ export class SpatialGeometryImpl implements SpatialGeometry {
     switch (geometry.type) {
       case 'Polygon':
         return this.polygonArea(geometry);
-
-      case 'MultiPolygon':
+      case 'MultiPolygon': {
         const multiPolygon = geometry;
         return multiPolygon.coordinates.reduce((total, polygonCoords) => {
           return total + this.polygonArea({ type: 'Polygon', coordinates: polygonCoords });
         }, 0);
-
-      case 'GeometryCollection':
+      }
+      case 'GeometryCollection': {
         const collection = geometry;
         return collection.geometries.reduce(
           (total, geom) => total + this.calculateArea(geom as unknown as Geometry),
           0,
         );
-
+      }
       default:
         return 0; // 点和线没有面积
     }
@@ -311,33 +312,32 @@ export class SpatialGeometryImpl implements SpatialGeometry {
     switch (geometry.type) {
       case 'LineString':
         return this.lineStringLength(geometry);
-
-      case 'MultiLineString':
+      case 'MultiLineString': {
         const multiLineString = geometry;
         return multiLineString.coordinates.reduce((total, lineCoords) => {
           return total + this.lineStringLength({ type: 'LineString', coordinates: lineCoords });
         }, 0);
-
-      case 'Polygon':
+      }
+      case 'Polygon': {
         const polygon = geometry;
         // 计算边界长度
         return polygon.coordinates.reduce((total, ring) => {
           return total + this.lineStringLength({ type: 'LineString', coordinates: ring });
         }, 0);
-
-      case 'MultiPolygon':
+      }
+      case 'MultiPolygon': {
         const multiPolygon = geometry;
         return multiPolygon.coordinates.reduce((total, polygonCoords) => {
           return total + this.calculateLength({ type: 'Polygon', coordinates: polygonCoords });
         }, 0);
-
-      case 'GeometryCollection':
+      }
+      case 'GeometryCollection': {
         const collection = geometry;
         return collection.geometries.reduce(
           (total, geom) => total + this.calculateLength(geom as unknown as Geometry),
           0,
         );
-
+      }
       default:
         return 0; // 点没有长度
     }
@@ -545,18 +545,20 @@ export class SpatialGeometryImpl implements SpatialGeometry {
    */
   private pointInGeometry(point: CoordinateArray, geometry: Geometry): boolean {
     switch (geometry.type) {
-      case 'Point':
+      case 'Point': {
         const geomPoint = geometry;
         return point[0] === geomPoint.coordinates[0] && point[1] === geomPoint.coordinates[1];
+      }
 
       case 'Polygon':
         return this.pointInPolygon(point, geometry);
 
-      case 'MultiPolygon':
+      case 'MultiPolygon': {
         const multiPolygon = geometry;
         return multiPolygon.coordinates.some((polygonCoords) =>
           this.pointInPolygon(point, { type: 'Polygon', coordinates: polygonCoords }),
         );
+      }
 
       default:
         return false;
@@ -749,16 +751,17 @@ export class SpatialGeometryImpl implements SpatialGeometry {
   simplify(geometry: Geometry, tolerance: number): Geometry {
     // Douglas-Peucker算法的简化实现
     switch (geometry.type) {
-      case 'LineString':
+      case 'LineString': {
         const simplified = this.simplifyLineString(geometry, tolerance);
         return simplified;
-
-      case 'Polygon':
+      }
+      case 'Polygon': {
         const polygon = geometry;
         const simplifiedRings = polygon.coordinates.map((ring) =>
           this.simplifyRing(ring, tolerance),
         );
         return { type: 'Polygon', coordinates: simplifiedRings };
+      }
 
       default:
         return geometry; // 其他类型暂不简化
@@ -852,14 +855,15 @@ export class SpatialGeometryImpl implements SpatialGeometry {
         case 'Point':
           return GeometryUtils.isValidCoordinate(geometry.coordinates);
 
-        case 'LineString':
+        case 'LineString': {
           const lineString = geometry;
           return (
             lineString.coordinates.length >= 2 &&
             lineString.coordinates.every((coord) => GeometryUtils.isValidCoordinate(coord))
           );
+        }
 
-        case 'Polygon':
+        case 'Polygon': {
           const polygon = geometry;
           return (
             polygon.coordinates.length > 0 &&
@@ -870,11 +874,12 @@ export class SpatialGeometryImpl implements SpatialGeometry {
                 this.isRingClosed(ring),
             )
           );
+        }
 
         default:
           return true; // 其他类型暂认为有效
       }
-    } catch (error) {
+    } catch {
       return false;
     }
   }
@@ -896,14 +901,15 @@ export class SpatialGeometryImpl implements SpatialGeometry {
 
     // 基本修复
     switch (geometry.type) {
-      case 'Point':
+      case 'Point': {
         const point = geometry;
         return {
           ...point,
           coordinates: GeometryUtils.normalizeCoordinate(point.coordinates),
         };
+      }
 
-      case 'Polygon':
+      case 'Polygon': {
         const polygon = geometry;
         const fixedRings = polygon.coordinates.map((ring) => {
           if (!this.isRingClosed(ring) && ring.length >= 3) {
@@ -912,6 +918,7 @@ export class SpatialGeometryImpl implements SpatialGeometry {
           return ring;
         });
         return { ...polygon, coordinates: fixedRings };
+      }
 
       default:
         return geometry;

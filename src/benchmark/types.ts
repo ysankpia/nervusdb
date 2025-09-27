@@ -67,7 +67,7 @@ export interface DataGenerationConfig {
   /** 随机种子 */
   seed?: number;
   /** 特定参数 */
-  params?: Record<string, any>;
+  params?: Record<string, unknown>;
 }
 
 /**
@@ -231,7 +231,7 @@ export interface DataGenerator<T> {
   /** 生成测试数据 */
   generate(config: DataGenerationConfig): T[];
   /** 生成单个数据项 */
-  generateSingle(params?: Record<string, any>): T;
+  generateSingle(params?: Record<string, unknown>): T;
 }
 
 /**

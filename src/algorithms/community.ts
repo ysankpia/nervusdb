@@ -260,7 +260,8 @@ export class LouvainCommunityDetection implements CommunityDetectionAlgorithm {
    * 构建社区图（将同一社区的节点合并）
    */
   private buildCommunityGraph(graph: Graph, communities: Map<string, number>): Graph {
-    console.log('[DEBUG] Louvain: Building community graph (currently cloning)...');
+    // 参数目前未使用，保留接口以便后续实现真实合并逻辑
+    void communities;
     // 为简化实现，这里返回原图的克隆
     // 在实际实现中，应该将同一社区的节点合并为一个超节点
     return graph.clone();
@@ -386,6 +387,7 @@ export class LabelPropagationCommunityDetection implements CommunityDetectionAlg
  */
 export class ConnectedComponentsDetection implements CommunityDetectionAlgorithm {
   detectCommunities(graph: Graph, options: AlgorithmOptions = {}): CommunityResult {
+    void options;
     const nodes = graph.getNodes();
     if (nodes.length === 0) {
       return {
@@ -453,6 +455,7 @@ export class ConnectedComponentsDetection implements CommunityDetectionAlgorithm
  */
 export class StronglyConnectedComponentsDetection implements CommunityDetectionAlgorithm {
   detectCommunities(graph: Graph, options: AlgorithmOptions = {}): CommunityResult {
+    void options;
     const nodes = graph.getNodes();
     if (nodes.length === 0) {
       return {
@@ -630,7 +633,8 @@ export class CommunityDetectionAlgorithmFactory {
       case 'strongly_connected_components':
         return this.createStronglyConnectedComponents();
       default:
-        throw new Error(`未知的社区发现算法类型: ${type}`);
+        // 理论上不可达，类型已穷尽
+        throw new Error('未知的社区发现算法类型');
     }
   }
 }

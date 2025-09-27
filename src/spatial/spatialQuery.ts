@@ -91,7 +91,7 @@ export class SpatialQueryManager {
   /**
    * 添加空间对象到索引
    */
-  addGeometry(id: string, geometry: Geometry, properties?: Record<string, any>): void {
+  addGeometry(id: string, geometry: Geometry, properties?: Record<string, unknown>): void {
     if (this.config.enableValidation && !this.spatialGeometry.isValid(geometry)) {
       geometry = this.spatialGeometry.makeValid(geometry);
     }
@@ -278,7 +278,7 @@ export class SpatialQueryManager {
     }>;
     groupBy?: string;
     options?: SpatialQueryOptions;
-  }): Record<string, any>[] {
+  }): Record<string, string | number | null>[] {
     const startTime = performance.now();
     this.stats.totalQueries++;
 
@@ -309,11 +309,20 @@ export class SpatialQueryManager {
    * 批量查询
    */
   queryBatch(
-    queries: Array<{
-      type: 'bbox' | 'distance' | 'nearest' | 'geometry';
-      params: any;
-      options?: SpatialQueryOptions;
-    }>,
+    queries: Array<
+      | { type: 'bbox'; params: { bbox: BoundingBox }; options?: SpatialQueryOptions }
+      | {
+          type: 'distance';
+          params: { center: Point; distance: number };
+          options?: SpatialQueryOptions;
+        }
+      | { type: 'nearest'; params: { point: Point; count?: number }; options?: SpatialQueryOptions }
+      | {
+          type: 'geometry';
+          params: { geometry: Geometry; relation: SpatialRelation };
+          options?: SpatialQueryOptions;
+        }
+    >,
   ): SpatialQueryResult[][] {
     const startTime = performance.now();
     this.stats.totalQueries += queries.length;
@@ -350,8 +359,8 @@ export class SpatialQueryManager {
     this.updateQueryStats(startTime);
     this.stats.indexHits += queries.length;
 
-    const options = this.mergeOptions({});
-    return results.map((result) => this.processResults(result, options));
+    const options2 = this.mergeOptions({});
+    return results.map((result) => this.processResults(result, options2));
   }
 
   /**
@@ -361,17 +370,21 @@ export class SpatialQueryManager {
     results: SpatialQueryResult[],
     options: { includeProperties?: boolean; includeBbox?: boolean } = {},
   ): FeatureCollection {
-    const features: Feature[] = results.map((result, index) => ({
-      type: 'Feature',
-      geometry: result.geometry,
-      properties: {
-        ...(options.includeProperties && result.properties ? result.properties : {}),
-        ...(result.distance !== undefined ? { distance: result.distance } : {}),
-        ...(result.relation ? { relation: result.relation } : {}),
-        _queryIndex: index,
-      },
-      id: result.properties?.id || index,
-    }));
+    const features: Feature[] = results.map((result, index) => {
+      const maybeId = (result.properties as Record<string, unknown> | undefined)?.id;
+      const idVal = typeof maybeId === 'string' || typeof maybeId === 'number' ? maybeId : index;
+      return {
+        type: 'Feature',
+        geometry: result.geometry,
+        properties: {
+          ...(options.includeProperties && result.properties ? result.properties : {}),
+          ...(result.distance !== undefined ? { distance: result.distance } : {}),
+          ...(result.relation ? { relation: result.relation } : {}),
+          _queryIndex: index,
+        },
+        id: idVal,
+      };
+    });
 
     const featureCollection: FeatureCollection = {
       type: 'FeatureCollection',
@@ -475,11 +488,13 @@ export class SpatialQueryManager {
     results: SpatialQueryResult[],
     aggregations: Array<{ type: string; field?: string; alias?: string }>,
     groupBy?: string,
-  ): Record<string, any>[] {
+  ): Record<string, string | number | null>[] {
     const groups = groupBy ? this.groupResults(results, groupBy) : { all: results };
 
     return Object.entries(groups).map(([groupKey, groupResults]) => {
-      const aggregateResult: Record<string, any> = groupBy ? { [groupBy]: groupKey } : {};
+      const aggregateResult: Record<string, string | number | null> = groupBy
+        ? { [groupBy]: groupKey }
+        : {};
 
       for (const agg of aggregations) {
         const alias = agg.alias || `${agg.type}_${agg.field || 'count'}`;
@@ -654,11 +669,15 @@ export class SpatialQueryUtils {
   /**
    * 验证查询参数
    */
-  static validateQueryParams(params: any): { valid: boolean; errors: string[] } {
+  static validateQueryParams(params: unknown): { valid: boolean; errors: string[] } {
     const errors: string[] = [];
 
-    if (params.bbox) {
-      const bbox = params.bbox as BoundingBox;
+    let obj: Record<string, unknown> | null = null;
+    if (typeof params === 'object' && params !== null) {
+      obj = params as Record<string, unknown>;
+    }
+    if (obj && 'bbox' in obj) {
+      const bbox = obj.bbox as BoundingBox;
       if (bbox.length !== 4) {
         errors.push('Bounding box must have 4 coordinates');
       } else if (bbox[0] >= bbox[2] || bbox[1] >= bbox[3]) {
@@ -666,11 +685,11 @@ export class SpatialQueryUtils {
       }
     }
 
-    if (params.distance && params.distance <= 0) {
+    if (obj && 'distance' in obj && typeof obj.distance === 'number' && obj.distance <= 0) {
       errors.push('Distance must be positive');
     }
 
-    if (params.count && params.count <= 0) {
+    if (obj && 'count' in obj && typeof obj.count === 'number' && obj.count <= 0) {
       errors.push('Count must be positive');
     }
 

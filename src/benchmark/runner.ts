@@ -15,9 +15,8 @@ import {
   PerformanceMetrics,
   EnvironmentInfo,
   BenchmarkSummary,
-  RegressionConfig,
-  RegressionResult,
 } from './types.js';
+import os from 'os';
 
 /**
  * 性能监控器实现
@@ -193,7 +192,8 @@ export class BenchmarkRunnerImpl implements BenchmarkRunner {
         results.push(result);
         console.log(`✓ ${test.name} - ${result.executionTime.toFixed(2)}ms`);
       } catch (error) {
-        console.error(`✗ ${test.name} - 测试失败: ${error}`);
+        const errMsg = error instanceof Error ? (error.stack ?? error.message) : String(error);
+        console.error(`✗ ${test.name} - 测试失败: ${errMsg}`);
         // 创建失败结果
         results.push({
           name: test.name,
@@ -281,8 +281,7 @@ export class BenchmarkRunnerImpl implements BenchmarkRunner {
    * 获取环境信息
    */
   private getEnvironmentInfo(): EnvironmentInfo {
-    const os = require('os');
-    const memoryUsage = process.memoryUsage();
+    // 读取内存信息用于整体概览（当前未直接使用返回值）
 
     return {
       nodeVersion: process.version,
@@ -454,14 +453,17 @@ export class BenchmarkUtils {
  * 基准测试装饰器
  */
 export function benchmark(name: string, description: string = '', config?: BenchmarkConfig) {
-  return function (target: any, propertyKey: string, descriptor: PropertyDescriptor) {
-    const originalMethod = descriptor.value;
+  // 未使用的参数标记
+  void description;
+  void config;
+  return function (target: unknown, propertyKey: string, descriptor: PropertyDescriptor) {
+    const originalMethod = descriptor.value as (...args: unknown[]) => Promise<unknown>;
 
-    descriptor.value = async function (...args: any[]) {
+    descriptor.value = async function (...args: unknown[]) {
       const monitor = new PerformanceMonitorImpl();
 
       monitor.start();
-      const result = await originalMethod.apply(this, args);
+      const result = await Promise.resolve(originalMethod.apply(this, args));
       const metrics = monitor.stop();
 
       console.log(
@@ -478,12 +480,16 @@ export function benchmark(name: string, description: string = '', config?: Bench
 /**
  * 内存使用监控装饰器
  */
-export function memoryMonitor(target: any, propertyKey: string, descriptor: PropertyDescriptor) {
-  const originalMethod = descriptor.value;
+export function memoryMonitor(
+  target: unknown,
+  propertyKey: string,
+  descriptor: PropertyDescriptor,
+) {
+  const originalMethod = descriptor.value as (...args: unknown[]) => Promise<unknown>;
 
-  descriptor.value = async function (...args: any[]) {
+  descriptor.value = async function (...args: unknown[]) {
     const beforeMemory = process.memoryUsage().heapUsed;
-    const result = await originalMethod.apply(this, args);
+    const result = await Promise.resolve(originalMethod.apply(this, args));
     const afterMemory = process.memoryUsage().heapUsed;
     const memoryDelta = afterMemory - beforeMemory;
 
@@ -502,12 +508,12 @@ export function memoryMonitor(target: any, propertyKey: string, descriptor: Prop
  * 性能阈值检查装饰器
  */
 export function performanceThreshold(maxTimeMs: number) {
-  return function (target: any, propertyKey: string, descriptor: PropertyDescriptor) {
-    const originalMethod = descriptor.value;
+  return function (target: unknown, propertyKey: string, descriptor: PropertyDescriptor) {
+    const originalMethod = descriptor.value as (...args: unknown[]) => Promise<unknown>;
 
-    descriptor.value = async function (...args: any[]) {
+    descriptor.value = async function (...args: unknown[]) {
       const start = performance.now();
-      const result = await originalMethod.apply(this, args);
+      const result = await Promise.resolve(originalMethod.apply(this, args));
       const executionTime = performance.now() - start;
 
       if (executionTime > maxTimeMs) {

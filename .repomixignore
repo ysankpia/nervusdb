@@ -1,3 +1,8 @@
+# Add patterns to ignore here, one per line
+# Example:
+*.log
+tmp/
+.qoder/repowiki/zh/meta
 # Node & TypeScript
 node_modules/
 coverage/
@@ -24,9 +29,6 @@ dist/
 temp-*
 temp-*.wal
 temp-*.pages/
-
-# Legacy or stray local temp folder created by older tests
-temp/
 
 # Repomix output
 repomix-output.xml
