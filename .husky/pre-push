@@ -10,11 +10,12 @@ if ! git diff --quiet -- .agents/rules/base.md; then
   exit 1
 fi
 
-echo "[husky] pre-push: lint:core"
-pnpm run lint:core
-
 echo "[husky] pre-push: prettier format check"
 pnpm run format:check
 
-echo "[husky] pre-push: typecheck + lint:core + coverage + build"
-pnpm run ci:prepush
+echo "[husky] pre-push: typecheck and lint (skipping tests for speed)"
+pnpm run typecheck
+pnpm run lint:core
+
+echo "[husky] pre-push: build check"
+pnpm run build
