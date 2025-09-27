@@ -371,7 +371,7 @@ export class SpatialQueryManager {
     options: { includeProperties?: boolean; includeBbox?: boolean } = {},
   ): FeatureCollection {
     const features: Feature[] = results.map((result, index) => {
-      const maybeId = (result.properties as Record<string, unknown> | undefined)?.id;
+      const maybeId = result.properties?.['id'];
       const idVal = typeof maybeId === 'string' || typeof maybeId === 'number' ? maybeId : index;
       return {
         type: 'Feature',

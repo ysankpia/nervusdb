@@ -394,8 +394,12 @@ export const graphAlgorithmsSuite: BenchmarkSuite = {
       name: 'PageRank计算',
       description: '测试PageRank算法性能',
       test: (config) => {
-        const nodeCount = Number((config.dataGeneration?.params as Record<string, unknown> | undefined)?.nodeCount ?? 1000);
-        const edgeCount = Number((config.dataGeneration?.params as Record<string, unknown> | undefined)?.edgeCount ?? 3000);
+        const nodeCount = Number(
+          (config.dataGeneration?.params as { nodeCount?: number })?.nodeCount ?? 1000,
+        );
+        const edgeCount = Number(
+          (config.dataGeneration?.params as { edgeCount?: number })?.edgeCount ?? 3000,
+        );
 
         const graph = new MemoryGraph();
         const { nodes, edges } = DataGenerator.generateGraph(nodeCount, edgeCount);
@@ -451,8 +455,12 @@ export const graphAlgorithmsSuite: BenchmarkSuite = {
       name: 'Dijkstra路径查找',
       description: '测试Dijkstra最短路径算法性能',
       test: (config) => {
-        const nodeCount = Number((config.dataGeneration?.params as Record<string, unknown> | undefined)?.nodeCount ?? 500);
-        const edgeCount = Number((config.dataGeneration?.params as Record<string, unknown> | undefined)?.edgeCount ?? 1500);
+        const nodeCount = Number(
+          (config.dataGeneration?.params as { nodeCount?: number })?.nodeCount ?? 500,
+        );
+        const edgeCount = Number(
+          (config.dataGeneration?.params as { edgeCount?: number })?.edgeCount ?? 1500,
+        );
 
         const graph = new MemoryGraph();
         const { nodes, edges } = DataGenerator.generateGraph(nodeCount, edgeCount);
@@ -512,8 +520,12 @@ export const graphAlgorithmsSuite: BenchmarkSuite = {
       name: '社区发现',
       description: '测试Louvain社区发现算法性能',
       test: (config) => {
-        const nodeCount = Number((config.dataGeneration?.params as Record<string, unknown> | undefined)?.nodeCount ?? 800);
-        const edgeCount = Number((config.dataGeneration?.params as Record<string, unknown> | undefined)?.edgeCount ?? 2400);
+        const nodeCount = Number(
+          (config.dataGeneration?.params as { nodeCount?: number })?.nodeCount ?? 800,
+        );
+        const edgeCount = Number(
+          (config.dataGeneration?.params as { edgeCount?: number })?.edgeCount ?? 2400,
+        );
 
         const graph = new MemoryGraph();
         const { nodes, edges } = DataGenerator.generateGraph(nodeCount, edgeCount);
