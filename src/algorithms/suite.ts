@@ -71,7 +71,7 @@ export class GraphAlgorithmSuiteImpl implements GraphAlgorithmSuite {
 
     betweenness: (options?: AlgorithmOptions): CentralityResult => {
       const algorithm = CentralityAlgorithmFactory.createBetweenness();
-      return algorithm.compute(this.graph, options);
+      return algorithm.compute(this.graph);
     },
 
     closeness: (options?: AlgorithmOptions): CentralityResult => {
@@ -81,7 +81,7 @@ export class GraphAlgorithmSuiteImpl implements GraphAlgorithmSuite {
 
     degree: (options?: AlgorithmOptions): CentralityResult => {
       const algorithm = CentralityAlgorithmFactory.createDegree();
-      return algorithm.compute(this.graph, options);
+      return algorithm.compute(this.graph);
     },
 
     eigenvector: (options?: AlgorithmOptions): CentralityResult => {

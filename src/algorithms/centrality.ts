@@ -154,7 +154,7 @@ export class BetweennessCentrality implements CentralityAlgorithm {
   }
 
   computeNode(graph: Graph, nodeId: string, options?: AlgorithmOptions): number {
-    const result = this.compute(graph, options);
+    const result = this.compute(graph);
     return result.values.get(nodeId) || 0;
   }
 

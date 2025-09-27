@@ -19,7 +19,7 @@ import {
  */
 export class LouvainCommunityDetection implements CommunityDetectionAlgorithm {
   detectCommunities(graph: Graph, options: LouvainOptions = {}): CommunityResult {
-    const { resolution = 1.0, maxIterations = 100, randomness = 0.01 } = options;
+    const { resolution = 1.0, maxIterations = 100, randomness = 0.01, tolerance = 1e-5 } = options;
 
     const nodes = graph.getNodes();
     if (nodes.length === 0) {
