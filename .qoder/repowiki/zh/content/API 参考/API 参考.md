@@ -1,3 +1,4 @@
+<docs>
 # API 参考
 
 <cite>
@@ -11,6 +12,7 @@
 - [query/graphql/index.ts](file://src/query/graphql/index.ts)
 - [query/gremlin/index.ts](file://src/query/gremlin/index.ts)
 - [types/openOptions.ts](file://src/types/openOptions.ts) - *新增事务与快照相关选项*
+- [tests/helpers/tempfs.ts](file://tests/helpers/tempfs.ts) - *新增测试辅助工具*
 </cite>
 
 ## 更新摘要
@@ -19,6 +21,7 @@
 - 在“核心数据库类 SynapseDB”中补充了事务批次和幂等性配置说明
 - 更新“接口定义摘要”以包含新的事务和快照相关接口
 - 添加 `SynapseDBOpenOptions` 配置项的完整文档
+- **新增测试辅助模块说明**：添加对 `tempfs.ts` 测试助手的描述，用于隔离测试环境
 
 ## 目录
 1. [核心数据库类 SynapseDB](#核心数据库类-synapsedb)
@@ -361,125 +364,4 @@ try {
 - [synapseDb.ts](file://src/synapseDb.ts#L460-L470)
 
 ### 读快照一致性
-`withSnapshot` 方法提供读取快照一致性，确保在回调执行期间视图不会漂移。
-
-```typescript
-// 在快照内执行复杂的查询链路
-const result = await db.withSnapshot(async (snap) => {
-  const step1 = snap.find({ predicate: 'knows' }).all();
-  const step2 = snap.find({ predicate: 'worksAt' }).follow('locatedIn').all();
-  return {
-    knowsCount: step1.length,
-    locations: step2.map(r => r.object)
-  };
-});
-```
-
-此机制通过固定 manifest `epoch` 来防止后台 compaction/GC 导致的视图漂移，特别适用于需要一致视图的复杂查询场景。
-
-**节来源**
-- [synapseDb.ts](file://src/synapseDb.ts#L477-L491)
-- [tests/system/snapshot_memory_basic.test.ts](file://tests/system/snapshot_memory_basic.test.ts#L0-L42)
-
-### 事务幂等性（实验性）
-通过配置选项和事务ID实现跨周期的幂等性控制。
-
-```typescript
-// 打开数据库时启用持久化事务ID去重
-const db = await SynapseDB.open('tx.synapsedb', {
-  enablePersistentTxDedupe: true,
-  maxRememberTxIds: 2000
-});
-
-// 使用相同的 txId 进行重试，确保"至多一次"效果
-db.beginBatch({ txId: 'retryable-operation-123' });
-db.addFact({ subject: 'A', predicate: 'R', object: 'X' });
-db.commitBatch();
-```
-
-**节来源**
-- [types/openOptions.ts](file://src/types/openOptions.ts#L120-L153)
-- [README.md](file://README.md#L124-L174)
-
-## 接口定义摘要
-
-以下为关键 TypeScript 接口的简要定义：
-
-### SynapseDB 主接口
-```typescript
-class SynapseDB {
-  static open(path: string, options?: SynapseDBOpenOptions): Promise<SynapseDB>;
-  addFact(fact: FactInput, options?: FactOptions): FactRecord;
-  deleteFact(fact: FactInput): void;
-  find(criteria: FactCriteria): QueryBuilder;
-  findByNodeProperty(filter: PropertyFilter): QueryBuilder;
-  findByEdgeProperty(filter: PropertyFilter): QueryBuilder;
-  findByLabel(labels: string | string[]): QueryBuilder;
-  cypherQuery(statement: string, parameters?: Record<string, unknown>): Promise<CypherResult>;
-  async close(): Promise<void>;
-  
-  // 事务控制
-  beginBatch(options?: BeginBatchOptions): void;
-  commitBatch(options?: CommitBatchOptions): void;
-  abortBatch(): void;
-  
-  // 快照控制
-  async withSnapshot<T>(fn: (db: SynapseDB) => Promise<T> | T): Promise<T>;
-}
-```
-
-### QueryBuilder 接口
-```typescript
-class QueryBuilder {
-  follow(predicate: string): QueryBuilder;
-  followReverse(predicate: string): QueryBuilder;
-  where(predicate: (record: FactRecord) => boolean): QueryBuilder;
-  limit(n: number): QueryBuilder;
-  skip(n: number): QueryBuilder;
-  all(): FactRecord[];
-  whereProperty(propertyName: string, operator: '=' | '>' | '<' | '>=' | '<=', value: unknown, target: 'node' | 'edge'): QueryBuilder;
-  whereLabel(labels: string | string[], options?: { mode?: 'AND' | 'OR'; on?: 'subject' | 'object' | 'both' }): QueryBuilder;
-}
-```
-
-### TypedSynapseDB 接口
-```typescript
-interface TypedSynapseDB<TNodeProps, TEdgeProps> {
-  addFact(fact: TypedFactInput, options?: TypedFactOptions<TNodeProps, TEdgeProps>): TypedFactRecord<TNodeProps, TEdgeProps>;
-  find<TCriteria extends FactCriteria>(criteria: TCriteria): TypedQueryBuilder<TNodeProps, TEdgeProps, TCriteria>;
-  findByNodeProperty<T>(filter: TypedPropertyFilter<T>): TypedQueryBuilder<TNodeProps, TEdgeProps, FactCriteria>;
-  findByEdgeProperty<T>(filter: TypedPropertyFilter<T>): TypedQueryBuilder<TNodeProps, TEdgeProps, FactCriteria>;
-  getNodeProperties(nodeId: number): TNodeProps | null;
-  getEdgeProperties(key: TripleKey): TEdgeProps | null;
-}
-```
-
-### 批次选项接口
-```typescript
-interface BeginBatchOptions {
-  /** 事务 ID，用于幂等性控制 */
-  txId?: string;
-  /** 会话 ID，用于审计和调试 */
-  sessionId?: string;
-}
-
-interface CommitBatchOptions {
-  /** 持久性保证，true 表示强制同步到磁盘 */
-  durable?: boolean;
-}
-
-interface SynapseDBOpenOptions {
-  /** 启用跨周期 txId 幂等去重 */
-  enablePersistentTxDedupe?: boolean;
-  /** 记忆的最大事务 ID 数量 */
-  maxRememberTxIds?: number;
-  // ... 其他选项
-}
-```
-
-这些接口定义可在对应源码文件中查阅详细信息。
-
-**节来源**
-- [index.ts](file://src/index.ts#L0-L113)
-- [types/enhanced.ts](file://src/types/enhanced.ts#L141-L215)
-- [types/openOptions.ts](file://src/types/openOptions.ts#L1-L153)
+`

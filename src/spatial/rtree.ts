@@ -229,11 +229,13 @@ export class RTree implements SpatialIndex {
     (node.children as RTreeItem[]).push(item);
     this.extend(node.bbox, bbox);
 
-    // 检查是否需要分裂
-    while (level >= 0) {
-      if (insertPath[level].children.length > this.config.maxEntries) {
-        this.split(insertPath, level);
-        level--;
+    // 检查是否需要分裂（自下而上沿插入路径回溯）
+    let idx = insertPath.length - 1;
+    while (idx >= 0) {
+      const cur = insertPath[idx];
+      if (cur.children.length > this.config.maxEntries) {
+        this.split(insertPath, idx);
+        idx--;
       } else {
         break;
       }
