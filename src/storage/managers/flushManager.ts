@@ -5,13 +5,14 @@ import { writeStorageFile } from '../fileHeader.js';
 import { StringDictionary } from '../dictionary.js';
 import { PropertyStore } from '../propertyStore.js';
 import { TripleIndexes } from '../tripleIndexes.js';
-import { TripleStore } from '../tripleStore.js';
+import { TripleStore, type EncodedTriple } from '../tripleStore.js';
 import { PagedIndexCoordinator } from './pagedIndexCoordinator.js';
 import { PropertyIndexManager } from '../propertyIndex.js';
 import { writeHotness, type HotnessData } from '../hotness.js';
 import { WalManager } from './walManager.js';
 import { ConcurrencyControl } from './concurrencyControl.js';
 import { triggerCrash } from '../../utils/fault.js';
+import type { LsmLiteStaging } from '../staging.js';
 
 export interface FlushContext {
   path: string;
@@ -26,7 +27,7 @@ export interface FlushContext {
   concurrency: ConcurrencyControl;
   tombstones: Set<string>;
   hotness: HotnessData | null;
-  lsm?: { drain: () => any[]; size: () => number };
+  lsm?: LsmLiteStaging<EncodedTriple>;
 }
 
 export interface FlushMetrics {

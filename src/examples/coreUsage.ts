@@ -12,7 +12,6 @@ import {
   ExtendedSynapseDB,
   SynapseDB,
   PathfindingPlugin,
-  CypherPlugin,
   AggregationPlugin,
 } from '../index.js';
 
@@ -26,9 +25,10 @@ export async function coreExample() {
   db.addFact({ subject: 'Alice', predicate: 'knows', object: 'Bob' });
   const facts = db.listFacts();
   const query = db.find({ predicate: 'knows' });
+  const result = query.all();
 
   await db.close();
-  console.log('Core example:', facts.length, 'facts');
+  console.log('Core example:', facts.length, 'facts, query hits', result.length);
 }
 
 // ======================
@@ -81,10 +81,16 @@ export async function compatibilityExample() {
   console.log('Path found:', path !== null);
 
   // 聚合查询
-  const pipeline = db.aggregate();
+  const aggResults = db
+    .aggregate()
+    .match({ predicate: 'knows' })
+    .groupBy(['predicate'])
+    .count('edges')
+    .execute();
 
   // Cypher查询
   const cypherResults = db.cypher('MATCH (a)-[:knows]->(b) RETURN a,b');
+  console.log('Aggregation results:', aggResults);
   console.log('Cypher results:', cypherResults.length);
 
   await db.close();

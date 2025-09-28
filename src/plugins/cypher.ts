@@ -162,7 +162,7 @@ export class CypherPlugin implements SynapseDBPlugin {
   /**
    * 清理资源
    */
-  async cleanup(): Promise<void> {
+  cleanup(): void {
     this.cypherSupport = undefined;
   }
 }

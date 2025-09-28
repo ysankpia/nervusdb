@@ -2,7 +2,7 @@ import { promises as fsp } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { initializeIfMissing, readStorageFile, writeStorageFile } from './fileHeader.js';
+import { initializeIfMissing, readStorageFile } from './fileHeader.js';
 import { StringDictionary } from './dictionary.js';
 import { PropertyStore, TripleKey } from './propertyStore.js';
 import { TripleIndexes, type IndexOrder } from './tripleIndexes.js';
@@ -12,7 +12,6 @@ import { EncodedTriple, TripleStore } from './tripleStore.js';
 import { LsmLiteStaging } from './staging.js';
 import { readHotness, type HotnessData } from './hotness.js';
 import { cleanupProcessReaders } from './readerRegistry.js';
-import { triggerCrash } from '../utils/fault.js';
 import { DEFAULT_PAGE_SIZE } from './pagedIndex.js';
 import { PagedIndexCoordinator } from './managers/pagedIndexCoordinator.js';
 import { WalManager } from './managers/walManager.js';
@@ -314,6 +313,16 @@ export class PersistentStore {
 
   getDictionarySize(): number {
     return this.dictionary.size;
+  }
+
+  hasPagedIndexData(order: IndexOrder = 'SPO'): boolean {
+    const reader = this.pagedIndex.getReader(order);
+    if (!reader) return false;
+    try {
+      return reader.getPrimaryValues().length > 0;
+    } catch {
+      return false;
+    }
   }
 
   getNodeIdByValue(value: string): number | undefined {

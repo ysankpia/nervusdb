@@ -1,12 +1,12 @@
 import { EncodedTriple } from '../tripleStore.js';
 import { FactRecord } from '../persistentStore.js';
-import { TripleIndexes, type IndexOrder } from '../tripleIndexes.js';
 import { PagedIndexCoordinator } from './pagedIndexCoordinator.js';
 import { ConcurrencyControl } from './concurrencyControl.js';
 import { StringDictionary } from '../dictionary.js';
 import { PropertyStore } from '../propertyStore.js';
 import { encodeTripleKey, matchCriteria, primaryKey } from '../helpers/tripleOrdering.js';
 import { getBestIndexKey } from '../tripleIndexes.js';
+import type { IndexOrder } from '../tripleIndexes.js';
 
 export interface QueryOptions {
   includeProperties?: boolean;
@@ -35,7 +35,7 @@ export class QueryEngine {
   /**
    * 统一查询入口：自动选择最优策略
    */
-  query(criteria: Partial<EncodedTriple>, options: QueryOptions = {}): EncodedTriple[] {
+  query(criteria: Partial<EncodedTriple>): EncodedTriple[] {
     // 快照模式：使用纯磁盘查询
     if (this.context.concurrency.hasPinnedEpoch()) {
       return this.queryFromDisk(criteria);
@@ -154,7 +154,9 @@ export class QueryEngine {
     if (isFullScan) {
       yield* this.streamFullScanFromDisk(batchSize);
     } else {
-      yield* this.streamIndexedQueryFromDisk(criteria, batchSize);
+      for (const batch of this.streamIndexedQueryFromDisk(criteria, batchSize)) {
+        yield batch;
+      }
     }
   }
 
@@ -429,10 +431,10 @@ export class QueryEngine {
   /**
    * 流式索引查询（纯磁盘）
    */
-  private async *streamIndexedQueryFromDisk(
+  private *streamIndexedQueryFromDisk(
     criteria: Partial<EncodedTriple>,
     batchSize: number,
-  ): AsyncGenerator<EncodedTriple[], void, unknown> {
+  ): Generator<EncodedTriple[], void, unknown> {
     const order = getBestIndexKey(criteria);
     const reader = this.context.pagedIndex.getReader(order);
     const primaryValue = criteria[primaryKey(order)];
@@ -494,7 +496,7 @@ export class QueryEngine {
   /**
    * 数组分批处理
    */
-  private async *batchArray<T>(array: T[], batchSize: number): AsyncGenerator<T[], void, unknown> {
+  private *batchArray<T>(array: T[], batchSize: number): Generator<T[], void, unknown> {
     for (let i = 0; i < array.length; i += batchSize) {
       yield array.slice(i, i + batchSize);
     }

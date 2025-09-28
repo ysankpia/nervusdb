@@ -167,15 +167,15 @@ export class SynapseDB {
   ): Promise<StreamingQueryBuilder> {
     const anchor = options?.anchor ?? this.inferAnchor(criteria);
     const store = this.core.getStore();
-    const pinned = store.getCurrentEpoch?.() ?? 0;
+    const pinned = store.getCurrentEpoch();
 
     // 流式查询始终使用快照模式以保证一致性
     try {
-      await store.pushPinnedEpoch?.(pinned);
+      await store.pushPinnedEpoch(pinned);
       const context = await buildStreamingFindContext(store, criteria, anchor);
       return new StreamingQueryBuilder(store, context, pinned);
     } finally {
-      await store.popPinnedEpoch?.();
+      await store.popPinnedEpoch();
     }
   }
 
@@ -188,31 +188,23 @@ export class SynapseDB {
   ): QueryBuilder {
     const anchor = options?.anchor ?? 'subject';
     const store = this.core.getStore();
-    const pinned = store.getCurrentEpoch?.() ?? 0;
-
-    // 检查是否有分页索引数据
-    const pagedReaders = (store as any).pagedReaders;
-    let hasPagedData = false;
-    if (pagedReaders?.size > 0) {
-      const spoReader = pagedReaders.get('SPO');
-      if (spoReader) {
-        const primaryValues = spoReader.getPrimaryValues?.() ?? [];
-        hasPagedData = primaryValues.length > 0;
-      }
-    }
+    const pinned = store.getCurrentEpoch();
+    const hasPagedData = store.hasPagedIndexData();
 
     if (hasPagedData) {
+      const pushPromise = store.pushPinnedEpoch(pinned);
+      void pushPromise.catch(() => undefined);
       try {
-        (store as any).pushPinnedEpoch?.(pinned);
         const context = buildFindContextFromProperty(store, propertyFilter, anchor, 'node');
         return QueryBuilder.fromFindResult(store, context, pinned);
       } finally {
-        (store as any).popPinnedEpoch?.();
+        const popPromise = store.popPinnedEpoch();
+        void popPromise.catch(() => undefined);
       }
-    } else {
-      const context = buildFindContextFromProperty(store, propertyFilter, anchor, 'node');
-      return QueryBuilder.fromFindResult(store, context);
     }
+
+    const context = buildFindContextFromProperty(store, propertyFilter, anchor, 'node');
+    return QueryBuilder.fromFindResult(store, context);
   }
 
   /**
@@ -224,31 +216,23 @@ export class SynapseDB {
   ): QueryBuilder {
     const anchor = options?.anchor ?? 'subject';
     const store = this.core.getStore();
-    const pinned = store.getCurrentEpoch?.() ?? 0;
-
-    // 检查是否有分页索引数据
-    const pagedReaders = (store as any).pagedReaders;
-    let hasPagedData = false;
-    if (pagedReaders?.size > 0) {
-      const spoReader = pagedReaders.get('SPO');
-      if (spoReader) {
-        const primaryValues = spoReader.getPrimaryValues?.() ?? [];
-        hasPagedData = primaryValues.length > 0;
-      }
-    }
+    const pinned = store.getCurrentEpoch();
+    const hasPagedData = store.hasPagedIndexData();
 
     if (hasPagedData) {
+      const pushPromise = store.pushPinnedEpoch(pinned);
+      void pushPromise.catch(() => undefined);
       try {
-        (store as any).pushPinnedEpoch?.(pinned);
         const context = buildFindContextFromProperty(store, propertyFilter, anchor, 'edge');
         return QueryBuilder.fromFindResult(store, context, pinned);
       } finally {
-        (store as any).popPinnedEpoch?.();
+        const popPromise = store.popPinnedEpoch();
+        void popPromise.catch(() => undefined);
       }
-    } else {
-      const context = buildFindContextFromProperty(store, propertyFilter, anchor, 'edge');
-      return QueryBuilder.fromFindResult(store, context);
     }
+
+    const context = buildFindContextFromProperty(store, propertyFilter, anchor, 'edge');
+    return QueryBuilder.fromFindResult(store, context);
   }
 
   /**
@@ -260,31 +244,23 @@ export class SynapseDB {
   ): QueryBuilder {
     const anchor = options?.anchor ?? 'subject';
     const store = this.core.getStore();
-    const pinned = store.getCurrentEpoch?.() ?? 0;
-
-    // 同 find()/属性查询：如果已有分页索引数据，采用快照模式
-    const pagedReaders = (store as any).pagedReaders;
-    let hasPagedData = false;
-    if (pagedReaders?.size > 0) {
-      const spoReader = pagedReaders.get('SPO');
-      if (spoReader) {
-        const primaryValues = spoReader.getPrimaryValues?.() ?? [];
-        hasPagedData = primaryValues.length > 0;
-      }
-    }
+    const pinned = store.getCurrentEpoch();
+    const hasPagedData = store.hasPagedIndexData();
 
     if (hasPagedData) {
+      const pushPromise = store.pushPinnedEpoch(pinned);
+      void pushPromise.catch(() => undefined);
       try {
-        (store as any).pushPinnedEpoch?.(pinned);
         const context = buildFindContextFromLabel(store, labels, { mode: options?.mode }, anchor);
         return QueryBuilder.fromFindResult(store, context, pinned);
       } finally {
-        (store as any).popPinnedEpoch?.();
+        const popPromise = store.popPinnedEpoch();
+        void popPromise.catch(() => undefined);
       }
-    } else {
-      const context = buildFindContextFromLabel(store, labels, { mode: options?.mode }, anchor);
-      return QueryBuilder.fromFindResult(store, context);
     }
+
+    const context = buildFindContextFromLabel(store, labels, { mode: options?.mode }, anchor);
+    return QueryBuilder.fromFindResult(store, context);
   }
 
   deleteFact(fact: import('./storage/persistentStore.js').FactInput): void {
@@ -319,14 +295,14 @@ export class SynapseDB {
   // 读快照：在给定回调期间固定当前 epoch，避免 mid-chain 刷新 readers 造成视图漂移
   async withSnapshot<T>(fn: (db: SynapseDB) => Promise<T> | T): Promise<T> {
     const store = this.core.getStore();
-    const epoch = store.getCurrentEpoch?.() ?? 0;
+    const epoch = store.getCurrentEpoch();
     try {
       this.snapshotDepth++;
       // 等待读者注册完成，确保快照安全
-      await (store as any).pushPinnedEpoch?.(epoch);
+      await store.pushPinnedEpoch(epoch);
       return await fn(this);
     } finally {
-      await (store as any).popPinnedEpoch?.();
+      await store.popPinnedEpoch();
       this.snapshotDepth = Math.max(0, this.snapshotDepth - 1);
     }
   }
@@ -334,7 +310,7 @@ export class SynapseDB {
   // 暂存层指标（实验性）：仅用于观测与基准
   getStagingMetrics(): { lsmMemtable: number } {
     const store = this.core.getStore();
-    return (store as any).getStagingMetrics?.() ?? { lsmMemtable: 0 };
+    return store.getStagingMetrics();
   }
 
   /**
