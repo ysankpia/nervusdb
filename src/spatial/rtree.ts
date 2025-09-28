@@ -401,7 +401,9 @@ export class RTree implements SpatialIndex {
    * 计算节点边界框
    */
   private calcBBox(node: RTreeNode): void {
-    this.distBBox(node, 0, node.children.length);
+    // 重新计算并回写当前节点的 bbox（修复先前未赋值导致的 Infinity/-Infinity 残留）
+    const bbox = this.distBBox(node, 0, node.children.length);
+    node.bbox = [bbox[0], bbox[1], bbox[2], bbox[3]];
   }
 
   /**
