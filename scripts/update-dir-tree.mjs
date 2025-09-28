@@ -76,6 +76,13 @@ const COMMENTS = {
   'docs/项目发展路线图': 'Roadmap',
   'docs/项目实施建议': '推广与落地建议',
   'docs/项目审查文档': '多模型评审记录',
+  'benchmarks': '性能基准脚本',
+  'scripts': '辅助脚本',
+  '.qoder/repowiki': '仓内知识库',
+  '.qoder/repowiki/zh': '中文资料',
+  '.qoder/repowiki/zh/content': '中文内容',
+  '.qoder/repowiki/zh/meta': '知识库元数据',
+  '.qoder/repowiki/zh/meta/repowiki-metadata.json': '知识库索引信息',
   'dist': '构建产物（发布用）',
   'coverage': '覆盖率报告（测试生成）',
   '.agents': '智能体规则与协作说明',
@@ -147,6 +154,27 @@ function listDirFiles(rel, { ext, directOnly = true } = { ext: '', directOnly: t
     out.push(f);
   }
   return out.sort();
+}
+
+function listDirEntries(rel) {
+  const prefix = toPosix(rel).replace(/\/?$/, '/');
+  const entries = new Map();
+  for (const f of GIT.list) {
+    if (!f.startsWith(prefix)) continue;
+    const rest = f.slice(prefix.length);
+    if (!rest) continue;
+    const [head, ...tail] = rest.split('/');
+    if (!head) continue;
+    const kind = tail.length > 0 ? 'dir' : 'file';
+    if (kind === 'dir') {
+      entries.set(head, 'dir');
+    } else if (!entries.has(head)) {
+      entries.set(head, 'file');
+    }
+  }
+  return Array.from(entries.entries())
+    .map(([name, kind]) => ({ name, kind }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-u-co-pinyin'));
 }
 
 async function buildTestsSummary() {
@@ -319,6 +347,52 @@ async function buildDocsSection() {
   return lines;
 }
 
+async function buildQoderSection() {
+  if (!hasDir('.qoder/repowiki')) return [];
+  const lines = [];
+  lines.push('├─ .qoder/repowiki/              ' + (COMMENTS['.qoder/repowiki'] || ''));
+
+  if (!hasDir('.qoder/repowiki/zh')) {
+    return lines;
+  }
+
+  const zhEntries = listDirEntries('.qoder/repowiki/zh');
+  const zhHasChildren = zhEntries.length > 0;
+  const zhLabel = COMMENTS['.qoder/repowiki/zh'] || '.qoder/repowiki/zh';
+  lines.push(`│  ${zhHasChildren ? '├' : '└'}─ ${zhLabel}/`);
+
+  zhEntries.forEach((entry, idx) => {
+    const isLast = idx === zhEntries.length - 1;
+    const connector = isLast ? '└' : '├';
+    const entryRel = path.posix.join('.qoder/repowiki/zh', entry.name);
+    const label = COMMENTS[entryRel] || entry.name;
+    const suffix = entry.kind === 'dir' ? '/' : '';
+    lines.push(`│  │  ${connector}─ ${label}${suffix}`);
+
+    if (entry.kind === 'dir' && entry.name === 'content') {
+      const contentEntries = listDirEntries(entryRel);
+      contentEntries.forEach((child, childIdx) => {
+        const childConnector = childIdx === contentEntries.length - 1 ? '└' : '├';
+        const childRel = path.posix.join(entryRel, child.name);
+        const childLabel = COMMENTS[childRel] || child.name;
+        const childSuffix = child.kind === 'dir' ? '/' : '';
+        lines.push(`│  │  │  ${childConnector}─ ${childLabel}${childSuffix}`);
+      });
+    }
+
+    if (entry.kind === 'dir' && entry.name === 'meta') {
+      const metaFiles = listDirFiles(entryRel, { directOnly: true });
+      metaFiles.forEach((file, fileIdx) => {
+        const fileConnector = fileIdx === metaFiles.length - 1 ? '└' : '├';
+        const fileLabel = COMMENTS[file] || path.posix.basename(file);
+        lines.push(`│  │     ${fileConnector}─ ${fileLabel}`);
+      });
+    }
+  });
+
+  return lines;
+}
+
 async function buildAgentsSection() {
   const lines = [];
   if (!hasDir('.agents')) return lines;
@@ -339,6 +413,10 @@ async function buildRootFiles() {
     lines.push('├─ ' + withComment('dist') + '/');
   if (hasDir('coverage'))
     lines.push('├─ ' + withComment('coverage') + '/');
+  if (hasDir('benchmarks'))
+    lines.push('├─ ' + withComment('benchmarks') + '/');
+  if (hasDir('scripts'))
+    lines.push('├─ ' + withComment('scripts') + '/');
   if (hasDir('.github'))
     lines.push('├─ ' + withComment('.github') + '/');
   if (hasDir('.husky'))
@@ -362,6 +440,7 @@ async function buildTree() {
     lines.push(...(await buildTestsSummary()));
   }
   lines.push(...(await buildDocsSection()));
+  lines.push(...(await buildQoderSection()));
   lines.push(...(await buildAgentsSection()));
   lines.push(...(await buildRootFiles()));
   return lines.join('\n');
