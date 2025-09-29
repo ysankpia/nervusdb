@@ -402,9 +402,10 @@ g.V('user:alice').repeat(out('FRIEND_OF')).times(2).values('dept');
 - **官方教学**：`docs/教学文档/`（教程 00~09 + 实战案例）
 - **操作示例**：`docs/使用示例/`（CLI、查询、事务、流式、图算法、迁移指南等）
 - **知识库**：`.qoder/repowiki/zh/content/` 分专题深入解释
-- **路线图**：`docs/项目发展路线图/` 与 `docs/milestones/`
+- **路线图**：`docs/milestones/`（v1.1 系列规划）
 - **测试分层**：`docs/测试分层与运行指南.md`
 - **API/CLI 附录**：`docs/教学文档/附录-API参考.md`、`docs/教学文档/附录-CLI参考.md`
+- **下一步方向**：`NEXT_STEPS.md`（基于代码现状的发展规划）
 
 ## 安全备份与合规
 
@@ -418,11 +419,12 @@ g.V('user:alice').repeat(out('FRIEND_OF')).times(2).values('dept');
 ## 路线图与版本策略
 
 - 版本遵循 SemVer：`MAJOR.MINOR.PATCH`
+- 当前版本：v1.1.0（功能完整、性能优秀）
 - 每个里程碑详见 `docs/milestones/` 与 `CHANGELOG.md`
-- 近期方向：
-  - v1.2.x：查询增强（模式匹配 Planner 优化、多跳聚合）
-  - v1.3.x：标准兼容（更多 Cypher/GraphQL 语法、Gremlin Pipeline）
-  - v1.4.x：高级特性（分布式同步、增量备份、统计指标下沉）
+- 下一步方向：**真实场景验证驱动的演进**（详见 `NEXT_STEPS.md`）
+  - Phase 1：选择真实项目验证（代码知识图谱/文档关联/配置血缘）
+  - Phase 2：基于验证结果优化（简化/性能/易用性）
+  - Phase 3：代码质量提升（测试回归/持续集成优化）
 
 ## 常见问题 FAQ
 
