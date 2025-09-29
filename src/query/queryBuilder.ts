@@ -1187,6 +1187,7 @@ export class LazyQueryBuilder extends QueryBuilder {
       const manifest = this.lazyStore.getIndexManifest() as PagedIndexManifest | null;
       let upperBound: number | undefined;
       let pagesForPrimary = 0;
+      let hotnessPrimary: number | undefined;
       if (manifest) {
         const lookup = manifest.lookups.find((l) => l.order === order);
         if (lookup) {
@@ -1200,9 +1201,30 @@ export class LazyQueryBuilder extends QueryBuilder {
           } else {
             upperBound = (lookup.pages?.length ?? 0) * pageSize;
           }
+
+          // 合并对偶顺序的热度计数，给出粗略热度估算
+          try {
+            const hot = (this.lazyStore as any).getHotnessSnapshot?.();
+            const counts = hot?.counts ?? {};
+            const pair: Partial<Record<IndexOrder, IndexOrder>> = {
+              SPO: 'SOP',
+              SOP: 'SPO',
+              POS: 'PSO',
+              PSO: 'POS',
+              OSP: 'OPS',
+              OPS: 'OSP',
+            };
+            const merged: Record<string, number> = { ...(counts[order] ?? {}) };
+            const other = pair[order];
+            if (other) {
+              const b = counts[other] ?? {};
+              for (const [k, v] of Object.entries(b)) merged[k] = (merged[k] ?? 0) + (v as number);
+            }
+            if (pid !== undefined) hotnessPrimary = merged[String(pid)] ?? 0;
+          } catch {}
         }
       }
-      (summary as any).estimate = { order, upperBound, pagesForPrimary };
+      (summary as any).estimate = { order, upperBound, pagesForPrimary, hotnessPrimary };
     }
 
     return summary;
