@@ -12,11 +12,7 @@ export { PathfindingPlugin } from './plugins/pathfinding.js';
 export { CypherPlugin } from './plugins/cypher.js';
 export { AggregationPlugin } from './plugins/aggregation.js';
 
-// 实验性查询语言工厂
-/** @experimental */
-export { graphql } from './query/graphql/index.js';
-/** @experimental */
-export { gremlin } from './query/gremlin/index.js';
+
 
 // =======================
 // 兼容性导出（向后兼容）
