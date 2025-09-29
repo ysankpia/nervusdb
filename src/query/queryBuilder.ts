@@ -4,6 +4,8 @@ import { VariablePathBuilder } from './path/variable.js';
 import type { PathResult, Direction, Uniqueness } from './path/variable.js';
 import { EncodedTriple } from '../storage/tripleStore.js';
 import type { IndexOrder } from '../storage/tripleIndexes.js';
+import { getBestIndexKey } from '../storage/tripleIndexes.js';
+import type { PagedIndexManifest } from '../storage/pagedIndex.js';
 
 export type FactCriteria = Partial<FactInput>;
 
@@ -1168,12 +1170,42 @@ export class LazyQueryBuilder extends QueryBuilder {
       if (n.kind === 'UNION' || n.kind === 'UNION_ALL') return { kind: n.kind };
       return { kind: (n as any).kind };
     });
-    return {
+    const summary: Record<string, unknown> = {
       type: 'LAZY',
       orientation: this.lazyOrientation,
       pinned: this.pinned !== undefined,
       plan,
     };
+
+    // 估算 FIND 阶段的基数（粗略）
+    const findNode = this.plan.find((n) => n.kind === 'FIND') as
+      | { kind: 'FIND'; criteria: FactCriteria; anchor: FrontierOrientation }
+      | undefined;
+    if (findNode) {
+      const idCrit = convertCriteriaToIds(this.lazyStore, findNode.criteria);
+      const order = getBestIndexKey(idCrit ?? {});
+      const manifest = this.lazyStore.getIndexManifest() as PagedIndexManifest | null;
+      let upperBound: number | undefined;
+      let pagesForPrimary = 0;
+      if (manifest) {
+        const lookup = manifest.lookups.find((l) => l.order === order);
+        if (lookup) {
+          const pageSize = manifest.pageSize;
+          // 根据主维度可用的 id 估算页数
+          const primary = order[0]; // 'S'|'P'|'O'
+          const pid = primary === 'S' ? (idCrit as any)?.subjectId : primary === 'P' ? (idCrit as any)?.predicateId : (idCrit as any)?.objectId;
+          if (pid !== undefined) {
+            pagesForPrimary = lookup.pages.filter((p) => p.primaryValue === pid).length;
+            upperBound = pagesForPrimary * pageSize;
+          } else {
+            upperBound = (lookup.pages?.length ?? 0) * pageSize;
+          }
+        }
+      }
+      (summary as any).estimate = { order, upperBound, pagesForPrimary };
+    }
+
+    return summary;
   }
 
   private materializeToQueryBuilder(other: QueryBuilder): QueryBuilder {

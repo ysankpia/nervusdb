@@ -319,6 +319,20 @@ export class PersistentStore {
     return this.dictionary.size;
   }
 
+  /**
+   * 获取分页索引的 manifest（只读，用于诊断/估算）
+   */
+  getIndexManifest() {
+    return this.pagedIndex.getManifest();
+  }
+
+  /**
+   * 获取热度数据快照（只读，用于诊断/估算）
+   */
+  getHotnessSnapshot() {
+    return this.hotness;
+  }
+
   hasPagedIndexData(order: IndexOrder = 'SPO'): boolean {
     const reader = this.pagedIndex.getReader(order);
     if (!reader) return false;
