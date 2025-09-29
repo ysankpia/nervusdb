@@ -163,6 +163,18 @@ export class QueryBuilder {
   }
 
   /**
+   * 异步收集为数组（与 all() 结果一致，便于统一 async 流程）
+   */
+  async collect(): Promise<FactRecord[]> {
+    this.pin();
+    try {
+      return [...this.facts];
+    } finally {
+      this.unpin();
+    }
+  }
+
+  /**
    * 警告：函数式过滤会绕过索引优化并在内存中扫描所有结果。
    * 建议改用 whereProperty()/whereLabel()/followWithNodeProperty()。
    *
@@ -908,6 +920,15 @@ export class StreamingQueryBuilder {
     }
   }
 
+  /**
+   * 异步收集全部事实
+   */
+  async collect(): Promise<FactRecord[]> {
+    const out: FactRecord[] = [];
+    for await (const f of this) out.push(f);
+    return out;
+  }
+
   private pin(): void {
     if (this.pinnedEpoch !== undefined) {
       (this.store as unknown as { pinnedEpochStack: number[] }).pinnedEpochStack?.push(
@@ -927,8 +948,8 @@ export class StreamingQueryBuilder {
   }
 }
 
-/**
- * 惰性执行版 QueryBuilder（灰度）：
+  /**
+   * 惰性执行版 QueryBuilder（灰度）：
  * - 不在链接口阶段物化结果，保存操作计划；
  * - 执行时基于底层 streamFactRecords/逐节点拓展按需产出；
  * - 通过 SynapseDB.findLazy() 暴露，默认 find() 行为不变。
@@ -1100,6 +1121,21 @@ export class LazyQueryBuilder extends QueryBuilder {
       return QueryBuilder.fromFindResult(this.lazyStore, { facts, frontier, orientation: this.lazyOrientation }, this.pinned);
     }
     return other;
+  }
+
+  /**
+   * 异步收集（真正流式收集，不占用大内存峰值）
+   */
+  async collect(): Promise<FactRecord[]> {
+    const out: FactRecord[] = [];
+    // 保持快照固定
+    if (this.pinned !== undefined) await this.lazyStore.pushPinnedEpoch(this.pinned);
+    try {
+      for await (const f of this) out.push(f);
+      return out;
+    } finally {
+      if (this.pinned !== undefined) await this.lazyStore.popPinnedEpoch();
+    }
   }
 
   override async *[Symbol.asyncIterator](): AsyncIterableIterator<FactRecord> {
