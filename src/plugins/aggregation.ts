@@ -1,5 +1,5 @@
 import { SynapseDBPlugin } from './base.js';
-import { CoreSynapseDB } from '../coreSynapseDb.js';
+import type { SynapseDB } from '../synapseDb.js';
 import { PersistentStore } from '../storage/persistentStore.js';
 import { AggregationPipeline } from '../query/aggregation.js';
 
@@ -15,10 +15,10 @@ export class AggregationPlugin implements SynapseDBPlugin {
   readonly name = 'aggregation';
   readonly version = '1.0.0';
 
-  private db!: CoreSynapseDB;
+  private db!: SynapseDB;
   private store!: PersistentStore;
 
-  initialize(db: CoreSynapseDB, store: PersistentStore): void {
+  initialize(db: SynapseDB, store: PersistentStore): void {
     this.db = db;
     this.store = store;
   }

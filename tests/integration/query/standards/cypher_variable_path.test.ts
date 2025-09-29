@@ -26,9 +26,9 @@ describe('Cypher 最小子集（变长路径）', () => {
     db.addFact({ subject: 'C', predicate: 'R', object: 'D' });
     await db.flush();
 
-    const rows = db.cypher('MATCH (x)-[:R*2..3]->(y) RETURN x,y');
+    const result = await db.cypher('MATCH (x)-[:R*2..3]->(y) RETURN x,y');
     // 应至少包含 (A->C), (B->D)
-    const pairs = rows.map((r) => `${r['x']}->${r['y']}`).sort();
+    const pairs = result.records.map((r) => `${r['x']}->${r['y']}`).sort();
     expect(pairs).toContain('A->C');
     expect(pairs).toContain('B->D');
   });

@@ -51,9 +51,9 @@ describe('查询增强：UNION/最短路径/Cypher', () => {
     db.addFact({ subject: 'alice', predicate: 'KNOWS', object: 'bob' });
     await db.flush();
 
-    const rows = db.cypher('MATCH (a)-[:KNOWS]->(b) RETURN a,b');
-    expect(rows.length).toBe(1);
-    expect(rows[0]['a']).toBe('alice');
-    expect(rows[0]['b']).toBe('bob');
+    const result = await db.cypher('MATCH (a)-[:KNOWS]->(b) RETURN a,b');
+    expect(result.records.length).toBe(1);
+    expect(result.records[0]['a']).toBe('alice');
+    expect(result.records[0]['b']).toBe('bob');
   });
 });

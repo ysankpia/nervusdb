@@ -1,5 +1,5 @@
 import { SynapseDBPlugin } from './base.js';
-import { CoreSynapseDB } from '../coreSynapseDb.js';
+import type { SynapseDB } from '../synapseDb.js';
 import { PersistentStore } from '../storage/persistentStore.js';
 import { warnExperimental } from '../utils/experimental.js';
 import {
@@ -23,11 +23,11 @@ export class CypherPlugin implements SynapseDBPlugin {
   readonly name = 'cypher';
   readonly version = '1.0.0';
 
-  private db!: CoreSynapseDB;
+  private db!: SynapseDB;
   private store!: PersistentStore;
   private cypherSupport?: CypherSupport;
 
-  initialize(db: CoreSynapseDB, store: PersistentStore): void {
+  initialize(db: SynapseDB, store: PersistentStore): void {
     this.db = db;
     this.store = store;
     warnExperimental('Cypher 查询语言前端');

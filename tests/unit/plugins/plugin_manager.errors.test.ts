@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { makeWorkspace, cleanupWorkspace, within } from '../../helpers/tempfs';
-import { CoreSynapseDB } from '@/coreSynapseDb';
+import { SynapseDB } from '@/synapseDb';
 import { PluginManager, type SynapseDBPlugin } from '@/plugins/base';
 
 describe('PluginManager 错误与边界', () => {
@@ -14,7 +14,7 @@ describe('PluginManager 错误与边界', () => {
 
   it('重复插件名应报错；初始化后禁止注册', async () => {
     const dbPath = within(ws, 'db.synapsedb');
-    const db = await CoreSynapseDB.open(dbPath, { pageSize: 256 });
+    const db = await SynapseDB.open(dbPath, { pageSize: 256 });
     const pm = new PluginManager(db, db.getStore());
 
     const ok: SynapseDBPlugin = { name: 'x', version: '1', initialize() {} };
@@ -33,7 +33,7 @@ describe('PluginManager 错误与边界', () => {
 
   it('cleanup 应跳过未实现清理的插件，并并发执行', async () => {
     const dbPath = within(ws, 'db2.synapsedb');
-    const db = await CoreSynapseDB.open(dbPath, { pageSize: 256 });
+    const db = await SynapseDB.open(dbPath, { pageSize: 256 });
     const pm = new PluginManager(db, db.getStore());
 
     let cleaned = 0;

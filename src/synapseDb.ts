@@ -1,15 +1,16 @@
-import { ExtendedSynapseDB, type SynapseDBPlugin } from './plugins/base.js';
+import { PluginManager, type SynapseDBPlugin } from './plugins/base.js';
 import { PathfindingPlugin } from './plugins/pathfinding.js';
 import { CypherPlugin } from './plugins/cypher.js';
 import { AggregationPlugin } from './plugins/aggregation.js';
 import { warnExperimental } from './utils/experimental.js';
 import { TripleKey } from './storage/propertyStore.js';
-import { PersistentStore } from './storage/persistentStore.js';
+import { PersistentStore, FactInput, FactRecord } from './storage/persistentStore.js';
 import {
   FactCriteria,
   FrontierOrientation,
   QueryBuilder,
   StreamingQueryBuilder,
+  buildFindContext,
   buildStreamingFindContext,
   buildFindContextFromProperty,
   buildFindContextFromLabel,
@@ -32,15 +33,17 @@ export interface FactOptions {
 }
 
 // 重新导出核心类型
-export type { FactInput, FactRecord } from './storage/persistentStore.js';
+export type { FactInput, FactRecord };
 
 /**
- * SynapseDB - 嵌入式三元组知识库（兼容性版本）
+ * SynapseDB - 嵌入式三元组知识库
  *
- * 这是一个向后兼容的版本，包含所有插件功能。
- * 新项目推荐使用 CoreSynapseDB + 选择性插件的方式。
+ * 统一的知识库实现，包含：
+ * - 核心存储与查询功能
+ * - 插件系统（默认加载 PathfindingPlugin + AggregationPlugin）
+ * - 可选实验性功能（Cypher 查询）
  *
- * "好品味"原则：使用组合而非继承，没有特殊情况。
+ * "好品味"原则：简单的 API，强大的功能，没有特殊情况。
  *
  * @example
  * ```typescript
@@ -59,129 +62,164 @@ export type { FactInput, FactRecord } from './storage/persistentStore.js';
  */
 export class SynapseDB {
   private snapshotDepth = 0;
+  private pluginManager: PluginManager;
+  private hasCypherPlugin: boolean;
 
   private constructor(
-    private readonly core: ExtendedSynapseDB,
-    private readonly hasCypherPlugin: boolean,
-  ) {}
+    private readonly store: PersistentStore,
+    plugins: SynapseDBPlugin[],
+    hasCypher: boolean,
+  ) {
+    this.hasCypherPlugin = hasCypher;
+    this.pluginManager = new PluginManager(this, store);
+
+    // 注册所有插件
+    for (const plugin of plugins) {
+      this.pluginManager.register(plugin);
+    }
+  }
 
   /**
-   * 打开或创建 SynapseDB 数据库（包含所有插件）
+   * 打开或创建 SynapseDB 数据库
    */
   static async open(path: string, options?: SynapseDBOpenOptions): Promise<SynapseDB> {
     const experimental = options?.experimental ?? {};
     const envEnableExperimental = process.env.SYNAPSEDB_ENABLE_EXPERIMENTAL_QUERIES === '1';
     const enableCypher = experimental.cypher ?? envEnableExperimental;
 
+    // 默认插件：Pathfinding + Aggregation
     const plugins: SynapseDBPlugin[] = [new PathfindingPlugin(), new AggregationPlugin()];
+
+    // 可选实验性插件：Cypher
     if (enableCypher) {
       plugins.push(new CypherPlugin());
       warnExperimental('Cypher 查询语言前端');
     }
 
-    const extendedDb = await ExtendedSynapseDB.open(path, {
-      ...(options ?? {}),
-      plugins,
-    });
+    // 打开存储
+    const store = await PersistentStore.open(path, options ?? {});
 
-    return new SynapseDB(extendedDb, enableCypher);
+    // 创建数据库实例
+    const db = new SynapseDB(store, plugins, enableCypher);
+
+    // 初始化插件
+    await db.pluginManager.initialize();
+
+    return db;
   }
 
   // ===================
-  // 核心API委托（直接委托）
+  // 核心 API：存储与查询
   // ===================
 
-  addFact(
-    fact: import('./storage/persistentStore.js').FactInput,
-    options: FactOptions = {},
-  ): import('./storage/persistentStore.js').FactRecord {
-    return this.core.addFact(fact, options);
+  /**
+   * 添加事实（三元组）
+   */
+  addFact(fact: FactInput, options: FactOptions = {}): FactRecord {
+    const persisted = this.store.addFact(fact);
+
+    if (options.subjectProperties) {
+      this.store.setNodeProperties(persisted.subjectId, options.subjectProperties);
+    }
+
+    if (options.objectProperties) {
+      this.store.setNodeProperties(persisted.objectId, options.objectProperties);
+    }
+
+    if (options.edgeProperties) {
+      const tripleKey: TripleKey = {
+        subjectId: persisted.subjectId,
+        predicateId: persisted.predicateId,
+        objectId: persisted.objectId,
+      };
+      this.store.setEdgeProperties(tripleKey, options.edgeProperties);
+    }
+
+    return {
+      ...persisted,
+      subjectProperties: this.store.getNodeProperties(persisted.subjectId),
+      objectProperties: this.store.getNodeProperties(persisted.objectId),
+      edgeProperties: this.store.getEdgeProperties({
+        subjectId: persisted.subjectId,
+        predicateId: persisted.predicateId,
+        objectId: persisted.objectId,
+      }),
+    };
   }
 
-  listFacts(): import('./storage/persistentStore.js').FactRecord[] {
-    return this.core.listFacts();
+  /**
+   * 列出所有事实
+   */
+  listFacts(): FactRecord[] {
+    return this.store.listFacts();
   }
 
-  // 流式查询：逐批返回事实记录，避免大结果集内存压力
+  /**
+   * 流式查询：逐批返回事实记录，避免大结果集内存压力
+   */
   async *streamFacts(
     criteria?: Partial<{ subject: string; predicate: string; object: string }>,
     batchSize = 1000,
-  ): AsyncGenerator<import('./storage/persistentStore.js').FactRecord[], void, unknown> {
+  ): AsyncGenerator<FactRecord[], void, unknown> {
     // 将字符串条件转换为ID条件
     const encodedCriteria: Partial<{ subjectId: number; predicateId: number; objectId: number }> =
       {};
 
     if (criteria?.subject) {
-      const subjectId = this.core.getNodeId(criteria.subject);
+      const subjectId = this.getNodeId(criteria.subject);
       if (subjectId !== undefined) encodedCriteria.subjectId = subjectId;
       else return; // 主语不存在，返回空
     }
 
     if (criteria?.predicate) {
-      const predicateId = this.core.getNodeId(criteria.predicate);
+      const predicateId = this.getNodeId(criteria.predicate);
       if (predicateId !== undefined) encodedCriteria.predicateId = predicateId;
       else return; // 谓语不存在，返回空
     }
 
     if (criteria?.object) {
-      const objectId = this.core.getNodeId(criteria.object);
+      const objectId = this.getNodeId(criteria.object);
       if (objectId !== undefined) encodedCriteria.objectId = objectId;
       else return; // 宾语不存在，返回空
     }
 
     // 使用底层流式查询
-    const store = this.core.getStore();
-    for await (const batch of store.streamFactRecords(encodedCriteria, batchSize)) {
+    for await (const batch of this.store.streamFactRecords(encodedCriteria, batchSize)) {
       if (batch.length > 0) {
         yield batch;
       }
     }
   }
 
-  // 兼容别名：满足测试与直觉 API（与 streamFacts 等价）
+  /**
+   * 兼容别名：满足测试与直觉 API（与 streamFacts 等价）
+   */
   findStream(
     criteria?: Partial<{ subject: string; predicate: string; object: string }>,
     options?: { batchSize?: number },
-  ): AsyncIterable<import('./storage/persistentStore.js').FactRecord[]> {
+  ): AsyncIterable<FactRecord[]> {
     return this.streamFacts(criteria, options?.batchSize);
   }
 
-  getNodeId(value: string): number | undefined {
-    return this.core.getNodeId(value);
-  }
-
-  getNodeValue(id: number): string | undefined {
-    return this.core.getNodeValue(id);
-  }
-
-  getNodeProperties(nodeId: number): Record<string, unknown> | null {
-    return this.core.getNodeProperties(nodeId);
-  }
-
-  getEdgeProperties(key: TripleKey): Record<string, unknown> | null {
-    return this.core.getEdgeProperties(key);
-  }
-
-  async flush(): Promise<void> {
-    await this.core.flush();
-  }
-
+  /**
+   * 查询事实 - 支持链式操作
+   */
   find(criteria: FactCriteria, options?: { anchor?: FrontierOrientation }): QueryBuilder {
-    // 快照上下文内：保持历史的“即刻物化”语义，避免跨区间观测到新写入
+    // 快照上下文内：保持历史的"即刻物化"语义
     if (this.snapshotDepth > 0) {
-      return this.core.find(criteria, options);
+      const anchor = options?.anchor ?? this.inferAnchor(criteria);
+      const context = buildFindContext(this.store, criteria, anchor);
+      return QueryBuilder.fromFindResult(this.store, context);
     }
-    // 默认采用惰性执行（未发布，允许前向调整）
+    // 默认采用惰性执行
     const anchor = options?.anchor ?? this.inferAnchor(criteria);
-    const store = this.core.getStore();
-    return new LazyQueryBuilder(store, criteria, anchor);
+    return new LazyQueryBuilder(this.store, criteria, anchor);
   }
 
   /**
    * 惰性执行版查询（灰度）：仅在执行时物化
    */
   findLazy(criteria: FactCriteria, options?: { anchor?: FrontierOrientation }): QueryBuilder {
-    // 与 find 等价，保留别名以兼容文档与外部调用
     return this.find(criteria, options);
   }
 
@@ -193,16 +231,15 @@ export class SynapseDB {
     options?: { anchor?: FrontierOrientation },
   ): Promise<StreamingQueryBuilder> {
     const anchor = options?.anchor ?? this.inferAnchor(criteria);
-    const store = this.core.getStore();
-    const pinned = store.getCurrentEpoch();
+    const pinned = this.store.getCurrentEpoch();
 
     // 流式查询始终使用快照模式以保证一致性
     try {
-      await store.pushPinnedEpoch(pinned);
-      const context = await buildStreamingFindContext(store, criteria, anchor);
-      return new StreamingQueryBuilder(store, context, pinned);
+      await this.store.pushPinnedEpoch(pinned);
+      const context = await buildStreamingFindContext(this.store, criteria, anchor);
+      return new StreamingQueryBuilder(this.store, context, pinned);
     } finally {
-      await store.popPinnedEpoch();
+      await this.store.popPinnedEpoch();
     }
   }
 
@@ -214,24 +251,23 @@ export class SynapseDB {
     options?: { anchor?: FrontierOrientation },
   ): QueryBuilder {
     const anchor = options?.anchor ?? 'subject';
-    const store = this.core.getStore();
-    const pinned = store.getCurrentEpoch();
-    const hasPagedData = store.hasPagedIndexData();
+    const pinned = this.store.getCurrentEpoch();
+    const hasPagedData = this.store.hasPagedIndexData();
 
     if (hasPagedData) {
-      const pushPromise = store.pushPinnedEpoch(pinned);
+      const pushPromise = this.store.pushPinnedEpoch(pinned);
       void pushPromise.catch(() => undefined);
       try {
-        const context = buildFindContextFromProperty(store, propertyFilter, anchor, 'node');
-        return QueryBuilder.fromFindResult(store, context, pinned);
+        const context = buildFindContextFromProperty(this.store, propertyFilter, anchor, 'node');
+        return QueryBuilder.fromFindResult(this.store, context, pinned);
       } finally {
-        const popPromise = store.popPinnedEpoch();
+        const popPromise = this.store.popPinnedEpoch();
         void popPromise.catch(() => undefined);
       }
     }
 
-    const context = buildFindContextFromProperty(store, propertyFilter, anchor, 'node');
-    return QueryBuilder.fromFindResult(store, context);
+    const context = buildFindContextFromProperty(this.store, propertyFilter, anchor, 'node');
+    return QueryBuilder.fromFindResult(this.store, context);
   }
 
   /**
@@ -242,24 +278,23 @@ export class SynapseDB {
     options?: { anchor?: FrontierOrientation },
   ): QueryBuilder {
     const anchor = options?.anchor ?? 'subject';
-    const store = this.core.getStore();
-    const pinned = store.getCurrentEpoch();
-    const hasPagedData = store.hasPagedIndexData();
+    const pinned = this.store.getCurrentEpoch();
+    const hasPagedData = this.store.hasPagedIndexData();
 
     if (hasPagedData) {
-      const pushPromise = store.pushPinnedEpoch(pinned);
+      const pushPromise = this.store.pushPinnedEpoch(pinned);
       void pushPromise.catch(() => undefined);
       try {
-        const context = buildFindContextFromProperty(store, propertyFilter, anchor, 'edge');
-        return QueryBuilder.fromFindResult(store, context, pinned);
+        const context = buildFindContextFromProperty(this.store, propertyFilter, anchor, 'edge');
+        return QueryBuilder.fromFindResult(this.store, context, pinned);
       } finally {
-        const popPromise = store.popPinnedEpoch();
+        const popPromise = this.store.popPinnedEpoch();
         void popPromise.catch(() => undefined);
       }
     }
 
-    const context = buildFindContextFromProperty(store, propertyFilter, anchor, 'edge');
-    return QueryBuilder.fromFindResult(store, context);
+    const context = buildFindContextFromProperty(this.store, propertyFilter, anchor, 'edge');
+    return QueryBuilder.fromFindResult(this.store, context);
   }
 
   /**
@@ -270,100 +305,226 @@ export class SynapseDB {
     options?: { mode?: 'AND' | 'OR'; anchor?: FrontierOrientation },
   ): QueryBuilder {
     const anchor = options?.anchor ?? 'subject';
-    const store = this.core.getStore();
-    const pinned = store.getCurrentEpoch();
-    const hasPagedData = store.hasPagedIndexData();
+    const labelOptions = options?.mode ? { mode: options.mode } : undefined;
+    const pinned = this.store.getCurrentEpoch();
+    const hasPagedData = this.store.hasPagedIndexData();
 
     if (hasPagedData) {
-      const pushPromise = store.pushPinnedEpoch(pinned);
+      const pushPromise = this.store.pushPinnedEpoch(pinned);
       void pushPromise.catch(() => undefined);
       try {
-        const context = buildFindContextFromLabel(store, labels, { mode: options?.mode }, anchor);
-        return QueryBuilder.fromFindResult(store, context, pinned);
+        const context = buildFindContextFromLabel(this.store, labels, labelOptions, anchor);
+        return QueryBuilder.fromFindResult(this.store, context, pinned);
       } finally {
-        const popPromise = store.popPinnedEpoch();
+        const popPromise = this.store.popPinnedEpoch();
         void popPromise.catch(() => undefined);
       }
     }
 
-    const context = buildFindContextFromLabel(store, labels, { mode: options?.mode }, anchor);
-    return QueryBuilder.fromFindResult(store, context);
-  }
-
-  deleteFact(fact: import('./storage/persistentStore.js').FactInput): void {
-    this.core.deleteFact(fact);
-  }
-
-  setNodeProperties(nodeId: number, properties: Record<string, unknown>): void {
-    this.core.setNodeProperties(nodeId, properties);
-  }
-
-  setEdgeProperties(key: TripleKey, properties: Record<string, unknown>): void {
-    this.core.setEdgeProperties(key, properties);
-  }
-
-  // 事务批次控制（可选）：允许将多次写入合并为一次提交
-  beginBatch(options?: BeginBatchOptions): void {
-    this.core.beginBatch(options);
-  }
-
-  commitBatch(options?: CommitBatchOptions): void {
-    this.core.commitBatch(options);
-  }
-
-  abortBatch(): void {
-    this.core.abortBatch();
-  }
-
-  async close(): Promise<void> {
-    await this.core.close();
-  }
-
-  // 读快照：在给定回调期间固定当前 epoch，避免 mid-chain 刷新 readers 造成视图漂移
-  async withSnapshot<T>(fn: (db: SynapseDB) => Promise<T> | T): Promise<T> {
-    const store = this.core.getStore();
-    const epoch = store.getCurrentEpoch();
-    try {
-      this.snapshotDepth++;
-      // 等待读者注册完成，确保快照安全
-      await store.pushPinnedEpoch(epoch);
-      return await fn(this);
-    } finally {
-      await store.popPinnedEpoch();
-      this.snapshotDepth = Math.max(0, this.snapshotDepth - 1);
-    }
-  }
-
-  // 暂存层指标（实验性）：仅用于观测与基准
-  getStagingMetrics(): { lsmMemtable: number } {
-    const store = this.core.getStore();
-    return store.getStagingMetrics();
+    const context = buildFindContextFromLabel(this.store, labels, labelOptions, anchor);
+    return QueryBuilder.fromFindResult(this.store, context);
   }
 
   /**
-   * 获取底层存储（用于高级功能如 Gremlin）
+   * 模式匹配查询（图模式）
+   */
+  pattern(): PatternBuilder {
+    return new PatternBuilder(this.store);
+  }
+
+  /**
+   * 向后兼容别名
+   */
+  match(): PatternBuilder {
+    return this.pattern();
+  }
+
+  /**
+   * 聚合查询管道
+   */
+  aggregate(): AggregationPipeline {
+    return new AggregationPipeline(this.store);
+  }
+
+  /**
+   * Cypher 查询（实验性功能）
+   * 注意：这是异步接口，使用 cypherQuery 的简化版本
+   */
+  async cypher(
+    query: string,
+    params?: Record<string, unknown>,
+    options?: CypherExecutionOptions,
+  ): Promise<CypherResult> {
+    return this.cypherQuery(query, params || {}, options);
+  }
+
+  /**
+   * 删除事实
+   */
+  deleteFact(fact: FactInput): void {
+    this.store.deleteFact(fact);
+  }
+
+  // ===================
+  // 节点与属性 API
+  // ===================
+
+  /**
+   * 获取节点ID
+   */
+  getNodeId(value: string): number | undefined {
+    return this.store.getNodeIdByValue(value);
+  }
+
+  /**
+   * 获取节点值
+   */
+  getNodeValue(id: number): string | undefined {
+    return this.store.getNodeValueById(id);
+  }
+
+  /**
+   * 获取节点属性
+   */
+  getNodeProperties(nodeId: number): Record<string, unknown> | null {
+    const v = this.store.getNodeProperties(nodeId);
+    return v ?? null;
+  }
+
+  /**
+   * 获取边属性
+   */
+  getEdgeProperties(key: TripleKey): Record<string, unknown> | null {
+    const v = this.store.getEdgeProperties(key);
+    return v ?? null;
+  }
+
+  /**
+   * 设置节点属性
+   */
+  setNodeProperties(nodeId: number, properties: Record<string, unknown>): void {
+    this.store.setNodeProperties(nodeId, properties);
+  }
+
+  /**
+   * 设置边属性
+   */
+  setEdgeProperties(key: TripleKey, properties: Record<string, unknown>): void {
+    this.store.setEdgeProperties(key, properties);
+  }
+
+  // ===================
+  // 事务 API
+  // ===================
+
+  /**
+   * 开始事务批次
+   */
+  beginBatch(options?: BeginBatchOptions): void {
+    this.store.beginBatch(options);
+  }
+
+  /**
+   * 提交事务批次
+   */
+  commitBatch(options?: CommitBatchOptions): void {
+    this.store.commitBatch(options);
+  }
+
+  /**
+   * 回滚事务批次
+   */
+  abortBatch(): void {
+    this.store.abortBatch();
+  }
+
+  /**
+   * 快照隔离：在快照上下文中执行操作
+   */
+  async snapshot<T>(fn: (db: SynapseDB) => Promise<T>): Promise<T> {
+    this.snapshotDepth++;
+    const pinned = this.store.getCurrentEpoch();
+    await this.store.pushPinnedEpoch(pinned);
+    try {
+      return await fn(this);
+    } finally {
+      await this.store.popPinnedEpoch();
+      this.snapshotDepth--;
+    }
+  }
+
+  /**
+   * 向后兼容别名
+   */
+  async withSnapshot<T>(fn: (db: SynapseDB) => Promise<T>): Promise<T> {
+    return this.snapshot(fn);
+  }
+
+  // ===================
+  // 生命周期 API
+  // ===================
+
+  /**
+   * 刷新到磁盘
+   */
+  async flush(): Promise<void> {
+    await this.store.flush();
+  }
+
+  /**
+   * 关闭数据库（包括清理插件）
+   */
+  async close(): Promise<void> {
+    await this.pluginManager.cleanup();
+    await this.store.close();
+  }
+
+  // ===================
+  // 插件 API
+  // ===================
+
+  /**
+   * 获取插件
+   */
+  plugin<T extends SynapseDBPlugin>(name: string): T | undefined {
+    return this.pluginManager.get<T>(name);
+  }
+
+  /**
+   * 检查插件是否可用
+   */
+  hasPlugin(name: string): boolean {
+    return this.pluginManager.has(name);
+  }
+
+  /**
+   * 列出所有插件
+   */
+  listPlugins(): Array<{ name: string; version: string }> {
+    return this.pluginManager.list();
+  }
+
+  /**
+   * 获取底层存储（供插件使用）
    */
   getStore(): PersistentStore {
-    return this.core.getStore();
+    return this.store;
+  }
+
+  /**
+   * 暂存层指标（实验性）：仅用于观测与基准
+   */
+  getStagingMetrics(): { lsmMemtable: number } {
+    return this.store.getStagingMetrics();
   }
 
   // ===================
-  // 插件功能委托
+  // 高级查询 API：路径查找
   // ===================
 
-  // 聚合入口
-  aggregate(): AggregationPipeline {
-    const plugin = this.core.plugin<AggregationPlugin>('aggregation');
-    if (!plugin) throw new Error('Aggregation plugin not available');
-    return plugin.aggregate();
-  }
-
-  // 模式匹配入口（最小实现）
-  match(): PatternBuilder {
-    return new PatternBuilder(this.core.getStore());
-  }
-
-  // 最短路径：基于 BFS，返回边序列（不存在则返回 null）
+  /**
+   * 最短路径：基于 BFS，返回边序列（不存在则返回 null）
+   */
   shortestPath(
     from: string,
     to: string,
@@ -372,13 +533,15 @@ export class SynapseDB {
       maxHops?: number;
       direction?: 'forward' | 'reverse' | 'both';
     },
-  ): import('./storage/persistentStore.js').FactRecord[] | null {
-    const plugin = this.core.plugin<PathfindingPlugin>('pathfinding');
+  ): FactRecord[] | null {
+    const plugin = this.pluginManager.get<PathfindingPlugin>('pathfinding');
     if (!plugin) throw new Error('Pathfinding plugin not available');
     return plugin.shortestPath(from, to, options);
   }
 
-  // 双向 BFS 最短路径（无权），对大图更高效 - 优化版本
+  /**
+   * 双向 BFS 最短路径（无权），对大图更高效 - 优化版本
+   */
   shortestPathBidirectional(
     from: string,
     to: string,
@@ -386,40 +549,36 @@ export class SynapseDB {
       predicates?: string[];
       maxHops?: number;
     },
-  ): import('./storage/persistentStore.js').FactRecord[] | null {
-    const plugin = this.core.plugin<PathfindingPlugin>('pathfinding');
+  ): FactRecord[] | null {
+    const plugin = this.pluginManager.get<PathfindingPlugin>('pathfinding');
     if (!plugin) throw new Error('Pathfinding plugin not available');
     return plugin.shortestPathBidirectional(from, to, options);
   }
 
-  // Dijkstra 加权最短路径（权重来自边属性，默认字段 'weight'，缺省视为1）
+  /**
+   * Dijkstra 加权最短路径（权重来自边属性，默认字段 'weight'，缺省视为1）
+   */
   shortestPathWeighted(
     from: string,
     to: string,
     options?: { predicate?: string; weightProperty?: string },
-  ): import('./storage/persistentStore.js').FactRecord[] | null {
-    const plugin = this.core.plugin<PathfindingPlugin>('pathfinding');
+  ): FactRecord[] | null {
+    const plugin = this.pluginManager.get<PathfindingPlugin>('pathfinding');
     if (!plugin) throw new Error('Pathfinding plugin not available');
     return plugin.shortestPathWeighted(from, to, options);
   }
 
-  // Cypher 极简子集：仅支持 MATCH (a)-[:REL]->(b) RETURN a,b
-  cypher(query: string): Array<Record<string, unknown>> {
-    return this.requireCypherPlugin().cypherSimple(query);
-  }
-
-  // ------------------
-  // Cypher 异步标准接口
-  // ------------------
+  // ===================
+  // Cypher 查询扩展 API
+  // ===================
 
   /**
    * 执行 Cypher 查询（标准异步接口）
-   * 注意：为保持向后兼容，保留了上方同步版 `cypher()`（极简子集）。
    */
   async cypherQuery(
     statement: string,
     parameters: Record<string, unknown> = {},
-    options: CypherExecutionOptions = {},
+    options?: CypherExecutionOptions,
   ): Promise<CypherResult> {
     return this.requireCypherPlugin().cypherQuery(statement, parameters, options);
   }
@@ -430,7 +589,7 @@ export class SynapseDB {
   async cypherRead(
     statement: string,
     parameters: Record<string, unknown> = {},
-    options: CypherExecutionOptions = {},
+    options?: CypherExecutionOptions,
   ): Promise<CypherResult> {
     return this.requireCypherPlugin().cypherRead(statement, parameters, options);
   }
@@ -442,37 +601,32 @@ export class SynapseDB {
     return this.requireCypherPlugin().validateCypher(statement);
   }
 
-  /** 清理 Cypher 优化器缓存 */
-  clearCypherOptimizationCache(): void {
-    this.requireCypherPlugin().clearCypherOptimizationCache();
+  /**
+   * 清理 Cypher 优化器缓存
+   */
+  clearCypherCache(): void {
+    return this.requireCypherPlugin().clearCypherOptimizationCache();
   }
 
-  /** 获取 Cypher 优化器统计信息 */
-  getCypherOptimizerStats(): unknown {
-    return this.requireCypherPlugin().getCypherOptimizerStats();
-  }
-
-  /** 预热 Cypher 优化器 */
-  async warmUpCypherOptimizer(): Promise<void> {
-    await this.requireCypherPlugin().warmUpCypherOptimizer();
-  }
-
-  // ===================
-  // 私有方法
-  // ===================
-
+  /**
+   * 私有方法：获取并验证 Cypher 插件
+   */
   private requireCypherPlugin(): CypherPlugin {
     if (!this.hasCypherPlugin) {
       throw new Error(
         'Cypher 插件未启用。请在 open() 时传入 experimental.cypher = true，或设置环境变量 SYNAPSEDB_ENABLE_EXPERIMENTAL_QUERIES=1。',
       );
     }
-    const plugin = this.core.plugin<CypherPlugin>('cypher');
+    const plugin = this.pluginManager.get<CypherPlugin>('cypher');
     if (!plugin) {
       throw new Error('Cypher 插件加载失败，请检查 experimental 配置。');
     }
     return plugin;
   }
+
+  // ===================
+  // 内部辅助方法
+  // ===================
 
   private inferAnchor(criteria: FactCriteria): FrontierOrientation {
     const hasSubject = criteria.subject !== undefined;
@@ -485,11 +639,9 @@ export class SynapseDB {
     if (hasSubject) {
       return 'subject';
     }
-    // p+o 查询通常希望锚定主语集合，便于后续正向联想
     if (hasObject && hasPredicate) {
       return 'subject';
     }
-    // 仅 object 的场景保持锚定到宾语，便于 reverse follow（测试依赖）
     if (hasObject) {
       return 'object';
     }
@@ -497,10 +649,15 @@ export class SynapseDB {
   }
 }
 
+// 向后兼容：导出类型
 export type {
   SynapseDBOpenOptions,
   CommitBatchOptions,
   BeginBatchOptions,
-  PropertyFilter,
+  SynapseDBPlugin,
+  FactCriteria,
   FrontierOrientation,
+  PropertyFilter,
+  CypherResult,
+  CypherExecutionOptions,
 };

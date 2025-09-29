@@ -35,14 +35,8 @@ export async function coreExample() {
 // 方式2：选择性插件（推荐）
 // ======================
 export async function selectivePluginExample() {
-  // 只加载需要的插件
-  const db = await ExtendedSynapseDB.open(':memory:', {
-    plugins: [
-      new PathfindingPlugin(),
-      new AggregationPlugin(),
-      // 不加载Cypher插件，节省内存
-    ],
-  });
+  // 注意：插件现在自动加载，无需手动指定
+  const db = await ExtendedSynapseDB.open(':memory:');
 
   // 基本功能
   db.addFact({ subject: 'Alice', predicate: 'knows', object: 'Bob' });
@@ -89,9 +83,9 @@ export async function compatibilityExample() {
     .execute();
 
   // Cypher查询
-  const cypherResults = db.cypher('MATCH (a)-[:knows]->(b) RETURN a,b');
+  const cypherResults = await db.cypher('MATCH (a)-[:knows]->(b) RETURN a,b');
   console.log('Aggregation results:', aggResults);
-  console.log('Cypher results:', cypherResults.length);
+  console.log('Cypher results:', cypherResults.records.length);
 
   await db.close();
 }

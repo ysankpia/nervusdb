@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { makeWorkspace, cleanupWorkspace, within } from '../../helpers/tempfs';
-import { ExtendedSynapseDB } from '@/plugins/base';
+import { SynapseDB } from '@/synapseDb';
 import { AggregationPlugin } from '@/plugins/aggregation';
 
 describe('AggregationPlugin 统计与分布', () => {
@@ -13,8 +13,7 @@ describe('AggregationPlugin 统计与分布', () => {
   });
 
   it('空图应返回全 0 与空结构', async () => {
-    const db = await ExtendedSynapseDB.open(within(ws, 'empty.synapsedb'), {
-      plugins: [new AggregationPlugin()],
+    const db = await SynapseDB.open(within(ws, 'empty.synapsedb'), {
       pageSize: 256,
     });
 
@@ -32,8 +31,7 @@ describe('AggregationPlugin 统计与分布', () => {
   });
 
   it('应正确统计节点/边/谓词分布、度与连通分量', async () => {
-    const db = await ExtendedSynapseDB.open(within(ws, 'graph.synapsedb'), {
-      plugins: [new AggregationPlugin()],
+    const db = await SynapseDB.open(within(ws, 'graph.synapsedb'), {
       pageSize: 256,
     });
 

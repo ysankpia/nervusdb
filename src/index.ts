@@ -1,23 +1,23 @@
 // =======================
-// 核心导出（推荐新项目使用）
+// 核心导出
 // =======================
 
-export { CoreSynapseDB } from './coreSynapseDb.js';
-export { ExtendedSynapseDB } from './plugins/base.js';
+export { SynapseDB } from './synapseDb.js';
+export type { FactRecord, FactInput } from './synapseDb.js';
+
+// 向后兼容别名（保留旧 API）
+export { SynapseDB as CoreSynapseDB } from './synapseDb.js';
+export { SynapseDB as ExtendedSynapseDB } from './synapseDb.js';
+
+// 插件接口与管理器
 export type { SynapseDBPlugin } from './plugins/base.js';
+export { PluginManager } from './plugins/base.js';
 
 // 内置插件
 export { PathfindingPlugin } from './plugins/pathfinding.js';
 /** @experimental Cypher 查询语言仍处于实验阶段 */
 export { CypherPlugin } from './plugins/cypher.js';
 export { AggregationPlugin } from './plugins/aggregation.js';
-
-// =======================
-// 兼容性导出（向后兼容）
-// =======================
-
-export { SynapseDB } from './synapseDb.js';
-export type { FactRecord, FactInput } from './synapseDb.js';
 
 // =======================
 // 存储与查询

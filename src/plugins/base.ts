@@ -1,4 +1,4 @@
-import { CoreSynapseDB } from '../coreSynapseDb.js';
+import type { SynapseDB } from '../synapseDb.js';
 import { PersistentStore } from '../storage/persistentStore.js';
 
 /**
@@ -15,7 +15,7 @@ export interface SynapseDBPlugin {
   readonly version: string;
 
   /** 初始化插件 */
-  initialize(db: CoreSynapseDB, store: PersistentStore): Promise<void> | void;
+  initialize(db: SynapseDB, store: PersistentStore): Promise<void> | void;
 
   /** 清理插件资源 */
   cleanup?(): Promise<void> | void;
@@ -31,7 +31,7 @@ export class PluginManager {
   private initialized = false;
 
   constructor(
-    private readonly db: CoreSynapseDB,
+    private readonly db: SynapseDB,
     private readonly store: PersistentStore,
   ) {}
 
@@ -106,65 +106,5 @@ export class PluginManager {
       name: plugin.name,
       version: plugin.version,
     }));
-  }
-}
-
-/**
- * 扩展的SynapseDB，支持插件
- */
-export class ExtendedSynapseDB extends CoreSynapseDB {
-  private pluginManager: PluginManager;
-
-  private constructor(store: PersistentStore, plugins: SynapseDBPlugin[] = []) {
-    super(store);
-    this.pluginManager = new PluginManager(this, store);
-
-    // 注册所有插件
-    for (const plugin of plugins) {
-      this.pluginManager.register(plugin);
-    }
-  }
-
-  /**
-   * 打开数据库并加载插件
-   */
-  static override async open(
-    path: string,
-    options?: { plugins?: SynapseDBPlugin[] } & Parameters<typeof CoreSynapseDB.open>[1],
-  ): Promise<ExtendedSynapseDB> {
-    const { plugins = [], ...coreOptions } = options || {};
-    const store = await PersistentStore.open(path, coreOptions);
-    const db = new ExtendedSynapseDB(store, plugins);
-    await db.pluginManager.initialize();
-    return db;
-  }
-
-  /**
-   * 获取插件
-   */
-  plugin<T extends SynapseDBPlugin>(name: string): T | undefined {
-    return this.pluginManager.get<T>(name);
-  }
-
-  /**
-   * 检查插件是否可用
-   */
-  hasPlugin(name: string): boolean {
-    return this.pluginManager.has(name);
-  }
-
-  /**
-   * 列出所有插件
-   */
-  listPlugins(): Array<{ name: string; version: string }> {
-    return this.pluginManager.list();
-  }
-
-  /**
-   * 关闭数据库（包括清理插件）
-   */
-  override async close(): Promise<void> {
-    await this.pluginManager.cleanup();
-    await super.close();
   }
 }
