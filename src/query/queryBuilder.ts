@@ -773,7 +773,7 @@ export class QueryBuilder {
       const predicateId = this.store.getNodeIdByValue(predicate);
       if (predicateId === undefined) return new QueryBuilder(this.store, EMPTY_CONTEXT);
 
-      // BFS 按层扩展
+      // BFS 按层扩展（保持旧实现语义，用于 EAGER 模式）
       let currentFrontier = new Set<number>(this.frontier);
       const visited = new Set<number>();
       const resultTriples = new Map<string, FactRecord>();
@@ -783,7 +783,6 @@ export class QueryBuilder {
         const nextFrontier = new Set<number>();
 
         for (const nodeId of currentFrontier) {
-          // 防止爆炸性重复扩展：节点级去重
           if (visited.has(nodeId)) continue;
           visited.add(nodeId);
 
@@ -794,11 +793,7 @@ export class QueryBuilder {
           const matches = this.store.query(criteria);
           const records = this.store.resolveRecords(matches);
           for (const rec of records) {
-            // 处于允许的范围时，收集“最后一跳”的边
-            if (depth >= min) {
-              resultTriples.set(encodeTripleKey(rec), rec);
-            }
-            // 推进下一层前沿
+            if (depth >= min) resultTriples.set(encodeTripleKey(rec), rec);
             const nextNode = direction === 'forward' ? rec.objectId : rec.subjectId;
             nextFrontier.add(nextNode);
           }
@@ -809,9 +804,8 @@ export class QueryBuilder {
 
       const nextFacts = [...resultTriples.values()];
       const nextFrontierSet = new Set<number>();
-      for (const rec of nextFacts) {
+      for (const rec of nextFacts)
         nextFrontierSet.add(direction === 'forward' ? rec.objectId : rec.subjectId);
-      }
 
       return new QueryBuilder(
         this.store,
@@ -984,6 +978,19 @@ export class StreamingQueryBuilder {
  * - 通过 SynapseDB.findLazy() 暴露，默认 find() 行为不变。
  */
 export class LazyQueryBuilder extends QueryBuilder {
+  // 仅用于 explain() 的返回体类型（避免 any）
+  private static readonly ExplainTypes = {} as unknown as {
+    Summary: {
+      type: string;
+      estimate?: {
+        order?: IndexOrder;
+        upperBound?: number;
+        pagesForPrimary?: number;
+        hotnessPrimary?: number;
+        estimatedOutput?: number;
+      };
+    };
+  };
   private readonly plan: Array<
     | { kind: 'FIND'; criteria: FactCriteria; anchor: FrontierOrientation }
     | { kind: 'ANCHOR'; orientation: FrontierOrientation }
@@ -1011,6 +1018,14 @@ export class LazyQueryBuilder extends QueryBuilder {
     | { kind: 'SKIP'; n: number }
     | { kind: 'UNION'; other: QueryBuilder }
     | { kind: 'UNION_ALL'; other: QueryBuilder }
+    | {
+        kind: 'FOLLOW_PATH';
+        predicate: string;
+        min: number;
+        max: number;
+        direction: 'forward' | 'reverse';
+        orientAtBuild: FrontierOrientation;
+      }
   > = [];
 
   private lazyOrientation: FrontierOrientation;
@@ -1191,6 +1206,14 @@ export class LazyQueryBuilder extends QueryBuilder {
       else if (node.kind === 'UNION') qb = qb.union(this.materializeToQueryBuilder(node.other));
       else if (node.kind === 'UNION_ALL')
         qb = qb.unionAll(this.materializeToQueryBuilder(node.other));
+      else if (node.kind === 'FOLLOW_PATH')
+        qb = qb.followPath(
+          node.predicate,
+          { min: node.min, max: node.max },
+          {
+            direction: node.direction,
+          },
+        );
     }
     return qb.all();
   }
@@ -1219,6 +1242,14 @@ export class LazyQueryBuilder extends QueryBuilder {
       if (n.kind === 'SKIP') return { kind: n.kind, n: n.n };
       if (n.kind === 'ANCHOR') return { kind: n.kind, orientation: n.orientation };
       if (n.kind === 'UNION' || n.kind === 'UNION_ALL') return { kind: n.kind };
+      if (n.kind === 'FOLLOW_PATH')
+        return {
+          kind: n.kind,
+          predicate: n.predicate,
+          min: n.min,
+          max: n.max,
+          direction: n.direction,
+        };
       return { kind: 'UNKNOWN' };
     });
     const summary: Record<string, unknown> = {
@@ -1255,13 +1286,15 @@ export class LazyQueryBuilder extends QueryBuilder {
             pagesForPrimary = lookup.pages.filter((p) => p.primaryValue === pid).length;
             upperBound = pagesForPrimary * pageSize;
           } else {
+            // 无主维度定值：给出极粗略上界（全页 * pageSize）
             upperBound = (lookup.pages?.length ?? 0) * pageSize;
           }
 
           // 合并对偶顺序的热度计数，给出粗略热度估算
           try {
             const hot = this.lazyStore.getHotnessSnapshot?.();
-            const counts = hot?.counts ?? {};
+            const counts =
+              hot?.counts ?? ({} as Partial<Record<IndexOrder, Record<string, number>>>);
             const pair: Partial<Record<IndexOrder, IndexOrder>> = {
               SPO: 'SOP',
               SOP: 'SPO',
@@ -1274,7 +1307,7 @@ export class LazyQueryBuilder extends QueryBuilder {
             const other = pair[order];
             if (other) {
               const b = counts[other] ?? {};
-              for (const [k, v] of Object.entries(b)) merged[k] = (merged[k] ?? 0) + (v as number);
+              for (const [k, v] of Object.entries(b)) merged[k] = (merged[k] ?? 0) + v;
             }
             if (pid !== undefined) hotnessPrimary = merged[String(pid)] ?? 0;
           } catch {}
@@ -1286,10 +1319,90 @@ export class LazyQueryBuilder extends QueryBuilder {
         pagesForPrimary: number;
         hotnessPrimary?: number;
         estimatedOutput?: number;
+        stages?: Array<{ type: string; factor?: number; output?: number; order?: IndexOrder }>;
       } = { order, upperBound, pagesForPrimary, hotnessPrimary };
 
-      // 继续基于计划传播一个非常保守的 estimatedOutput（仅考虑 skip/limit/union）
+      // 基于属性/标签进一步收紧上界（当主维度为节点时）
+      if (manifest) {
+        const lookup = manifest.lookups.find((l) => l.order === order);
+        const pageSize = manifest.pageSize;
+        const primary = order[0];
+        if (lookup && (primary === 'S' || primary === 'O')) {
+          // 收集可约束主维度的候选集合，使用 AND 交集组合，避免过度乐观
+          const candidateSets: Array<Set<number>> = [];
+
+          // WHERE_PROP: 仅在 target==='edge' 时可通过主维度收紧；'node' 无法区分是 subject 还是 object，避免乐观
+          for (const node of this.plan) {
+            if (node.kind === 'WHERE_PROP' && node.target === 'edge' && node.operator === '=') {
+              const eidx = this.lazyStore.getPropertyIndex();
+              const edges = eidx.queryEdgesByProperty(node.propertyName, node.value);
+              if (edges.size > 0) {
+                const set = new Set<number>();
+                for (const key of edges) {
+                  const parts = key.split(':');
+                  if (parts.length !== 3) continue;
+                  const sid = Number(parts[0]);
+                  const oid = Number(parts[2]);
+                  set.add(primary === 'S' ? sid : oid);
+                }
+                if (set.size > 0) candidateSets.push(set);
+              }
+            }
+          }
+
+          // WHERE_LABEL: 仅当 on 与主维度匹配时参与（subject->S / object->O；both 视为匹配）
+          const lidx = this.lazyStore.getLabelIndex();
+          for (const node of this.plan) {
+            if (node.kind === 'WHERE_LABEL') {
+              const applies =
+                node.on === 'both' ||
+                (primary === 'S' ? node.on !== 'object' : node.on !== 'subject');
+              if (!applies) continue;
+              const match = lidx.findNodesByLabels(node.labels, { mode: node.mode });
+              if (match.size > 0) candidateSets.push(match);
+            }
+          }
+
+          // 交集合并
+          if (candidateSets.length > 0) {
+            let intersect = new Set<number>(candidateSets[0]);
+            for (let i = 1; i < candidateSets.length; i++) {
+              const cur = candidateSets[i];
+              const next = new Set<number>();
+              for (const v of intersect) if (cur.has(v)) next.add(v);
+              intersect = next;
+              if (intersect.size === 0) break;
+            }
+            if (intersect.size > 0) {
+              const pageCountSum = lookup.pages.reduce(
+                (acc, pg) => acc + (intersect.has(pg.primaryValue) ? 1 : 0),
+                0,
+              );
+              const ub = pageCountSum * pageSize;
+              estimateObj.upperBound =
+                estimateObj.upperBound !== undefined ? Math.min(estimateObj.upperBound, ub) : ub;
+            }
+          }
+        }
+      }
+
+      // 继续基于计划传播一个非常保守的 estimatedOutput：
+      // - 初始取 upperBound；
+      // - FOLLOW 阶段按平均每主键条目数进行倍增预估；
+      // - 再应用 skip/limit；
+      // - UNION/UNION_ALL 叠加/取大（保持粗略）。
       let estimatedOutput = upperBound ?? undefined;
+      const stages: NonNullable<(typeof estimateObj)['stages']> = [];
+
+      const avgEntriesPerPrimary = (ord: IndexOrder): number | undefined => {
+        if (!manifest) return undefined;
+        const lk = manifest.lookups.find((l) => l.order === ord);
+        if (!lk || lk.pages.length === 0) return undefined;
+        const uniq = new Set(lk.pages.map((p) => p.primaryValue)).size || 1;
+        const avgPages = lk.pages.length / uniq;
+        const entriesPerPage = manifest.pageSize || 1024;
+        return avgPages * entriesPerPage;
+      };
       let skipped = 0;
       for (const n of this.plan) {
         if (n.kind === 'SKIP') {
@@ -1301,9 +1414,20 @@ export class LazyQueryBuilder extends QueryBuilder {
           } else {
             estimatedOutput = n.n; // 没有上界时，limit 作为上界
           }
+        } else if (n.kind === 'FOLLOW') {
+          // FOLLOW 后的基数传播（粗略）：按主维度切换选择合适的 order
+          const ord: IndexOrder = n.dir === 'forward' ? 'SPO' : 'OPS';
+          const deg = avgEntriesPerPrimary(ord);
+          if (typeof deg === 'number' && isFinite(deg) && deg > 0) {
+            if (estimatedOutput === undefined) estimatedOutput = deg;
+            else estimatedOutput = Math.max(0, Math.floor(estimatedOutput * deg));
+            stages.push({ type: 'FOLLOW', factor: deg, output: estimatedOutput, order: ord });
+          }
         } else if (n.kind === 'UNION' || n.kind === 'UNION_ALL') {
           try {
-            const otherSummary = n.other.explain?.();
+            const otherSummary = n.other.explain?.() as
+              | (typeof LazyQueryBuilder.ExplainTypes)['Summary']
+              | undefined;
             const otherOut =
               otherSummary?.estimate?.estimatedOutput ?? otherSummary?.estimate?.upperBound;
             if (typeof otherOut === 'number') {
@@ -1320,6 +1444,7 @@ export class LazyQueryBuilder extends QueryBuilder {
         }
       }
       estimateObj.estimatedOutput = estimatedOutput;
+      if (stages.length > 0) estimateObj.stages = stages;
       summary['estimate'] = estimateObj as unknown;
     }
 
@@ -1593,6 +1718,61 @@ export class LazyQueryBuilder extends QueryBuilder {
         src = traceWrap(distinct ? 'UNION' : 'UNION_ALL', stage);
         continue;
       }
+      if (node.kind === 'FOLLOW_PATH') {
+        const { predicate, direction, min, max, orientAtBuild } = node;
+        currentOrientation = direction === 'forward' ? 'object' : 'subject';
+        const stage = (async function* (
+          up: AsyncIterableIterator<FactRecord>,
+          store: PersistentStore,
+        ) {
+          // 收集起始前沿（基于上游链路与构建时朝向）
+          const start = new Set<number>();
+          for await (const f of up) {
+            if (orientAtBuild === 'subject' || orientAtBuild === 'both') start.add(f.subjectId);
+            if (orientAtBuild === 'object' || orientAtBuild === 'both') start.add(f.objectId);
+          }
+          if (start.size === 0) return;
+
+          const predId = store.getNodeIdByValue(predicate);
+          if (predId === undefined) return;
+
+          const visited = new Set<number>();
+          const seenTriple = new Set<string>();
+          let current = new Set<number>(start);
+          let depth = 0;
+
+          while (depth < max && current.size > 0) {
+            depth += 1;
+            const next = new Set<number>();
+            // 遍历当前层所有节点，并使用流式批量扩展
+            for (const nodeId of current) {
+              if (visited.has(nodeId)) continue;
+              visited.add(nodeId);
+              const criteria =
+                direction === 'forward'
+                  ? { subjectId: nodeId, predicateId: predId }
+                  : { predicateId: predId, objectId: nodeId };
+              for await (const batch of store.streamFactRecords(criteria, 512, {
+                includeProperties: true,
+              })) {
+                for (const r of batch) {
+                  const key = encodeTripleKey(r);
+                  // depth 在范围内时产出“最后一跳”边
+                  if (depth >= min && !seenTriple.has(key)) {
+                    seenTriple.add(key);
+                    yield r;
+                  }
+                  const nextNode = direction === 'forward' ? r.objectId : r.subjectId;
+                  if (!visited.has(nextNode)) next.add(nextNode);
+                }
+              }
+            }
+            current = next;
+          }
+        })(src, this.lazyStore);
+        src = traceWrap('FOLLOW_PATH', stage);
+        continue;
+      }
     }
     // 产出
     try {
@@ -1722,8 +1902,21 @@ export class LazyQueryBuilder extends QueryBuilder {
     range: { min?: number; max: number },
     options?: { direction?: 'forward' | 'reverse' },
   ): QueryBuilder {
-    const base = this.materializeToQueryBuilder(this);
-    return base.followPath(predicate, range, options);
+    const qb = new LazyQueryBuilder(this.lazyStore, { subject: undefined }, this.lazyOrientation);
+    qb.plan.length = 0;
+    const min = Math.max(1, range.min ?? 1);
+    const max = Math.max(min, range.max);
+    const dir = options?.direction ?? 'forward';
+    qb.plan.push(...this.plan, {
+      kind: 'FOLLOW_PATH',
+      predicate,
+      min,
+      max,
+      direction: dir,
+      orientAtBuild: this.lazyOrientation,
+    });
+    qb.lazyOrientation = dir === 'forward' ? 'object' : 'subject';
+    return qb;
   }
 
   override whereNodeProperty(filter: PropertyFilter): QueryBuilder {
