@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { SynapseDB } from '@/synapseDb';
+import { makeWorkspace, cleanupWorkspace, within } from '../../helpers/tempfs';
 
 describe('LazyQueryBuilder · variablePathStream', () => {
   it('流式 BFS 产出的路径与同步 variablePath 一致（无 target）', async () => {
-    const db = await SynapseDB.open('tmp-lazy-vpath.synapsedb');
+    const dir = await makeWorkspace('unit-lazy-vpath');
+    const db = await SynapseDB.open(within(dir, 'db.synapsedb'));
     // A-R->B-R->C-R->D
     db.addFact({ subject: 'A', predicate: 'R', object: 'B' });
     db.addFact({ subject: 'B', predicate: 'R', object: 'C' });
@@ -23,5 +25,6 @@ describe('LazyQueryBuilder · variablePathStream', () => {
 
     expect(asyncPaths.length).toBe(syncPaths.length);
     await db.close();
+    await cleanupWorkspace(dir);
   });
 });

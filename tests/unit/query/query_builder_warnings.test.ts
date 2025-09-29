@@ -22,8 +22,9 @@ describe('QueryBuilder warnings · 大结果集内存处理提示', () => {
   it('all(): 大于阈值时输出一次警告', async () => {
     const { SynapseDB } = await import('@/synapseDb');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => void 0);
-
-    const db = await SynapseDB.open('tmp-warn-all.synapsedb');
+    const { makeWorkspace, cleanupWorkspace, within } = await import('../../helpers/tempfs');
+    const dir = await makeWorkspace('unit-warn-all');
+    const db = await SynapseDB.open(within(dir, 'db.synapsedb'));
     db.addFact({ subject: 'S', predicate: 'R', object: 'O1' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O2' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O3' });
@@ -35,13 +36,15 @@ describe('QueryBuilder warnings · 大结果集内存处理提示', () => {
     expect(warn.mock.calls[0][0]).toContain('SynapseDB: all()');
 
     await db.close();
+    await cleanupWorkspace(dir);
   });
 
   it('where(): 大于阈值时输出一次警告', async () => {
     const { SynapseDB } = await import('@/synapseDb');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => void 0);
-
-    const db = await SynapseDB.open('tmp-warn-where.synapsedb');
+    const { makeWorkspace, cleanupWorkspace, within } = await import('../../helpers/tempfs');
+    const dir = await makeWorkspace('unit-warn-where');
+    const db = await SynapseDB.open(within(dir, 'db.synapsedb'));
     db.addFact({ subject: 'S', predicate: 'R', object: 'O1' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O2' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O3' });
@@ -54,5 +57,6 @@ describe('QueryBuilder warnings · 大结果集内存处理提示', () => {
     expect(q2.all().length).toBe(3);
 
     await db.close();
+    await cleanupWorkspace(dir);
   });
 });

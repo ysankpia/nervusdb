@@ -25,6 +25,7 @@ export default defineConfig({
       concurrent: false
     },
     include: ['tests/**/*.test.ts'],
+    globalSetup: resolve(rootDir, 'tests/setup/global-cleanup.ts'),
     coverage: {
       provider: 'v8',
       reportsDirectory: resolve(rootDir, 'coverage'),

@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { SynapseDB } from '@/synapseDb';
+import { makeWorkspace, cleanupWorkspace, within } from '../../helpers/tempfs';
 
 describe('LazyQueryBuilder · collect()', () => {
   it('collect() 与 all() 结果一致，但以异步方式收集', async () => {
-    const db = await SynapseDB.open('tmp-lazy-collect.synapsedb');
+    const dir = await makeWorkspace('unit-lazy-collect');
+    const db = await SynapseDB.open(within(dir, 'db.synapsedb'));
     db.addFact({ subject: 'S', predicate: 'R', object: 'O1' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O2' });
     await db.flush();
@@ -13,5 +15,6 @@ describe('LazyQueryBuilder · collect()', () => {
     const collected = await q.collect();
     expect(collected.length).toBe(all.length);
     await db.close();
+    await cleanupWorkspace(dir);
   });
 });

@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { SynapseDB } from '@/synapseDb';
+import { makeWorkspace, cleanupWorkspace, within } from '../../helpers/tempfs';
 
 describe('LazyQueryBuilder · 基础流式链路', () => {
   it('findLazy + follow + limit 流式产出与 all() 结果一致', async () => {
-    const db = await SynapseDB.open('tmp-lazy-basic.synapsedb');
+    const dir1 = await makeWorkspace('unit-lazy-basic');
+    const db = await SynapseDB.open(within(dir1, 'db.synapsedb'));
     db.addFact({ subject: 'A', predicate: 'R', object: 'B' });
     db.addFact({ subject: 'A', predicate: 'R', object: 'C' });
     db.addFact({ subject: 'B', predicate: 'R', object: 'D' });
@@ -21,10 +23,12 @@ describe('LazyQueryBuilder · 基础流式链路', () => {
     expect(iter.length).toBe(2);
 
     await db.close();
+    await cleanupWorkspace(dir1);
   });
 
   it('whereProperty/whereLabel 在流上过滤', async () => {
-    const db = await SynapseDB.open('tmp-lazy-filter.synapsedb');
+    const dir2 = await makeWorkspace('unit-lazy-filter');
+    const db = await SynapseDB.open(within(dir2, 'db.synapsedb'));
     db.addFact(
       { subject: 'X', predicate: 'IS', object: 'Person' },
       { subjectProperties: { age: 30 } },
@@ -42,5 +46,6 @@ describe('LazyQueryBuilder · 基础流式链路', () => {
     expect(res.length).toBe(1);
 
     await db.close();
+    await cleanupWorkspace(dir2);
   });
 });
