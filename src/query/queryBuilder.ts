@@ -164,6 +164,19 @@ export class QueryBuilder {
   }
 
   /**
+   * 输出查询执行摘要（非规范化，仅用于调试/诊断）
+   */
+  explain(): Record<string, unknown> {
+    return {
+      type: 'EAGER',
+      length: this.facts.length,
+      orientation: this.orientation,
+      frontierSize: this.frontier.size,
+      pinned: this.pinnedEpoch !== undefined,
+    };
+  }
+
+  /**
    * 异步收集为数组（与 all() 结果一致，便于统一 async 流程）
    */
   async collect(): Promise<FactRecord[]> {
@@ -930,6 +943,17 @@ export class StreamingQueryBuilder {
     return out;
   }
 
+  /**
+   * 流式查询的摘要信息（仅用于诊断）
+   */
+  explain(): Record<string, unknown> {
+    return {
+      type: 'STREAMING',
+      orientation: this.orientation,
+      pinned: this.pinnedEpoch !== undefined,
+    };
+  }
+
   private pin(): void {
     if (this.pinnedEpoch !== undefined) {
       (this.store as unknown as { pinnedEpochStack: number[] }).pinnedEpochStack?.push(
@@ -1128,6 +1152,30 @@ export class LazyQueryBuilder extends QueryBuilder {
     return this.all();
   }
 
+  /**
+   * 输出惰性计划摘要（用于调试/诊断）
+   */
+  override explain(): Record<string, unknown> {
+    const plan = this.plan.map((n) => {
+      if (n.kind === 'FIND') return { kind: n.kind, criteria: n.criteria, anchor: n.anchor };
+      if (n.kind === 'FOLLOW') return { kind: n.kind, predicate: n.predicate, dir: n.dir };
+      if (n.kind === 'WHERE_PROP')
+        return { kind: n.kind, propertyName: n.propertyName, operator: n.operator, target: n.target };
+      if (n.kind === 'WHERE_LABEL') return { kind: n.kind, labels: n.labels, mode: n.mode, on: n.on };
+      if (n.kind === 'LIMIT') return { kind: n.kind, n: n.n };
+      if (n.kind === 'SKIP') return { kind: n.kind, n: n.n };
+      if (n.kind === 'ANCHOR') return { kind: n.kind, orientation: n.orientation };
+      if (n.kind === 'UNION' || n.kind === 'UNION_ALL') return { kind: n.kind };
+      return { kind: (n as any).kind };
+    });
+    return {
+      type: 'LAZY',
+      orientation: this.lazyOrientation,
+      pinned: this.pinned !== undefined,
+      plan,
+    };
+  }
+
   private materializeToQueryBuilder(other: QueryBuilder): QueryBuilder {
     // 如果是 LazyQueryBuilder，先物化为事实数组再包装为普通 QueryBuilder
     if (other instanceof LazyQueryBuilder) {
@@ -1141,7 +1189,7 @@ export class LazyQueryBuilder extends QueryBuilder {
   /**
    * 异步收集（真正流式收集，不占用大内存峰值）
    */
-  async collect(): Promise<FactRecord[]> {
+  override async collect(): Promise<FactRecord[]> {
     const out: FactRecord[] = [];
     // 保持快照固定
     if (this.pinned !== undefined) await this.lazyStore.pushPinnedEpoch(this.pinned);
@@ -1159,6 +1207,21 @@ export class LazyQueryBuilder extends QueryBuilder {
       await this.lazyStore.pushPinnedEpoch(this.pinned);
     }
     const self = this;
+    const TRACE = typeof process !== 'undefined' && process.env.SYNAPSEDB_TRACE_QUERY === '1';
+
+    const traceWrap = <T>(name: string, gen: AsyncIterableIterator<T>): AsyncIterableIterator<T> => {
+      if (!TRACE) return gen;
+      return (async function* () {
+        const t0 = Date.now();
+        let c = 0;
+        for await (const x of gen) {
+          c += 1;
+          yield x;
+        }
+        // eslint-disable-next-line no-console
+        console.debug(`[TRACE] stage=${name} count=${c} costMs=${Date.now() - t0}`);
+      })();
+    };
     // 构建源
     let src: AsyncIterableIterator<FactRecord> = (async function* () {})();
     let currentOrientation: FrontierOrientation = 'object';
@@ -1168,7 +1231,7 @@ export class LazyQueryBuilder extends QueryBuilder {
         currentOrientation = node.anchor;
         const context = await buildStreamingFindContext(self.lazyStore, node.criteria, node.anchor);
         const base = context.factsStream;
-        src = base;
+        src = traceWrap('FIND', base);
         continue;
       }
       if (node.kind === 'ANCHOR') {
@@ -1178,7 +1241,7 @@ export class LazyQueryBuilder extends QueryBuilder {
       }
       if (node.kind === 'WHERE_PRED') {
         const pred = node.pred;
-        src = (async function* (up: AsyncIterableIterator<FactRecord>) {
+        const stage = (async function* (up: AsyncIterableIterator<FactRecord>) {
           for await (const f of up) {
             try {
               if (pred(f)) yield f;
@@ -1187,11 +1250,12 @@ export class LazyQueryBuilder extends QueryBuilder {
             }
           }
         })(src);
+        src = traceWrap('WHERE_PRED', stage);
         continue;
       }
       if (node.kind === 'WHERE_PROP') {
         const { propertyName, operator, value, target } = node;
-        src = (async function* (up: AsyncIterableIterator<FactRecord>, store: PersistentStore) {
+        const stage = (async function* (up: AsyncIterableIterator<FactRecord>, store: PersistentStore) {
           // 预取索引集合
           const idx = store.getPropertyIndex();
           let nodeSet: Set<number> | undefined;
@@ -1227,11 +1291,12 @@ export class LazyQueryBuilder extends QueryBuilder {
             }
           }
         })(src, self.lazyStore);
+        src = traceWrap('WHERE_PROP', stage);
         continue;
       }
       if (node.kind === 'WHERE_LABEL') {
         const { labels, mode, on } = node;
-        src = (async function* (up: AsyncIterableIterator<FactRecord>, store: PersistentStore) {
+        const stage = (async function* (up: AsyncIterableIterator<FactRecord>, store: PersistentStore) {
           const labelIndex = store.getLabelIndex();
           for await (const f of up) {
             const testSubject = on === 'subject' || on === 'both'
@@ -1243,6 +1308,7 @@ export class LazyQueryBuilder extends QueryBuilder {
             if (testSubject || testObject) yield f;
           }
         })(src, self.lazyStore);
+        src = traceWrap('WHERE_LABEL', stage);
         continue;
       }
       if (node.kind === 'FOLLOW') {
@@ -1250,8 +1316,7 @@ export class LazyQueryBuilder extends QueryBuilder {
         currentOrientation = dir === 'forward'
           ? orientAtBuild === 'subject' ? 'object' : orientAtBuild === 'object' ? 'subject' : 'both'
           : orientAtBuild === 'subject' ? 'object' : orientAtBuild === 'object' ? 'subject' : 'both';
-
-        src = (async function* (up: AsyncIterableIterator<FactRecord>, store: PersistentStore) {
+        const stage = (async function* (up: AsyncIterableIterator<FactRecord>, store: PersistentStore) {
           const predId = store.getNodeIdByValue(predicate);
           if (predId === undefined) return; // 无结果
           const expandedFrontier = new Set<number>();
@@ -1276,29 +1341,32 @@ export class LazyQueryBuilder extends QueryBuilder {
             }
           }
         })(src, self.lazyStore);
+        src = traceWrap('FOLLOW', stage);
         continue;
       }
       if (node.kind === 'LIMIT') {
         const cap = Math.max(0, node.n);
-        src = (async function* (up: AsyncIterableIterator<FactRecord>) {
+        const stage = (async function* (up: AsyncIterableIterator<FactRecord>) {
           if (cap === 0) return; let i = 0;
           for await (const f of up) { yield f; i += 1; if (i >= cap) break; }
         })(src);
+        src = traceWrap('LIMIT', stage);
         continue;
       }
       if (node.kind === 'SKIP') {
         const n = Math.max(0, node.n);
-        src = (async function* (up: AsyncIterableIterator<FactRecord>) {
+        const stage = (async function* (up: AsyncIterableIterator<FactRecord>) {
           let i = 0;
           for await (const f of up) { if (i++ < n) continue; yield f; }
         })(src);
+        src = traceWrap('SKIP', stage);
         continue;
       }
       if (node.kind === 'UNION' || node.kind === 'UNION_ALL') {
         const right = node.other[Symbol.asyncIterator]();
         const left = src;
         const distinct = node.kind === 'UNION';
-        src = (async function* (a: AsyncIterableIterator<FactRecord>, b: AsyncIterableIterator<FactRecord>) {
+        const stage = (async function* (a: AsyncIterableIterator<FactRecord>, b: AsyncIterableIterator<FactRecord>) {
           const seen = new Set<string>();
           for await (const f of a) {
             const key = encodeTripleKey(f);
@@ -1317,6 +1385,7 @@ export class LazyQueryBuilder extends QueryBuilder {
             yield f;
           }
         })(left, right);
+        src = traceWrap(distinct ? 'UNION' : 'UNION_ALL', stage);
         continue;
       }
     }
