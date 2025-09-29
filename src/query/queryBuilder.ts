@@ -943,6 +943,8 @@ export class LazyQueryBuilder extends QueryBuilder {
     | { kind: 'WHERE_LABEL'; labels: string[]; mode: 'AND' | 'OR'; on: 'subject' | 'object' | 'both' }
     | { kind: 'LIMIT'; n: number }
     | { kind: 'SKIP'; n: number }
+    | { kind: 'UNION'; other: QueryBuilder }
+    | { kind: 'UNION_ALL'; other: QueryBuilder }
   > = [];
 
   private lazyOrientation: FrontierOrientation;
@@ -1033,6 +1035,22 @@ export class LazyQueryBuilder extends QueryBuilder {
     return qb;
   }
 
+  override union(other: QueryBuilder): QueryBuilder {
+    const qb = new LazyQueryBuilder(this.lazyStore, { subject: undefined }, this.lazyOrientation);
+    qb.plan.length = 0;
+    qb.plan.push(...this.plan, { kind: 'UNION', other });
+    qb.lazyOrientation = this.lazyOrientation;
+    return qb;
+  }
+
+  override unionAll(other: QueryBuilder): QueryBuilder {
+    const qb = new LazyQueryBuilder(this.lazyStore, { subject: undefined }, this.lazyOrientation);
+    qb.plan.length = 0;
+    qb.plan.push(...this.plan, { kind: 'UNION_ALL', other });
+    qb.lazyOrientation = this.lazyOrientation;
+    return qb;
+  }
+
   // 物化
   override all(): FactRecord[] {
     // 使用现有 QueryBuilder 同步路径物化，保证返回类型与时序兼容
@@ -1049,6 +1067,8 @@ export class LazyQueryBuilder extends QueryBuilder {
       else if (node.kind === 'FOLLOW') qb = node.dir === 'forward' ? qb.follow(node.predicate) : qb.followReverse(node.predicate);
       else if (node.kind === 'LIMIT') qb = qb.limit(node.n);
       else if (node.kind === 'SKIP') qb = qb.skip(node.n);
+      else if (node.kind === 'UNION') qb = qb.union(this.materializeToQueryBuilder(node.other));
+      else if (node.kind === 'UNION_ALL') qb = qb.unionAll(this.materializeToQueryBuilder(node.other));
     }
     return qb.all();
   }
@@ -1057,7 +1077,21 @@ export class LazyQueryBuilder extends QueryBuilder {
     return this.all();
   }
 
+  private materializeToQueryBuilder(other: QueryBuilder): QueryBuilder {
+    // 如果是 LazyQueryBuilder，先物化为事实数组再包装为普通 QueryBuilder
+    if (other instanceof LazyQueryBuilder) {
+      const facts = other.all();
+      const frontier = rebuildFrontier(facts, this.lazyOrientation);
+      return QueryBuilder.fromFindResult(this.lazyStore, { facts, frontier, orientation: this.lazyOrientation }, this.pinned);
+    }
+    return other;
+  }
+
   override async *[Symbol.asyncIterator](): AsyncIterableIterator<FactRecord> {
+    // 保持快照一致性
+    if (this.pinned !== undefined) {
+      await this.lazyStore.pushPinnedEpoch(this.pinned);
+    }
     const self = this;
     // 构建源
     let src: AsyncIterableIterator<FactRecord> = (async function* () {})();
@@ -1194,9 +1228,40 @@ export class LazyQueryBuilder extends QueryBuilder {
         })(src);
         continue;
       }
+      if (node.kind === 'UNION' || node.kind === 'UNION_ALL') {
+        const right = node.other[Symbol.asyncIterator]();
+        const left = src;
+        const distinct = node.kind === 'UNION';
+        src = (async function* (a: AsyncIterableIterator<FactRecord>, b: AsyncIterableIterator<FactRecord>) {
+          const seen = new Set<string>();
+          for await (const f of a) {
+            const key = encodeTripleKey(f);
+            if (distinct) {
+              if (seen.has(key)) continue;
+              seen.add(key);
+            }
+            yield f;
+          }
+          for await (const f of b) {
+            const key = encodeTripleKey(f);
+            if (distinct) {
+              if (seen.has(key)) continue;
+              seen.add(key);
+            }
+            yield f;
+          }
+        })(left, right);
+        continue;
+      }
     }
     // 产出
-    for await (const f of src) yield f;
+    try {
+      for await (const f of src) yield f;
+    } finally {
+      if (this.pinned !== undefined) {
+        await this.lazyStore.popPinnedEpoch();
+      }
+    }
   }
 
   override async *batch(size: number): AsyncIterableIterator<FactRecord[]> {
