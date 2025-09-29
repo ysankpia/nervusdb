@@ -1,7 +1,8 @@
-import { ExtendedSynapseDB } from './plugins/base.js';
+import { ExtendedSynapseDB, type SynapseDBPlugin } from './plugins/base.js';
 import { PathfindingPlugin } from './plugins/pathfinding.js';
 import { CypherPlugin } from './plugins/cypher.js';
 import { AggregationPlugin } from './plugins/aggregation.js';
+import { warnExperimental } from './utils/experimental.js';
 import { TripleKey } from './storage/propertyStore.js';
 import { PersistentStore } from './storage/persistentStore.js';
 import {
@@ -58,21 +59,31 @@ export type { FactInput, FactRecord } from './storage/persistentStore.js';
 export class SynapseDB {
   private snapshotDepth = 0;
 
-  private constructor(private readonly core: ExtendedSynapseDB) {}
+  private constructor(
+    private readonly core: ExtendedSynapseDB,
+    private readonly hasCypherPlugin: boolean,
+  ) {}
 
   /**
    * 打开或创建 SynapseDB 数据库（包含所有插件）
    */
   static async open(path: string, options?: SynapseDBOpenOptions): Promise<SynapseDB> {
-    // 默认加载所有插件以保持向后兼容
-    const plugins = [new PathfindingPlugin(), new CypherPlugin(), new AggregationPlugin()];
+    const experimental = options?.experimental ?? {};
+    const envEnableExperimental = process.env.SYNAPSEDB_ENABLE_EXPERIMENTAL_QUERIES === '1';
+    const enableCypher = experimental.cypher ?? envEnableExperimental;
+
+    const plugins: SynapseDBPlugin[] = [new PathfindingPlugin(), new AggregationPlugin()];
+    if (enableCypher) {
+      plugins.push(new CypherPlugin());
+      warnExperimental('Cypher 查询语言前端');
+    }
 
     const extendedDb = await ExtendedSynapseDB.open(path, {
-      ...options,
+      ...(options ?? {}),
       plugins,
     });
 
-    return new SynapseDB(extendedDb);
+    return new SynapseDB(extendedDb, enableCypher);
   }
 
   // ===================
@@ -378,9 +389,7 @@ export class SynapseDB {
 
   // Cypher 极简子集：仅支持 MATCH (a)-[:REL]->(b) RETURN a,b
   cypher(query: string): Array<Record<string, unknown>> {
-    const plugin = this.core.plugin<CypherPlugin>('cypher');
-    if (!plugin) throw new Error('Cypher plugin not available');
-    return plugin.cypherSimple(query);
+    return this.requireCypherPlugin().cypherSimple(query);
   }
 
   // ------------------
@@ -396,9 +405,7 @@ export class SynapseDB {
     parameters: Record<string, unknown> = {},
     options: CypherExecutionOptions = {},
   ): Promise<CypherResult> {
-    const plugin = this.core.plugin<CypherPlugin>('cypher');
-    if (!plugin) throw new Error('Cypher plugin not available');
-    return plugin.cypherQuery(statement, parameters, options);
+    return this.requireCypherPlugin().cypherQuery(statement, parameters, options);
   }
 
   /**
@@ -409,44 +416,47 @@ export class SynapseDB {
     parameters: Record<string, unknown> = {},
     options: CypherExecutionOptions = {},
   ): Promise<CypherResult> {
-    const plugin = this.core.plugin<CypherPlugin>('cypher');
-    if (!plugin) throw new Error('Cypher plugin not available');
-    return plugin.cypherRead(statement, parameters, options);
+    return this.requireCypherPlugin().cypherRead(statement, parameters, options);
   }
 
   /**
    * 验证 Cypher 语法
    */
   validateCypher(statement: string): { valid: boolean; errors: string[] } {
-    const plugin = this.core.plugin<CypherPlugin>('cypher');
-    if (!plugin) throw new Error('Cypher plugin not available');
-    return plugin.validateCypher(statement);
+    return this.requireCypherPlugin().validateCypher(statement);
   }
 
   /** 清理 Cypher 优化器缓存 */
   clearCypherOptimizationCache(): void {
-    const plugin = this.core.plugin<CypherPlugin>('cypher');
-    if (!plugin) throw new Error('Cypher plugin not available');
-    plugin.clearCypherOptimizationCache();
+    this.requireCypherPlugin().clearCypherOptimizationCache();
   }
 
   /** 获取 Cypher 优化器统计信息 */
   getCypherOptimizerStats(): unknown {
-    const plugin = this.core.plugin<CypherPlugin>('cypher');
-    if (!plugin) throw new Error('Cypher plugin not available');
-    return plugin.getCypherOptimizerStats();
+    return this.requireCypherPlugin().getCypherOptimizerStats();
   }
 
   /** 预热 Cypher 优化器 */
   async warmUpCypherOptimizer(): Promise<void> {
-    const plugin = this.core.plugin<CypherPlugin>('cypher');
-    if (!plugin) throw new Error('Cypher plugin not available');
-    await plugin.warmUpCypherOptimizer();
+    await this.requireCypherPlugin().warmUpCypherOptimizer();
   }
 
   // ===================
   // 私有方法
   // ===================
+
+  private requireCypherPlugin(): CypherPlugin {
+    if (!this.hasCypherPlugin) {
+      throw new Error(
+        'Cypher 插件未启用。请在 open() 时传入 experimental.cypher = true，或设置环境变量 SYNAPSEDB_ENABLE_EXPERIMENTAL_QUERIES=1。',
+      );
+    }
+    const plugin = this.core.plugin<CypherPlugin>('cypher');
+    if (!plugin) {
+      throw new Error('Cypher 插件加载失败，请检查 experimental 配置。');
+    }
+    return plugin;
+  }
 
   private inferAnchor(criteria: FactCriteria): FrontierOrientation {
     const hasSubject = criteria.subject !== undefined;

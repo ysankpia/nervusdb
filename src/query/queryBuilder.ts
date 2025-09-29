@@ -38,10 +38,30 @@ const EMPTY_CONTEXT: QueryContext = {
 };
 
 export class QueryBuilder {
+  // 大结果集告警阈值（可通过环境变量覆盖）：
+  // SYNAPSEDB_QUERY_WARN_THRESHOLD=number；设置为0可关闭
+  private static readonly WARN_THRESHOLD: number = (() => {
+    const raw =
+      (typeof process !== 'undefined' &&
+        process.env &&
+        process.env.SYNAPSEDB_QUERY_WARN_THRESHOLD) ||
+      '';
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return 5000; // 默认阈值
+    return n;
+  })();
+
+  // 是否静默警告：SYNAPSEDB_SILENCE_QUERY_WARNINGS=1 关闭警告
+  private static readonly SILENCE_WARNINGS: boolean =
+    typeof process !== 'undefined' &&
+    process.env &&
+    process.env.SYNAPSEDB_SILENCE_QUERY_WARNINGS === '1';
+
   private readonly facts: FactRecord[];
   private readonly frontier: Set<number>;
   private readonly orientation: FrontierOrientation;
   private readonly pinnedEpoch?: number;
+  private warnedOps?: Set<string>; // 单实例去重，避免重复输出警告
 
   constructor(
     private readonly store: PersistentStore,
@@ -52,6 +72,7 @@ export class QueryBuilder {
     this.frontier = context.frontier;
     this.orientation = context.orientation;
     this.pinnedEpoch = pinnedEpoch;
+    this.warnedOps = new Set<string>();
   }
 
   // 变长路径构建器：返回 PathBuilder 用于获取路径结果
@@ -82,6 +103,7 @@ export class QueryBuilder {
   }
 
   slice(start?: number, end?: number): FactRecord[] {
+    this.maybeWarn('slice');
     this.pin();
     try {
       return this.facts.slice(start, end);
@@ -92,6 +114,7 @@ export class QueryBuilder {
 
   // 迭代期间保持快照固定
   *[Symbol.iterator](): IterableIterator<FactRecord> {
+    this.maybeWarn('iterator');
     this.pin();
     try {
       for (const fact of this.facts) {
@@ -107,6 +130,7 @@ export class QueryBuilder {
     const pageSize = 2048;
     let offset = 0;
 
+    this.maybeWarn('iterator');
     this.pin();
     try {
       // 满足 require-await 规则，同时不改变逻辑
@@ -129,6 +153,7 @@ export class QueryBuilder {
   }
 
   all(): FactRecord[] {
+    this.maybeWarn('all');
     this.pin();
     try {
       return [...this.facts];
@@ -137,7 +162,14 @@ export class QueryBuilder {
     }
   }
 
+  /**
+   * 警告：函数式过滤会绕过索引优化并在内存中扫描所有结果。
+   * 建议改用 whereProperty()/whereLabel()/followWithNodeProperty()。
+   *
+   * @deprecated 此 API 将在后续版本转为仅允许受限表达式。
+   */
   where(predicate: (record: FactRecord) => boolean): QueryBuilder {
+    this.maybeWarn('where');
     this.pin();
     const nextFacts = this.facts.filter((f) => {
       try {
@@ -293,6 +325,7 @@ export class QueryBuilder {
       throw new Error('批次大小必须大于 0');
     }
 
+    this.maybeWarn('batch');
     this.pin();
     try {
       let offset = 0;
@@ -342,19 +375,16 @@ export class QueryBuilder {
           );
         }
 
-        // 节点属性查询：同时检查主体和客体，不依赖可能有误导性的orientation
-        const nextFacts = this.facts.filter((fact) => {
-          return matchingIds.has(fact.subjectId) || matchingIds.has(fact.objectId);
-        });
-
-        const nextFrontier = rebuildFrontier(nextFacts, this.orientation);
+        const { facts: nextFacts, frontier: nextFrontier } = filterFactsWithPredicate(
+          this.facts,
+          this.orientation,
+          (fact) => matchingIds.has(fact.subjectId) || matchingIds.has(fact.objectId),
+        );
+        if (nextFacts.length === 0)
+          return new QueryBuilder(this.store, EMPTY_CONTEXT, this.pinnedEpoch);
         return new QueryBuilder(
           this.store,
-          {
-            facts: nextFacts,
-            frontier: nextFrontier,
-            orientation: this.orientation,
-          },
+          { facts: nextFacts, frontier: nextFrontier, orientation: this.orientation },
           this.pinnedEpoch,
         );
       } else {
@@ -366,20 +396,16 @@ export class QueryBuilder {
           throw new Error('边属性暂不支持范围查询操作符');
         }
 
-        // 过滤当前事实
-        const nextFacts = this.facts.filter((fact) => {
-          const edgeKey = encodeTripleKey(fact);
-          return matchingIds.has(edgeKey);
-        });
-
-        const nextFrontier = rebuildFrontier(nextFacts, this.orientation);
+        const { facts: nextFacts, frontier: nextFrontier } = filterFactsWithPredicate(
+          this.facts,
+          this.orientation,
+          (fact) => matchingIds.has(encodeTripleKey(fact)),
+        );
+        if (nextFacts.length === 0)
+          return new QueryBuilder(this.store, EMPTY_CONTEXT, this.pinnedEpoch);
         return new QueryBuilder(
           this.store,
-          {
-            facts: nextFacts,
-            frontier: nextFrontier,
-            orientation: this.orientation,
-          },
+          { facts: nextFacts, frontier: nextFrontier, orientation: this.orientation },
           this.pinnedEpoch,
         );
       }
@@ -448,19 +474,17 @@ export class QueryBuilder {
         // 注意：这是一个简化实现，在实际应用中可能需要更高效的方式
       }
 
-      // 节点属性查询：同时检查主体和客体，不依赖可能有误导性的orientation
-      const nextFacts = this.facts.filter((fact) => {
-        return matchingNodeIds.has(fact.subjectId) || matchingNodeIds.has(fact.objectId);
-      });
-
-      const nextFrontier = rebuildFrontier(nextFacts, this.orientation);
+      const { facts: nextFacts, frontier: nextFrontier } = filterFactsWithPredicate(
+        this.facts,
+        this.orientation,
+        (fact) => matchingNodeIds.has(fact.subjectId) || matchingNodeIds.has(fact.objectId),
+      );
+      if (nextFacts.length === 0) {
+        return new QueryBuilder(this.store, EMPTY_CONTEXT, this.pinnedEpoch);
+      }
       return new QueryBuilder(
         this.store,
-        {
-          facts: nextFacts,
-          frontier: nextFrontier,
-          orientation: this.orientation,
-        },
+        { facts: nextFacts, frontier: nextFrontier, orientation: this.orientation },
         this.pinnedEpoch,
       );
     } finally {
@@ -492,20 +516,17 @@ export class QueryBuilder {
         // 注意：这是一个简化实现
       }
 
-      // 过滤当前事实
-      const nextFacts = this.facts.filter((fact) => {
-        const edgeKey = encodeTripleKey(fact);
-        return matchingEdgeKeys.has(edgeKey);
-      });
-
-      const nextFrontier = rebuildFrontier(nextFacts, this.orientation);
+      const { facts: nextFacts, frontier: nextFrontier } = filterFactsWithPredicate(
+        this.facts,
+        this.orientation,
+        (fact) => matchingEdgeKeys.has(encodeTripleKey(fact)),
+      );
+      if (nextFacts.length === 0) {
+        return new QueryBuilder(this.store, EMPTY_CONTEXT, this.pinnedEpoch);
+      }
       return new QueryBuilder(
         this.store,
-        {
-          facts: nextFacts,
-          frontier: nextFrontier,
-          orientation: this.orientation,
-        },
+        { facts: nextFacts, frontier: nextFrontier, orientation: this.orientation },
         this.pinnedEpoch,
       );
     } finally {
@@ -811,6 +832,25 @@ export class QueryBuilder {
       }
     }
   }
+
+  /**
+   * 大结果集时输出一次性运行时警告，提醒用户改用结构化/流式API。
+   */
+  private maybeWarn(op: 'where' | 'all' | 'batch' | 'slice' | 'iterator'): void {
+    if (QueryBuilder.SILENCE_WARNINGS) return;
+    const threshold = QueryBuilder.WARN_THRESHOLD;
+    if (threshold === 0) return;
+    if (this.facts.length < threshold) return;
+    if (this.warnedOps && this.warnedOps.has(op)) return;
+    this.warnedOps?.add(op);
+
+    console.warn(
+      `SynapseDB: ${op}() 正在对 ~${this.facts.length} 条结果在内存中处理。这可能非常慢并占用大量内存。` +
+        ' 建议：优先使用 whereProperty()/whereLabel()/followWithNodeProperty() 下推过滤；' +
+        ' 或使用 db.findStreaming().' +
+        ' 设置环境变量 SYNAPSEDB_SILENCE_QUERY_WARNINGS=1 可关闭警告，SYNAPSEDB_QUERY_WARN_THRESHOLD 可调整阈值。',
+    );
+  }
 }
 
 /**
@@ -939,24 +979,35 @@ export async function buildStreamingFindContext(
     };
   }
 
-  // 使用流式查询替代预加载，需要转换为 FactRecord
-  const factsStream = store.queryStreaming(query);
-  const frontier = new Set<number>(); // 流式查询需要动态构建前沿
+  const includeProps = !(
+    query.subjectId === undefined &&
+    query.predicateId === undefined &&
+    query.objectId === undefined
+  );
 
-  // 将 EncodedTriple 转换为 FactRecord 的流式包装器
-  async function* encodeTripleToFactRecord(
-    stream: AsyncIterableIterator<EncodedTriple>,
-  ): AsyncIterableIterator<FactRecord> {
-    for await (const triple of stream) {
-      // 这里需要转换逻辑，但现在先简化处理
-      // 注意：这是一个临时解决方案，更好的方法是在 PersistentStore 层提供 FactRecord 的流式查询
-      const fact = store.resolveRecords([triple])[0];
-      if (fact) yield fact;
+  const frontier = new Set<number>();
+  const batchSize = 512;
+
+  async function* streamFacts(): AsyncIterableIterator<FactRecord> {
+    for await (const batch of store.streamFactRecords(query!, batchSize, {
+      includeProperties: includeProps,
+    })) {
+      for (const fact of batch) {
+        if (anchor === 'subject') {
+          frontier.add(fact.subjectId);
+        } else if (anchor === 'object') {
+          frontier.add(fact.objectId);
+        } else {
+          frontier.add(fact.subjectId);
+          frontier.add(fact.objectId);
+        }
+        yield fact;
+      }
     }
   }
 
   return {
-    factsStream: encodeTripleToFactRecord(factsStream),
+    factsStream: streamFacts(),
     frontier,
     orientation: anchor,
   };
@@ -1182,4 +1233,16 @@ function rebuildFrontier(facts: FactRecord[], orientation: FrontierOrientation):
 
 function encodeTripleKey(fact: FactRecord | EncodedTriple): string {
   return `${fact.subjectId}:${fact.predicateId}:${fact.objectId}`;
+}
+
+/**
+ * 统一的过滤助手：一次性返回过滤后的事实与相应前沿
+ */
+function filterFactsWithPredicate(
+  facts: FactRecord[],
+  orientation: FrontierOrientation,
+  predicate: (f: FactRecord) => boolean,
+): { facts: FactRecord[]; frontier: Set<number> } {
+  const filtered = facts.filter(predicate);
+  return { facts: filtered, frontier: rebuildFrontier(filtered, orientation) };
 }

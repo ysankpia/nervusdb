@@ -11,7 +11,8 @@ async function main() {
     console.log('  --mode=incremental      压缩模式: incremental | rewrite（默认incremental）');
     console.log('  --hot-threshold=N       热度阈值，仅增量模式生效（默认不限制）');
     console.log('  --max-primary=N         每个顺序最多重写的primary数（默认不限制）');
-    console.log('  --dry-run               模拟运行，不实际执行压缩');
+    console.log('  --dry-run               显式模拟运行（默认即为 dry-run）');
+    console.log('  --force                 真正执行压缩（默认不会修改磁盘）');
     console.log('  --auto-gc               压缩后自动运行垃圾回收');
     console.log('  --no-respect-readers    即使有活跃读者也执行压缩');
     console.log('  --quiet                 减少日志输出，仅显示关键信息');
@@ -23,9 +24,14 @@ async function main() {
     const [k, v] = a.startsWith('--') ? a.substring(2).split('=') : [a, 'true'];
     opts[k] = v === undefined ? true : v;
   }
+  const toBool = (value: string | boolean | undefined): boolean =>
+    value === true || value === 'true';
+  const isExplicitFalse = (value: string | boolean | undefined): boolean =>
+    value === false || value === 'false';
   const mode = (opts['mode'] as 'rewrite' | 'incremental' | undefined) ?? 'incremental';
   const minMergePages = opts['min-merge'] ? Number(opts['min-merge']) : undefined;
-  const dryRun = Boolean(opts['dry-run']);
+  // 安全默认：干跑，只有 --force 或 --dry-run=false 才执行
+  const dryRun = toBool(opts['force']) ? false : isExplicitFalse(opts['dry-run']) ? false : true;
   const orders = typeof opts['orders'] === 'string' ? String(opts['orders']).split(',') : undefined;
   const hotThreshold = opts['hot-threshold'] ? Number(opts['hot-threshold']) : undefined;
   const maxPrimariesPerOrder = opts['max-primary'] ? Number(opts['max-primary']) : undefined;

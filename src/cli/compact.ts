@@ -5,7 +5,7 @@ async function main() {
   const [dbPath, ...args] = process.argv.slice(2);
   if (!dbPath) {
     console.log(
-      '用法: pnpm db:compact <db> [--orders=SPO,POS] [--page-size=1024] [--min-merge=2] [--tombstone-threshold=0.2] [--dry-run] [--compression=brotli:4|none]',
+      '用法: pnpm db:compact <db> [--orders=SPO,POS] [--page-size=1024] [--min-merge=2] [--tombstone-threshold=0.2] [--compression=brotli:4|none] [--force]',
     );
     process.exit(1);
   }
@@ -23,7 +23,8 @@ async function main() {
   const tombstoneRatioThreshold = opts['tombstone-threshold']
     ? Number(opts['tombstone-threshold'])
     : undefined;
-  const dryRun = Boolean(opts['dry-run']);
+  // 安全默认：dry-run 默认开启；只有 --force 显式关闭
+  const dryRun = opts['dry-run'] === true ? true : opts['force'] === true ? false : true;
   let compression: { codec: 'none' | 'brotli'; level?: number } | undefined;
   if (typeof opts['compression'] === 'string') {
     const raw = String(opts['compression']);

@@ -43,10 +43,12 @@ export async function autoCompact(
   dbPath: string,
   options: AutoCompactOptions = {},
 ): Promise<AutoCompactDecision> {
+  // 默认干跑（不改磁盘），与 CLI 文档一致；需要真实执行时显式传 dryRun: false
+  const dryRun = options.dryRun ?? true;
   console.log(`🔧 Starting auto-compact analysis for: ${dbPath}`);
   console.log(`   Mode: ${options.mode ?? 'incremental'}`);
   console.log(`   Min merge pages: ${options.minMergePages ?? 2}`);
-  console.log(`   Dry run: ${options.dryRun ?? false}`);
+  console.log(`   Dry run: ${dryRun}`);
 
   const manifest = await readPagedManifest(`${dbPath}.pages`);
   if (!manifest) {
@@ -285,7 +287,7 @@ export async function autoCompact(
     console.log(`   ❌ LSM segments not requested`);
   }
 
-  if (selectedOrders.length === 0 && includeLsmSegments && !(options.dryRun ?? false)) {
+  if (selectedOrders.length === 0 && includeLsmSegments && !dryRun) {
     // 当仅因为 LSM 段需要并入时，至少对指定 orders 执行一次合并
     console.log(`\n🔄 No orders selected but LSM merge needed - selecting all orders`);
     selectedOrders = orders;
@@ -294,7 +296,7 @@ export async function autoCompact(
   console.log(`\n🎯 Final compaction decision:`);
   console.log(`   Selected orders: [${selectedOrders.join(', ')}]`);
   console.log(`   Include LSM segments: ${includeLsmSegments}`);
-  console.log(`   Dry run: ${options.dryRun ?? false}`);
+  console.log(`   Dry run: ${dryRun}`);
 
   if (selectedOrders.length === 0) {
     console.log(`\n✅ No compaction needed - all indexes are optimal`);
@@ -309,7 +311,7 @@ export async function autoCompact(
     compression: options.compression ?? manifest.compression,
     hotCompression: options.hotCompression,
     coldCompression: options.coldCompression,
-    dryRun: options.dryRun ?? false,
+    dryRun,
     mode: options.mode ?? 'incremental',
     onlyPrimaries,
     includeLsmSegments,
@@ -327,10 +329,12 @@ export async function autoCompact(
     console.log(`   Orders processed: [${stats.ordersRewritten.join(', ')}]`);
   }
 
-  if (options.autoGC && !options.dryRun) {
+  if (options.autoGC && !dryRun) {
     console.log(`\n🗑️  Running auto garbage collection...`);
-    await garbageCollectPages(dbPath);
+    await garbageCollectPages(dbPath, { dryRun: false });
     console.log(`✅ Garbage collection completed`);
+  } else if (options.autoGC && dryRun) {
+    console.log(`\nℹ️  Auto GC skipped (dry-run mode)`);
   }
 
   console.log(`\n✅ Auto-compact finished successfully`);

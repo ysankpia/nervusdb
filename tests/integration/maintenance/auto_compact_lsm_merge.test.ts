@@ -61,6 +61,7 @@ describe('Auto-Compact 自动并入 LSM 段并清理', () => {
       mode: 'rewrite',
       includeLsmSegmentsAuto: true,
       lsmSegmentsThreshold: 1,
+      dryRun: false,
     });
     expect(decision.selectedOrders).toContain('SPO');
     const m2 = JSON.parse(await readFile(manPath, 'utf8')) as { segments: any[] };
