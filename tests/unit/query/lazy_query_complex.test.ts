@@ -5,9 +5,18 @@ describe('LazyQueryBuilder · 复杂链路与 length/slice', () => {
   it('follow→whereProperty→followReverse→skip/limit 组合链路', async () => {
     const db = await SynapseDB.open('tmp-lazy-complex.synapsedb');
     // A -KNOWS-> B(age=30), C(age=20); D(age=40) -KNOWS-> B
-    db.addFact({ subject: 'A', predicate: 'KNOWS', object: 'B' }, { objectProperties: { age: 30 } });
-    db.addFact({ subject: 'A', predicate: 'KNOWS', object: 'C' }, { objectProperties: { age: 20 } });
-    db.addFact({ subject: 'D', predicate: 'KNOWS', object: 'B' }, { subjectProperties: { age: 40 } });
+    db.addFact(
+      { subject: 'A', predicate: 'KNOWS', object: 'B' },
+      { objectProperties: { age: 30 } },
+    );
+    db.addFact(
+      { subject: 'A', predicate: 'KNOWS', object: 'C' },
+      { objectProperties: { age: 20 } },
+    );
+    db.addFact(
+      { subject: 'D', predicate: 'KNOWS', object: 'B' },
+      { subjectProperties: { age: 40 } },
+    );
     await db.flush();
 
     const q = db
@@ -47,4 +56,3 @@ describe('LazyQueryBuilder · 复杂链路与 length/slice', () => {
     await db.close();
   });
 });
-

@@ -25,8 +25,14 @@ describe('LazyQueryBuilder · 基础流式链路', () => {
 
   it('whereProperty/whereLabel 在流上过滤', async () => {
     const db = await SynapseDB.open('tmp-lazy-filter.synapsedb');
-    db.addFact({ subject: 'X', predicate: 'IS', object: 'Person' }, { subjectProperties: { age: 30 } });
-    db.addFact({ subject: 'Y', predicate: 'IS', object: 'Person' }, { subjectProperties: { age: 20 } });
+    db.addFact(
+      { subject: 'X', predicate: 'IS', object: 'Person' },
+      { subjectProperties: { age: 30 } },
+    );
+    db.addFact(
+      { subject: 'Y', predicate: 'IS', object: 'Person' },
+      { subjectProperties: { age: 20 } },
+    );
     await db.flush();
 
     const res = db
@@ -38,4 +44,3 @@ describe('LazyQueryBuilder · 基础流式链路', () => {
     await db.close();
   });
 });
-

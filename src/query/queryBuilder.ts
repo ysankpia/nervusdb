@@ -184,6 +184,8 @@ export class QueryBuilder {
   async collect(): Promise<FactRecord[]> {
     this.pin();
     try {
+      // 统一异步流程：保持 async 语义
+      await Promise.resolve();
       return [...this.facts];
     } finally {
       this.unpin();
@@ -975,8 +977,8 @@ export class StreamingQueryBuilder {
   }
 }
 
-  /**
-   * 惰性执行版 QueryBuilder（灰度）：
+/**
+ * 惰性执行版 QueryBuilder（灰度）：
  * - 不在链接口阶段物化结果，保存操作计划；
  * - 执行时基于底层 streamFactRecords/逐节点拓展按需产出；
  * - 通过 SynapseDB.findLazy() 暴露，默认 find() 行为不变。
@@ -985,10 +987,26 @@ export class LazyQueryBuilder extends QueryBuilder {
   private readonly plan: Array<
     | { kind: 'FIND'; criteria: FactCriteria; anchor: FrontierOrientation }
     | { kind: 'ANCHOR'; orientation: FrontierOrientation }
-    | { kind: 'FOLLOW'; predicate: string; dir: 'forward' | 'reverse'; orientAtBuild: FrontierOrientation }
+    | {
+        kind: 'FOLLOW';
+        predicate: string;
+        dir: 'forward' | 'reverse';
+        orientAtBuild: FrontierOrientation;
+      }
     | { kind: 'WHERE_PRED'; pred: (f: FactRecord) => boolean }
-    | { kind: 'WHERE_PROP'; propertyName: string; operator: '=' | '>' | '<' | '>=' | '<='; value: unknown; target: 'node' | 'edge' }
-    | { kind: 'WHERE_LABEL'; labels: string[]; mode: 'AND' | 'OR'; on: 'subject' | 'object' | 'both' }
+    | {
+        kind: 'WHERE_PROP';
+        propertyName: string;
+        operator: '=' | '>' | '<' | '>=' | '<=';
+        value: unknown;
+        target: 'node' | 'edge';
+      }
+    | {
+        kind: 'WHERE_LABEL';
+        labels: string[];
+        mode: 'AND' | 'OR';
+        on: 'subject' | 'object' | 'both';
+      }
     | { kind: 'LIMIT'; n: number }
     | { kind: 'SKIP'; n: number }
     | { kind: 'UNION'; other: QueryBuilder }
@@ -999,7 +1017,11 @@ export class LazyQueryBuilder extends QueryBuilder {
   private readonly pinned?: number;
   private lazyWarnedOps?: Set<string>;
 
-  constructor(private readonly lazyStore: PersistentStore, criteria: FactCriteria, anchor: FrontierOrientation) {
+  constructor(
+    private readonly lazyStore: PersistentStore,
+    criteria: FactCriteria,
+    anchor: FrontierOrientation,
+  ) {
     // 传入空上下文占位，避免父类逻辑介入；所有方法均被本类覆写
     super(lazyStore, EMPTY_CONTEXT);
     this.plan.push({ kind: 'FIND', criteria, anchor });
@@ -1035,23 +1057,37 @@ export class LazyQueryBuilder extends QueryBuilder {
   override follow(predicate: string): QueryBuilder {
     const qb = new LazyQueryBuilder(this.lazyStore, { subject: undefined }, this.lazyOrientation);
     qb.plan.length = 0;
-    qb.plan.push(
-      ...this.plan,
-      { kind: 'FOLLOW', predicate, dir: 'forward', orientAtBuild: this.lazyOrientation },
-    );
+    qb.plan.push(...this.plan, {
+      kind: 'FOLLOW',
+      predicate,
+      dir: 'forward',
+      orientAtBuild: this.lazyOrientation,
+    });
     // 跟随后，前沿朝向切换（与老实现一致）
-    qb.lazyOrientation = this.lazyOrientation === 'subject' ? 'object' : this.lazyOrientation === 'object' ? 'subject' : 'both';
+    qb.lazyOrientation =
+      this.lazyOrientation === 'subject'
+        ? 'object'
+        : this.lazyOrientation === 'object'
+          ? 'subject'
+          : 'both';
     return qb;
   }
 
   override followReverse(predicate: string): QueryBuilder {
     const qb = new LazyQueryBuilder(this.lazyStore, { subject: undefined }, this.lazyOrientation);
     qb.plan.length = 0;
-    qb.plan.push(
-      ...this.plan,
-      { kind: 'FOLLOW', predicate, dir: 'reverse', orientAtBuild: this.lazyOrientation },
-    );
-    qb.lazyOrientation = this.lazyOrientation === 'subject' ? 'object' : this.lazyOrientation === 'object' ? 'subject' : 'both';
+    qb.plan.push(...this.plan, {
+      kind: 'FOLLOW',
+      predicate,
+      dir: 'reverse',
+      orientAtBuild: this.lazyOrientation,
+    });
+    qb.lazyOrientation =
+      this.lazyOrientation === 'subject'
+        ? 'object'
+        : this.lazyOrientation === 'object'
+          ? 'subject'
+          : 'both';
     return qb;
   }
 
@@ -1059,7 +1095,7 @@ export class LazyQueryBuilder extends QueryBuilder {
     // 轻量一次性警告
     if (!this.lazyWarnedOps?.has('where')) {
       this.lazyWarnedOps?.add('where');
-      // eslint-disable-next-line no-console
+
       console.warn(
         'SynapseDB: where() 在惰性链上可能触发大结果的内存处理。建议使用 whereProperty()/whereLabel() 或异步流。',
       );
@@ -1091,10 +1127,12 @@ export class LazyQueryBuilder extends QueryBuilder {
   ): QueryBuilder {
     const qb = new LazyQueryBuilder(this.lazyStore, { subject: undefined }, this.lazyOrientation);
     qb.plan.length = 0;
-    qb.plan.push(
-      ...this.plan,
-      { kind: 'WHERE_LABEL', labels: Array.isArray(labels) ? labels : [labels], mode: options?.mode ?? 'AND', on: options?.on ?? 'both' },
-    );
+    qb.plan.push(...this.plan, {
+      kind: 'WHERE_LABEL',
+      labels: Array.isArray(labels) ? labels : [labels],
+      mode: options?.mode ?? 'AND',
+      on: options?.on ?? 'both',
+    });
     return qb;
   }
 
@@ -1132,20 +1170,27 @@ export class LazyQueryBuilder extends QueryBuilder {
   override all(): FactRecord[] {
     // 使用现有 QueryBuilder 同步路径物化，保证返回类型与时序兼容
     let qb: QueryBuilder;
-    const find = this.plan.find((p) => p.kind === 'FIND') as Extract<typeof this.plan[number], { kind: 'FIND' }>;
+    const find = this.plan.find((p) => p.kind === 'FIND') as Extract<
+      (typeof this.plan)[number],
+      { kind: 'FIND' }
+    >;
     const ctx = buildFindContext(this.lazyStore, find.criteria, find.anchor);
     qb = QueryBuilder.fromFindResult(this.lazyStore, ctx, this.pinned);
     for (const node of this.plan) {
       if (node.kind === 'FIND') continue;
       if (node.kind === 'ANCHOR') qb = qb.anchor(node.orientation);
       else if (node.kind === 'WHERE_PRED') qb = qb.where(node.pred);
-      else if (node.kind === 'WHERE_PROP') qb = qb.whereProperty(node.propertyName, node.operator, node.value, node.target);
-      else if (node.kind === 'WHERE_LABEL') qb = qb.whereLabel(node.labels, { mode: node.mode, on: node.on });
-      else if (node.kind === 'FOLLOW') qb = node.dir === 'forward' ? qb.follow(node.predicate) : qb.followReverse(node.predicate);
+      else if (node.kind === 'WHERE_PROP')
+        qb = qb.whereProperty(node.propertyName, node.operator, node.value, node.target);
+      else if (node.kind === 'WHERE_LABEL')
+        qb = qb.whereLabel(node.labels, { mode: node.mode, on: node.on });
+      else if (node.kind === 'FOLLOW')
+        qb = node.dir === 'forward' ? qb.follow(node.predicate) : qb.followReverse(node.predicate);
       else if (node.kind === 'LIMIT') qb = qb.limit(node.n);
       else if (node.kind === 'SKIP') qb = qb.skip(node.n);
       else if (node.kind === 'UNION') qb = qb.union(this.materializeToQueryBuilder(node.other));
-      else if (node.kind === 'UNION_ALL') qb = qb.unionAll(this.materializeToQueryBuilder(node.other));
+      else if (node.kind === 'UNION_ALL')
+        qb = qb.unionAll(this.materializeToQueryBuilder(node.other));
     }
     return qb.all();
   }
@@ -1162,13 +1207,19 @@ export class LazyQueryBuilder extends QueryBuilder {
       if (n.kind === 'FIND') return { kind: n.kind, criteria: n.criteria, anchor: n.anchor };
       if (n.kind === 'FOLLOW') return { kind: n.kind, predicate: n.predicate, dir: n.dir };
       if (n.kind === 'WHERE_PROP')
-        return { kind: n.kind, propertyName: n.propertyName, operator: n.operator, target: n.target };
-      if (n.kind === 'WHERE_LABEL') return { kind: n.kind, labels: n.labels, mode: n.mode, on: n.on };
+        return {
+          kind: n.kind,
+          propertyName: n.propertyName,
+          operator: n.operator,
+          target: n.target,
+        };
+      if (n.kind === 'WHERE_LABEL')
+        return { kind: n.kind, labels: n.labels, mode: n.mode, on: n.on };
       if (n.kind === 'LIMIT') return { kind: n.kind, n: n.n };
       if (n.kind === 'SKIP') return { kind: n.kind, n: n.n };
       if (n.kind === 'ANCHOR') return { kind: n.kind, orientation: n.orientation };
       if (n.kind === 'UNION' || n.kind === 'UNION_ALL') return { kind: n.kind };
-      return { kind: (n as any).kind };
+      return { kind: 'UNKNOWN' };
     });
     const summary: Record<string, unknown> = {
       type: 'LAZY',
@@ -1184,7 +1235,7 @@ export class LazyQueryBuilder extends QueryBuilder {
     if (findNode) {
       const idCrit = convertCriteriaToIds(this.lazyStore, findNode.criteria);
       const order = getBestIndexKey(idCrit ?? {});
-      const manifest = this.lazyStore.getIndexManifest() as PagedIndexManifest | null;
+      const manifest = this.lazyStore.getIndexManifest();
       let upperBound: number | undefined;
       let pagesForPrimary = 0;
       let hotnessPrimary: number | undefined;
@@ -1194,7 +1245,12 @@ export class LazyQueryBuilder extends QueryBuilder {
           const pageSize = manifest.pageSize;
           // 根据主维度可用的 id 估算页数
           const primary = order[0]; // 'S'|'P'|'O'
-          const pid = primary === 'S' ? (idCrit as any)?.subjectId : primary === 'P' ? (idCrit as any)?.predicateId : (idCrit as any)?.objectId;
+          const pid =
+            primary === 'S'
+              ? idCrit?.subjectId
+              : primary === 'P'
+                ? idCrit?.predicateId
+                : idCrit?.objectId;
           if (pid !== undefined) {
             pagesForPrimary = lookup.pages.filter((p) => p.primaryValue === pid).length;
             upperBound = pagesForPrimary * pageSize;
@@ -1204,7 +1260,7 @@ export class LazyQueryBuilder extends QueryBuilder {
 
           // 合并对偶顺序的热度计数，给出粗略热度估算
           try {
-            const hot = (this.lazyStore as any).getHotnessSnapshot?.();
+            const hot = this.lazyStore.getHotnessSnapshot?.();
             const counts = hot?.counts ?? {};
             const pair: Partial<Record<IndexOrder, IndexOrder>> = {
               SPO: 'SOP',
@@ -1224,7 +1280,13 @@ export class LazyQueryBuilder extends QueryBuilder {
           } catch {}
         }
       }
-      (summary as any).estimate = { order, upperBound, pagesForPrimary, hotnessPrimary };
+      const estimateObj: {
+        order: IndexOrder;
+        upperBound?: number;
+        pagesForPrimary: number;
+        hotnessPrimary?: number;
+        estimatedOutput?: number;
+      } = { order, upperBound, pagesForPrimary, hotnessPrimary };
 
       // 继续基于计划传播一个非常保守的 estimatedOutput（仅考虑 skip/limit/union）
       let estimatedOutput = upperBound ?? undefined;
@@ -1241,18 +1303,24 @@ export class LazyQueryBuilder extends QueryBuilder {
           }
         } else if (n.kind === 'UNION' || n.kind === 'UNION_ALL') {
           try {
-            const otherSummary = (n.other as any).explain?.();
-            const otherOut = otherSummary?.estimate?.estimatedOutput ?? otherSummary?.estimate?.upperBound;
+            const otherSummary = n.other.explain?.();
+            const otherOut =
+              otherSummary?.estimate?.estimatedOutput ?? otherSummary?.estimate?.upperBound;
             if (typeof otherOut === 'number') {
               if (estimatedOutput === undefined) estimatedOutput = otherOut;
-              else estimatedOutput = n.kind === 'UNION_ALL' ? estimatedOutput + otherOut : Math.max(estimatedOutput, otherOut);
+              else
+                estimatedOutput =
+                  n.kind === 'UNION_ALL'
+                    ? estimatedOutput + otherOut
+                    : Math.max(estimatedOutput, otherOut);
             }
           } catch {
             // ignore explain failure of other side
           }
         }
       }
-      (summary as any).estimate.estimatedOutput = estimatedOutput;
+      estimateObj.estimatedOutput = estimatedOutput;
+      summary['estimate'] = estimateObj as unknown;
     }
 
     return summary;
@@ -1263,7 +1331,11 @@ export class LazyQueryBuilder extends QueryBuilder {
     if (other instanceof LazyQueryBuilder) {
       const facts = other.all();
       const frontier = rebuildFrontier(facts, this.lazyOrientation);
-      return QueryBuilder.fromFindResult(this.lazyStore, { facts, frontier, orientation: this.lazyOrientation }, this.pinned);
+      return QueryBuilder.fromFindResult(
+        this.lazyStore,
+        { facts, frontier, orientation: this.lazyOrientation },
+        this.pinned,
+      );
     }
     return other;
   }
@@ -1288,10 +1360,13 @@ export class LazyQueryBuilder extends QueryBuilder {
     if (this.pinned !== undefined) {
       await this.lazyStore.pushPinnedEpoch(this.pinned);
     }
-    const self = this;
+    // 直接使用 this 引用，避免 this-alias 警告
     const TRACE = typeof process !== 'undefined' && process.env.SYNAPSEDB_TRACE_QUERY === '1';
 
-    const traceWrap = <T>(name: string, gen: AsyncIterableIterator<T>): AsyncIterableIterator<T> => {
+    const traceWrap = <T>(
+      name: string,
+      gen: AsyncIterableIterator<T>,
+    ): AsyncIterableIterator<T> => {
       if (!TRACE) return gen;
       return (async function* () {
         const t0 = Date.now();
@@ -1300,7 +1375,7 @@ export class LazyQueryBuilder extends QueryBuilder {
           c += 1;
           yield x;
         }
-        // eslint-disable-next-line no-console
+
         console.debug(`[TRACE] stage=${name} count=${c} costMs=${Date.now() - t0}`);
       })();
     };
@@ -1308,10 +1383,10 @@ export class LazyQueryBuilder extends QueryBuilder {
     let src: AsyncIterableIterator<FactRecord> = (async function* () {})();
     let currentOrientation: FrontierOrientation = 'object';
 
-    for (const node of self.plan) {
+    for (const node of this.plan) {
       if (node.kind === 'FIND') {
         currentOrientation = node.anchor;
-        const context = await buildStreamingFindContext(self.lazyStore, node.criteria, node.anchor);
+        const context = await buildStreamingFindContext(this.lazyStore, node.criteria, node.anchor);
         const base = context.factsStream;
         src = traceWrap('FIND', base);
         continue;
@@ -1337,7 +1412,10 @@ export class LazyQueryBuilder extends QueryBuilder {
       }
       if (node.kind === 'WHERE_PROP') {
         const { propertyName, operator, value, target } = node;
-        const stage = (async function* (up: AsyncIterableIterator<FactRecord>, store: PersistentStore) {
+        const stage = (async function* (
+          up: AsyncIterableIterator<FactRecord>,
+          store: PersistentStore,
+        ) {
           // 预取索引集合
           const idx = store.getPropertyIndex();
           let nodeSet: Set<number> | undefined;
@@ -1357,7 +1435,13 @@ export class LazyQueryBuilder extends QueryBuilder {
                     return { min: undefined, max: value, includeMin: true, includeMax: true };
                 }
               })();
-              nodeSet = idx.queryNodesByRange(propertyName, range?.min, range?.max, range?.includeMin, range?.includeMax);
+              nodeSet = idx.queryNodesByRange(
+                propertyName,
+                range?.min,
+                range?.max,
+                range?.includeMin,
+                range?.includeMax,
+              );
             }
           } else {
             if (operator !== '=') throw new Error('边属性暂不支持范围查询');
@@ -1372,33 +1456,54 @@ export class LazyQueryBuilder extends QueryBuilder {
               if (edgeSet!.has(key)) yield f;
             }
           }
-        })(src, self.lazyStore);
+        })(src, this.lazyStore);
         src = traceWrap('WHERE_PROP', stage);
         continue;
       }
       if (node.kind === 'WHERE_LABEL') {
         const { labels, mode, on } = node;
-        const stage = (async function* (up: AsyncIterableIterator<FactRecord>, store: PersistentStore) {
+        const stage = (async function* (
+          up: AsyncIterableIterator<FactRecord>,
+          store: PersistentStore,
+        ) {
           const labelIndex = store.getLabelIndex();
           for await (const f of up) {
-            const testSubject = on === 'subject' || on === 'both'
-              ? mode === 'AND' ? labelIndex.hasAllNodeLabels(f.subjectId, labels) : labelIndex.hasAnyNodeLabel(f.subjectId, labels)
-              : false;
-            const testObject = on === 'object' || on === 'both'
-              ? mode === 'AND' ? labelIndex.hasAllNodeLabels(f.objectId, labels) : labelIndex.hasAnyNodeLabel(f.objectId, labels)
-              : false;
+            const testSubject =
+              on === 'subject' || on === 'both'
+                ? mode === 'AND'
+                  ? labelIndex.hasAllNodeLabels(f.subjectId, labels)
+                  : labelIndex.hasAnyNodeLabel(f.subjectId, labels)
+                : false;
+            const testObject =
+              on === 'object' || on === 'both'
+                ? mode === 'AND'
+                  ? labelIndex.hasAllNodeLabels(f.objectId, labels)
+                  : labelIndex.hasAnyNodeLabel(f.objectId, labels)
+                : false;
             if (testSubject || testObject) yield f;
           }
-        })(src, self.lazyStore);
+        })(src, this.lazyStore);
         src = traceWrap('WHERE_LABEL', stage);
         continue;
       }
       if (node.kind === 'FOLLOW') {
         const { predicate, dir, orientAtBuild } = node;
-        currentOrientation = dir === 'forward'
-          ? orientAtBuild === 'subject' ? 'object' : orientAtBuild === 'object' ? 'subject' : 'both'
-          : orientAtBuild === 'subject' ? 'object' : orientAtBuild === 'object' ? 'subject' : 'both';
-        const stage = (async function* (up: AsyncIterableIterator<FactRecord>, store: PersistentStore) {
+        currentOrientation =
+          dir === 'forward'
+            ? orientAtBuild === 'subject'
+              ? 'object'
+              : orientAtBuild === 'object'
+                ? 'subject'
+                : 'both'
+            : orientAtBuild === 'subject'
+              ? 'object'
+              : orientAtBuild === 'object'
+                ? 'subject'
+                : 'both';
+        const stage = (async function* (
+          up: AsyncIterableIterator<FactRecord>,
+          store: PersistentStore,
+        ) {
           const predId = store.getNodeIdByValue(predicate);
           if (predId === undefined) return; // 无结果
           const expandedFrontier = new Set<number>();
@@ -1406,13 +1511,20 @@ export class LazyQueryBuilder extends QueryBuilder {
           for await (const f of up) {
             // 取当前流的前沿节点
             const frontierIds: number[] = [];
-            if (orientAtBuild === 'subject' || orientAtBuild === 'both') frontierIds.push(f.subjectId);
-            if (orientAtBuild === 'object' || orientAtBuild === 'both') frontierIds.push(f.objectId);
+            if (orientAtBuild === 'subject' || orientAtBuild === 'both')
+              frontierIds.push(f.subjectId);
+            if (orientAtBuild === 'object' || orientAtBuild === 'both')
+              frontierIds.push(f.objectId);
             for (const nodeId of frontierIds) {
               if (expandedFrontier.has(nodeId)) continue; // 每节点只扩展一次
               expandedFrontier.add(nodeId);
-              const criteria = dir === 'forward' ? { subjectId: nodeId, predicateId: predId } : { predicateId: predId, objectId: nodeId };
-              for await (const batch of store.streamFactRecords(criteria, 512, { includeProperties: true })) {
+              const criteria =
+                dir === 'forward'
+                  ? { subjectId: nodeId, predicateId: predId }
+                  : { predicateId: predId, objectId: nodeId };
+              for await (const batch of store.streamFactRecords(criteria, 512, {
+                includeProperties: true,
+              })) {
                 for (const r of batch) {
                   const key = encodeTripleKey(r);
                   if (seenTriple.has(key)) continue;
@@ -1422,15 +1534,20 @@ export class LazyQueryBuilder extends QueryBuilder {
               }
             }
           }
-        })(src, self.lazyStore);
+        })(src, this.lazyStore);
         src = traceWrap('FOLLOW', stage);
         continue;
       }
       if (node.kind === 'LIMIT') {
         const cap = Math.max(0, node.n);
         const stage = (async function* (up: AsyncIterableIterator<FactRecord>) {
-          if (cap === 0) return; let i = 0;
-          for await (const f of up) { yield f; i += 1; if (i >= cap) break; }
+          if (cap === 0) return;
+          let i = 0;
+          for await (const f of up) {
+            yield f;
+            i += 1;
+            if (i >= cap) break;
+          }
         })(src);
         src = traceWrap('LIMIT', stage);
         continue;
@@ -1439,7 +1556,10 @@ export class LazyQueryBuilder extends QueryBuilder {
         const n = Math.max(0, node.n);
         const stage = (async function* (up: AsyncIterableIterator<FactRecord>) {
           let i = 0;
-          for await (const f of up) { if (i++ < n) continue; yield f; }
+          for await (const f of up) {
+            if (i++ < n) continue;
+            yield f;
+          }
         })(src);
         src = traceWrap('SKIP', stage);
         continue;
@@ -1448,7 +1568,10 @@ export class LazyQueryBuilder extends QueryBuilder {
         const right = node.other[Symbol.asyncIterator]();
         const left = src;
         const distinct = node.kind === 'UNION';
-        const stage = (async function* (a: AsyncIterableIterator<FactRecord>, b: AsyncIterableIterator<FactRecord>) {
+        const stage = (async function* (
+          a: AsyncIterableIterator<FactRecord>,
+          b: AsyncIterableIterator<FactRecord>,
+        ) {
           const seen = new Set<string>();
           for await (const f of a) {
             const key = encodeTripleKey(f);
@@ -1486,7 +1609,9 @@ export class LazyQueryBuilder extends QueryBuilder {
     const cur: FactRecord[] = [];
     for await (const f of this) {
       cur.push(f);
-      if (cur.length >= size) { yield cur.splice(0, cur.length); }
+      if (cur.length >= size) {
+        yield cur.splice(0, cur.length);
+      }
     }
     if (cur.length) yield cur;
   }
@@ -1494,21 +1619,27 @@ export class LazyQueryBuilder extends QueryBuilder {
   // 变长路径：灰度期采用“同步物化前沿 + 现有路径构建器”策略，保持行为与类型一致
   override variablePath(
     relation: string,
-    options: { min?: number; max: number; uniqueness?: 'NODE' | 'EDGE' | 'NONE'; direction?: 'forward' | 'reverse' },
+    options: {
+      min?: number;
+      max: number;
+      uniqueness?: 'NODE' | 'EDGE' | 'NONE';
+      direction?: 'forward' | 'reverse';
+    },
   ) {
-    const self = this;
     const builder = {
-      all(target?: number) {
-        const acc = self.all();
-        const front = buildInitialFrontier(acc, self.lazyOrientation);
-        const predicateId = self.lazyStore.getNodeIdByValue(relation) ?? 0;
-        return new VariablePathBuilder(self.lazyStore, front, predicateId, options).all(target);
+      all: (target?: number) => {
+        const acc = this.all();
+        const front = buildInitialFrontier(acc, this.lazyOrientation);
+        const predicateId = this.lazyStore.getNodeIdByValue(relation) ?? 0;
+        return new VariablePathBuilder(this.lazyStore, front, predicateId, options).all(target);
       },
-      shortest(target: number) {
-        const acc = self.all();
-        const front = buildInitialFrontier(acc, self.lazyOrientation);
-        const predicateId = self.lazyStore.getNodeIdByValue(relation) ?? 0;
-        return new VariablePathBuilder(self.lazyStore, front, predicateId, options).shortest(target);
+      shortest: (target: number) => {
+        const acc = this.all();
+        const front = buildInitialFrontier(acc, this.lazyOrientation);
+        const predicateId = this.lazyStore.getNodeIdByValue(relation) ?? 0;
+        return new VariablePathBuilder(this.lazyStore, front, predicateId, options).shortest(
+          target,
+        );
       },
     } as unknown as VariablePathBuilder;
     return builder;
@@ -1534,12 +1665,19 @@ export class LazyQueryBuilder extends QueryBuilder {
     // 计算起始前沿（基于上游链路的朝向），避免物化全部事实
     const start = new Set<number>();
     for await (const f of this) {
-      if (this.lazyOrientation === 'subject' || this.lazyOrientation === 'both') start.add(f.subjectId);
-      if (this.lazyOrientation === 'object' || this.lazyOrientation === 'both') start.add(f.objectId);
+      if (this.lazyOrientation === 'subject' || this.lazyOrientation === 'both')
+        start.add(f.subjectId);
+      if (this.lazyOrientation === 'object' || this.lazyOrientation === 'both')
+        start.add(f.objectId);
     }
     if (start.size === 0) return;
 
-    type Item = { node: number; edges: { record: FactRecord; direction: Direction }[]; vNodes: Set<number>; vEdges: Set<string> };
+    type Item = {
+      node: number;
+      edges: { record: FactRecord; direction: Direction }[];
+      vNodes: Set<number>;
+      vEdges: Set<string>;
+    };
     const q: Item[] = [];
     for (const s of start) q.push({ node: s, edges: [], vNodes: new Set([s]), vEdges: new Set() });
 
@@ -1558,7 +1696,10 @@ export class LazyQueryBuilder extends QueryBuilder {
       }
       if (depth >= max) continue;
 
-      const crit = dir === 'forward' ? { subjectId: cur.node, predicateId: predId } : { predicateId: predId, objectId: cur.node };
+      const crit =
+        dir === 'forward'
+          ? { subjectId: cur.node, predicateId: predId }
+          : { predicateId: predId, objectId: cur.node };
       const matches = this.lazyStore.query(crit);
       const recs = this.lazyStore.resolveRecords(matches);
       for (const rec of recs) {

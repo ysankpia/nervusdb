@@ -15,4 +15,3 @@ describe('LazyQueryBuilder · collect()', () => {
     await db.close();
   });
 });
-

@@ -25,4 +25,3 @@ describe('LazyQueryBuilder · variablePathStream', () => {
     await db.close();
   });
 });
-

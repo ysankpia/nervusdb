@@ -42,4 +42,3 @@ describe('LazyQueryBuilder · union/unionAll', () => {
     await db.close();
   });
 });
-

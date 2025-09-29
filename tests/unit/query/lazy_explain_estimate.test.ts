@@ -20,4 +20,3 @@ describe('LazyQueryBuilder.explain · 估算摘要', () => {
     await db.close();
   });
 });
-
