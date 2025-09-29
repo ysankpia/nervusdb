@@ -80,7 +80,7 @@
 | 全文检索   | `src/fulltext/*`                                  | 分词、倒排索引、打分器、批处理导入、查询 DSL                         |
 | 空间索引   | `src/spatial/*`                                   | R-Tree、几何类型、范围/相交/最近邻查询                               |
 | 图算法     | `src/algorithms/*`                                | Dijkstra、A\*、双向 BFS、中心性、社区发现、相似度                    |
-| 基准测试   | `src/benchmark/*` / `benchmarks/*`                | CLI 与脚本化基准套件，输出详细指标                                   |
+| 基准测试   | `benchmarks/*` ⚠️ `src/benchmark/*` 已弃用        | 外部脚本化基准套件，输出详细指标；CLI 保持兼容但推荐直接运行脚本     |
 | CLI 工具   | `src/cli/*`                                       | stats、check、repair、compact、auto-compact、gc、hot、txids、dump 等 |
 
 ## 安装与环境准备

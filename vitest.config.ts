@@ -29,13 +29,18 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reportsDirectory: resolve(rootDir, 'coverage'),
-      reporter: ['text', 'lcov'],
+      // 增加 json-summary 以便后续按文件阈值检查脚本解析
+      reporter: ['text', 'lcov', 'json-summary'],
       include: ['src/**/*.ts'],
       // 说明：以下排除项不计入当前覆盖率门槛
       // - src/cli/**: CLI 封装，覆盖率独立评估
+      // - src/benchmark/**: 基准测试框架（将迁移到 benchmarks/*.mjs），不影响产品质量指标
+      // - src/examples/**: 示例代码，不计入质量门槛
       // - **/*.d.ts/**.config.*: 类型与配置文件
       exclude: [
         'src/cli/**',
+        'src/benchmark/**',
+        'src/examples/**',
         '**/*.d.ts',
         '**/*.config.*',
         'cspell.config.cjs'

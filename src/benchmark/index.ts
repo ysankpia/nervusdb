@@ -2,6 +2,15 @@
  * SynapseDB 性能基准测试框架入口
  *
  * 提供统一的基准测试接口和工具，支持多种测试场景和报告格式
+ *
+ * @deprecated 此内部基准测试框架将在 v2.0 移除
+ * @see benchmarks/*.mjs - 推荐直接使用外部基准测试脚本
+ * @see benchmarks/run-all.mjs - 统一入口脚本
+ *
+ * 迁移路径：
+ * - 命令行用户：继续使用 `pnpm benchmark` CLI（内部已迁移到外部脚本）
+ * - 高级用户：直接运行 `node benchmarks/run-all.mjs` 获得最佳体验
+ * - 程序化使用：不推荐（此模块未作为公开 API）
  */
 
 // 核心类型和接口

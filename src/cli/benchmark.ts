@@ -3,20 +3,60 @@
  * SynapseDB 基准测试命令行工具
  *
  * 提供性能基准测试的命令行接口
+ *
+ * @deprecated 内部基准测试框架将在 v2.0 移除
+ * 推荐直接使用 benchmarks/*.mjs 脚本或 benchmarks/run-all.mjs 统一入口
  */
 
 import { Command } from 'commander';
 import { promises as fs } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
 import { createBenchmarkManager } from '../benchmark/index.js';
 import type { BenchmarkReport } from '../benchmark/index.js';
-import {
-  allBenchmarkSuites,
-  synapseDBCoreSuite,
-  fullTextSearchSuite,
-  graphAlgorithmsSuite,
-  spatialGeometrySuite,
-} from '../benchmark/suites.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+/**
+ * 使用外部脚本运行基准测试（新实现）
+ */
+async function runExternalBenchmark(
+  suite: 'all' | 'core' | 'search' | 'graph' | 'spatial',
+  options: { output: string; format: string; console?: boolean },
+): Promise<void> {
+  const scriptPath = join(__dirname, '../../benchmarks/run-all.mjs');
+
+  // 映射 CLI 参数到脚本参数
+  const args = ['--suite', suite, '--format', options.format, '--output', options.output];
+
+  if (options.console === false) {
+    args.push('--no-console');
+  }
+
+  console.log('⚠️  注意：基准测试现已使用外部脚本运行（benchmarks/run-all.mjs）');
+  console.log('   内部框架将在未来版本移除，建议直接运行外部脚本以获得最佳体验\n');
+
+  return new Promise((resolve, reject) => {
+    const child = spawn('node', [scriptPath, ...args], {
+      stdio: 'inherit',
+      cwd: join(__dirname, '../..'),
+    });
+
+    child.on('exit', (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`基准测试脚本退出，代码: ${code}`));
+      }
+    });
+
+    child.on('error', (error) => {
+      reject(new Error(`无法启动基准测试脚本: ${error.message}`));
+    });
+  });
+}
 
 /**
  * 创建基准测试CLI程序
@@ -35,36 +75,7 @@ function createBenchmarkCLI(): Command {
     .option('--no-console', '不显示控制台输出')
     .action(async (options: { output: string; format: string; console?: boolean }) => {
       try {
-        console.log('🚀 启动 SynapseDB 完整基准测试...\n');
-
-        const formats = options.format.split(',') as ('console' | 'html' | 'json' | 'csv')[];
-        const outputFormats = options.console ? formats : formats.filter((f) => f !== 'console');
-
-        const manager = createBenchmarkManager();
-        const { report, outputs } = await manager.benchmark({
-          suites: allBenchmarkSuites,
-          outputFormats,
-          outputDir: options.output,
-        });
-
-        // 写入文件
-        await fs.mkdir(options.output, { recursive: true });
-
-        for (const output of outputs) {
-          if (output.path && output.format !== 'console') {
-            await fs.writeFile(output.path, output.content, 'utf8');
-            console.log(`\n📄 已生成 ${output.format.toUpperCase()} 报告: ${output.path}`);
-          }
-        }
-
-        // 显示摘要
-        console.log('\n📊 基准测试完成摘要:');
-        console.log(`总测试数: ${report.summary.totalTests}`);
-        console.log(`通过测试: ${report.summary.passedTests} ✅`);
-        console.log(
-          `失败测试: ${report.summary.failedTests} ${report.summary.failedTests > 0 ? '❌' : ''}`,
-        );
-        console.log(`总执行时间: ${(report.summary.totalExecutionTime / 1000).toFixed(2)}s`);
+        await runExternalBenchmark('all', options);
       } catch (error) {
         console.error('❌ 基准测试失败:', error);
         process.exit(1);
@@ -79,8 +90,7 @@ function createBenchmarkCLI(): Command {
     .option('-f, --format <formats>', '报告格式 (console,html,json,csv)', 'console')
     .action(async (options: { output: string; format: string }) => {
       try {
-        console.log('🧠 运行 SynapseDB 核心功能测试...\n');
-        await runSuiteCommand([synapseDBCoreSuite], options);
+        await runExternalBenchmark('core', options);
       } catch (error) {
         console.error('❌ 核心功能测试失败:', error);
         process.exit(1);
@@ -95,8 +105,7 @@ function createBenchmarkCLI(): Command {
     .option('-f, --format <formats>', '报告格式 (console,html,json,csv)', 'console')
     .action(async (options: { output: string; format: string }) => {
       try {
-        console.log('🔍 运行全文搜索引擎测试...\n');
-        await runSuiteCommand([fullTextSearchSuite], options);
+        await runExternalBenchmark('search', options);
       } catch (error) {
         console.error('❌ 全文搜索测试失败:', error);
         process.exit(1);
@@ -111,8 +120,7 @@ function createBenchmarkCLI(): Command {
     .option('-f, --format <formats>', '报告格式 (console,html,json,csv)', 'console')
     .action(async (options: { output: string; format: string }) => {
       try {
-        console.log('📊 运行图算法库测试...\n');
-        await runSuiteCommand([graphAlgorithmsSuite], options);
+        await runExternalBenchmark('graph', options);
       } catch (error) {
         console.error('❌ 图算法测试失败:', error);
         process.exit(1);
@@ -127,8 +135,7 @@ function createBenchmarkCLI(): Command {
     .option('-f, --format <formats>', '报告格式 (console,html,json,csv)', 'console')
     .action(async (options: { output: string; format: string }) => {
       try {
-        console.log('🗺️ 运行空间几何计算测试...\n');
-        await runSuiteCommand([spatialGeometrySuite], options);
+        await runExternalBenchmark('spatial', options);
       } catch (error) {
         console.error('❌ 空间几何测试失败:', error);
         process.exit(1);
@@ -311,33 +318,6 @@ function createBenchmarkCLI(): Command {
     );
 
   return program;
-}
-
-/**
- * 运行测试套件的通用函数
- */
-async function runSuiteCommand(
-  suites: import('../benchmark/types.js').BenchmarkSuite[],
-  options: { output: string; format: string },
-) {
-  const formats = options.format.split(',') as ('console' | 'html' | 'json' | 'csv')[];
-
-  const manager = createBenchmarkManager();
-  const { outputs } = await manager.benchmark({
-    suites,
-    outputFormats: formats,
-    outputDir: options.output,
-  });
-
-  // 写入文件
-  await fs.mkdir(options.output, { recursive: true });
-
-  for (const output of outputs) {
-    if (output.path && output.format !== 'console') {
-      await fs.writeFile(output.path, output.content, 'utf8');
-      console.log(`\n📄 已生成 ${output.format.toUpperCase()} 报告: ${output.path}`);
-    }
-  }
 }
 
 // CLI程序入口

@@ -52,6 +52,9 @@ jobs:
           VITEST_COVERAGE: '1'
         run: pnpm test:coverage
 
+      - name: Per-file coverage gate (≥75%)
+        run: pnpm coverage:check-per-file
+
       - name: Build
         run: pnpm build
 

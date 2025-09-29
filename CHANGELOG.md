@@ -9,9 +9,41 @@
 - **图算法套件**：实现最短路径（Dijkstra/A*/双向 BFS）、中心性与社区发现算法，配合链式查询与属性过滤。
 - **治理 CLI 扩展**：完善自动压实（增量/整序混合）、热度驱动策略、事务 ID 观测与页级修复命令。
 
+### ⚠️ 弃用声明
+
+#### 基准测试框架迁移
+
+**背景**：内部基准测试框架 `src/benchmark/**` 拖累覆盖率统计（17.36%），且与外部脚本 `benchmarks/*.mjs` 功能重复。
+
+**迁移计划**：
+- ✅ **v1.1.x**（当前）：`src/benchmark/**` 标记为弃用，CLI 命令（`pnpm benchmark`）保持兼容但内部已切换到外部脚本
+- 📅 **v2.0**：完全移除 `src/benchmark/**` 模块
+
+**推荐操作**：
+```bash
+# 方式1：继续使用 CLI（内部已迁移到外部脚本）
+pnpm benchmark run           # 运行完整测试
+pnpm benchmark core          # 运行核心测试
+pnpm benchmark search        # 运行全文搜索测试
+pnpm benchmark graph         # 运行图算法测试
+pnpm benchmark spatial       # 运行空间几何测试
+
+# 方式2：直接运行外部脚本（推荐，获得最佳体验）
+node benchmarks/run-all.mjs --suite=all --format=console,json
+node benchmarks/quick.mjs                        # 快速测试
+node benchmarks/comprehensive.mjs                # 综合测试
+node benchmarks/insert_scan.mjs                  # 插入与扫描
+node benchmarks/path_agg.mjs                     # 路径与聚合
+```
+
+**影响面**：
+- CLI 命令接口不变，用户无感知
+- 程序化引用 `import {} from '@/benchmark'` 不推荐（未作为公开 API）
+- `regression` 和 `memory-leak` 命令暂时保留内部实现，将在后续版本迁移
+
 ### 📚 文档
 - 更新根目录 `README.md`，补充架构、数据模型、运维与调优细节。
-- 重写 `docs/教学文档` 教程 00~09 及附录、实战章节，统一“目标→步骤→验证→FAQ”结构。
+- 重写 `docs/教学文档` 教程 00~09 及附录、实战章节，统一"目标→步骤→验证→FAQ"结构。
 - 全面更新 `docs/使用示例`，覆盖 CLI、查询、事务、图算法、全文/空间索引、迁移指南等场景。
 
 ## v1.1.0 - 基础巩固里程碑 🎉
