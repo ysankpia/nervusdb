@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * NervusDB 顶层 CLI 分发器
  *
