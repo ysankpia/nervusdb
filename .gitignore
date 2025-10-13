@@ -1,37 +1,44 @@
-# Node & TypeScript
+# Dependencies
 node_modules/
-coverage/
+
+# Build output
+dist/
 *.tsbuildinfo
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Memory snapshots
+memory-snapshots/
+
+# Rust
+nervusdb-wasm/target/
+nervusdb-wasm/Cargo.lock
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
 *.log
 npm-debug.log*
 yarn-debug.log*
-pnpm-debug.log*
+yarn-error.log*
 
-# Editor/OS
-.DS_Store
-.idea/
-.vscode/
-
-# Build outputs (keep tracked dist if already committed)
-dist/
-
-# Local databases generated during tests/bench
-*.synapsedb
-*.synapsedb.wal
-*.synapsedb.pages/
-
-# Test temp databases (e.g. temp-test-snapshot-memory)
-temp-*
-temp-*.wal
-temp-*.pages/
-
-# Legacy or stray local temp folder created by older tests
-temp/
-
-# Repomix output
-repomix-output.xml
-
-# Temp
-tmp/
-.tmp/
+# Temporary files
 *.tmp
+*.temp
+.tmp/
+.temp/
+
+# Database files (for testing)
+*.synapsedb
+*.nervusdb

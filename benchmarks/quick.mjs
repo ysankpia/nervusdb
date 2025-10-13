@@ -8,7 +8,7 @@
  *   pnpm bench:quick
  */
 
-import { SynapseDB } from '../dist/synapseDb.js';
+import { NervusDB } from '../dist/index.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -67,7 +67,7 @@ function checkPerformance(testName, duration, memoryUsed) {
  * 快速基准测试主函数
  */
 async function runQuickBenchmarks() {
-  console.log('🏃 SynapseDB 快速基准测试');
+  console.log('🏃 NervusDB 快速基准测试');
   console.log('=========================');
 
   const tempDir = await mkdtemp(join(tmpdir(), 'synapsedb-quick-'));
@@ -79,7 +79,7 @@ async function runQuickBenchmarks() {
   try {
     // 初始化数据库
     console.log('📊 初始化数据库...');
-    const db = await SynapseDB.open(dbPath);
+    const db = await NervusDB.open(dbPath);
 
     // 1. 插入性能测试
     console.log('\n1. 📥 批量插入测试');

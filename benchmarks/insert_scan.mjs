@@ -3,7 +3,7 @@
  * 插入/扫描基准（可配置规模）
  * 用法：node benchmarks/insert_scan.mjs [N=20000]
  */
-import { SynapseDB } from '../dist/synapseDb.js';
+import { NervusDB } from '../dist/index.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -20,7 +20,7 @@ const t = async (name, fn) => {
 
 async function main() {
   const ws = await mkdtemp(join(tmpdir(), 'synapsedb-bench-'));
-  const db = await SynapseDB.open(join(ws, 'bench.synapsedb'));
+  const db = await NervusDB.open(join(ws, 'bench.synapsedb'));
   await t('insert', async () => {
     for (let i = 0; i < N; i++) {
       db.addFact({ subject: `user${i%1000}`, predicate: 'KNOWS', object: `friend${i}` });

@@ -12,7 +12,7 @@
  * 4. Identifies potential memory leaks
  */
 
-import { NervusDB } from '../src/index.js';
+import { NervusDB } from '../dist/index.mjs';
 import { writeHeapSnapshot } from 'v8';
 import fs from 'fs/promises';
 import path from 'path';
@@ -50,31 +50,31 @@ async function runIteration(i) {
   console.log(`\n🔄 Iteration ${i + 1}/${ITERATIONS}`);
   console.log(`   DB Path: ${dbPath}`);
 
-  const db = new NervusDB(dbPath);
-  await db.open();
+  const db = await NervusDB.open(dbPath);
 
   // Insert data
   console.log(`   ➕ Inserting ${RECORDS_PER_ITERATION} records...`);
   const startInsert = Date.now();
   for (let j = 0; j < RECORDS_PER_ITERATION; j++) {
-    await db.add({
+    db.addFact({
       subject: `subject_${i}_${j}`,
       predicate: `predicate_${j % 10}`,
       object: `object_${j}`,
-      properties: {
+      subjectProperties: {
         iteration: i,
         index: j,
         timestamp: Date.now(),
       },
     });
   }
+  await db.flush();
   const insertTime = Date.now() - startInsert;
   console.log(`   ✅ Insert completed in ${insertTime}ms`);
 
   // Query data
   console.log(`   🔍 Querying data...`);
   const startQuery = Date.now();
-  const results = await db.query().whereSubject(`subject_${i}_500`).execute();
+  const results = db.find({ subject: `subject_${i}_500` }).all();
   const queryTime = Date.now() - startQuery;
   console.log(`   ✅ Query completed in ${queryTime}ms (found ${results.length} results)`);
 

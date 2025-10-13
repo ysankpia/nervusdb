@@ -8,7 +8,7 @@
  *   node --expose-gc benchmarks/comprehensive.mjs  # 启用GC测量
  */
 
-import { SynapseDB } from '../dist/synapseDb.js';
+import { NervusDB } from '../dist/index.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -43,7 +43,7 @@ function createInsertionSuite() {
 
   suite.setGlobalSetup(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'synapsedb-bench-'));
-    db = await SynapseDB.open(join(tempDir, 'insertion.synapsedb'), {
+    db = await NervusDB.open(join(tempDir, 'insertion.synapsedb'), {
       pageSize: 2000,
       compression: { codec: 'brotli', level: 4 }
     });
@@ -137,7 +137,7 @@ function createQuerySuite() {
 
   suite.setGlobalSetup(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'synapsedb-bench-'));
-    db = await SynapseDB.open(join(tempDir, 'query.synapsedb'));
+    db = await NervusDB.open(join(tempDir, 'query.synapsedb'));
 
     // 准备测试数据
     console.log('  🔧 准备查询测试数据...');
@@ -271,7 +271,7 @@ function createPathSuite() {
 
   suite.setGlobalSetup(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'synapsedb-bench-'));
-    db = await SynapseDB.open(join(tempDir, 'path.synapsedb'));
+    db = await NervusDB.open(join(tempDir, 'path.synapsedb'));
 
     // 创建测试图：网格+随机边
     console.log('  🔧 构建测试图结构...');
@@ -388,7 +388,7 @@ function createAggregationSuite() {
 
   suite.setGlobalSetup(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'synapsedb-bench-'));
-    db = await SynapseDB.open(join(tempDir, 'aggregation.synapsedb'));
+    db = await NervusDB.open(join(tempDir, 'aggregation.synapsedb'));
 
     // 生成用户评分数据
     console.log('  🔧 生成聚合测试数据...');
@@ -487,7 +487,7 @@ function createAggregationSuite() {
  * 主函数：运行所有基准测试套件
  */
 async function main() {
-  console.log('🎯 SynapseDB v1.1 综合性能基准测试');
+  console.log('🎯 NervusDB v1.1 综合性能基准测试');
   console.log('====================================');
   console.log(`Node.js: ${process.version}`);
   console.log(`平台: ${process.platform} ${process.arch}`);

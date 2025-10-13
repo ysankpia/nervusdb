@@ -2,7 +2,7 @@
 /**
  * 路径遍历与聚合流式基准
  */
-import { SynapseDB } from '../dist/synapseDb.js';
+import { NervusDB } from '../dist/index.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -17,7 +17,7 @@ const t = async (name, fn) => {
 
 async function main() {
   const ws = await mkdtemp(join(tmpdir(), 'synapsedb-bench-'));
-  const db = await SynapseDB.open(join(ws, 'bench.synapsedb'));
+  const db = await NervusDB.open(join(ws, 'bench.synapsedb'));
 
   // 构造 R 星型 + 链式，用于路径基准
   for (let i = 0; i < 2000; i++) {

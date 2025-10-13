@@ -3,7 +3,7 @@
  * 最小基准脚本（实验性）
  * 用法：node benchmarks/basic.mjs
  */
-import { SynapseDB } from '../dist/synapseDb.js';
+import { NervusDB } from '../dist/index.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -18,7 +18,7 @@ const time = async (name, fn) => {
 
 async function main() {
   const ws = await mkdtemp(join(tmpdir(), 'synapsedb-bench-'));
-  const db = await SynapseDB.open(join(ws, 'bench.synapsedb'));
+  const db = await NervusDB.open(join(ws, 'bench.synapsedb'));
   const N = 5000;
   await time('insert', async () => {
     for (let i = 0; i < N; i++) {
