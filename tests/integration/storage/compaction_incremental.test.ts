@@ -3,7 +3,7 @@ import { mkdtemp, rm, readdir, unlink, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { readPagedManifest } from '@/storage/pagedIndex';
 import { compactDatabase } from '@/maintenance/compaction';
 
@@ -51,7 +51,7 @@ describe('Compaction 增量按 primary 重写', () => {
   });
 
   it('仅为满足阈值的 primary 追加新页，并替换 manifest 映射', async () => {
-    const db = await SynapseDB.open(dbPath, { pageSize: 2 });
+    const db = await NervusDB.open(dbPath, { pageSize: 2 });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O1' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O2' });
     await db.flush();
@@ -75,7 +75,7 @@ describe('Compaction 增量按 primary 重写', () => {
     const m2 = await readPagedManifest(`${dbPath}.pages`);
     const spo2 = m2!.lookups.find((l) => l.order === 'SPO')!;
     // 数据不变（收敛效果依赖策略与实现细节，这里不作强约束）
-    const db2 = await SynapseDB.open(dbPath);
+    const db2 = await NervusDB.open(dbPath);
     const facts = db2.find({ subject: 'S', predicate: 'R' }).all();
     expect(facts.length).toBe(3);
   });

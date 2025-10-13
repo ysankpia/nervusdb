@@ -3,7 +3,7 @@ import { mkdtemp, rm, readdir, unlink, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { compactDatabase } from '@/maintenance/compaction';
 import { readPagedManifest } from '@/storage/pagedIndex';
 
@@ -51,7 +51,7 @@ describe('Compaction 高级选项', () => {
   });
 
   it('dry-run 仅输出统计，不修改 manifest', async () => {
-    const db = await SynapseDB.open(dbPath, { pageSize: 2 });
+    const db = await NervusDB.open(dbPath, { pageSize: 2 });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O1' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O2' });
     await db.flush();
@@ -71,7 +71,7 @@ describe('Compaction 高级选项', () => {
   });
 
   it('orders 过滤仅重写指定顺序', async () => {
-    const db = await SynapseDB.open(dbPath, { pageSize: 2 });
+    const db = await NervusDB.open(dbPath, { pageSize: 2 });
     db.addFact({ subject: 'S', predicate: 'R1', object: 'O1' });
     db.addFact({ subject: 'S', predicate: 'R2', object: 'O2' });
     await db.flush();

@@ -1,15 +1,15 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rm } from 'node:fs/promises';
 
 describe('属性索引 · 集成流 (写入→查询→更新)', () => {
   const dbPath = join(tmpdir(), `prop-index-int-${Date.now()}.synapsedb`);
-  let db: SynapseDB;
+  let db: NervusDB;
 
   beforeAll(async () => {
-    db = await SynapseDB.open(dbPath, { rebuildIndexes: true });
+    db = await NervusDB.open(dbPath, { rebuildIndexes: true });
   });
 
   afterAll(async () => {

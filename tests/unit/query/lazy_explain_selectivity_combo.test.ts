@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { makeWorkspace, cleanupWorkspace, within } from '../../helpers/tempfs';
 
 describe('Lazy.explain · 选择率组合（AND 交集）', () => {
   it('两个 whereLabel(subject) 叠加应进一步收紧 upperBound', async () => {
     const dir = await makeWorkspace('unit-lazy-explain-combo');
-    const db = await SynapseDB.open(within(dir, 'db.synapsedb'));
+    const db = await NervusDB.open(within(dir, 'db.synapsedb'));
 
     // 三个主体，各有若干边
     db.addFact({ subject: 'S1', predicate: 'R', object: 'O1' });

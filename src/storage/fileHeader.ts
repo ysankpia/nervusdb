@@ -34,7 +34,7 @@ function encodeHeader(layout: FileLayout): Buffer {
 function decodeHeader(buffer: Buffer): FileHeader {
   const magic = buffer.subarray(0, MAGIC_HEADER.length);
   if (!magic.equals(MAGIC_HEADER)) {
-    throw new Error('非法的 SynapseDB 文件头');
+    throw new Error('非法的 NervusDB 文件头');
   }
 
   const version = buffer.readUInt32LE(MAGIC_HEADER.length);
@@ -130,7 +130,7 @@ export interface LoadedSections {
 export async function readStorageFile(path: string): Promise<LoadedSections> {
   const file = await fs.readFile(path);
   if (file.length < FILE_HEADER_LENGTH) {
-    throw new Error('SynapseDB 文件长度不足');
+    throw new Error('NervusDB 文件长度不足');
   }
 
   const headerBuffer = file.subarray(0, FILE_HEADER_LENGTH);

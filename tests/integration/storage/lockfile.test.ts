@@ -3,7 +3,7 @@ import { mkdtemp, rm, readdir, unlink, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 
 describe('进程级写锁（可选）', () => {
   let workspace: string;
@@ -49,11 +49,11 @@ describe('进程级写锁（可选）', () => {
   });
 
   it('启用 enableLock 时同进程重复打开可并行（同 PID），不同进程应独占（此处仅验证同进程不报错）', async () => {
-    const db1 = await SynapseDB.open(dbPath, {
+    const db1 = await NervusDB.open(dbPath, {
       indexDirectory: `${dbPath}.pages`,
       enableLock: true,
     });
-    const db2 = await SynapseDB.open(dbPath, {
+    const db2 = await NervusDB.open(dbPath, {
       indexDirectory: `${dbPath}.pages`,
       enableLock: false,
     });

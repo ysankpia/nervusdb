@@ -2,12 +2,12 @@
 
 ## 基础
 
-SynapseDB 提供与 Gremlin 兼容的查询接口（通过 `src/query/gremlin/*`）。在 Node.js 中可这样调用：
+NervusDB 提供与 Gremlin 兼容的查询接口（通过 `src/query/gremlin/*`）。在 Node.js 中可这样调用：
 
 ```ts
 import { GremlinExecutor } from '@/query/gremlin/executor';
 
-const executor = await GremlinExecutor.open('social.synapsedb');
+const executor = await GremlinExecutor.open('social.nervusdb');
 const result = await executor.execute("g.V('user:alice').repeat(out('FRIEND_OF')).times(2).path()");
 ```
 

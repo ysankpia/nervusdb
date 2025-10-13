@@ -2,7 +2,7 @@
 
 ## 目标
 
-- 使用 `TypedSynapseDB` 提供的泛型 API 和类型推断
+- 使用 `TypedNervusDB` 提供的泛型 API 和类型推断
 - 演示属性索引、查询过滤在类型系统下的写法
 
 ## 定义类型
@@ -24,7 +24,7 @@ interface RelationEdge {
 ## 打开数据库
 
 ```ts
-const db = await TypedSynapseDB.open<PersonNode, RelationEdge>('social.synapsedb', {
+const db = await TypedNervusDB.open<PersonNode, RelationEdge>('social.nervusdb', {
   enableLock: true,
 });
 ```

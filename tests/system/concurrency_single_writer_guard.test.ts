@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 
 describe('并发单写者保护测试', () => {
   let workspace: string;
@@ -20,12 +20,12 @@ describe('并发单写者保护测试', () => {
 
   it('启用锁时第二个写者应被拒绝', async () => {
     // 第一个写者开启锁
-    const db1 = await SynapseDB.open(dbPath, { enableLock: true });
+    const db1 = await NervusDB.open(dbPath, { enableLock: true });
 
     db1.addFact({ subject: 'Writer1', predicate: 'claims', object: 'database' });
 
     // 尝试开启第二个写者应该失败
-    await expect(SynapseDB.open(dbPath, { enableLock: true })).rejects.toThrow();
+    await expect(NervusDB.open(dbPath, { enableLock: true })).rejects.toThrow();
 
     await db1.close();
   });
@@ -33,7 +33,7 @@ describe('并发单写者保护测试', () => {
   it('第一个写者关闭后第二个写者可以获得锁', async () => {
     // 第一个写者
     {
-      const db1 = await SynapseDB.open(dbPath, { enableLock: true });
+      const db1 = await NervusDB.open(dbPath, { enableLock: true });
       db1.addFact({ subject: 'FirstWriter', predicate: 'action', object: 'write' });
       await db1.flush();
       await db1.close(); // 释放锁
@@ -41,7 +41,7 @@ describe('并发单写者保护测试', () => {
 
     // 第二个写者现在应该可以获得锁
     {
-      const db2 = await SynapseDB.open(dbPath, { enableLock: true });
+      const db2 = await NervusDB.open(dbPath, { enableLock: true });
       db2.addFact({ subject: 'SecondWriter', predicate: 'action', object: 'write' });
       await db2.flush();
 
@@ -59,8 +59,8 @@ describe('并发单写者保护测试', () => {
 
   it('禁用锁时多个写者可以并存（危险但允许）', async () => {
     // 不启用锁，允许多个写者
-    const db1 = await SynapseDB.open(dbPath, { enableLock: false });
-    const db2 = await SynapseDB.open(dbPath, { enableLock: false });
+    const db1 = await NervusDB.open(dbPath, { enableLock: false });
+    const db2 = await NervusDB.open(dbPath, { enableLock: false });
 
     db1.addFact({ subject: 'Writer1', predicate: 'concurrent', object: 'data1' });
     db2.addFact({ subject: 'Writer2', predicate: 'concurrent', object: 'data2' });
@@ -82,10 +82,10 @@ describe('并发单写者保护测试', () => {
 
   it('混合锁模式：已锁定时读者仍可无锁打开（不应拒绝）', async () => {
     // 第一个写者启用锁
-    const db1 = await SynapseDB.open(dbPath, { enableLock: true });
+    const db1 = await NervusDB.open(dbPath, { enableLock: true });
 
     // 作为读者（无锁且不写入）应当允许打开
-    const reader = await SynapseDB.open(dbPath, { enableLock: false });
+    const reader = await NervusDB.open(dbPath, { enableLock: false });
     await reader.close();
 
     await db1.close();
@@ -93,13 +93,13 @@ describe('并发单写者保护测试', () => {
 
   it('读者不受锁限制（多读者可以与写者共存）', async () => {
     // 写者启用锁
-    const writer = await SynapseDB.open(dbPath, { enableLock: true });
+    const writer = await NervusDB.open(dbPath, { enableLock: true });
     writer.addFact({ subject: 'Data', predicate: 'type', object: 'test' });
     await writer.flush();
 
     // 多个读者应该可以正常打开
-    const reader1 = await SynapseDB.open(dbPath, { enableLock: false });
-    const reader2 = await SynapseDB.open(dbPath, { enableLock: false });
+    const reader1 = await NervusDB.open(dbPath, { enableLock: false });
+    const reader2 = await NervusDB.open(dbPath, { enableLock: false });
 
     // 读者应该能看到写者的数据
     const results1 = reader1.find({ predicate: 'type' }).all();
@@ -119,7 +119,7 @@ describe('并发单写者保护测试', () => {
     const lockFile = `${dbPath}.lock`;
 
     // 打开带锁的数据库
-    const db = await SynapseDB.open(dbPath, { enableLock: true });
+    const db = await NervusDB.open(dbPath, { enableLock: true });
 
     // 锁文件应该存在
     {
@@ -142,7 +142,7 @@ describe('并发单写者保护测试', () => {
 
     // 模拟进程崩溃：创建数据库但不正常关闭
     {
-      const db = await SynapseDB.open(dbPath, { enableLock: true });
+      const db = await NervusDB.open(dbPath, { enableLock: true });
       db.addFact({ subject: 'CrashTest', predicate: 'data', object: 'value' });
       await db.flush();
       // 不调用 close()，模拟崩溃
@@ -151,7 +151,7 @@ describe('并发单写者保护测试', () => {
     // 尝试创建新实例时，如果锁文件存在但进程不存在，应该能够启动
     // 注意：这个测试的行为依赖于具体的锁实现
     try {
-      const db2 = await SynapseDB.open(dbPath, { enableLock: true });
+      const db2 = await NervusDB.open(dbPath, { enableLock: true });
 
       // 验证数据恢复
       const results = db2.find({ subject: 'CrashTest' }).all();
@@ -168,12 +168,12 @@ describe('并发单写者保护测试', () => {
 
   it('同一进程内多次打开相同路径（同 PID）', async () => {
     // 第一个实例
-    const db1 = await SynapseDB.open(dbPath, { enableLock: true });
+    const db1 = await NervusDB.open(dbPath, { enableLock: true });
 
     // 同一进程的第二个实例，行为可能依赖于锁的实现
     // 一些实现允许同进程重复打开，一些不允许
     try {
-      const db2 = await SynapseDB.open(dbPath, { enableLock: true });
+      const db2 = await NervusDB.open(dbPath, { enableLock: true });
 
       // 如果允许，两个实例应该能协调工作
       db1.addFact({ subject: 'Instance1', predicate: 'data', object: 'value1' });

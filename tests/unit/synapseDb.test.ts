@@ -1,14 +1,14 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import type { FactOptions } from '@/synapseDb';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 
-describe('SynapseDB 核心API', () => {
+describe('NervusDB 核心API', () => {
   let testDbPath: string;
-  let db: SynapseDB;
+  let db: NervusDB;
 
   beforeEach(async () => {
     // 创建临时数据库文件路径
@@ -47,13 +47,13 @@ describe('SynapseDB 核心API', () => {
 
   describe('数据库生命周期管理', () => {
     it('应该成功创建和打开数据库', async () => {
-      db = await SynapseDB.open(testDbPath);
+      db = await NervusDB.open(testDbPath);
       expect(db).toBeDefined();
-      expect(db).toBeInstanceOf(SynapseDB);
+      expect(db).toBeInstanceOf(NervusDB);
     });
 
     it('应该支持自定义配置选项', async () => {
-      db = await SynapseDB.open(testDbPath, {
+      db = await NervusDB.open(testDbPath, {
         pageSize: 1000,
         enableLock: false,
         registerReader: false,
@@ -62,24 +62,24 @@ describe('SynapseDB 核心API', () => {
     });
 
     it('应该能够正确关闭数据库', async () => {
-      db = await SynapseDB.open(testDbPath);
+      db = await NervusDB.open(testDbPath);
       await expect(db.close()).resolves.not.toThrow();
     });
 
     it('重复打开同一文件路径应该成功', async () => {
       // 首先创建数据库
-      db = await SynapseDB.open(testDbPath);
+      db = await NervusDB.open(testDbPath);
       await db.close();
 
       // 重新打开应该成功
-      db = await SynapseDB.open(testDbPath);
+      db = await NervusDB.open(testDbPath);
       expect(db).toBeDefined();
     });
   });
 
   describe('事实数据操作', () => {
     beforeEach(async () => {
-      db = await SynapseDB.open(testDbPath);
+      db = await NervusDB.open(testDbPath);
     });
 
     it('应该能够添加简单三元组事实', () => {
@@ -150,7 +150,7 @@ describe('SynapseDB 核心API', () => {
 
   describe('节点和属性操作', () => {
     beforeEach(async () => {
-      db = await SynapseDB.open(testDbPath);
+      db = await NervusDB.open(testDbPath);
     });
 
     it('应该能够根据值获取节点ID', () => {
@@ -217,7 +217,7 @@ describe('SynapseDB 核心API', () => {
 
   describe('批量操作和事务', () => {
     beforeEach(async () => {
-      db = await SynapseDB.open(testDbPath);
+      db = await NervusDB.open(testDbPath);
     });
 
     it('应该支持批量开始和提交', () => {
@@ -247,7 +247,7 @@ describe('SynapseDB 核心API', () => {
 
   describe('查询构建器', () => {
     beforeEach(async () => {
-      db = await SynapseDB.open(testDbPath);
+      db = await NervusDB.open(testDbPath);
 
       // 准备测试数据
       db.addFact({ subject: 'Alice', predicate: 'knows', object: 'Bob' });
@@ -290,11 +290,11 @@ describe('SynapseDB 核心API', () => {
   describe('错误处理', () => {
     it('打开无效路径应该抛出错误', async () => {
       const invalidPath = '/invalid/nonexistent/path/database.synapsedb';
-      await expect(SynapseDB.open(invalidPath)).rejects.toThrow();
+      await expect(NervusDB.open(invalidPath)).rejects.toThrow();
     });
 
     it('空字符串主体不会抛出错误', async () => {
-      db = await SynapseDB.open(testDbPath);
+      db = await NervusDB.open(testDbPath);
 
       // 空字符串应该被正常处理
       expect(() => {
@@ -303,7 +303,7 @@ describe('SynapseDB 核心API', () => {
     });
 
     it('重复关闭数据库应该不报错', async () => {
-      db = await SynapseDB.open(testDbPath);
+      db = await NervusDB.open(testDbPath);
 
       await db.close();
       await expect(db.close()).resolves.not.toThrow();
@@ -312,7 +312,7 @@ describe('SynapseDB 核心API', () => {
 
   describe('数据类型处理', () => {
     beforeEach(async () => {
-      db = await SynapseDB.open(testDbPath);
+      db = await NervusDB.open(testDbPath);
     });
 
     it('应该正确处理字符串类型的节点值', () => {

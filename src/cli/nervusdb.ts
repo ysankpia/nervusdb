@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * SynapseDB 顶层 CLI 分发器
+ * NervusDB 顶层 CLI 分发器
  *
  * 用法：
  *   synapsedb <command> [...args]
@@ -38,7 +38,7 @@ function run(file: string, args: string[]): Promise<number> {
 
 function usage(): void {
   const lines = [
-    'SynapseDB CLI',
+    'NervusDB CLI',
     '',
     '用法:',
     '  synapsedb <command> [...args]',

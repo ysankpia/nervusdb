@@ -770,7 +770,7 @@ export async function executeCypher(
 }
 
 /**
- * 便利函数：扩展 SynapseDB 类以支持 Cypher 文本查询
+ * 便利函数：扩展 NervusDB 类以支持 Cypher 文本查询
  */
 export interface CypherSupport {
   cypher(query: string, parameters?: Record<string, unknown>): Promise<PatternResult[]>;

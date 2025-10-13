@@ -1,6 +1,6 @@
 /**
  * TypeScript 类型系统增强 - v1.1 里程碑
- * 提供泛型化的 SynapseDB API，支持强类型的属性和查询结果
+ * 提供泛型化的 NervusDB API，支持强类型的属性和查询结果
  */
 
 import type { FactInput, FactRecord } from '../storage/persistentStore.js';
@@ -137,9 +137,9 @@ export interface TypedPropertyFilter<T = unknown> {
 }
 
 /**
- * 泛型化的 SynapseDB 主类接口
+ * 泛型化的 NervusDB 主类接口
  */
-export interface TypedSynapseDB<
+export interface TypedNervusDB<
   TNodeProps extends NodeProperties = NodeProperties,
   TEdgeProps extends EdgeProperties = EdgeProperties,
 > {
@@ -216,9 +216,9 @@ export interface TypedSynapseDB<
 }
 
 /**
- * 工厂函数：创建类型安全的 SynapseDB 实例
+ * 工厂函数：创建类型安全的 NervusDB 实例
  */
-export type TypedSynapseDBFactory = {
+export type TypedNervusDBFactory = {
   /**
    * 打开类型化的数据库实例
    */
@@ -228,7 +228,7 @@ export type TypedSynapseDBFactory = {
   >(
     path: string,
     options?: unknown,
-  ): Promise<TypedSynapseDB<TNodeProps, TEdgeProps>>;
+  ): Promise<TypedNervusDB<TNodeProps, TEdgeProps>>;
 };
 
 /**
@@ -301,19 +301,19 @@ export interface DependencyEdge extends EdgeProperties {
 export interface QueryExamples {
   // 社交网络查询
   findFriends(
-    db: TypedSynapseDB<PersonNode, RelationshipEdge>,
+    db: TypedNervusDB<PersonNode, RelationshipEdge>,
     personName: string,
   ): TypedFactRecord<PersonNode, RelationshipEdge>[];
 
   // 知识图谱查询
   findRelatedEntities(
-    db: TypedSynapseDB<EntityNode, KnowledgeEdge>,
+    db: TypedNervusDB<EntityNode, KnowledgeEdge>,
     entityType: string,
   ): TypedFactRecord<EntityNode, KnowledgeEdge>[];
 
   // 代码依赖查询
   findDependencies(
-    db: TypedSynapseDB<CodeNode, DependencyEdge>,
+    db: TypedNervusDB<CodeNode, DependencyEdge>,
     filePath: string,
   ): TypedFactRecord<CodeNode, DependencyEdge>[];
 }

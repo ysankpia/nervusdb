@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 
 describe('性能基准测试 - 架构重构后', () => {
   let workspace: string;
@@ -19,7 +19,7 @@ describe('性能基准测试 - 架构重构后', () => {
   });
 
   it('中等数据集查询性能基准 (100条记录)', async () => {
-    const db = await SynapseDB.open(dbPath, { pageSize: 50 });
+    const db = await NervusDB.open(dbPath, { pageSize: 50 });
 
     // 插入100条测试数据（减少数量以避免超时）
     const startInsert = Date.now();
@@ -36,7 +36,7 @@ describe('性能基准测试 - 架构重构后', () => {
     // 重新打开数据库（测试架构重构后的加载性能）
     await db.close();
     const startReopen = Date.now();
-    const reopened = await SynapseDB.open(dbPath);
+    const reopened = await NervusDB.open(dbPath);
     const reopenTime = Date.now() - startReopen;
 
     // 测试查询性能
@@ -70,7 +70,7 @@ describe('性能基准测试 - 架构重构后', () => {
   }, 25000);
 
   it('内存占用基准 - 验证不再全量加载到内存', async () => {
-    const db = await SynapseDB.open(dbPath);
+    const db = await NervusDB.open(dbPath);
 
     // 插入较大数据集
     for (let i = 0; i < 500; i++) {
@@ -87,7 +87,7 @@ describe('性能基准测试 - 架构重构后', () => {
 
     // 重新打开数据库
     await db.close();
-    const reopened = await SynapseDB.open(dbPath);
+    const reopened = await NervusDB.open(dbPath);
 
     const memAfter = process.memoryUsage().heapUsed;
     const memIncrease = memAfter - memBefore;

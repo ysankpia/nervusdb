@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 
 describe('WAL ABORT 语义测试', () => {
   let workspace: string;
@@ -19,7 +19,7 @@ describe('WAL ABORT 语义测试', () => {
   });
 
   it('单一批次 ABORT 后重启时数据不应生效', async () => {
-    const db = await SynapseDB.open(dbPath);
+    const db = await NervusDB.open(dbPath);
 
     // 先提交一些基础数据
     db.beginBatch({ txId: 'base-data' });
@@ -35,7 +35,7 @@ describe('WAL ABORT 语义测试', () => {
     await db.close();
 
     // 重新打开数据库，验证 ABORT 的数据在 WAL 重放时不生效
-    const db2 = await SynapseDB.open(dbPath);
+    const db2 = await NervusDB.open(dbPath);
 
     const baseResults = db2.find({ predicate: 'BaseR' }).all();
     expect(baseResults).toHaveLength(1);
@@ -49,7 +49,7 @@ describe('WAL ABORT 语义测试', () => {
   });
 
   it('嵌套批次部分 ABORT（重启验证）', async () => {
-    const db = await SynapseDB.open(dbPath);
+    const db = await NervusDB.open(dbPath);
 
     // 外层批次开始
     db.beginBatch({ txId: 'outer-1' });
@@ -72,7 +72,7 @@ describe('WAL ABORT 语义测试', () => {
     await db.close();
 
     // 重启验证：内层批次2被ABORT，其数据不应在重放时恢复
-    const db2 = await SynapseDB.open(dbPath);
+    const db2 = await NervusDB.open(dbPath);
 
     const outerResults = db2.find({ predicate: 'OuterR' }).all();
     expect(outerResults).toHaveLength(2);
@@ -88,7 +88,7 @@ describe('WAL ABORT 语义测试', () => {
   it('ABORT 后重启恢复验证', async () => {
     // 第一阶段：提交部分数据，中止部分数据
     {
-      const db = await SynapseDB.open(dbPath);
+      const db = await NervusDB.open(dbPath);
 
       // 提交的数据
       db.beginBatch({ txId: 'committed-data' });
@@ -111,7 +111,7 @@ describe('WAL ABORT 语义测试', () => {
 
     // 第二阶段：重启验证，中止的数据不应恢复
     {
-      const db2 = await SynapseDB.open(dbPath);
+      const db2 = await NervusDB.open(dbPath);
 
       const results = db2.find({ predicate: 'R' }).all();
       expect(results).toHaveLength(2);
@@ -127,7 +127,7 @@ describe('WAL ABORT 语义测试', () => {
   });
 
   it('ABORT 对属性操作的影响', async () => {
-    const db = await SynapseDB.open(dbPath);
+    const db = await NervusDB.open(dbPath);
 
     // 先添加一个事实以获取节点ID
     db.addFact({ subject: 'TestNode', predicate: 'type', object: 'Node' });
@@ -156,7 +156,7 @@ describe('WAL ABORT 语义测试', () => {
   });
 
   it('混合操作 ABORT 测试', async () => {
-    const db = await SynapseDB.open(dbPath);
+    const db = await NervusDB.open(dbPath);
 
     // 先建立一些基础数据
     db.addFact({ subject: 'S1', predicate: 'R1', object: 'O1' });
@@ -195,7 +195,7 @@ describe('WAL ABORT 语义测试', () => {
   });
 
   it('大量数据 ABORT 性能测试', async () => {
-    const db = await SynapseDB.open(dbPath);
+    const db = await NervusDB.open(dbPath);
 
     const startTime = Date.now();
 

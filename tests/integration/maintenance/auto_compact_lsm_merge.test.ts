@@ -3,7 +3,7 @@ import { mkdtemp, rm, readFile, readdir, unlink, rmdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { autoCompact } from '@/maintenance/autoCompact';
 
 describe('Auto-Compact 自动并入 LSM 段并清理', () => {
@@ -49,7 +49,7 @@ describe('Auto-Compact 自动并入 LSM 段并清理', () => {
   });
 
   it('includeLsmSegmentsAuto 触发阈值时自动并入并清空清单', async () => {
-    const db = await SynapseDB.open(dbPath, { stagingMode: 'lsm-lite' as any, pageSize: 2 });
+    const db = await NervusDB.open(dbPath, { stagingMode: 'lsm-lite' as any, pageSize: 2 });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O1' });
     await db.flush();
     const manPath = `${dbPath}.pages/lsm-manifest.json`;

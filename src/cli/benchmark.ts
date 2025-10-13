@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * SynapseDB 基准测试命令行工具
+ * NervusDB 基准测试命令行工具
  *
  * 提供性能基准测试的命令行接口
  *
@@ -64,7 +64,7 @@ async function runExternalBenchmark(
 function createBenchmarkCLI(): Command {
   const program = new Command();
 
-  program.name('synapsedb-benchmark').description('SynapseDB 性能基准测试工具').version('1.0.0');
+  program.name('synapsedb-benchmark').description('NervusDB 性能基准测试工具').version('1.0.0');
 
   // 运行所有基准测试
   program
@@ -85,7 +85,7 @@ function createBenchmarkCLI(): Command {
   // 运行核心功能测试
   program
     .command('core')
-    .description('运行 SynapseDB 核心功能基准测试')
+    .description('运行 NervusDB 核心功能基准测试')
     .option('-o, --output <dir>', '输出目录', './benchmark-reports')
     .option('-f, --format <formats>', '报告格式 (console,html,json,csv)', 'console')
     .action(async (options: { output: string; format: string }) => {

@@ -1,15 +1,15 @@
 # 附录 · API 参考
 
-> 本附录汇总 SynapseDB 核心 TypeScript API，适合作为开发时的速查表。所有示例均基于 ESM 模块。
+> 本附录汇总 NervusDB 核心 TypeScript API，适合作为开发时的速查表。所有示例均基于 ESM 模块。
 
 ## 引入方式
 
 ```ts
-import { SynapseDB } from 'synapsedb';
-import { TypedSynapseDB } from 'synapsedb';
+import { NervusDB } from 'nervusdb';
+import { TypedNervusDB } from 'nervusdb';
 ```
 
-## `SynapseDB.open(path, options)`
+## `NervusDB.open(path, options)`
 
 | 选项                       | 类型                                          | 默认                | 说明                       |
 | -------------------------- | --------------------------------------------- | ------------------- | -------------------------- |
@@ -94,8 +94,8 @@ await db.findByEdgeProperty({ propertyName: 'tags', contains: 'core-team' });
 ## 全文检索
 
 ```ts
-import { FulltextEngine } from 'synapsedb/fulltext';
-const engine = await FulltextEngine.open('demo.synapsedb');
+import { FulltextEngine } from 'nervusdb/fulltext';
+const engine = await FulltextEngine.open('demo.nervusdb');
 await engine.batchIndex([{ id: 'doc:1', title: 'WAL', body: '事务日志' }]);
 const hits = await engine.search({ keywords: ['事务'], limit: 10 });
 ```
@@ -103,8 +103,8 @@ const hits = await engine.search({ keywords: ['事务'], limit: 10 });
 ## 空间查询
 
 ```ts
-import { SpatialStore } from 'synapsedb/spatial';
-const spatial = await SpatialStore.open('demo.synapsedb');
+import { SpatialStore } from 'nervusdb/spatial';
+const spatial = await SpatialStore.open('demo.nervusdb');
 await spatial.insertGeometry('cluster:01', { type: 'Point', coordinates: [121.5, 31.2] });
 const matches = await spatial.searchWithin({
   type: 'Circle',
@@ -113,7 +113,7 @@ const matches = await spatial.searchWithin({
 });
 ```
 
-## TypedSynapseDB
+## TypedNervusDB
 
 ```ts
 interface NodeProps {
@@ -125,7 +125,7 @@ interface EdgeProps {
   strength?: number;
 }
 
-const typed = await TypedSynapseDB.open<NodeProps, EdgeProps>('demo.synapsedb');
+const typed = await TypedNervusDB.open<NodeProps, EdgeProps>('demo.nervusdb');
 const res = await typed
   .find({ predicate: 'FRIEND_OF' })
   .where((edge) => edge.edgeProperties?.strength! > 0.8)

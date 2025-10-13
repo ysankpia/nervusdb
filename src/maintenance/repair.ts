@@ -9,7 +9,7 @@ import {
   writePagedManifest,
   type PagedIndexManifest,
 } from '../storage/pagedIndex.js';
-import { SynapseDB } from '../synapseDb.js';
+import { NervusDB } from '../synapseDb.js';
 import { triggerCrash } from '../utils/fault.js';
 
 export async function repairCorruptedOrders(dbPath: string): Promise<{ repairedOrders: string[] }> {
@@ -26,7 +26,7 @@ export async function repairCorruptedOrders(dbPath: string): Promise<{ repairedO
   const newLookups: PagedIndexManifest['lookups'] = [];
 
   // 从主文件获取“权威”三元组集合，避免因坏页导致数据丢失
-  const db = await SynapseDB.open(dbPath);
+  const db = await NervusDB.open(dbPath);
   const all = db.listFacts();
 
   for (const lookup of manifest.lookups) {
@@ -109,7 +109,7 @@ export async function repairCorruptedPagesFast(
     errorGroups.set(e.order, set);
   }
 
-  const db = await SynapseDB.open(dbPath);
+  const db = await NervusDB.open(dbPath);
   const facts = db.listFacts();
   const repaired: Array<{ order: string; primaryValues: number[] }> = [];
 

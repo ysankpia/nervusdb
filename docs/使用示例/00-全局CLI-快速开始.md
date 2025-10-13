@@ -3,13 +3,13 @@
 ## 目标
 
 - 通过命令行完成数据库创建、导入、统计、压实与导出
-- 熟悉 `synapsedb` 命令的常用参数与输出格式
+- 熟悉 `nervusdb` 命令的常用参数与输出格式
 
 ## 前置准备
 
 ```bash
 pnpm build
-npm i -g .    # 或使用 npx synapsedb
+npm i -g .    # 或使用 npx nervusdb
 mkdir -p ~/data/sdb
 cd ~/data/sdb
 ```
@@ -17,21 +17,21 @@ cd ~/data/sdb
 ## 1. 生成示例数据库
 
 ```bash
-synapsedb bench demo.synapsedb 200 lsm
+nervusdb bench demo.nervusdb 200 lsm
 ```
 
 输出示例：
 
 ```
 🚀 生成示例数据... triples=820, properties=400
-✅ 完成：demo.synapsedb + demo.synapsedb.pages/
+✅ 完成：demo.nervusdb + demo.nervusdb.pages/
 ```
 
 ## 2. 查看统计
 
 ```bash
-synapsedb stats demo.synapsedb --summary
-synapsedb stats demo.synapsedb --txids=10
+nervusdb stats demo.nervusdb --summary
+nervusdb stats demo.nervusdb --txids=10
 ```
 
 重点字段：`triples`、`tombstones`、`walBytes`、`orders.*.multiPagePrimaries`
@@ -39,7 +39,7 @@ synapsedb stats demo.synapsedb --txids=10
 ## 3. 自动压实
 
 ```bash
-synapsedb auto-compact demo.synapsedb \
+nervusdb auto-compact demo.nervusdb \
   --mode=incremental \
   --hot-threshold=1.1 \
   --max-primary=5 \
@@ -57,7 +57,7 @@ synapsedb auto-compact demo.synapsedb \
 ## 4. 查看热点
 
 ```bash
-synapsedb hot demo.synapsedb --top=10
+nervusdb hot demo.nervusdb --top=10
 ```
 
 输出示例：`primary=42 pages=3 score=0.82`
@@ -65,29 +65,29 @@ synapsedb hot demo.synapsedb --top=10
 ## 5. 导出页内容
 
 ```bash
-synapsedb dump demo.synapsedb SPO 42 --output spo-42.ndjson
+nervusdb dump demo.nervusdb SPO 42 --output spo-42.ndjson
 head spo-42.ndjson
 ```
 
 ## 6. 事务 ID 管理
 
 ```bash
-synapsedb txids demo.synapsedb --list=10
-synapsedb txids demo.synapsedb --since=240
+nervusdb txids demo.nervusdb --list=10
+nervusdb txids demo.nervusdb --since=240
 ```
 
 ## 7. 快速检查
 
 ```bash
-synapsedb check demo.synapsedb --summary
+nervusdb check demo.nervusdb --summary
 ```
 
-若需深度校验：`synapsedb check demo.synapsedb --strict`
+若需深度校验：`nervusdb check demo.nervusdb --strict`
 
 ## 8. 清理示例
 
 ```bash
-rm -rf demo.synapsedb demo.synapsedb.pages demo.synapsedb.wal spo-42.ndjson
+rm -rf demo.nervusdb demo.nervusdb.pages demo.nervusdb.wal spo-42.ndjson
 ```
 
 ## 小贴士

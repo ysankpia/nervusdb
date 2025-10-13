@@ -1,10 +1,10 @@
 # 附录 · CLI 参考
 
-> SynapseDB 提供完整的命令行工具链，覆盖诊断、治理、导出与事务观测。本附录列出主要命令及常用参数。
+> NervusDB 提供完整的命令行工具链，覆盖诊断、治理、导出与事务观测。本附录列出主要命令及常用参数。
 
 ## 总体说明
 
-- 默认命令：`synapsedb <command> [options]`
+- 默认命令：`nervusdb <command> [options]`
 - 源码模式：`pnpm db:<command>` 等价
 - 所有命令支持绝对/相对路径，建议显式带文件扩展名
 
@@ -27,9 +27,9 @@
 ## `stats`
 
 ```bash
-synapsedb stats demo.synapsedb --summary
-synapsedb stats demo.synapsedb --txids=20
-synapsedb stats demo.synapsedb --txids-window=60
+nervusdb stats demo.nervusdb --summary
+nervusdb stats demo.nervusdb --txids=20
+nervusdb stats demo.nervusdb --txids-window=60
 ```
 
 - `--summary`：简化输出
@@ -39,8 +39,8 @@ synapsedb stats demo.synapsedb --txids-window=60
 ## `check`
 
 ```bash
-synapsedb check demo.synapsedb
-synapsedb check demo.synapsedb --strict
+nervusdb check demo.nervusdb
+nervusdb check demo.nervusdb --strict
 ```
 
 - 检查 manifest、索引页、WAL 校验和
@@ -49,8 +49,8 @@ synapsedb check demo.synapsedb --strict
 ## `repair`
 
 ```bash
-synapsedb repair demo.synapsedb --fast
-synapsedb repair demo.synapsedb --rebuild-indexes
+nervusdb repair demo.nervusdb --fast
+nervusdb repair demo.nervusdb --rebuild-indexes
 ```
 
 - `--fast`：按页修复映射
@@ -59,7 +59,7 @@ synapsedb repair demo.synapsedb --rebuild-indexes
 ## `auto-compact`
 
 ```bash
-synapsedb auto-compact demo.synapsedb \
+nervusdb auto-compact demo.nervusdb \
   --mode=incremental \
   --orders=SPO,POS \
   --min-merge=2 \
@@ -78,8 +78,8 @@ synapsedb auto-compact demo.synapsedb \
 ## `gc`
 
 ```bash
-synapsedb gc demo.synapsedb --respect-readers
-synapsedb gc demo.synapsedb --no-respect-readers   # 谨慎使用
+nervusdb gc demo.nervusdb --respect-readers
+nervusdb gc demo.nervusdb --no-respect-readers   # 谨慎使用
 ```
 
 - 清理 `orphans` 与无效索引页
@@ -88,10 +88,10 @@ synapsedb gc demo.synapsedb --no-respect-readers   # 谨慎使用
 ## `txids`
 
 ```bash
-synapsedb txids demo.synapsedb --list=20
-synapsedb txids demo.synapsedb --since=120
-synapsedb txids demo.synapsedb --session=ingest
-synapsedb txids demo.synapsedb --clear
+nervusdb txids demo.nervusdb --list=20
+nervusdb txids demo.nervusdb --since=120
+nervusdb txids demo.nervusdb --session=ingest
+nervusdb txids demo.nervusdb --clear
 ```
 
 - 管理幂等事务 ID
@@ -100,8 +100,8 @@ synapsedb txids demo.synapsedb --clear
 ## `dump`
 
 ```bash
-synapsedb dump demo.synapsedb SPO 42
-synapsedb dump demo.synapsedb POS 10 --output spo-10.ndjson
+nervusdb dump demo.nervusdb SPO 42
+nervusdb dump demo.nervusdb POS 10 --output spo-10.ndjson
 ```
 
 - 导出指定主键所在页的原始数据
@@ -110,8 +110,8 @@ synapsedb dump demo.synapsedb POS 10 --output spo-10.ndjson
 ## `bench`
 
 ```bash
-synapsedb bench sample.synapsedb 500 lsm
-synapsedb benchmark demo.synapsedb core
+nervusdb bench sample.nervusdb 500 lsm
+nervusdb benchmark demo.nervusdb core
 ```
 
 - `bench`：生成演示数据

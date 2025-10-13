@@ -8,9 +8,9 @@
  */
 
 import {
-  CoreSynapseDB,
-  ExtendedSynapseDB,
-  SynapseDB,
+  CoreNervusDB,
+  ExtendedNervusDB,
+  NervusDB,
   PathfindingPlugin,
   AggregationPlugin,
 } from '../index.js';
@@ -19,7 +19,7 @@ import {
 // 方式1：核心版本（最轻量）
 // ======================
 export async function coreExample() {
-  const db = await CoreSynapseDB.open(':memory:');
+  const db = await CoreNervusDB.open(':memory:');
 
   // 只有基本的CRUD功能
   db.addFact({ subject: 'Alice', predicate: 'knows', object: 'Bob' });
@@ -36,7 +36,7 @@ export async function coreExample() {
 // ======================
 export async function selectivePluginExample() {
   // 注意：插件现在自动加载，无需手动指定
-  const db = await ExtendedSynapseDB.open(':memory:');
+  const db = await ExtendedNervusDB.open(':memory:');
 
   // 基本功能
   db.addFact({ subject: 'Alice', predicate: 'knows', object: 'Bob' });
@@ -64,7 +64,7 @@ export async function selectivePluginExample() {
 // ======================
 export async function compatibilityExample() {
   // 包含所有插件的完整版本
-  const db = await SynapseDB.open(':memory:');
+  const db = await NervusDB.open(':memory:');
 
   // 所有原有API都可以使用
   db.addFact({ subject: 'Alice', predicate: 'knows', object: 'Bob' });
@@ -98,7 +98,7 @@ export async function performanceComparison() {
 
   // 测试核心版本
   const startCore = performance.now();
-  const coreDb = await CoreSynapseDB.open(':memory:');
+  const coreDb = await CoreNervusDB.open(':memory:');
   for (let i = 0; i < iterations; i++) {
     coreDb.addFact({ subject: `node${i}`, predicate: 'connects', object: `node${i + 1}` });
   }
@@ -107,7 +107,7 @@ export async function performanceComparison() {
 
   // 测试完整版本
   const startFull = performance.now();
-  const fullDb = await SynapseDB.open(':memory:');
+  const fullDb = await NervusDB.open(':memory:');
   for (let i = 0; i < iterations; i++) {
     fullDb.addFact({ subject: `node${i}`, predicate: 'connects', object: `node${i + 1}` });
   }

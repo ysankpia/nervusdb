@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { makeWorkspace, cleanupWorkspace, within } from '../../helpers/tempfs';
 
 describe('LazyQueryBuilder · 复杂链路与 length/slice', () => {
   it('follow→whereProperty→followReverse→skip/limit 组合链路', async () => {
     const dir1 = await makeWorkspace('unit-lazy-complex');
-    const db = await SynapseDB.open(within(dir1, 'db.synapsedb'));
+    const db = await NervusDB.open(within(dir1, 'db.synapsedb'));
     // A -KNOWS-> B(age=30), C(age=20); D(age=40) -KNOWS-> B
     db.addFact(
       { subject: 'A', predicate: 'KNOWS', object: 'B' },
@@ -46,7 +46,7 @@ describe('LazyQueryBuilder · 复杂链路与 length/slice', () => {
 
   it('length/slice 在 LazyQueryBuilder 上可用（物化一次）', async () => {
     const dir2 = await makeWorkspace('unit-lazy-length');
-    const db = await SynapseDB.open(within(dir2, 'db.synapsedb'));
+    const db = await NervusDB.open(within(dir2, 'db.synapsedb'));
     db.addFact({ subject: 'X', predicate: 'R', object: 'O1' });
     db.addFact({ subject: 'X', predicate: 'R', object: 'O2' });
     db.addFact({ subject: 'X', predicate: 'R', object: 'O3' });

@@ -2,14 +2,14 @@
 
 ## 目标
 
-- 理解 SynapseDB 的数据模型：三元组、属性、节点 ID、边 ID
+- 理解 NervusDB 的数据模型：三元组、属性、节点 ID、边 ID
 - 掌握基础写入、查询、删除与 flush 流程
 - 使用事务批次与类型安全包装器完成一次完整写入
 
 ## 前置要求
 
 - 已完成 [教程 01 · 安装与环境](教程-01-安装与环境.md)
-- 拥有演示库 `demo.synapsedb`
+- 拥有演示库 `demo.nervusdb`
 
 ## 核心概念
 
@@ -26,9 +26,9 @@
 ### 1. 写入三元组
 
 ```ts
-import { SynapseDB } from 'synapsedb';
+import { NervusDB } from 'nervusdb';
 
-const db = await SynapseDB.open('demo.synapsedb');
+const db = await NervusDB.open('demo.nervusdb');
 await db.addFact({ subject: 'user:alice', predicate: 'FRIEND_OF', object: 'user:bob' });
 await db.addFact({ subject: 'user:bob', predicate: 'FRIEND_OF', object: 'user:carol' });
 ```
@@ -86,7 +86,7 @@ await db.close();
 ## 类型安全包装器
 
 ```ts
-import { TypedSynapseDB } from '@/typedSynapseDb';
+import { TypedNervusDB } from '@/typedSynapseDb';
 
 interface NodeProps {
   labels: string[];
@@ -97,7 +97,7 @@ interface EdgeProps {
   weight?: number;
 }
 
-const typed = await TypedSynapseDB.open<NodeProps, EdgeProps>('demo.synapsedb');
+const typed = await TypedNervusDB.open<NodeProps, EdgeProps>('demo.nervusdb');
 const repos = await typed
   .find({ predicate: 'DEPENDS_ON' })
   .where((edge) => edge.edgeProperties?.weight! >= 0.5)
@@ -107,7 +107,7 @@ const repos = await typed
 
 ## 插件系统
 
-SynapseDB 的高级查询能力由插件提供，以下插件在 `open()` 时**自动加载**：
+NervusDB 的高级查询能力由插件提供，以下插件在 `open()` 时**自动加载**：
 
 ### 默认插件
 
@@ -135,7 +135,7 @@ SynapseDB 的高级查询能力由插件提供，以下插件在 `open()` 时**�
 **CypherPlugin** 需显式启用：
 
 ```ts
-const db = await SynapseDB.open('demo.synapsedb', {
+const db = await NervusDB.open('demo.nervusdb', {
   experimental: { cypher: true },
 });
 
@@ -149,8 +149,8 @@ const result = await db.cypher(`
 
 ## 验证
 
-- `synapsedb stats demo.synapsedb --summary` 中文件数、墓碑、热度符合预期
-- `synapsedb dump demo.synapsedb SPO <primary>` 可看到新增事实与 tombstone
+- `nervusdb stats demo.nervusdb --summary` 中文件数、墓碑、热度符合预期
+- `nervusdb dump demo.nervusdb SPO <primary>` 可看到新增事实与 tombstone
 
 ## 常见问题
 

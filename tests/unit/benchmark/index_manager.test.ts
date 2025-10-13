@@ -44,7 +44,7 @@ describe('BenchmarkManager · 轻量套件与报告生成', () => {
     expect(report.results[0].name).toBe('noop');
 
     const consoleTxt = mgr.generateConsoleReport(report);
-    expect(consoleTxt.includes('SynapseDB 性能基准测试报告')).toBe(true);
+    expect(consoleTxt.includes('NervusDB 性能基准测试报告')).toBe(true);
     expect(consoleTxt.includes('noop')).toBe(true);
     const html = mgr.generateHTMLReport(report);
     expect(html.includes('<html')).toBe(true);

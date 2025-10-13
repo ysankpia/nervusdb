@@ -1,4 +1,4 @@
-# SynapseDB v1.0 升级实施计划 (TODOs)
+# NervusDB v1.0 升级实施计划 (TODOs)
 
 > 基于 Roadmap v2.0 的详细工程实施任务清单
 >
@@ -286,7 +286,7 @@
     );
   }
   ```
-- [ ] **注册到 CLI**: 更新 `src/cli/synapsedb.ts`
+- [ ] **注册到 CLI**: 更新 `src/cli/nervusdb.ts`
 
 ---
 
@@ -304,10 +304,10 @@
 
 #### C.1.1 泛型化核心类
 
-- [ ] **重构 SynapseDB 类**:
+- [ ] **重构 NervusDB 类**:
   ```typescript
   // synapseDb.ts
-  export class SynapseDB<
+  export class NervusDB<
     TNode extends Record<string, any> = any,
     TEdge extends Record<string, any> = any,
   > {

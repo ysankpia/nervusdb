@@ -1,9 +1,9 @@
 /**
- * SynapseDB 数据库打开选项
+ * NervusDB 数据库打开选项
  *
  * 这些选项控制数据库的行为、性能和并发特性。
  */
-export interface SynapseDBOpenOptions {
+export interface NervusDBOpenOptions {
   /**
    * 索引目录路径
    *
@@ -167,22 +167,22 @@ export interface BeginBatchOptions {
 }
 
 /**
- * 判断输入是否符合 SynapseDB 打开选项的基本约束
+ * 判断输入是否符合 NervusDB 打开选项的基本约束
  */
-export function isSynapseDBOpenOptions(value: unknown): value is SynapseDBOpenOptions {
+export function isNervusDBOpenOptions(value: unknown): value is NervusDBOpenOptions {
   if (value === null || typeof value !== 'object') {
     return false;
   }
 
   const options = value as Record<string, unknown>;
 
-  const ensureOptionalBoolean = (key: keyof SynapseDBOpenOptions): boolean => {
+  const ensureOptionalBoolean = (key: keyof NervusDBOpenOptions): boolean => {
     if (!(key in options)) return true;
     return typeof options[key] === 'boolean';
   };
 
   const ensureOptionalNumber = (
-    key: keyof SynapseDBOpenOptions,
+    key: keyof NervusDBOpenOptions,
     { min, max, integer }: { min?: number; max?: number; integer?: boolean } = {},
   ): boolean => {
     if (!(key in options)) return true;
@@ -268,13 +268,13 @@ export function isSynapseDBOpenOptions(value: unknown): value is SynapseDBOpenOp
 }
 
 /**
- * 断言输入符合 SynapseDB 打开选项要求
+ * 断言输入符合 NervusDB 打开选项要求
  */
-export function assertSynapseDBOpenOptions(
+export function assertNervusDBOpenOptions(
   value: unknown,
   message?: string,
-): asserts value is SynapseDBOpenOptions {
-  if (!isSynapseDBOpenOptions(value)) {
-    throw new TypeError(message ?? 'SynapseDB 打开选项格式错误');
+): asserts value is NervusDBOpenOptions {
+  if (!isNervusDBOpenOptions(value)) {
+    throw new TypeError(message ?? 'NervusDB 打开选项格式错误');
   }
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { SynapseDB } from '../synapseDb.js';
+import { NervusDB } from '../synapseDb.js';
 
 async function main() {
   const [dbPath, countArg, modeArg] = process.argv.slice(2);
@@ -9,7 +9,7 @@ async function main() {
   }
   const count = Number(countArg ?? '10000');
   const stagingMode = modeArg === 'lsm' ? ('lsm-lite' as any) : undefined;
-  const db = await SynapseDB.open(dbPath, { pageSize: 1024, stagingMode });
+  const db = await NervusDB.open(dbPath, { pageSize: 1024, stagingMode });
   console.time('insert');
   for (let i = 0; i < count; i += 1) {
     db.addFact({ subject: `S${i % 1000}`, predicate: `R${i % 50}`, object: `O${i}` });

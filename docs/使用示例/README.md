@@ -16,7 +16,7 @@
 | 09   | 09-嵌入式脚本与自动化-示例.md                           | 运维自动化流程           |
 | 10   | 10-消费者项目模板.md                                    | 标准接入模板             |
 | 99   | 99-常见问题与排错.md                                    | CLI 实操 FAQ             |
-| -    | TypeScript类型系统使用指南.md                           | TypedSynapseDB 用法      |
+| -    | TypeScript类型系统使用指南.md                           | TypedNervusDB 用法       |
 | -    | 全文搜索使用指南.md                                     | 全文索引操作             |
 | -    | 空间几何计算指南.md                                     | 空间索引与几何查询       |
 | -    | 图算法库使用指南.md                                     | 最短路径、社区、中心性   |
@@ -30,15 +30,15 @@
 
 1. 先完成 `docs/教学文档/` 系列教程
 2. 根据业务需求选择对应示例
-3. 所有示例基于 `synapsedb bench` 生成的样例库，可替换为生产数据
+3. 所有示例基于 `nervusdb bench` 生成的样例库，可替换为生产数据
 
 ## 注意
 
 - 示例代码默认使用 ESM + TypeScript
-- CLI 展示以 `synapsedb` 为主，亦可使用 `pnpm db:*`
+- CLI 展示以 `nervusdb` 为主，亦可使用 `pnpm db:*`
 - 若涉及真实数据，请先备份并在测试环境验证
 
 ## 延伸
 
-- README · [SynapseDB 总览](../../README.md)
+- README · [NervusDB 总览](../../README.md)
 - 教学教程 · [docs/教学文档/教程-00-概览.md](../教学文档/教程-00-概览.md)

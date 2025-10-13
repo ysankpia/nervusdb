@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { SynapseDB } from '@/synapseDb.ts';
+import { NervusDB } from '@/synapseDb.ts';
 import '@/fulltext/integration.ts';
 
-describe('SynapseDB 全文搜索扩展 · 启用/调用/统计/重建', () => {
+describe('NervusDB 全文搜索扩展 · 启用/调用/统计/重建', () => {
   it('未启用时报错；启用后可调用各 API', async () => {
-    const db = await SynapseDB.open(':memory:');
+    const db = await NervusDB.open(':memory:');
     // 未启用前调用应报错
     await expect(db.searchNodes('hello')).rejects.toThrow(/Full-text search is not enabled/);
 
@@ -31,7 +31,7 @@ describe('SynapseDB 全文搜索扩展 · 启用/调用/统计/重建', () => {
   });
 
   it('重复启用全文搜索应该幂等', async () => {
-    const db = await SynapseDB.open(':memory:');
+    const db = await NervusDB.open(':memory:');
     await db.enableFullTextSearch();
 
     // 第二次启用应该幂等（不报错）
@@ -45,7 +45,7 @@ describe('SynapseDB 全文搜索扩展 · 启用/调用/统计/重建', () => {
   });
 
   it('批量索引大量节点和边', async () => {
-    const db = await SynapseDB.open(':memory:');
+    const db = await NervusDB.open(':memory:');
     await db.enableFullTextSearch();
 
     // 批量添加节点
@@ -75,7 +75,7 @@ describe('SynapseDB 全文搜索扩展 · 启用/调用/统计/重建', () => {
   });
 
   it('空查询和特殊字符查询', async () => {
-    const db = await SynapseDB.open(':memory:');
+    const db = await NervusDB.open(':memory:');
     await db.enableFullTextSearch();
 
     db.addFact(
@@ -101,7 +101,7 @@ describe('SynapseDB 全文搜索扩展 · 启用/调用/统计/重建', () => {
   });
 
   it('分页查询和排序', async () => {
-    const db = await SynapseDB.open(':memory:');
+    const db = await NervusDB.open(':memory:');
     await db.enableFullTextSearch();
 
     // 添加多个匹配的文档
@@ -133,7 +133,7 @@ describe('SynapseDB 全文搜索扩展 · 启用/调用/统计/重建', () => {
   });
 
   it('搜索建议功能', async () => {
-    const db = await SynapseDB.open(':memory:');
+    const db = await NervusDB.open(':memory:');
     await db.enableFullTextSearch();
 
     db.addFact(
@@ -168,7 +168,7 @@ describe('SynapseDB 全文搜索扩展 · 启用/调用/统计/重建', () => {
   });
 
   it('统计信息应该反映索引状态', async () => {
-    const db = await SynapseDB.open(':memory:');
+    const db = await NervusDB.open(':memory:');
     await db.enableFullTextSearch();
 
     // 初始状态
@@ -194,7 +194,7 @@ describe('SynapseDB 全文搜索扩展 · 启用/调用/统计/重建', () => {
   });
 
   it('重建索引后数据仍可搜索', async () => {
-    const db = await SynapseDB.open(':memory:');
+    const db = await NervusDB.open(':memory:');
     await db.enableFullTextSearch();
 
     db.addFact(
@@ -223,7 +223,7 @@ describe('SynapseDB 全文搜索扩展 · 启用/调用/统计/重建', () => {
   });
 
   it('全局搜索应该同时搜索节点和边', async () => {
-    const db = await SynapseDB.open(':memory:');
+    const db = await NervusDB.open(':memory:');
     await db.enableFullTextSearch();
 
     db.addFact(
@@ -250,7 +250,7 @@ describe('SynapseDB 全文搜索扩展 · 启用/调用/统计/重建', () => {
   });
 
   it('搜索结果应该包含相关性分数', async () => {
-    const db = await SynapseDB.open(':memory:');
+    const db = await NervusDB.open(':memory:');
     await db.enableFullTextSearch();
 
     db.addFact(

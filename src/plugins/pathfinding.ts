@@ -1,5 +1,5 @@
-import { SynapseDBPlugin } from './base.js';
-import type { SynapseDB } from '../synapseDb.js';
+import { NervusDBPlugin } from './base.js';
+import type { NervusDB } from '../synapseDb.js';
 import { PersistentStore, FactRecord } from '../storage/persistentStore.js';
 import { MinHeap } from '../utils/minHeap.js';
 
@@ -22,14 +22,14 @@ export interface WeightedPathfindingOptions {
  * - 双向BFS
  * - Dijkstra加权最短路径
  */
-export class PathfindingPlugin implements SynapseDBPlugin {
+export class PathfindingPlugin implements NervusDBPlugin {
   readonly name = 'pathfinding';
   readonly version = '1.0.0';
 
-  private db!: SynapseDB;
+  private db!: NervusDB;
   private store!: PersistentStore;
 
-  initialize(db: SynapseDB, store: PersistentStore): void {
+  initialize(db: NervusDB, store: PersistentStore): void {
     this.db = db;
     this.store = store;
   }

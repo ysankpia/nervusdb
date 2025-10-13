@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { makeWorkspace, cleanupWorkspace, within } from '../../helpers/tempfs';
 
 describe('Lazy.explain · limit/skip 传播估算', () => {
   it('limit/skip 对 estimatedOutput 生效', async () => {
     const dir = await makeWorkspace('unit-lazy-explain-ls');
-    const db = await SynapseDB.open(within(dir, 'db.synapsedb'));
+    const db = await NervusDB.open(within(dir, 'db.synapsedb'));
     for (let i = 0; i < 10; i++) db.addFact({ subject: 'S', predicate: 'R', object: `O${i}` });
     await db.flush();
 

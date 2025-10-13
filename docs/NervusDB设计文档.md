@@ -1,19 +1,19 @@
 这个想法极具雄心和创造力！您已经触及到了数据库设计和人工智能领域一个非常前沿的交叉点。**是的，我们完全可以基于TypeScript，借鉴SQLite的理念，设计并实现一个专为知识推理而生的、类似人脑联想记忆的“类人脑数据库”。**
 
-这不仅仅是对现有技术（如图数据库）的重复，而是一种**面向特定领域（代码知识）、高度优化且开发者友好**的创新。我们将它命名为 **“SynapseDB”**——灵感来源于大脑中连接神经元的“突触”。
+这不仅仅是对现有技术（如图数据库）的重复，而是一种**面向特定领域（代码知识）、高度优化且开发者友好**的创新。我们将它命名为 **“NervusDB”**——灵感来源于大脑中连接神经元的“突触”。
 
 ---
 
-### **SynapseDB: 一个基于TypeScript的嵌入式类人脑知识库**
+### **NervusDB: 一个基于TypeScript的嵌入式类人脑知识库**
 
 #### **一、 核心设计哲学**
 
-SynapseDB 将会是一个**嵌入式（embedded）、零配置、基于文件的数据库引擎**，就像SQLite一样，但它的核心数据模型和API将完全围绕**“主谓宾”（SPO）三元组**和**联想查询**来设计。它旨在让开发者感觉像是在操作一个“数字大脑”，而不是在编写复杂的SQL。
+NervusDB 将会是一个**嵌入式（embedded）、零配置、基于文件的数据库引擎**，就像SQLite一样，但它的核心数据模型和API将完全围绕**“主谓宾”（SPO）三元组**和**联想查询**来设计。它旨在让开发者感觉像是在操作一个“数字大脑”，而不是在编写复杂的SQL。
 
 **核心特性：**
 
 1.  **SPO原生（SPO-Native）**：数据库的底层存储和查询引擎都将直接围绕SPO三元组构建，而不是在关系表之上模拟。
-2.  **永不遗忘（Persistent）**：所有知识都将被持久化到单一的本地文件中（例如 `.synapsedb` 文件），除非明确删除，否则不会丢失。
+2.  **永不遗忘（Persistent）**：所有知识都将被持久化到单一的本地文件中（例如 `.nervusdb` 文件），除非明确删除，否则不会丢失。
 3.  **联想查询（Associative Query）**：API设计将模仿人类的联想思维，例如 `db.find({ subject: 'file:main.js' }).follow('CONTAINS')`，而不是 `SELECT ... JOIN ...`。
 4.  **嵌入式与零配置（Embedded & Zero-Config）**：像SQLite一样，它是一个库，不是一个服务。无需安装、无需启动服务器，直接在您的TypeScript/JavaScript项目中使用。
 5.  **类型安全（Type-Safe）**：利用TypeScript的强大能力，为节点（主语/宾语）和边（谓语）提供类型定义和校验。
@@ -24,7 +24,7 @@ SynapseDB 将会是一个**嵌入式（embedded）、零配置、基于文件的
 
 我们将使用一个单一的二进制文件来存储所有数据，但这文件内部会有高度优化的结构。
 
-1.  **文件格式**：一个自定义的二进制格式 `.synapsedb`。
+1.  **文件格式**：一个自定义的二进制格式 `.nervusdb`。
 2.  **内部结构**：
     - **字典区 (Dictionary Section)**：
       - **目的**：将所有字符串（如文件路径、函数名、关系标签 `MODIFIES`）映射为一个唯一的整数ID。
@@ -52,10 +52,10 @@ SynapseDB 将会是一个**嵌入式（embedded）、零配置、基于文件的
 API的设计将是直观且链式调用的，完全隐藏底层SQL或索引操作的复杂性。
 
 ```typescript
-// 导入并初始化SynapseDB
-import { SynapseDB } from './synapsedb';
+// 导入并初始化NervusDB
+import { NervusDB } from './nervusdb';
 
-const db = new SynapseDB('./.repomix/project_brain.synapsedb');
+const db = new NervusDB('./.repomix/project_brain.nervusdb');
 
 // ---- 写入操作：添加“事实” ----
 await db.addFact({
@@ -105,7 +105,7 @@ const largeFiles = await db
 
 **阶段1：核心存储引擎**
 
-1.  **文件I/O**：设计`.synapsedb`文件的二进制格式和读写逻辑。
+1.  **文件I/O**：设计`.nervusdb`文件的二进制格式和读写逻辑。
 2.  **字典实现**：实现字符串到整数ID的双向映射字典，并能持久化到文件。
 3.  **三元组存储**：实现SPO三元组（使用整数ID）的追加和存储。
 4.  **属性存储**：实现一个简单的键值存储用于存放节点和边的属性。
@@ -132,7 +132,7 @@ const largeFiles = await db
 
 您提出的这个想法，不仅可行，而且非常有价值。创建一个**专为代码知识优化的、开发者友好的、SPO原生的嵌入式数据库**，是填补当前技术生态空白的绝佳机会。
 
-与现有的通用图数据库相比，**SynapseDB**的优势在于：
+与现有的通用图数据库相比，**NervusDB**的优势在于：
 
 - **轻量与专注**：它只为“主谓宾”这一种模型做了极致优化，因此会比通用图数据库更小、更快、更易于使用。
 - **开发者体验**：其API设计完全贴合开发者的思维模式，将复杂的图论概念隐藏在流畅的链式调用背后。
@@ -146,7 +146,7 @@ const largeFiles = await db
 
 - WAL v2：实现 begin(0x40)/commit(0x41)/abort(0x42) 批次语义；重放时按校验计算 safeOffset，并在打开数据库时自动对 WAL 尾部不完整记录进行安全截断。
 - 恢复与幂等：flush 后 WAL 会被 reset；未 flush 的已提交批次可在重启后通过 WAL 重放恢复；未提交批次在重启后不会生效。
-- 并发控制：`SynapseDB.open(path, { enableLock?, registerReader? })` 支持进程级独占写锁与读者登记；CLI 运维指令在 `--respect-readers` 下尊重活动读者。
+- 并发控制：`NervusDB.open(path, { enableLock?, registerReader? })` 支持进程级独占写锁与读者登记；CLI 运维指令在 `--respect-readers` 下尊重活动读者。
 
 读一致性（Snapshot）
 

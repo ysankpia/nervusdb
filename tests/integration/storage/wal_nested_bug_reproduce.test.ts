@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 
 describe('WAL 嵌套事务问题重现', () => {
   let workspace: string;
@@ -19,7 +19,7 @@ describe('WAL 嵌套事务问题重现', () => {
   });
 
   it('重现问题：内层COMMIT后外层ABORT不应该影响已提交的内层事务', async () => {
-    const db = await SynapseDB.open(dbPath);
+    const db = await NervusDB.open(dbPath);
 
     // 外层事务
     db.beginBatch({ txId: 'outer' });
@@ -40,7 +40,7 @@ describe('WAL 嵌套事务问题重现', () => {
     await db.close();
 
     // 重启验证
-    const db2 = await SynapseDB.open(dbPath);
+    const db2 = await NervusDB.open(dbPath);
     // 合并“predicate=test”的结果与“object=test”的基线记录，确保同时验证两类数据
     const results = db2
       .find({ predicate: 'test' })
@@ -58,7 +58,7 @@ describe('WAL 嵌套事务问题重现', () => {
   });
 
   it('验证WAL重放是否正确处理嵌套事务', async () => {
-    const db = await SynapseDB.open(dbPath);
+    const db = await NervusDB.open(dbPath);
 
     // 先创建一些基础数据
     db.addFact({ subject: 'Base', predicate: 'type', object: 'test' });
@@ -84,7 +84,7 @@ describe('WAL 嵌套事务问题重现', () => {
     await db.close();
 
     // 重启，依赖WAL重放
-    const db2 = await SynapseDB.open(dbPath);
+    const db2 = await NervusDB.open(dbPath);
     const results = db2
       .find({ predicate: 'test' })
       .union(db2.find({ object: 'test' }))

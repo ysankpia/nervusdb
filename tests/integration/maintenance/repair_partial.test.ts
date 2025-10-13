@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promises as fs } from 'node:fs';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { readPagedManifest, pageFileName } from '@/storage/pagedIndex';
 import { checkStrict } from '@/maintenance/check';
 import { repairCorruptedPagesFast } from '@/maintenance/repair';
@@ -53,7 +53,7 @@ describe('按页（primary）快速修复', () => {
   });
 
   it('仅替换损坏 primary 的页映射，其他 primary 不受影响', async () => {
-    const db = await SynapseDB.open(dbPath, { pageSize: 2 });
+    const db = await NervusDB.open(dbPath, { pageSize: 2 });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O1' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O2' });
     db.addFact({ subject: 'T', predicate: 'R', object: 'P' });
@@ -86,7 +86,7 @@ describe('按页（primary）快速修复', () => {
     expect(ok.errors.length).toBeGreaterThanOrEqual(0);
 
     // 重新打开数据库以加载最新 manifest
-    const db2 = await SynapseDB.open(dbPath);
+    const db2 = await NervusDB.open(dbPath);
     const factsS = db2.find({ subject: 'S', predicate: 'R' }).all();
     const factsT = db2.find({ subject: 'T', predicate: 'R' }).all();
     expect(factsS.length).toBe(2);

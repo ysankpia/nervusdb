@@ -3,7 +3,7 @@ import { mkdtemp, rm, readdir, unlink, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 
 describe('WAL 恢复', () => {
   let workspace: string;
@@ -48,11 +48,11 @@ describe('WAL 恢复', () => {
   });
 
   it('未 flush 的写入可通过 WAL 重放恢复', async () => {
-    const db1 = await SynapseDB.open(dbPath);
+    const db1 = await NervusDB.open(dbPath);
     db1.addFact({ subject: 'class:User', predicate: 'HAS_METHOD', object: 'method:login' });
     // 模拟崩溃：不调用 flush，直接新开一个实例
 
-    const db2 = await SynapseDB.open(dbPath);
+    const db2 = await NervusDB.open(dbPath);
     const facts = db2.find({ subject: 'class:User', predicate: 'HAS_METHOD' }).all();
     expect(facts).toHaveLength(1);
     expect(facts[0].object).toBe('method:login');

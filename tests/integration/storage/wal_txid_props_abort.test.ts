@@ -3,7 +3,7 @@ import { mkdtemp, rm, readdir, unlink, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 
 describe('WAL 事务 ID：属性与 abort 语义（实验特性）', () => {
   let workspace: string;
@@ -48,7 +48,7 @@ describe('WAL 事务 ID：属性与 abort 语义（实验特性）', () => {
   });
 
   it('相同 txId 的属性覆盖仅生效一次；abort 批次不会生效', async () => {
-    const db1 = await SynapseDB.open(dbPath);
+    const db1 = await NervusDB.open(dbPath);
     // 先持久化节点，方便设置属性
     const f = db1.addFact({ subject: 'N', predicate: 'R', object: 'X' });
     await db1.flush();
@@ -69,7 +69,7 @@ describe('WAL 事务 ID：属性与 abort 语义（实验特性）', () => {
     db1.abortBatch();
 
     // 不调用 flush，模拟崩溃重启
-    const db2 = await SynapseDB.open(dbPath);
+    const db2 = await NervusDB.open(dbPath);
     const props = db2.getNodeProperties(f.subjectId);
     expect(props?.v).toBe(1);
     await db2.flush();

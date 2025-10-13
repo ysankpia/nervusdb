@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rm } from 'node:fs/promises';
@@ -7,7 +7,7 @@ import { rm } from 'node:fs/promises';
 describe('快照一致性 · 基础校验', () => {
   it('withSnapshot 期间查询链路稳定（不关心后台写入）', async () => {
     const dbPath = join(tmpdir(), `snapshot-basic-${Date.now()}.synapsedb`);
-    const db = await SynapseDB.open(dbPath, { rebuildIndexes: true });
+    const db = await NervusDB.open(dbPath, { rebuildIndexes: true });
 
     // 初始数据
     db.beginBatch();

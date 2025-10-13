@@ -2,7 +2,7 @@
 
 ## 接口说明
 
-SynapseDB 提供 GraphQL 端点（需在应用层封装），基本 schema 如下：
+NervusDB 提供 GraphQL 端点（需在应用层封装），基本 schema 如下：
 
 ```graphql
 schema {

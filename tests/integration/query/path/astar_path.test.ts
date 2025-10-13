@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
 import { cleanupWorkspace, makeWorkspace } from '../../../helpers/tempfs';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import {
   AStarPathBuilder,
   createAStarPathBuilder,
@@ -19,13 +19,13 @@ import { SimpleBidirectionalPathBuilder } from '@/query/path/bidirectionalSimple
 
 describe('A*启发式搜索算法', () => {
   let testDir: string;
-  let db: SynapseDB;
+  let db: NervusDB;
   let store: any;
 
   beforeEach(async () => {
     // 统一使用测试助手创建临时工作区
     testDir = await makeWorkspace('astar');
-    db = await SynapseDB.open(join(testDir, 'test.synapsedb'));
+    db = await NervusDB.open(join(testDir, 'test.synapsedb'));
     store = db.getStore();
 
     // 构建测试图

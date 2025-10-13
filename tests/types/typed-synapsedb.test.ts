@@ -1,14 +1,14 @@
 /**
  * TypeScript 类型系统增强测试
- * 验证类型安全的 SynapseDB API 和编译时类型检查
+ * 验证类型安全的 NervusDB API 和编译时类型检查
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { TypedSynapseDB, PersonNode, RelationshipEdge, EntityNode, KnowledgeEdge } from '@/index';
+import { TypedNervusDB, PersonNode, RelationshipEdge, EntityNode, KnowledgeEdge } from '@/index';
 import { join } from 'node:path';
 import { cleanupWorkspace, makeWorkspace } from '../helpers/tempfs';
 
-describe('TypedSynapseDB 类型安全测试', () => {
+describe('TypedNervusDB 类型安全测试', () => {
   let testDir: string;
   let testDbPath: string;
 
@@ -22,7 +22,7 @@ describe('TypedSynapseDB 类型安全测试', () => {
   });
 
   it('应该支持带类型的数据库创建和基本操作', async () => {
-    const db = await TypedSynapseDB.open<PersonNode, RelationshipEdge>(testDbPath);
+    const db = await TypedNervusDB.open<PersonNode, RelationshipEdge>(testDbPath);
 
     // 添加类型化的 fact
     const fact = db.addFact(
@@ -42,7 +42,7 @@ describe('TypedSynapseDB 类型安全测试', () => {
   });
 
   it('应该支持类型安全的属性查询', async () => {
-    const db = await TypedSynapseDB.open<PersonNode, RelationshipEdge>(testDbPath);
+    const db = await TypedNervusDB.open<PersonNode, RelationshipEdge>(testDbPath);
 
     db.addFact(
       { subject: 'Alice', predicate: 'FRIEND_OF', object: 'Bob' },
@@ -71,7 +71,7 @@ describe('TypedSynapseDB 类型安全测试', () => {
   });
 
   it('应该支持类型安全的链式查询', async () => {
-    const db = await TypedSynapseDB.open<PersonNode, RelationshipEdge>(testDbPath);
+    const db = await TypedNervusDB.open<PersonNode, RelationshipEdge>(testDbPath);
 
     db.addFact(
       { subject: 'Alice', predicate: 'FRIEND_OF', object: 'Bob' },
@@ -110,7 +110,7 @@ describe('TypedSynapseDB 类型安全测试', () => {
   });
 
   it('应该支持知识图谱类型', async () => {
-    const db = await TypedSynapseDB.open<EntityNode, KnowledgeEdge>(testDbPath);
+    const db = await TypedNervusDB.open<EntityNode, KnowledgeEdge>(testDbPath);
 
     const fact = db.addFact(
       { subject: 'Entity1', predicate: 'RELATED_TO', object: 'Entity2' },
@@ -144,7 +144,7 @@ describe('TypedSynapseDB 类型安全测试', () => {
   });
 
   it('应该支持标签查询', async () => {
-    const db = await TypedSynapseDB.open<PersonNode, RelationshipEdge>(testDbPath);
+    const db = await TypedNervusDB.open<PersonNode, RelationshipEdge>(testDbPath);
 
     db.addFact(
       { subject: 'Alice', predicate: 'WORKS_WITH', object: 'Bob' },
@@ -171,7 +171,7 @@ describe('TypedSynapseDB 类型安全测试', () => {
   });
 
   it('应该支持属性直接访问', async () => {
-    const db = await TypedSynapseDB.open<PersonNode, RelationshipEdge>(testDbPath);
+    const db = await TypedNervusDB.open<PersonNode, RelationshipEdge>(testDbPath);
 
     const fact = db.addFact(
       { subject: 'Alice', predicate: 'FRIEND_OF', object: 'Bob' },
@@ -213,7 +213,7 @@ describe('TypedSynapseDB 类型安全测试', () => {
   });
 
   it('应该支持异步迭代器', async () => {
-    const db = await TypedSynapseDB.open<PersonNode, RelationshipEdge>(testDbPath);
+    const db = await TypedNervusDB.open<PersonNode, RelationshipEdge>(testDbPath);
 
     // 添加多个 facts，确保每个都有 subject 属性
     db.addFact(
@@ -257,7 +257,7 @@ describe('TypedSynapseDB 类型安全测试', () => {
   });
 
   it('应该支持原始数据库访问', async () => {
-    const db = await TypedSynapseDB.open<PersonNode, RelationshipEdge>(testDbPath);
+    const db = await TypedNervusDB.open<PersonNode, RelationshipEdge>(testDbPath);
 
     // 通过 raw 访问原始 API
     const rawDb = db.raw;
@@ -303,7 +303,7 @@ describe('TypeSafeQueries 辅助函数测试', () => {
     expect(ageRange.range?.includeMin).toBe(true);
     expect(ageRange.range?.includeMax).toBe(false);
 
-    const db = await TypedSynapseDB.open<PersonNode, RelationshipEdge>(testDbPath);
+    const db = await TypedNervusDB.open<PersonNode, RelationshipEdge>(testDbPath);
 
     db.addFact(
       { subject: 'Alice', predicate: 'HAS_AGE', object: '30' },

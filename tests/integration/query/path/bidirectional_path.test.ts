@@ -8,18 +8,18 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
 import { cleanupWorkspace, makeWorkspace } from '../../../helpers/tempfs';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { SimpleBidirectionalPathBuilder } from '@/query/path/bidirectionalSimple';
 import { VariablePathBuilder } from '@/query/path/variable';
 
 describe('双向 BFS 路径查询', () => {
   let testDir: string;
-  let db: SynapseDB;
+  let db: NervusDB;
   let store: any;
 
   beforeEach(async () => {
     testDir = await makeWorkspace('bibfs');
-    db = await SynapseDB.open(join(testDir, 'test.synapsedb'));
+    db = await NervusDB.open(join(testDir, 'test.synapsedb'));
     store = db.getStore();
 
     // 构建测试图：A -> B -> C -> D -> E

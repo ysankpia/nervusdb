@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 
 import { readStorageFile } from '../storage/fileHeader.js';
 import { pageFileName, readPagedManifest, writePagedManifest } from '../storage/pagedIndex.js';
-import { SynapseDB } from '../synapseDb.js';
+import { NervusDB } from '../synapseDb.js';
 import { checkStrict } from '../maintenance/check.js';
 import { repairCorruptedOrders, repairCorruptedPagesFast } from '../maintenance/repair.js';
 
@@ -56,7 +56,7 @@ async function check(dbPath: string): Promise<{ ok: boolean; errors: string[] }>
 async function repair(dbPath: string): Promise<void> {
   const indexDir = `${dbPath}.pages`;
   const prev = await readPagedManifest(indexDir);
-  const db = await SynapseDB.open(dbPath, { rebuildIndexes: true });
+  const db = await NervusDB.open(dbPath, { rebuildIndexes: true });
   await db.flush();
   // 尝试保留 tombstones
   if (prev && prev.tombstones && prev.tombstones.length > 0) {

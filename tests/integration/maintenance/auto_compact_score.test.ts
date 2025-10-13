@@ -3,7 +3,7 @@ import { mkdtemp, rm, readdir, unlink, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { autoCompact } from '@/maintenance/autoCompact';
 import { readPagedManifest } from '@/storage/pagedIndex';
 
@@ -51,7 +51,7 @@ describe('Auto-Compact 多因素评分决策', () => {
   });
 
   it('在 S 与 T 同为多页时，优先对热度更高的 S 进行合并（限制 Top1）', async () => {
-    const db = await SynapseDB.open(dbPath, { pageSize: 1 });
+    const db = await NervusDB.open(dbPath, { pageSize: 1 });
     // 产生两个多页主键 S、T
     db.addFact({ subject: 'S', predicate: 'R', object: 'S1' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'S2' });
@@ -87,7 +87,7 @@ describe('Auto-Compact 多因素评分决策', () => {
       pagesByPrimaryAfter.set(p.primaryValue, (pagesByPrimaryAfter.get(p.primaryValue) ?? 0) + 1);
 
     // 数据保持一致
-    const db2 = await SynapseDB.open(dbPath);
+    const db2 = await NervusDB.open(dbPath);
     const factsS = db2.find({ subject: 'S', predicate: 'R' }).all();
     const factsT = db2.find({ subject: 'T', predicate: 'R' }).all();
     expect(factsS.length).toBe(2);

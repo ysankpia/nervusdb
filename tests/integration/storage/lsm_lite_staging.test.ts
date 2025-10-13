@@ -3,7 +3,7 @@ import { mkdtemp, rm, readdir, unlink, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 
 describe('LSM-Lite 暂存（占位）在可见性上与默认一致', () => {
   let workspace: string;
@@ -48,7 +48,7 @@ describe('LSM-Lite 暂存（占位）在可见性上与默认一致', () => {
   });
 
   it('开启 stagingMode=lsm-lite 时，新增事实的即时查询与 flush 后结果一致', async () => {
-    const db = await SynapseDB.open(dbPath, { stagingMode: 'lsm-lite' as any });
+    const db = await NervusDB.open(dbPath, { stagingMode: 'lsm-lite' as any });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O1' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O2' });
     // 即时可见

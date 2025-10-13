@@ -9,7 +9,7 @@
  */
 
 import { readFile } from 'node:fs/promises';
-import { SynapseDB } from '../synapseDb.js';
+import { NervusDB } from '../synapseDb.js';
 import { formatCypherResults } from '../query/pattern/index.js';
 
 interface Args {
@@ -118,7 +118,7 @@ async function main() {
       throw new Error('必须通过 --query 或 --file 指定 Cypher 语句');
     }
 
-    const db = await SynapseDB.open(args.dbPath, {
+    const db = await NervusDB.open(args.dbPath, {
       experimental: { cypher: true },
     });
     const text = args.query ?? (await readFile(args.file!, 'utf8'));

@@ -11,7 +11,7 @@ export function warnExperimental(feature: string): void {
   try {
     // 统一输出格式，避免被误当作错误日志。
     console.warn(
-      `[SynapseDB][EXPERIMENTAL] 功能「${feature}」仍处于实验阶段，未来版本可能发生重大调整。`,
+      `[NervusDB][EXPERIMENTAL] 功能「${feature}」仍处于实验阶段，未来版本可能发生重大调整。`,
     );
   } catch {
     // 环境禁止 stdout 时静默失败

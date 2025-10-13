@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 
 describe('WAL durable commit 测试', () => {
   let workspace: string;
@@ -21,7 +21,7 @@ describe('WAL durable commit 测试', () => {
   it('durable commit 后崩溃重启应能恢复数据', async () => {
     // 第一阶段：使用 durable commit 写入数据
     {
-      const db = await SynapseDB.open(dbPath);
+      const db = await NervusDB.open(dbPath);
 
       db.beginBatch({ txId: 'durable-test-1' });
       db.addFact({ subject: 'S1', predicate: 'R1', object: 'O1' });
@@ -34,7 +34,7 @@ describe('WAL durable commit 测试', () => {
 
     // 第二阶段：重启数据库，验证数据已恢复
     {
-      const db2 = await SynapseDB.open(dbPath);
+      const db2 = await NervusDB.open(dbPath);
 
       const facts = db2.find({ predicate: 'R1' }).all();
       expect(facts).toHaveLength(2);
@@ -48,7 +48,7 @@ describe('WAL durable commit 测试', () => {
   it('非 durable commit 与 durable commit 行为对比', async () => {
     // 第一阶段：非 durable commit
     {
-      const db = await SynapseDB.open(dbPath);
+      const db = await NervusDB.open(dbPath);
 
       db.beginBatch({ txId: 'non-durable-1' });
       db.addFact({ subject: 'NonDurable', predicate: 'R', object: 'O1' });
@@ -63,7 +63,7 @@ describe('WAL durable commit 测试', () => {
 
     // 第二阶段：验证重启后数据恢复
     {
-      const db2 = await SynapseDB.open(dbPath);
+      const db2 = await NervusDB.open(dbPath);
 
       const facts = db2.find({ predicate: 'R' }).all();
       expect(facts).toHaveLength(2);
@@ -77,7 +77,7 @@ describe('WAL durable commit 测试', () => {
   });
 
   it('嵌套批次中的 durable commit', async () => {
-    const db = await SynapseDB.open(dbPath);
+    const db = await NervusDB.open(dbPath);
 
     // 外层批次
     db.beginBatch({ txId: 'outer-batch' });
@@ -94,7 +94,7 @@ describe('WAL durable commit 测试', () => {
     await db.close();
 
     // 重启验证
-    const db2 = await SynapseDB.open(dbPath);
+    const db2 = await NervusDB.open(dbPath);
     const facts = db2.find({ predicate: 'R' }).all();
     expect(facts).toHaveLength(2);
 
@@ -106,7 +106,7 @@ describe('WAL durable commit 测试', () => {
   });
 
   it('durable commit 性能验证（确保同步完成）', async () => {
-    const db = await SynapseDB.open(dbPath);
+    const db = await NervusDB.open(dbPath);
 
     const startTime = Date.now();
 
@@ -126,7 +126,7 @@ describe('WAL durable commit 测试', () => {
     await db.close();
 
     // 验证数据完整性
-    const db2 = await SynapseDB.open(dbPath);
+    const db2 = await NervusDB.open(dbPath);
     const facts = db2.find({ predicate: 'perf' }).all();
     expect(facts).toHaveLength(100);
 

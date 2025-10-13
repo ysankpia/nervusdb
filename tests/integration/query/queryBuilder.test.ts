@@ -3,18 +3,18 @@ import { mkdtemp, rm, readdir, unlink, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 
-async function createDatabase(): Promise<{ db: SynapseDB; path: string; workspace: string }> {
+async function createDatabase(): Promise<{ db: NervusDB; path: string; workspace: string }> {
   const workspace = await mkdtemp(join(tmpdir(), 'synapsedb-query-'));
   const path = join(workspace, 'query.synapsedb');
-  const db = await SynapseDB.open(path);
+  const db = await NervusDB.open(path);
   return { db, path, workspace };
 }
 
 describe('QueryBuilder 联想查询', () => {
   let workspace: string;
-  let db: SynapseDB;
+  let db: NervusDB;
 
   beforeEach(async () => {
     const env = await createDatabase();

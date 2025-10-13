@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { PersistentStore } from '@/storage/persistentStore';
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,7 +10,7 @@ describe('属性索引性能验收测试', () => {
     const tempPath = join(tmpdir(), `property-perf-test-${Date.now()}.synapsedb`);
 
     try {
-      const db = await SynapseDB.open(tempPath, {
+      const db = await NervusDB.open(tempPath, {
         rebuildIndexes: true,
       });
 
@@ -206,7 +206,7 @@ describe('属性索引性能验收测试', () => {
     const tempPath = join(tmpdir(), `property-memory-test-${Date.now()}.synapsedb`);
 
     try {
-      const db = await SynapseDB.open(tempPath, {
+      const db = await NervusDB.open(tempPath, {
         rebuildIndexes: true,
       });
 
@@ -287,7 +287,7 @@ describe('属性索引性能验收测试', () => {
     const tempPath = join(tmpdir(), `property-concurrent-test-${Date.now()}.synapsedb`);
 
     try {
-      const db = await SynapseDB.open(tempPath, {
+      const db = await NervusDB.open(tempPath, {
         rebuildIndexes: true,
       });
 

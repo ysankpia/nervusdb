@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { createCypherSupport, type CypherSupport } from '@/query/cypher';
 import { PersistentStore } from '@/storage/persistentStore';
 import { tmpdir } from 'os';
@@ -11,14 +11,14 @@ import { join } from 'path';
 import { unlinkSync, rmSync, existsSync } from 'fs';
 
 describe('Cypher 基础功能', () => {
-  let db: SynapseDB;
+  let db: NervusDB;
   let cypher: CypherSupport;
   let dbPath: string;
 
   beforeEach(async () => {
     // 使用临时文件
     dbPath = join(tmpdir(), `test-cypher-${Date.now()}.synapsedb`);
-    db = await SynapseDB.open(dbPath, {
+    db = await NervusDB.open(dbPath, {
       experimental: { cypher: true },
     });
     cypher = createCypherSupport(db.getStore());

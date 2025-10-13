@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { makeWorkspace, cleanupWorkspace, within } from '../../helpers/tempfs';
 
 describe('LazyQueryBuilder · union/unionAll', () => {
   it('union: 去重合并两路流', async () => {
     const dir1 = await makeWorkspace('unit-lazy-union');
-    const db = await SynapseDB.open(within(dir1, 'db.synapsedb'));
+    const db = await NervusDB.open(within(dir1, 'db.synapsedb'));
     db.addFact({ subject: 'S', predicate: 'R', object: 'O1' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O2' });
     db.addFact({ subject: 'T', predicate: 'R', object: 'O2' });
@@ -29,7 +29,7 @@ describe('LazyQueryBuilder · union/unionAll', () => {
 
   it('unionAll: 简单拼接', async () => {
     const dir2 = await makeWorkspace('unit-lazy-unionall');
-    const db = await SynapseDB.open(within(dir2, 'db.synapsedb'));
+    const db = await NervusDB.open(within(dir2, 'db.synapsedb'));
     db.addFact({ subject: 'S', predicate: 'R', object: 'O1' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O2' });
     await db.flush();

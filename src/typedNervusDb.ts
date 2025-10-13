@@ -1,13 +1,13 @@
 /**
- * 类型安全的 SynapseDB 包装器实现
+ * 类型安全的 NervusDB 包装器实现
  * 在保持运行时兼容的同时，提供强类型的 TypeScript 接口
  */
 
-import { SynapseDB } from './synapseDb.js';
+import { NervusDB } from './synapseDb.js';
 import { QueryBuilder } from './query/queryBuilder.js';
 import type { FactRecord } from './storage/persistentStore.js';
 import type {
-  TypedSynapseDB,
+  TypedNervusDB,
   TypedQueryBuilder,
   TypedFactInput,
   TypedFactOptions,
@@ -17,7 +17,7 @@ import type {
   EdgeProperties,
 } from './types/enhanced.js';
 import type {
-  SynapseDBOpenOptions,
+  NervusDBOpenOptions,
   FactCriteria,
   FrontierOrientation,
   PropertyFilter,
@@ -78,14 +78,14 @@ class TypedQueryBuilderImpl<
 }
 
 /**
- * 类型安全的 SynapseDB 包装器实现
+ * 类型安全的 NervusDB 包装器实现
  */
-class TypedSynapseDBImpl<
+class TypedNervusDBImpl<
   TNodeProps extends NodeProperties = NodeProperties,
   TEdgeProps extends EdgeProperties = EdgeProperties,
-> implements TypedSynapseDB<TNodeProps, TEdgeProps>
+> implements TypedNervusDB<TNodeProps, TEdgeProps>
 {
-  constructor(private readonly db: SynapseDB) {}
+  constructor(private readonly db: NervusDB) {}
 
   addFact(
     fact: TypedFactInput,
@@ -184,51 +184,51 @@ class TypedSynapseDBImpl<
   }
 
   // 提供对原始实例的访问（用于高级操作）
-  get raw(): SynapseDB {
+  get raw(): NervusDB {
     return this.db;
   }
 }
 
 /**
- * 类型安全的 SynapseDB 工厂
+ * 类型安全的 NervusDB 工厂
  */
-export const TypedSynapseDBFactory = {
+export const TypedNervusDBFactory = {
   /**
-   * 打开类型化的 SynapseDB 实例
+   * 打开类型化的 NervusDB 实例
    *
    * @example
    * ```typescript
    * // 使用预定义类型
-   * const socialDb = await TypedSynapseDB.open<PersonNode, RelationshipEdge>('./social.db');
+   * const socialDb = await TypedNervusDB.open<PersonNode, RelationshipEdge>('./social.db');
    *
    * // 使用自定义类型
    * interface MyNode { name: string; score: number; }
    * interface MyEdge { weight: number; }
-   * const customDb = await TypedSynapseDB.open<MyNode, MyEdge>('./custom.db');
+   * const customDb = await TypedNervusDB.open<MyNode, MyEdge>('./custom.db');
    * ```
    */
   async open<
     TNodeProps extends NodeProperties = NodeProperties,
     TEdgeProps extends EdgeProperties = EdgeProperties,
-  >(path: string, options?: SynapseDBOpenOptions): Promise<TypedSynapseDB<TNodeProps, TEdgeProps>> {
-    const db = await SynapseDB.open(path, options);
-    return new TypedSynapseDBImpl<TNodeProps, TEdgeProps>(db);
+  >(path: string, options?: NervusDBOpenOptions): Promise<TypedNervusDB<TNodeProps, TEdgeProps>> {
+    const db = await NervusDB.open(path, options);
+    return new TypedNervusDBImpl<TNodeProps, TEdgeProps>(db);
   },
 
   /**
-   * 从现有的 SynapseDB 实例创建类型化包装器
+   * 从现有的 NervusDB 实例创建类型化包装器
    *
    * @example
    * ```typescript
-   * const rawDb = await SynapseDB.open('./existing.db');
-   * const typedDb = TypedSynapseDB.wrap<PersonNode, RelationshipEdge>(rawDb);
+   * const rawDb = await NervusDB.open('./existing.db');
+   * const typedDb = TypedNervusDB.wrap<PersonNode, RelationshipEdge>(rawDb);
    * ```
    */
   wrap<
     TNodeProps extends NodeProperties = NodeProperties,
     TEdgeProps extends EdgeProperties = EdgeProperties,
-  >(db: SynapseDB): TypedSynapseDB<TNodeProps, TEdgeProps> {
-    return new TypedSynapseDBImpl<TNodeProps, TEdgeProps>(db);
+  >(db: NervusDB): TypedNervusDB<TNodeProps, TEdgeProps> {
+    return new TypedNervusDBImpl<TNodeProps, TEdgeProps>(db);
   },
 };
 
@@ -270,7 +270,7 @@ export const TypeSafeQueries = {
 
 // 导出所有类型和实现
 export type {
-  TypedSynapseDB,
+  TypedNervusDB,
   TypedQueryBuilder,
   TypedFactInput,
   TypedFactOptions,
@@ -297,7 +297,7 @@ export { TypedQueryBuilderImpl };
 export type TypedDB<
   TNode extends NodeProperties = NodeProperties,
   TEdge extends EdgeProperties = EdgeProperties,
-> = TypedSynapseDB<TNode, TEdge>;
+> = TypedNervusDB<TNode, TEdge>;
 
 export type TypedQuery<
   TNode extends NodeProperties = NodeProperties,

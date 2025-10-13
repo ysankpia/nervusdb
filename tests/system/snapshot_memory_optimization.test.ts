@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
 import { cleanupWorkspace, makeWorkspace } from '../helpers/tempfs';
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 
 describe('快照内存优化测试', () => {
   const isCoverage = !!process.env.VITEST_COVERAGE;
@@ -18,7 +18,7 @@ describe('快照内存优化测试', () => {
   });
 
   it('快照查询不增加内存占用', async () => {
-    const db = await SynapseDB.open(testDbPath);
+    const db = await NervusDB.open(testDbPath);
 
     // 覆盖率模式下缩小数据规模，降低 V8 覆盖开销导致的超时/崩溃风险
     const recordCount = isCoverage ? 2000 : 10000;
@@ -122,7 +122,7 @@ describe('快照内存优化测试', () => {
   }, 60000); // 60秒超时
 
   it('大数据集流式查询内存稳定', async () => {
-    const db = await SynapseDB.open(testDbPath);
+    const db = await NervusDB.open(testDbPath);
 
     // 覆盖率模式下缩小数据规模
     const recordCount = isCoverage ? 3000 : 12000;

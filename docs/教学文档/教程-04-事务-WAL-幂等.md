@@ -9,12 +9,12 @@
 ## 前置要求
 
 - 已熟悉基础 CRUD 与 QueryBuilder
-- 本教程假设数据库路径为 `demo.synapsedb`
+- 本教程假设数据库路径为 `demo.nervusdb`
 
 ## 事务批次
 
 ```ts
-const db = await SynapseDB.open('demo.synapsedb', {
+const db = await NervusDB.open('demo.nervusdb', {
   enableLock: true,
   enablePersistentTxDedupe: true,
 });
@@ -37,7 +37,7 @@ try {
 ## 幂等与重放
 
 - WAL 重放时，若遇到相同 `txId` 的 `COMMIT`，会跳过写入（防止重复）
-- `enablePersistentTxDedupe`：在 `<db>.synapsedb.pages/txids.json` 中记录历史 `txId`
+- `enablePersistentTxDedupe`：在 `<db>.nervusdb.pages/txids.json` 中记录历史 `txId`
 - `maxRememberTxIds`：控制记忆容量（默认 1000）
 
 ## 崩溃恢复流程
@@ -51,21 +51,21 @@ try {
 可通过以下指令验证：
 
 ```bash
-synapsedb check demo.synapsedb --summary
-synapsedb txids demo.synapsedb --list=20
+nervusdb check demo.nervusdb --summary
+nervusdb txids demo.nervusdb --list=20
 ```
 
 ## 读一致性
 
 - `withSnapshot(fn)`：回调期间固定 manifest epoch，适合长链查询
 - `registerReader: true`（默认）：登记读者，自动写入 `readers.json`
-- `synapsedb auto-compact` 会在有活跃读者时跳过相关主键
+- `nervusdb auto-compact` 会在有活跃读者时跳过相关主键
 
 ## 多写者与锁
 
 - 默认允许多进程并发写；开启 `enableLock` 实现单写者
 - 读者不受写锁影响，可启用 `registerReader` 保障快照期间安全
-- 判断写锁：`synapsedb stats --summary` 输出 `lock: true/false`
+- 判断写锁：`nervusdb stats --summary` 输出 `lock: true/false`
 
 ## WAL 文件结构
 
@@ -80,18 +80,18 @@ synapsedb txids demo.synapsedb --list=20
 
 ## 常见问题
 
-| 情况               | 分析                      | 解决                                                  |
-| ------------------ | ------------------------- | ----------------------------------------------------- |
-| `commitBatch` 抛错 | 批次尚未开始、重复 commit | 确认 `beginBatch` 调用顺序；异常时及时 `abortBatch`   |
-| WAL 持续变大       | 未 flush 或治理           | 定期 `db.flush()`、`synapsedb auto-compact`           |
-| 重放时间长         | WAL 涉及大量历史事务      | 执行 `synapsedb auto-compact --mode=rewrite` 减少 WAL |
-| 幂等失效           | 未设置 `txId`             | 关键事务必须提供稳定 `txId`                           |
+| 情况               | 分析                      | 解决                                                 |
+| ------------------ | ------------------------- | ---------------------------------------------------- |
+| `commitBatch` 抛错 | 批次尚未开始、重复 commit | 确认 `beginBatch` 调用顺序；异常时及时 `abortBatch`  |
+| WAL 持续变大       | 未 flush 或治理           | 定期 `db.flush()`、`nervusdb auto-compact`           |
+| 重放时间长         | WAL 涉及大量历史事务      | 执行 `nervusdb auto-compact --mode=rewrite` 减少 WAL |
+| 幂等失效           | 未设置 `txId`             | 关键事务必须提供稳定 `txId`                          |
 
 ## 验证练习
 
 1. 模拟在批次中抛错并验证 `abortBatch` 行为
-2. 手动修改 WAL（如新增无效 entry），使用 `synapsedb check --strict` 观察诊断结果
-3. 使用 `synapsedb txids --clear` 清空注册表，再次重复提交验证幂等失效
+2. 手动修改 WAL（如新增无效 entry），使用 `nervusdb check --strict` 观察诊断结果
+3. 使用 `nervusdb txids --clear` 清空注册表，再次重复提交验证幂等失效
 
 ## 延伸阅读
 

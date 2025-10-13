@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promises as fs } from 'node:fs';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { readPagedManifest, pageFileName } from '@/storage/pagedIndex';
 import { compactDatabase } from '@/maintenance/compaction';
 import { garbageCollectPages } from '@/maintenance/gc';
@@ -53,7 +53,7 @@ describe('页面级 GC（移除不可达页块）', () => {
   });
 
   it('在增量重写后通过 GC 收缩页文件体积', async () => {
-    const db = await SynapseDB.open(dbPath, { pageSize: 2 });
+    const db = await NervusDB.open(dbPath, { pageSize: 2 });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O1' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O2' });
     await db.flush();
@@ -73,7 +73,7 @@ describe('页面级 GC（移除不可达页块）', () => {
     expect(stats.bytesAfter).toBeGreaterThan(0);
 
     // 数据不变
-    const db2 = await SynapseDB.open(dbPath);
+    const db2 = await NervusDB.open(dbPath);
     const facts = db2.find({ subject: 'S', predicate: 'R' }).all();
     expect(facts.length).toBe(3);
   });

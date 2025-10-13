@@ -1,13 +1,13 @@
 /**
- * SynapseDB 全文搜索集成
+ * NervusDB 全文搜索集成
  *
- * 提供便捷的方法将全文搜索功能集成到 SynapseDB 实例中
+ * 提供便捷的方法将全文搜索功能集成到 NervusDB 实例中
  */
 
-import { SynapseDB } from '../synapseDb.js';
+import { NervusDB } from '../synapseDb.js';
 import {
-  SynapseDBFullTextExtension,
-  SynapseDBFullTextExtensionFactory,
+  NervusDBFullTextExtension,
+  NervusDBFullTextExtensionFactory,
   FullTextExtensionConfig,
   FullTextSearchResultWithFacts,
 } from './synapsedbExtension.js';
@@ -15,12 +15,12 @@ import {
 import type { SearchOptions, SearchResult } from './types.js';
 
 /**
- * 扩展 SynapseDB 类的接口，添加全文搜索方法
+ * 扩展 NervusDB 类的接口，添加全文搜索方法
  */
 declare module '../synapseDb.js' {
-  interface SynapseDB {
+  interface NervusDB {
     /** 全文搜索扩展实例 */
-    fullText?: SynapseDBFullTextExtension;
+    fullText?: NervusDBFullTextExtension;
     /** 内部：确保已启用全文搜索 */
     ensureFullTextEnabled(): void;
 
@@ -65,19 +65,19 @@ declare module '../synapseDb.js' {
 }
 
 /**
- * 为 SynapseDB 添加全文搜索方法
+ * 为 NervusDB 添加全文搜索方法
  */
-SynapseDB.prototype.enableFullTextSearch = async function (
-  this: SynapseDB,
+NervusDB.prototype.enableFullTextSearch = async function (
+  this: NervusDB,
   config?: FullTextExtensionConfig,
 ): Promise<void> {
   if (this.fullText) {
-    console.warn('Full-text search is already enabled for this SynapseDB instance');
+    console.warn('Full-text search is already enabled for this NervusDB instance');
     return;
   }
 
   try {
-    this.fullText = await SynapseDBFullTextExtensionFactory.create(this, config);
+    this.fullText = await NervusDBFullTextExtensionFactory.create(this, config);
     console.log('Full-text search enabled successfully');
   } catch (error) {
     console.error('Failed to enable full-text search:', error);
@@ -85,35 +85,35 @@ SynapseDB.prototype.enableFullTextSearch = async function (
   }
 };
 
-SynapseDB.prototype.searchFacts = async function (
-  this: SynapseDB,
+NervusDB.prototype.searchFacts = async function (
+  this: NervusDB,
   query: string,
   options?: SearchOptions,
 ): Promise<FullTextSearchResultWithFacts[]> {
-  (this as SynapseDB & { ensureFullTextEnabled: () => void }).ensureFullTextEnabled();
+  (this as NervusDB & { ensureFullTextEnabled: () => void }).ensureFullTextEnabled();
   return await this.fullText!.searchFacts(query, options);
 };
 
-SynapseDB.prototype.searchNodes = async function (
-  this: SynapseDB,
+NervusDB.prototype.searchNodes = async function (
+  this: NervusDB,
   query: string,
   options?: SearchOptions,
 ): Promise<SearchResult[]> {
-  (this as SynapseDB & { ensureFullTextEnabled: () => void }).ensureFullTextEnabled();
+  (this as NervusDB & { ensureFullTextEnabled: () => void }).ensureFullTextEnabled();
   return await this.fullText!.searchNodes(query, options);
 };
 
-SynapseDB.prototype.searchEdges = async function (
-  this: SynapseDB,
+NervusDB.prototype.searchEdges = async function (
+  this: NervusDB,
   query: string,
   options?: SearchOptions,
 ): Promise<SearchResult[]> {
-  (this as SynapseDB & { ensureFullTextEnabled: () => void }).ensureFullTextEnabled();
+  (this as NervusDB & { ensureFullTextEnabled: () => void }).ensureFullTextEnabled();
   return await this.fullText!.searchEdges(query, options);
 };
 
-SynapseDB.prototype.globalSearch = async function (
-  this: SynapseDB,
+NervusDB.prototype.globalSearch = async function (
+  this: NervusDB,
   query: string,
   options?: SearchOptions,
 ): Promise<{
@@ -121,12 +121,12 @@ SynapseDB.prototype.globalSearch = async function (
   nodes: SearchResult[];
   edges: SearchResult[];
 }> {
-  (this as SynapseDB & { ensureFullTextEnabled: () => void }).ensureFullTextEnabled();
+  (this as NervusDB & { ensureFullTextEnabled: () => void }).ensureFullTextEnabled();
   return await this.fullText!.globalSearch(query, options);
 };
 
-SynapseDB.prototype.getSearchSuggestions = async function (
-  this: SynapseDB,
+NervusDB.prototype.getSearchSuggestions = async function (
+  this: NervusDB,
   prefix: string,
   count: number = 10,
 ): Promise<{
@@ -134,14 +134,14 @@ SynapseDB.prototype.getSearchSuggestions = async function (
   nodes: string[];
   edges: string[];
 }> {
-  (this as SynapseDB & { ensureFullTextEnabled: () => void }).ensureFullTextEnabled();
+  (this as NervusDB & { ensureFullTextEnabled: () => void }).ensureFullTextEnabled();
   return await this.fullText!.getSuggestions(prefix, count);
 };
 
-SynapseDB.prototype.getFullTextStats = async function (
-  this: SynapseDB,
+NervusDB.prototype.getFullTextStats = async function (
+  this: NervusDB,
 ): Promise<{ indexes: unknown; performance: unknown }> {
-  (this as SynapseDB & { ensureFullTextEnabled: () => void }).ensureFullTextEnabled();
+  (this as NervusDB & { ensureFullTextEnabled: () => void }).ensureFullTextEnabled();
   const [indexStats, performanceReport] = await Promise.all([
     this.fullText!.getIndexStats(),
     Promise.resolve(this.fullText!.getPerformanceReport()),
@@ -153,8 +153,8 @@ SynapseDB.prototype.getFullTextStats = async function (
   };
 };
 
-SynapseDB.prototype.rebuildFullTextIndexes = async function (this: SynapseDB): Promise<void> {
-  (this as SynapseDB & { ensureFullTextEnabled: () => void }).ensureFullTextEnabled();
+NervusDB.prototype.rebuildFullTextIndexes = async function (this: NervusDB): Promise<void> {
+  (this as NervusDB & { ensureFullTextEnabled: () => void }).ensureFullTextEnabled();
   await this.fullText!.rebuildIndexes();
 };
 
@@ -162,10 +162,10 @@ SynapseDB.prototype.rebuildFullTextIndexes = async function (this: SynapseDB): P
  * 添加私有辅助方法检查全文搜索是否启用
  */
 (
-  SynapseDB.prototype as unknown as {
-    ensureFullTextEnabled: (this: SynapseDB) => void;
+  NervusDB.prototype as unknown as {
+    ensureFullTextEnabled: (this: NervusDB) => void;
   }
-).ensureFullTextEnabled = function (this: SynapseDB): void {
+).ensureFullTextEnabled = function (this: NervusDB): void {
   if (!this.fullText) {
     throw new Error('Full-text search is not enabled. Call enableFullTextSearch() first.');
   }
@@ -176,10 +176,10 @@ SynapseDB.prototype.rebuildFullTextIndexes = async function (this: SynapseDB): P
  */
 export class FullTextSearchUtils {
   /**
-   * 为多个 SynapseDB 实例批量启用全文搜索
+   * 为多个 NervusDB 实例批量启用全文搜索
    */
   static async enableForMultiple(
-    databases: SynapseDB[],
+    databases: NervusDB[],
     config?: FullTextExtensionConfig,
   ): Promise<void> {
     const promises = databases.map((db) => db.enableFullTextSearch(config));
@@ -190,12 +190,12 @@ export class FullTextSearchUtils {
    * 跨多个数据库搜索
    */
   static async searchAcrossDatabases(
-    databases: SynapseDB[],
+    databases: NervusDB[],
     query: string,
     options?: SearchOptions,
   ): Promise<
     Array<{
-      database: SynapseDB;
+      database: NervusDB;
       results: {
         facts: FullTextSearchResultWithFacts[];
         nodes: SearchResult[];
@@ -338,4 +338,4 @@ export class FullTextSearchUtils {
 /**
  * 导出集成相关的功能
  */
-export { SynapseDBFullTextExtension, SynapseDBFullTextExtensionFactory };
+export { NervusDBFullTextExtension, NervusDBFullTextExtensionFactory };

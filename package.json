@@ -1,7 +1,7 @@
 {
-  "name": "synapsedb",
+  "name": "nervusdb",
   "version": "1.1.0",
-  "description": "SynapseDB v1.1 - 高性能类人脑图知识库，支持流式查询、类型安全、属性索引与变长路径",
+  "description": "NervusDB v1.1 - 高性能神经知识图谱数据库，支持流式查询、类型安全、属性索引与变长路径",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -55,12 +55,15 @@
     "db:repair-page": "tsx src/cli/repair_page.ts"
   },
   "bin": {
-    "synapsedb": "dist/cli/synapsedb.js"
+    "nervusdb": "dist/cli/nervusdb.js"
   },
   "keywords": [
-    "synapsedb",
-    "database",
-    "prototype"
+    "nervusdb",
+    "knowledge-graph",
+    "graph-database",
+    "neural-database",
+    "typescript",
+    "embedded-database"
   ],
   "author": "",
   "license": "ISC",

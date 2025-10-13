@@ -22,7 +22,7 @@
   - ✅ 属性索引下推优化 (`src/storage/propertyIndex.ts`)
 
 - **Phase B 已全面完成**：图数据库核心功能全部实现
-  - ✅ 节点标签系统 (`src/graph/labels.ts`、`SynapseDB.findByLabel`)
+  - ✅ 节点标签系统 (`src/graph/labels.ts`、`NervusDB.findByLabel`)
   - ✅ 变长路径查询 (`src/query/path/variable.ts`、最短路径算法)
   - ✅ Dijkstra/双向 BFS 优化完成，使用 MinHeap 数据结构
   - ✅ 聚合函数框架 (`src/query/aggregation.ts`，支持流式聚合)
@@ -394,7 +394,7 @@ class BenchmarkRunner {
 
 ```typescript
 // 泛型化核心类
-export class SynapseDB<
+export class NervusDB<
   TNodeProps extends Record<string, any> = any,
   TEdgeProps extends Record<string, any> = any,
 > {
@@ -417,7 +417,7 @@ interface PersonNode {
   email?: string;
 }
 
-const db = await SynapseDB.open<PersonNode>('./db.synapsedb');
+const db = await NervusDB.open<PersonNode>('./db.nervusdb');
 const result = db
   .find({ predicate: 'KNOWS' })
   .where((r) => r.subjectProperties?.age > 25)

@@ -4,7 +4,7 @@ import * as fssync from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 
 // 该用例验证：当 WAL 尾部存在不完整记录时，重放应仅应用完整批次，并将文件安全截断到 safeOffset
 describe('WAL 尾部安全截断', () => {
@@ -51,7 +51,7 @@ describe('WAL 尾部安全截断', () => {
   });
 
   it('遇到不完整记录时仅保留 safeOffset，并在 open 时截断', async () => {
-    const db1 = await SynapseDB.open(dbPath);
+    const db1 = await NervusDB.open(dbPath);
     // 写入一个完成的批次记录
     db1.beginBatch();
     db1.addFact({ subject: 'S', predicate: 'R', object: 'O' });
@@ -74,7 +74,7 @@ describe('WAL 尾部安全截断', () => {
     expect(sizeCorrupted).toBeGreaterThan(sizeBefore);
 
     // 重开数据库：应只恢复此前完整批次，且自动截断到 safeOffset（即 sizeBefore）
-    const db2 = await SynapseDB.open(dbPath);
+    const db2 = await NervusDB.open(dbPath);
     const results = db2.find({ subject: 'S', predicate: 'R' }).all();
     expect(results).toHaveLength(1);
 

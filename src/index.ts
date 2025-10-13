@@ -2,15 +2,15 @@
 // 核心导出
 // =======================
 
-export { SynapseDB } from './synapseDb.js';
+export { NervusDB } from './synapseDb.js';
 export type { FactRecord, FactInput } from './synapseDb.js';
 
 // 向后兼容别名（保留旧 API）
-export { SynapseDB as CoreSynapseDB } from './synapseDb.js';
-export { SynapseDB as ExtendedSynapseDB } from './synapseDb.js';
+export { NervusDB as CoreNervusDB } from './synapseDb.js';
+export { NervusDB as ExtendedNervusDB } from './synapseDb.js';
 
 // 插件接口与管理器
-export type { SynapseDBPlugin } from './plugins/base.js';
+export type { NervusDBPlugin } from './plugins/base.js';
 export { PluginManager } from './plugins/base.js';
 
 // 内置插件
@@ -35,19 +35,19 @@ export { AggregationPipeline } from './query/aggregation.js';
 // =======================
 
 export type {
-  SynapseDBOpenOptions,
+  NervusDBOpenOptions,
   CommitBatchOptions,
   BeginBatchOptions,
 } from './types/openOptions.js';
 
 // 新增：类型增强版本
 export {
-  TypedSynapseDBFactory as TypedSynapseDB,
+  TypedNervusDBFactory as TypedNervusDB,
   TypeSafeQueries,
   TypedQueryBuilderImpl,
-} from './typedSynapseDb.js';
+} from './typedNervusDb.js';
 export type {
-  TypedSynapseDB as TypedDB,
+  TypedNervusDB as TypedDB,
   TypedQueryBuilder,
   TypedFactInput,
   TypedFactOptions,

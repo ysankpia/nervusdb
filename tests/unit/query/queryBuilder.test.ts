@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { QueryBuilder } from '@/query/queryBuilder';
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { unlink } from 'node:fs/promises';
@@ -8,7 +8,7 @@ import { existsSync } from 'node:fs';
 
 describe('查询构建器单元测试', () => {
   let testDbPath: string;
-  let db: SynapseDB;
+  let db: NervusDB;
   let queryBuilder: QueryBuilder;
 
   beforeEach(async () => {
@@ -18,7 +18,7 @@ describe('查询构建器单元测试', () => {
       `test-query-builder-${Date.now()}-${Math.random().toString(36).slice(2)}.synapsedb`,
     );
 
-    db = await SynapseDB.open(testDbPath);
+    db = await NervusDB.open(testDbPath);
 
     // 添加测试数据
     db.addFact({ subject: 'Alice', predicate: 'knows', object: 'Bob' });

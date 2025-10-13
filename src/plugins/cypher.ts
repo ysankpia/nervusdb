@@ -1,5 +1,5 @@
-import { SynapseDBPlugin } from './base.js';
-import type { SynapseDB } from '../synapseDb.js';
+import { NervusDBPlugin } from './base.js';
+import type { NervusDB } from '../synapseDb.js';
 import { PersistentStore } from '../storage/persistentStore.js';
 import { warnExperimental } from '../utils/experimental.js';
 import {
@@ -19,15 +19,15 @@ import { VariablePathBuilder } from '../query/path/variable.js';
  * - 语法验证
  * - 查询优化
  */
-export class CypherPlugin implements SynapseDBPlugin {
+export class CypherPlugin implements NervusDBPlugin {
   readonly name = 'cypher';
   readonly version = '1.0.0';
 
-  private db!: SynapseDB;
+  private db!: NervusDB;
   private store!: PersistentStore;
   private cypherSupport?: CypherSupport;
 
-  initialize(db: SynapseDB, store: PersistentStore): void {
+  initialize(db: NervusDB, store: PersistentStore): void {
     this.db = db;
     this.store = store;
     warnExperimental('Cypher 查询语言前端');

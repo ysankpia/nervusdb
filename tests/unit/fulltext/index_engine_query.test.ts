@@ -71,7 +71,7 @@ describe('全文 · 索引/语料/评分/查询/引擎', () => {
       id: 'doc1',
       fields: new Map([
         ['title', 'Hello'],
-        ['content', 'Hello SynapseDB'],
+        ['content', 'Hello NervusDB'],
       ]),
       tokens: [],
       timestamp: new Date(),

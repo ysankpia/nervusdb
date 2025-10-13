@@ -21,7 +21,7 @@ export class BenchmarkReporterImpl implements BenchmarkReporter {
     // 报告头部
     lines.push('');
     lines.push('═'.repeat(80));
-    lines.push('🏆 SynapseDB 性能基准测试报告');
+    lines.push('🏆 NervusDB 性能基准测试报告');
     lines.push('═'.repeat(80));
     lines.push(`测试时间: ${timestamp.toLocaleString()}`);
     lines.push('');
@@ -146,7 +146,7 @@ export class BenchmarkReporterImpl implements BenchmarkReporter {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SynapseDB 性能基准测试报告</title>
+    <title>NervusDB 性能基准测试报告</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 20px; background: #f5f7fa; }
         .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
@@ -177,7 +177,7 @@ export class BenchmarkReporterImpl implements BenchmarkReporter {
 <body>
     <div class="container">
         <div class="header">
-            <h1>🏆 SynapseDB 性能基准测试报告</h1>
+            <h1>🏆 NervusDB 性能基准测试报告</h1>
             <div class="timestamp">测试时间: ${timestamp.toLocaleString()}</div>
         </div>
 
@@ -418,7 +418,7 @@ export class BenchmarkReporterImpl implements BenchmarkReporter {
       let suiteName = 'Unknown';
 
       if (result.name.includes('三元组') || result.name.includes('链式')) {
-        suiteName = 'SynapseDB Core';
+        suiteName = 'NervusDB Core';
       } else if (result.name.includes('文档') || result.name.includes('搜索')) {
         suiteName = 'Full-Text Search';
       } else if (

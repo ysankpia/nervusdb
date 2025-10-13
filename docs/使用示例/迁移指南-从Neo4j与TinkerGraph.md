@@ -2,12 +2,12 @@
 
 ## 目标
 
-- 将现有 Neo4j / TinkerGraph 图数据迁移到 SynapseDB
+- 将现有 Neo4j / TinkerGraph 图数据迁移到 NervusDB
 - 映射标签、属性、关系到三元组与特性
 
 ## 概念映射
 
-| Neo4j/TinkerGraph       | SynapseDB                                |
+| Neo4j/TinkerGraph       | NervusDB                                 |
 | ----------------------- | ---------------------------------------- |
 | Node (label)            | `subject`/`object` + `labels` 属性       |
 | Relationship (type)     | `predicate`                              |
@@ -43,10 +43,10 @@ g.E().project('out','label','in','props','outProps','inProps')
 ## 导入脚本示例
 
 ```ts
-import { SynapseDB } from 'synapsedb';
+import { NervusDB } from 'nervusdb';
 import edges from './neo4j-export.json' assert { type: 'json' };
 
-const db = await SynapseDB.open('neo4j-migrated.synapsedb', {
+const db = await NervusDB.open('neo4j-migrated.nervusdb', {
   enableLock: true,
   enablePersistentTxDedupe: true,
 });
@@ -71,8 +71,8 @@ await db.close();
 
 ## 验证
 
-- `synapsedb stats` 查看迁移后的三元组数量
-- `synapsedb dump` 检查属性是否正确
+- `nervusdb stats` 查看迁移后的三元组数量
+- `nervusdb dump` 检查属性是否正确
 - 执行关键查询与 Neo4j/TinkerGraph 结果对比
 
 ## 常见问题

@@ -2,7 +2,7 @@
  * 高级路径查找算法实现
  *
  * 提供基于图算法库的路径查找功能，包括Dijkstra、Floyd-Warshall、Bellman-Ford算法
- * 以及针对SynapseDB优化的路径搜索实现
+ * 以及针对NervusDB优化的路径搜索实现
  */
 
 import type {

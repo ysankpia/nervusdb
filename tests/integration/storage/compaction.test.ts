@@ -3,7 +3,7 @@ import { mkdtemp, rm, readdir, unlink, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { readPagedManifest } from '@/storage/pagedIndex';
 
 describe('Compaction MVP', () => {
@@ -50,7 +50,7 @@ describe('Compaction MVP', () => {
   });
 
   it('合并同主键的小页，压缩页数', async () => {
-    const db = await SynapseDB.open(dbPath, { pageSize: 4 });
+    const db = await NervusDB.open(dbPath, { pageSize: 4 });
     // 初次写入 3 条（同 subject），首次构建将写入 1 页
     db.addFact({ subject: 'S', predicate: 'R', object: 'O1' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O2' });

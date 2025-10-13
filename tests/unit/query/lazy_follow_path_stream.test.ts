@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { makeWorkspace, cleanupWorkspace, within } from '../../helpers/tempfs';
 
 describe('LazyQueryBuilder · followPath 真流式', () => {
   it('与 EAGER followPath 结果一致（小图）', async () => {
     const dir = await makeWorkspace('unit-lazy-followpath');
-    const db = await SynapseDB.open(within(dir, 'db.synapsedb'));
+    const db = await NervusDB.open(within(dir, 'db.synapsedb'));
     // 形成一个简单的层级：A->B1,B2 ; B1->C1 ; B2->C2
     db.addFact({ subject: 'A', predicate: 'R', object: 'B1' });
     db.addFact({ subject: 'A', predicate: 'R', object: 'B2' });

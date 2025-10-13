@@ -3,7 +3,7 @@ import { mkdtemp, rm, access, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { readPagedManifest, writePagedManifest } from '@/storage/pagedIndex';
 
 describe('Manifest 原子更新测试', () => {
@@ -21,7 +21,7 @@ describe('Manifest 原子更新测试', () => {
   });
 
   it('manifest 写入期间不存在临时文件泄露', async () => {
-    const db = await SynapseDB.open(dbPath);
+    const db = await NervusDB.open(dbPath);
 
     // 添加数据触发 manifest 更新
     for (let i = 0; i < 10; i++) {
@@ -44,7 +44,7 @@ describe('Manifest 原子更新测试', () => {
   });
 
   it('manifest 更新后的 epoch 递增验证', async () => {
-    const db = await SynapseDB.open(dbPath);
+    const db = await NervusDB.open(dbPath);
 
     // 第一次更新
     db.addFact({ subject: 'S1', predicate: 'R', object: 'O1' });
@@ -67,7 +67,7 @@ describe('Manifest 原子更新测试', () => {
   });
 
   it('manifest 内容一致性验证', async () => {
-    const db = await SynapseDB.open(dbPath);
+    const db = await NervusDB.open(dbPath);
 
     // 添加足够数据触发多页
     for (let i = 0; i < 50; i++) {
@@ -94,7 +94,7 @@ describe('Manifest 原子更新测试', () => {
   }, 15000);
 
   it('并发读写 manifest 安全性', async () => {
-    const db = await SynapseDB.open(dbPath);
+    const db = await NervusDB.open(dbPath);
 
     // 添加初始数据
     for (let i = 0; i < 10; i++) {
@@ -145,7 +145,7 @@ describe('Manifest 原子更新测试', () => {
   });
 
   it('manifest 文件格式验证', async () => {
-    const db = await SynapseDB.open(dbPath);
+    const db = await NervusDB.open(dbPath);
 
     db.addFact({ subject: 'FormatTest', predicate: 'type', object: 'Test' });
     await db.flush();
@@ -171,7 +171,7 @@ describe('Manifest 原子更新测试', () => {
   it(
     '大量数据下的 manifest 更新性能',
     async () => {
-      const db = await SynapseDB.open(dbPath, { pageSize: 100 }); // 小页面增加页数
+      const db = await NervusDB.open(dbPath, { pageSize: 100 }); // 小页面增加页数
 
       const startTime = Date.now();
 
@@ -210,7 +210,7 @@ describe('Manifest 原子更新测试', () => {
   );
 
   it('空数据库的 manifest 状态', async () => {
-    const db = await SynapseDB.open(dbPath);
+    const db = await NervusDB.open(dbPath);
     await db.flush(); // 强制创建 manifest
     await db.close();
 

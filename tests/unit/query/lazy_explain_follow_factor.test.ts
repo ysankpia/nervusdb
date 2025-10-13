@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { makeWorkspace, cleanupWorkspace, within } from '../../helpers/tempfs';
 
 describe('Lazy.explain · FOLLOW 基数传播（粗略）', () => {
   it('explain() stages 含 FOLLOW，并使 estimatedOutput 不小于初始 upperBound（如有）', async () => {
     const dir = await makeWorkspace('unit-lazy-explain-follow');
-    const db = await SynapseDB.open(within(dir, 'db.synapsedb'));
+    const db = await NervusDB.open(within(dir, 'db.synapsedb'));
     // 构造若干从 S1 出发的边，提高平均度
     for (let i = 0; i < 8; i++) db.addFact({ subject: 'S1', predicate: 'R', object: `O${i}` });
     // 再加一些与其他主体有关的边，避免过小样本

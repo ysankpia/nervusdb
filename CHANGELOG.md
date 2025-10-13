@@ -4,18 +4,18 @@
 
 ### 🔨 重构
 
-#### 统一三层架构为单一 SynapseDB 类
+#### 统一三层架构为单一 NervusDB 类
 
-**背景**：之前的三层架构（`CoreSynapseDB` → `ExtendedSynapseDB` → `SynapseDB`）造成过度抽象，95% 的代码只使用 `SynapseDB`，插件（PathfindingPlugin、AggregationPlugin）总是被加载而非可选。
+**背景**：之前的三层架构（`CoreNervusDB` → `ExtendedNervusDB` → `NervusDB`）造成过度抽象，95% 的代码只使用 `NervusDB`，插件（PathfindingPlugin、AggregationPlugin）总是被加载而非可选。
 
 **变更内容**：
-- 合并 `CoreSynapseDB`、`ExtendedSynapseDB` 和 `SynapseDB` 为统一的 `SynapseDB` 类
+- 合并 `CoreNervusDB`、`ExtendedNervusDB` 和 `NervusDB` 为统一的 `NervusDB` 类
 - 插件系统保留但简化：默认加载 `PathfindingPlugin`、`AggregationPlugin`(可选 `CypherPlugin`)
 - 删除 `src/coreSynapseDb.ts`
-- `src/plugins/base.ts` 仅保留 `PluginManager`,移除 `ExtendedSynapseDB` 类
+- `src/plugins/base.ts` 仅保留 `PluginManager`,移除 `ExtendedNervusDB` 类
 
 **向后兼容**：
-- 导出别名：`export { SynapseDB as CoreSynapseDB, SynapseDB as ExtendedSynapseDB }`
+- 导出别名：`export { NervusDB as CoreNervusDB, NervusDB as ExtendedNervusDB }`
 - 所有现有 API 保持不变
 
 **收益**：
@@ -98,7 +98,7 @@ node benchmarks/path_agg.mjs                     # 路径与聚合
 #### 工程化质量提升
 
 - **✅ TypeScript 类型系统增强**：
-  - 完整的泛型化 API 设计 (`TypedSynapseDB<TNode, TEdge>`)
+  - 完整的泛型化 API 设计 (`TypedNervusDB<TNode, TEdge>`)
   - 编译时类型安全与运行时兼容性并存
   - 预定义类型：`PersonNode`、`RelationshipEdge`、`EntityNode`、`KnowledgeEdge`
   - 类型安全的查询构建器与属性访问
@@ -131,7 +131,7 @@ node benchmarks/path_agg.mjs                     # 路径与聚合
 
 ```typescript
 // TypeScript 类型安全 API
-const db = await TypedSynapseDB.open<PersonNode, RelationshipEdge>('./db.synapsedb');
+const db = await TypedNervusDB.open<PersonNode, RelationshipEdge>('./db.synapsedb');
 
 // 标签查询
 db.findByLabel('Person', { mode: 'AND' });

@@ -1,4 +1,4 @@
-import { PluginManager, type SynapseDBPlugin } from './plugins/base.js';
+import { PluginManager, type NervusDBPlugin } from './plugins/base.js';
 import { PathfindingPlugin } from './plugins/pathfinding.js';
 import { CypherPlugin } from './plugins/cypher.js';
 import { AggregationPlugin } from './plugins/aggregation.js';
@@ -18,7 +18,7 @@ import {
   LazyQueryBuilder,
 } from './query/queryBuilder.js';
 import type {
-  SynapseDBOpenOptions,
+  NervusDBOpenOptions,
   CommitBatchOptions,
   BeginBatchOptions,
 } from './types/openOptions.js';
@@ -36,7 +36,7 @@ export interface FactOptions {
 export type { FactInput, FactRecord };
 
 /**
- * SynapseDB - 嵌入式三元组知识库
+ * NervusDB - 嵌入式三元组知识库
  *
  * 统一的知识库实现，包含：
  * - 核心存储与查询功能
@@ -47,7 +47,7 @@ export type { FactInput, FactRecord };
  *
  * @example
  * ```typescript
- * const db = await SynapseDB.open('/path/to/database.synapsedb', {
+ * const db = await NervusDB.open('/path/to/database.synapsedb', {
  *   pageSize: 2000,
  *   enableLock: true,
  *   compression: { codec: 'brotli', level: 6 }
@@ -60,14 +60,14 @@ export type { FactInput, FactRecord };
  * await db.close();
  * ```
  */
-export class SynapseDB {
+export class NervusDB {
   private snapshotDepth = 0;
   private pluginManager: PluginManager;
   private hasCypherPlugin: boolean;
 
   private constructor(
     private readonly store: PersistentStore,
-    plugins: SynapseDBPlugin[],
+    plugins: NervusDBPlugin[],
     hasCypher: boolean,
   ) {
     this.hasCypherPlugin = hasCypher;
@@ -80,15 +80,15 @@ export class SynapseDB {
   }
 
   /**
-   * 打开或创建 SynapseDB 数据库
+   * 打开或创建 NervusDB 数据库
    */
-  static async open(path: string, options?: SynapseDBOpenOptions): Promise<SynapseDB> {
+  static async open(path: string, options?: NervusDBOpenOptions): Promise<NervusDB> {
     const experimental = options?.experimental ?? {};
     const envEnableExperimental = process.env.SYNAPSEDB_ENABLE_EXPERIMENTAL_QUERIES === '1';
     const enableCypher = experimental.cypher ?? envEnableExperimental;
 
     // 默认插件：Pathfinding + Aggregation
-    const plugins: SynapseDBPlugin[] = [new PathfindingPlugin(), new AggregationPlugin()];
+    const plugins: NervusDBPlugin[] = [new PathfindingPlugin(), new AggregationPlugin()];
 
     // 可选实验性插件：Cypher
     if (enableCypher) {
@@ -100,7 +100,7 @@ export class SynapseDB {
     const store = await PersistentStore.open(path, options ?? {});
 
     // 创建数据库实例
-    const db = new SynapseDB(store, plugins, enableCypher);
+    const db = new NervusDB(store, plugins, enableCypher);
 
     // 初始化插件
     await db.pluginManager.initialize();
@@ -441,7 +441,7 @@ export class SynapseDB {
   /**
    * 快照隔离：在快照上下文中执行操作
    */
-  async snapshot<T>(fn: (db: SynapseDB) => Promise<T>): Promise<T> {
+  async snapshot<T>(fn: (db: NervusDB) => Promise<T>): Promise<T> {
     this.snapshotDepth++;
     const pinned = this.store.getCurrentEpoch();
     await this.store.pushPinnedEpoch(pinned);
@@ -456,7 +456,7 @@ export class SynapseDB {
   /**
    * 向后兼容别名
    */
-  async withSnapshot<T>(fn: (db: SynapseDB) => Promise<T>): Promise<T> {
+  async withSnapshot<T>(fn: (db: NervusDB) => Promise<T>): Promise<T> {
     return this.snapshot(fn);
   }
 
@@ -486,7 +486,7 @@ export class SynapseDB {
   /**
    * 获取插件
    */
-  plugin<T extends SynapseDBPlugin>(name: string): T | undefined {
+  plugin<T extends NervusDBPlugin>(name: string): T | undefined {
     return this.pluginManager.get<T>(name);
   }
 
@@ -651,10 +651,10 @@ export class SynapseDB {
 
 // 向后兼容：导出类型
 export type {
-  SynapseDBOpenOptions,
+  NervusDBOpenOptions,
   CommitBatchOptions,
   BeginBatchOptions,
-  SynapseDBPlugin,
+  NervusDBPlugin,
   FactCriteria,
   FrontierOrientation,
   PropertyFilter,

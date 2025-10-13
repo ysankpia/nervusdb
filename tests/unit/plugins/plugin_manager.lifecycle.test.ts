@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { makeWorkspace, cleanupWorkspace, within } from '../../helpers/tempfs';
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 
 describe('PluginManager 生命周期', () => {
   let ws: string;
@@ -13,7 +13,7 @@ describe('PluginManager 生命周期', () => {
 
   it('应按顺序初始化并在 close 时清理', async () => {
     const dbPath = within(ws, 'db.synapsedb');
-    const db = await SynapseDB.open(dbPath, { pageSize: 256 });
+    const db = await NervusDB.open(dbPath, { pageSize: 256 });
 
     // 默认插件应该自动加载：pathfinding, aggregation
     expect(db.hasPlugin('pathfinding')).toBe(true);

@@ -3,17 +3,17 @@ import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 
 describe('调试 whereProperty 问题', () => {
   let tempDir: string;
-  let db: SynapseDB;
+  let db: NervusDB;
   let dbPath: string;
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'synapse-debug-'));
     dbPath = join(tempDir, 'test.synapsedb');
-    db = await SynapseDB.open(dbPath);
+    db = await NervusDB.open(dbPath);
   });
 
   afterEach(async () => {

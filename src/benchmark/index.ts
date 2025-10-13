@@ -1,5 +1,5 @@
 /**
- * SynapseDB 性能基准测试框架入口
+ * NervusDB 性能基准测试框架入口
  *
  * 提供统一的基准测试接口和工具，支持多种测试场景和报告格式
  *
@@ -151,7 +151,7 @@ export class BenchmarkManager {
   }> {
     const { suites = allBenchmarkSuites, outputFormats = ['console'], outputDir } = options;
 
-    console.log('🏁 开始运行 SynapseDB 性能基准测试...\n');
+    console.log('🏁 开始运行 NervusDB 性能基准测试...\n');
 
     // 运行测试
     const report = await this.runSuites(suites);

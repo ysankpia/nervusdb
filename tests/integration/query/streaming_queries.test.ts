@@ -3,16 +3,16 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 
 describe('流式查询功能', () => {
   let workspace: string;
-  let db: SynapseDB;
+  let db: NervusDB;
 
   beforeEach(async () => {
     workspace = await mkdtemp(join(tmpdir(), 'synapsedb-streaming-'));
     const path = join(workspace, 'streaming.synapsedb');
-    db = await SynapseDB.open(path);
+    db = await NervusDB.open(path);
 
     // 插入测试数据
     for (let i = 0; i < 50; i++) {

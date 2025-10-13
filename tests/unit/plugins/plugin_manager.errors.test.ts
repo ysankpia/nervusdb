@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { makeWorkspace, cleanupWorkspace, within } from '../../helpers/tempfs';
-import { SynapseDB } from '@/synapseDb';
-import { PluginManager, type SynapseDBPlugin } from '@/plugins/base';
+import { NervusDB } from '@/synapseDb';
+import { PluginManager, type NervusDBPlugin } from '@/plugins/base';
 
 describe('PluginManager 错误与边界', () => {
   let ws: string;
@@ -14,11 +14,11 @@ describe('PluginManager 错误与边界', () => {
 
   it('重复插件名应报错；初始化后禁止注册', async () => {
     const dbPath = within(ws, 'db.synapsedb');
-    const db = await SynapseDB.open(dbPath, { pageSize: 256 });
+    const db = await NervusDB.open(dbPath, { pageSize: 256 });
     const pm = new PluginManager(db, db.getStore());
 
-    const ok: SynapseDBPlugin = { name: 'x', version: '1', initialize() {} };
-    const dup: SynapseDBPlugin = { name: 'x', version: '2', initialize() {} };
+    const ok: NervusDBPlugin = { name: 'x', version: '1', initialize() {} };
+    const dup: NervusDBPlugin = { name: 'x', version: '2', initialize() {} };
 
     pm.register(ok);
     expect(() => pm.register(dup)).toThrow(/已存在/);
@@ -33,11 +33,11 @@ describe('PluginManager 错误与边界', () => {
 
   it('cleanup 应跳过未实现清理的插件，并并发执行', async () => {
     const dbPath = within(ws, 'db2.synapsedb');
-    const db = await SynapseDB.open(dbPath, { pageSize: 256 });
+    const db = await NervusDB.open(dbPath, { pageSize: 256 });
     const pm = new PluginManager(db, db.getStore());
 
     let cleaned = 0;
-    const a: SynapseDBPlugin = {
+    const a: NervusDBPlugin = {
       name: 'a',
       version: '1',
       initialize() {},
@@ -45,8 +45,8 @@ describe('PluginManager 错误与边界', () => {
         cleaned++;
       },
     };
-    const b: SynapseDBPlugin = { name: 'b', version: '1', initialize() {} }; // 无 cleanup
-    const c: SynapseDBPlugin = {
+    const b: NervusDBPlugin = { name: 'b', version: '1', initialize() {} }; // 无 cleanup
+    const c: NervusDBPlugin = {
       name: 'c',
       version: '1',
       initialize() {},

@@ -3,7 +3,7 @@ import { mkdtemp, rm, readdir, unlink, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { autoCompact } from '@/maintenance/autoCompact';
 import { readPagedManifest } from '@/storage/pagedIndex';
 
@@ -51,7 +51,7 @@ describe('Auto-Compact 决策与执行', () => {
   });
 
   it('在 primary 拥有多页时自动选择并执行增量合并', async () => {
-    const db = await SynapseDB.open(dbPath, { pageSize: 2 });
+    const db = await NervusDB.open(dbPath, { pageSize: 2 });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O1' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O2' });
     await db.flush();

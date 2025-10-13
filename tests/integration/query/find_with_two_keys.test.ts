@@ -3,7 +3,7 @@ import { mkdtemp, rm, readdir, unlink, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 
 describe('find 支持双键（s+o / p+o）命中', () => {
   let workspace: string;
@@ -48,7 +48,7 @@ describe('find 支持双键（s+o / p+o）命中', () => {
   });
 
   it('s+o 查询可命中结果（SOP 顺序）', async () => {
-    const db = await SynapseDB.open(dbPath);
+    const db = await NervusDB.open(dbPath);
     db.addFact({ subject: 'S', predicate: 'R', object: 'O' });
     db.addFact({ subject: 'S', predicate: 'R2', object: 'O2' });
     await db.flush();
@@ -59,7 +59,7 @@ describe('find 支持双键（s+o / p+o）命中', () => {
   });
 
   it('p+o 查询可命中结果（POS 顺序）', async () => {
-    const db = await SynapseDB.open(dbPath);
+    const db = await NervusDB.open(dbPath);
     db.addFact({ subject: 'A', predicate: 'R', object: 'B' });
     db.addFact({ subject: 'A2', predicate: 'R', object: 'C' });
     await db.flush();

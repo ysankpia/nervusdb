@@ -1,13 +1,13 @@
-import type { SynapseDB } from '../synapseDb.js';
+import type { NervusDB } from '../synapseDb.js';
 import { PersistentStore } from '../storage/persistentStore.js';
 
 /**
  * 插件基础接口
  *
- * 所有SynapseDB插件都必须实现这个接口。
+ * 所有NervusDB插件都必须实现这个接口。
  * "好品味"原则：简单的接口，明确的职责分离。
  */
-export interface SynapseDBPlugin {
+export interface NervusDBPlugin {
   /** 插件名称 */
   readonly name: string;
 
@@ -15,7 +15,7 @@ export interface SynapseDBPlugin {
   readonly version: string;
 
   /** 初始化插件 */
-  initialize(db: SynapseDB, store: PersistentStore): Promise<void> | void;
+  initialize(db: NervusDB, store: PersistentStore): Promise<void> | void;
 
   /** 清理插件资源 */
   cleanup?(): Promise<void> | void;
@@ -27,18 +27,18 @@ export interface SynapseDBPlugin {
  * 负责插件的注册、初始化和生命周期管理。
  */
 export class PluginManager {
-  private plugins = new Map<string, SynapseDBPlugin>();
+  private plugins = new Map<string, NervusDBPlugin>();
   private initialized = false;
 
   constructor(
-    private readonly db: SynapseDB,
+    private readonly db: NervusDB,
     private readonly store: PersistentStore,
   ) {}
 
   /**
    * 注册插件
    */
-  register(plugin: SynapseDBPlugin): void {
+  register(plugin: NervusDBPlugin): void {
     if (this.initialized) {
       throw new Error('无法在初始化后注册插件');
     }
@@ -68,7 +68,7 @@ export class PluginManager {
   /**
    * 获取插件
    */
-  get<T extends SynapseDBPlugin>(name: string): T | undefined {
+  get<T extends NervusDBPlugin>(name: string): T | undefined {
     return this.plugins.get(name) as T | undefined;
   }
 

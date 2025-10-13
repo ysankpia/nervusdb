@@ -3,9 +3,9 @@ import { mkdtemp, rm, readdir, unlink, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB, FactRecord } from '@/synapseDb';
+import { NervusDB, FactRecord } from '@/synapseDb';
 
-describe('SynapseDB 持久化', () => {
+describe('NervusDB 持久化', () => {
   let workspace: string;
   let databasePath: string;
 
@@ -55,7 +55,7 @@ describe('SynapseDB 持久化', () => {
   });
 
   it('首次写入会初始化文件并持久化三元组与属性', async () => {
-    const db = await SynapseDB.open(databasePath);
+    const db = await NervusDB.open(databasePath);
 
     const persisted = db.addFact(
       {
@@ -72,7 +72,7 @@ describe('SynapseDB 持久化', () => {
 
     await db.flush();
 
-    const reopened = await SynapseDB.open(databasePath);
+    const reopened = await NervusDB.open(databasePath);
     const facts = reopened.listFacts();
 
     expect(facts).toHaveLength(1);
@@ -90,7 +90,7 @@ describe('SynapseDB 持久化', () => {
   });
 
   it('重复写入复用字典 ID，支持增量刷新', async () => {
-    const db = await SynapseDB.open(databasePath);
+    const db = await NervusDB.open(databasePath);
 
     const factA = db.addFact({
       subject: 'file:/src/index.ts',
@@ -110,7 +110,7 @@ describe('SynapseDB 持久化', () => {
 
     await db.flush();
 
-    const reopened = await SynapseDB.open(databasePath);
+    const reopened = await NervusDB.open(databasePath);
     const ids = reopened.listFacts().map((fact): number => fact.subjectId);
     const uniqueIds = new Set<number>();
     ids.forEach((id: number) => uniqueIds.add(id));

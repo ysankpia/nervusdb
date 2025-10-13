@@ -1,16 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 describe('节点标签系统 (B.1)', () => {
-  let db: SynapseDB;
+  let db: NervusDB;
   let workspace: string;
 
   beforeEach(async () => {
     workspace = await mkdtemp(join(tmpdir(), 'synapsedb-labels-'));
-    db = await SynapseDB.open(join(workspace, 'db.synapsedb'));
+    db = await NervusDB.open(join(workspace, 'db.synapsedb'));
   });
 
   afterEach(async () => {

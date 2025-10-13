@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promises as fs } from 'node:fs';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { readPagedManifest, pageFileName } from '@/storage/pagedIndex';
 import { checkStrict } from '@/maintenance/check';
 import { repairCorruptedOrders } from '@/maintenance/repair';
@@ -53,7 +53,7 @@ describe('按序修复损坏页（CRC）', () => {
   });
 
   it('损坏某页后 strict 检查失败，执行按序修复后恢复正常', async () => {
-    const db = await SynapseDB.open(dbPath, { pageSize: 4 });
+    const db = await NervusDB.open(dbPath, { pageSize: 4 });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O1' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O2' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O3' });
@@ -85,7 +85,7 @@ describe('按序修复损坏页（CRC）', () => {
     expect(ok.ok).toBe(true);
 
     // 重新打开数据库以加载新的 manifest
-    const db2 = await SynapseDB.open(dbPath);
+    const db2 = await NervusDB.open(dbPath);
     const results = db2.find({ subject: 'S', predicate: 'R' }).all();
     expect(results).toHaveLength(3);
   });

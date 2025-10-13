@@ -1,10 +1,10 @@
 /**
- * SynapseDB 基准测试套件
+ * NervusDB 基准测试套件
  *
  * 为各个模块提供完整的性能测试用例
  */
 
-import { SynapseDB } from '../synapseDb.js';
+import { NervusDB } from '../synapseDb.js';
 import { MemoryGraph } from '../algorithms/graph.js';
 import { GraphAlgorithmSuiteImpl } from '../algorithms/suite.js';
 import { FullTextSearchFactory } from '../fulltext/engine.js';
@@ -120,11 +120,11 @@ class DataGenerator {
 }
 
 /**
- * SynapseDB 核心功能基准测试套件
+ * NervusDB 核心功能基准测试套件
  */
 export const synapseDBCoreSuite: BenchmarkSuite = {
-  name: 'SynapseDB Core',
-  description: 'SynapseDB 核心功能性能测试',
+  name: 'NervusDB Core',
+  description: 'NervusDB 核心功能性能测试',
   config: {
     warmupRuns: 3,
     runs: 5,
@@ -136,7 +136,7 @@ export const synapseDBCoreSuite: BenchmarkSuite = {
       description: '测试三元组事实插入性能',
       test: async (config) => {
         const dataSize = config.dataGeneration?.size || 1000;
-        const db = await SynapseDB.open(':memory:');
+        const db = await NervusDB.open(':memory:');
         const facts = DataGenerator.generateFacts(dataSize);
 
         const start = performance.now();
@@ -171,7 +171,7 @@ export const synapseDBCoreSuite: BenchmarkSuite = {
       description: '测试三元组事实查询性能',
       test: async (config) => {
         const dataSize = config.dataGeneration?.size || 1000;
-        const db = await SynapseDB.open(':memory:');
+        const db = await NervusDB.open(':memory:');
         const facts = DataGenerator.generateFacts(dataSize);
 
         // 预填充数据
@@ -215,7 +215,7 @@ export const synapseDBCoreSuite: BenchmarkSuite = {
       description: '测试链式联想查询性能',
       test: async (config) => {
         const dataSize = config.dataGeneration?.size || 1000;
-        const db = await SynapseDB.open(':memory:');
+        const db = await NervusDB.open(':memory:');
 
         // 创建链式数据
         for (let i = 0; i < dataSize - 1; i++) {

@@ -3,7 +3,7 @@ import { mkdtemp, rm, readdir, unlink, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { autoCompact } from '@/maintenance/autoCompact';
 import { readPagedManifest } from '@/storage/pagedIndex';
 
@@ -51,7 +51,7 @@ describe('Auto-Compact 热度驱动', () => {
   });
 
   it('优先对热门且多页的 primary 进行增量合并', async () => {
-    const db = await SynapseDB.open(dbPath, { pageSize: 1 });
+    const db = await NervusDB.open(dbPath, { pageSize: 1 });
     // 为同一 subject 产生多个页
     db.addFact({ subject: 'S', predicate: 'R', object: 'O1' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O2' });

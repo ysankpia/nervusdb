@@ -1,5 +1,5 @@
-import { SynapseDBPlugin } from './base.js';
-import type { SynapseDB } from '../synapseDb.js';
+import { NervusDBPlugin } from './base.js';
+import type { NervusDB } from '../synapseDb.js';
 import { PersistentStore } from '../storage/persistentStore.js';
 import { AggregationPipeline } from '../query/aggregation.js';
 
@@ -11,14 +11,14 @@ import { AggregationPipeline } from '../query/aggregation.js';
  * - 统计计算
  * - 聚合操作
  */
-export class AggregationPlugin implements SynapseDBPlugin {
+export class AggregationPlugin implements NervusDBPlugin {
   readonly name = 'aggregation';
   readonly version = '1.0.0';
 
-  private db!: SynapseDB;
+  private db!: NervusDB;
   private store!: PersistentStore;
 
-  initialize(db: SynapseDB, store: PersistentStore): void {
+  initialize(db: NervusDB, store: PersistentStore): void {
     this.db = db;
     this.store = store;
   }

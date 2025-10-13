@@ -2,13 +2,13 @@
 
 ## 目标
 
-- 在多仓协同开发时，通过 npm link 将 SynapseDB 作为本地依赖
+- 在多仓协同开发时，通过 npm link 将 NervusDB 作为本地依赖
 - 支持边修改边在业务项目中调试
 
-## 步骤 1：在 SynapseDB 仓库创建 link
+## 步骤 1：在 NervusDB 仓库创建 link
 
 ```bash
-cd /Volumes/WorkDrive/Develop/github/SynapseDB
+cd /Volumes/WorkDrive/Develop/github/NervusDB
 pnpm build
 npm link    # 或 pnpm link --global
 ```
@@ -17,7 +17,7 @@ npm link    # 或 pnpm link --global
 
 ```bash
 cd /path/to/your-app
-npm link synapsedb    # 或 pnpm link synapsedb
+npm link nervusdb    # 或 pnpm link nervusdb
 ```
 
 ## 步骤 3：刷新类型
@@ -27,25 +27,25 @@ npm link synapsedb    # 或 pnpm link synapsedb
 
 ## 步骤 4：调试流程
 
-- 在 SynapseDB 中修改源码 → `pnpm build`
+- 在 NervusDB 中修改源码 → `pnpm build`
 - 业务项目重新运行测试或服务
-- 可使用 `pnpm dev`（SynapseDB）+ `npm run dev`（业务项目）双向 watch
+- 可使用 `pnpm dev`（NervusDB）+ `npm run dev`（业务项目）双向 watch
 
 ## 步骤 5：解除 link
 
 ```bash
 cd /path/to/your-app
-npm unlink synapsedb --no-save
-npm install synapsedb
+npm unlink nervusdb --no-save
+npm install nervusdb
 ```
 
-或在全局：`npm unlink synapsedb`
+或在全局：`npm unlink nervusdb`
 
 ## 常见问题
 
 | 现象                 | 原因                         | 解决                                      |
 | -------------------- | ---------------------------- | ----------------------------------------- |
-| 业务项目找不到包     | 未执行 `npm link` 或路径错误 | 重新 link，确认包名 `synapsedb`           |
+| 业务项目找不到包     | 未执行 `npm link` 或路径错误 | 重新 link，确认包名 `nervusdb`            |
 | 类型提示与源码不一致 | 未重新 build                 | 每次源码变更后执行 `pnpm build`           |
 | Windows 上权限问题   | 全局 npm 目录需要管理员权限  | 使用 `nvm`/`fnm` 安装 Node 或以管理员运行 |
 

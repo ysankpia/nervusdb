@@ -2,7 +2,7 @@
  * Cypher 查询处理器
  *
  * 整合词法分析、语法分析、编译和执行的完整 Cypher 查询处理流程
- * 提供统一的 API 供 SynapseDB 使用
+ * 提供统一的 API 供 NervusDB 使用
  */
 
 import type { PersistentStore } from '../storage/persistentStore.js';
@@ -214,7 +214,7 @@ export class CypherError extends Error {
 }
 
 /**
- * 扩展 SynapseDB 以支持 Cypher 查询
+ * 扩展 NervusDB 以支持 Cypher 查询
  */
 export interface CypherSupport {
   /**
@@ -257,7 +257,7 @@ export interface CypherSupport {
 }
 
 /**
- * 为 SynapseDB 添加 Cypher 支持的工厂函数
+ * 为 NervusDB 添加 Cypher 支持的工厂函数
  */
 export function createCypherSupport(store: PersistentStore): CypherSupport {
   const processor = new CypherProcessor(store);

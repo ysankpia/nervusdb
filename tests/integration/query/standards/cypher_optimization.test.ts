@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { createCypherSupport } from '@/query/cypher';
 import { CypherQueryPlanner, CypherQueryExecutor } from '@/query/pattern';
 import { tmpdir } from 'os';
@@ -11,13 +11,13 @@ import { join } from 'path';
 import { unlinkSync, rmSync, existsSync } from 'fs';
 
 describe('Cypher 查询优化器', () => {
-  let db: SynapseDB;
+  let db: NervusDB;
   let cypher: ReturnType<typeof createCypherSupport>;
   let dbPath: string;
 
   beforeEach(async () => {
     dbPath = join(tmpdir(), `test-optimization-${Date.now()}.synapsedb`);
-    db = await SynapseDB.open(dbPath, {
+    db = await NervusDB.open(dbPath, {
       experimental: { cypher: true },
     });
     cypher = createCypherSupport(db.getStore());

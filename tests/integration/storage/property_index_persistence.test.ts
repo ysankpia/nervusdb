@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 
 describe('属性索引持久化测试', () => {
   let workspace: string;
@@ -19,7 +19,7 @@ describe('属性索引持久化测试', () => {
   });
 
   it('属性索引持久化后重启应该能正确工作', async () => {
-    const db1 = await SynapseDB.open(dbPath);
+    const db1 = await NervusDB.open(dbPath);
 
     // 插入测试数据
     console.log('🚀 开始插入数据...');
@@ -83,7 +83,7 @@ describe('属性索引持久化测试', () => {
     // 重启数据库，测试属性索引加载
     console.log('🔄 重启数据库...');
     const reopenStart = Date.now();
-    const db2 = await SynapseDB.open(dbPath);
+    const db2 = await NervusDB.open(dbPath);
     console.log(`✅ 重启完成，耗时: ${Date.now() - reopenStart}ms`);
 
     // 使用 whereProperty 测试属性查询是否工作正常（持久化加载后）
@@ -123,7 +123,7 @@ describe('属性索引持久化测试', () => {
   });
 
   it('属性索引应该能正确处理复杂类型的值', async () => {
-    const db1 = await SynapseDB.open(dbPath);
+    const db1 = await NervusDB.open(dbPath);
 
     // 插入包含复杂类型的属性
     db1.addFact(
@@ -168,7 +168,7 @@ describe('属性索引持久化测试', () => {
     await db1.close();
 
     // 重启后验证复杂类型属性索引被持久化
-    const db2 = await SynapseDB.open(dbPath);
+    const db2 = await NervusDB.open(dbPath);
 
     // 使用 whereProperty 查询复杂类型
     const juniorUsers = db2
@@ -190,7 +190,7 @@ describe('属性索引持久化测试', () => {
   });
 
   it('属性索引更新后持久化应该正确', async () => {
-    const db1 = await SynapseDB.open(dbPath);
+    const db1 = await NervusDB.open(dbPath);
 
     // 初始数据
     db1.addFact(
@@ -217,7 +217,7 @@ describe('属性索引持久化测试', () => {
     await db1.close();
 
     // 重启验证更新
-    const db2 = await SynapseDB.open(dbPath);
+    const db2 = await NervusDB.open(dbPath);
     const results = db2.find({ subject: 'user1' }).all();
 
     expect(results).toHaveLength(1);

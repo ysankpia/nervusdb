@@ -1,16 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 describe('查询增强：UNION/最短路径/Cypher', () => {
-  let db: SynapseDB;
+  let db: NervusDB;
   let workspace: string;
 
   beforeEach(async () => {
     workspace = await mkdtemp(join(tmpdir(), 'synapsedb-qe-'));
-    db = await SynapseDB.open(join(workspace, 'db.synapsedb'), {
+    db = await NervusDB.open(join(workspace, 'db.synapsedb'), {
       experimental: { cypher: true },
     });
   });

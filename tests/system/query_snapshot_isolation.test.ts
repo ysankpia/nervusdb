@@ -3,7 +3,7 @@ import { mkdtemp, rm, readdir, unlink, rmdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { autoCompact } from '@/maintenance/autoCompact';
 import { garbageCollectPages } from '@/maintenance/gc';
 import { compactDatabase } from '@/maintenance/compaction';
@@ -42,7 +42,7 @@ describe('查询快照隔离（withSnapshot）', () => {
   });
 
   it('长查询期间 epoch 固定，后台 compaction 不影响链式结果', async () => {
-    const db = await SynapseDB.open(dbPath, { pageSize: 2 });
+    const db = await NervusDB.open(dbPath, { pageSize: 2 });
     // 构造多页：S->R->O1..O5
     for (let i = 1; i <= 5; i += 1) {
       db.addFact({ subject: 'S', predicate: 'R', object: `O${i}` });
@@ -69,7 +69,7 @@ describe('查询快照隔离（withSnapshot）', () => {
   });
 
   it('链式查询期间独立 GC 操作不影响结果', async () => {
-    const db = await SynapseDB.open(dbPath, { pageSize: 4 });
+    const db = await NervusDB.open(dbPath, { pageSize: 4 });
 
     // 创建多个主题，每个有多个关联
     for (let i = 1; i <= 3; i++) {
@@ -116,7 +116,7 @@ describe('查询快照隔离（withSnapshot）', () => {
   });
 
   it('多重嵌套链式查询与增量压缩并发', async () => {
-    const db = await SynapseDB.open(dbPath, { pageSize: 3 });
+    const db = await NervusDB.open(dbPath, { pageSize: 3 });
 
     // 创建复杂的关联结构：A -> B -> C -> D
     for (let i = 1; i <= 10; i++) {
@@ -170,7 +170,7 @@ describe('查询快照隔离（withSnapshot）', () => {
   }, 15000);
 
   it('并发读写与维护任务的隔离性', async () => {
-    const db = await SynapseDB.open(dbPath, { pageSize: 5 });
+    const db = await NervusDB.open(dbPath, { pageSize: 5 });
 
     // 初始数据
     for (let i = 1; i <= 15; i++) {
@@ -237,7 +237,7 @@ describe('查询快照隔离（withSnapshot）', () => {
   });
 
   it('快照期间新写入不影响当前查询', async () => {
-    const db = await SynapseDB.open(dbPath, { pageSize: 4 });
+    const db = await NervusDB.open(dbPath, { pageSize: 4 });
 
     // 初始数据
     for (let i = 1; i <= 8; i++) {

@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { autoCompact } from '@/maintenance/autoCompact';
 import { readPagedManifest } from '@/storage/pagedIndex';
 
@@ -21,7 +21,7 @@ describe('运维组合工况（增量合并 + 热度驱动 + autoGC）', () => {
   });
 
   it('在高热度主键下进行增量合并，并在 autoGC 后无冗余 orphan', async () => {
-    const db = await SynapseDB.open(dbPath, { pageSize: 2 });
+    const db = await NervusDB.open(dbPath, { pageSize: 2 });
     // 构造两个主语，其中 S 为热门且多页，T 为较冷
     for (let i = 1; i <= 5; i += 1) {
       db.addFact({ subject: 'S', predicate: 'R', object: `O${i}` });
@@ -59,7 +59,7 @@ describe('运维组合工况（增量合并 + 热度驱动 + autoGC）', () => {
 
     // 关闭并重开实例以确保读取最新 manifest（亦可视为跨进程验证）
     await db.close();
-    const db2 = await SynapseDB.open(dbPath);
+    const db2 = await NervusDB.open(dbPath);
     // 数据可见性未受影响
     const allS = db2.find({ subject: 'S', predicate: 'R' }).all();
     expect(allS.map((x) => x.object).sort()).toEqual(['O1', 'O2', 'O3', 'O4', 'O5']);

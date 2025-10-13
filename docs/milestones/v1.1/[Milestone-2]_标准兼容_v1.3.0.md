@@ -7,7 +7,7 @@
 
 ## 🎯 里程碑概述
 
-本里程碑专注于实现主流图数据库查询语言的兼容性，使 SynapseDB 能够支持 Cypher、Gremlin 和 GraphQL 等标准查询接口，降低用户迁移成本。
+本里程碑专注于实现主流图数据库查询语言的兼容性，使 NervusDB 能够支持 Cypher、Gremlin 和 GraphQL 等标准查询接口，降低用户迁移成本。
 
 ## 📋 功能清单
 
@@ -385,7 +385,7 @@ class CypherQueryPlanner {
 
 ```typescript
 class CypherExecutor {
-  async execute(plan: QueryPlan, db: SynapseDB): Promise<CypherResult> {
+  async execute(plan: QueryPlan, db: NervusDB): Promise<CypherResult> {
     const context = new ExecutionContext(db);
     const operator = this.createOperator(plan.root, context);
 
@@ -439,8 +439,8 @@ interface CypherAPI {
   cypherBatch(queries: CypherQuery[]): Promise<CypherResult[]>;
 }
 
-// 扩展 SynapseDB 类
-class SynapseDB implements CypherAPI {
+// 扩展 NervusDB 类
+class NervusDB implements CypherAPI {
   async cypher(query: string, parameters?: Record<string, any>): Promise<CypherResult> {
     const processor = new CypherProcessor(this);
     return await processor.execute(query, parameters);
@@ -448,12 +448,12 @@ class SynapseDB implements CypherAPI {
 }
 
 // 实际实现说明（当前版本）
-// - 为保持向后兼容，SynapseDB 保留了同步版 `db.cypher()`（极简子集）
+// - 为保持向后兼容，NervusDB 保留了同步版 `db.cypher()`（极简子集）
 // - 新增标准异步接口：`db.cypherQuery()` 与 `db.cypherRead()`，由 Cypher 引擎驱动
 // - 统一入口位于：src/query/cypher.ts（createCypherSupport/CypherProcessor）
 
 // 使用示例（当前可用 API）
-const db = await SynapseDB.open('demo.synapsedb');
+const db = await NervusDB.open('demo.nervusdb');
 
 // 只读查询（异步）
 await db.cypherRead(
@@ -473,8 +473,8 @@ await db.cypherQuery(
 
 ##### 1.5 验收状态（已完成 ✅）
 
-- CLI 支持：`synapsedb cypher <db> --query|-q <cypher> [--readonly] [--optimize[=basic|aggressive]] [--params JSON] [--format table|json] [--limit N]`
-  - 实现位置：`src/cli/cypher.ts:1`，分发入口 `src/cli/synapsedb.ts:1`
+- CLI 支持：`nervusdb cypher <db> --query|-q <cypher> [--readonly] [--optimize[=basic|aggressive]] [--params JSON] [--format table|json] [--limit N]`
+  - 实现位置：`src/cli/cypher.ts:1`，分发入口 `src/cli/nervusdb.ts:1`
 - 兼容性测试套件（代表性用例）：
   - 基础/只读/语法验证：`tests/cypher_basic.test.ts:1`
   - 优化器/回退/统计：`tests/cypher_optimization.test.ts:1`
@@ -582,7 +582,7 @@ interface GremlinTraversal {
 
 - [x] 基础遍历步骤实现
 - [x] 过滤和转换步骤
-- [x] 与 SynapseDB 的适配层（通过 `gremlin(store)` 暴露）
+- [x] 与 NervusDB 的适配层（通过 `gremlin(store)` 暴露）
 
 **第15-16周：高级功能**
 
@@ -612,7 +612,7 @@ interface GremlinAPI {
   g(): GremlinTraversalSource;
 }
 
-class SynapseDB implements GremlinAPI {
+class NervusDB implements GremlinAPI {
   g(): GremlinTraversalSource {
     return new GremlinTraversalSource(this);
   }
@@ -718,7 +718,7 @@ interface GraphQLAPI {
   generateSchema(): string;
 }
 
-class SynapseDB implements GraphQLAPI {
+class NervusDB implements GraphQLAPI {
   async graphql(query: string, variables?: any): Promise<GraphQLResult> {
     const processor = new GraphQLProcessor(this);
     return await processor.execute(query, variables);
@@ -845,9 +845,9 @@ describe('标准查询性能', () => {
 
 ### 工具
 
-- [x] Cypher 查询验证器（`validateCypher()` in `src/query/cypher.ts`；`SynapseDB.validateCypher()`）
+- [x] Cypher 查询验证器（`validateCypher()` in `src/query/cypher.ts`；`NervusDB.validateCypher()`）
 - [x] GraphQL Schema 生成器（`GraphQLService.getSchema()` 与 `graphql()` 工厂）
-- [x] 性能基准对比工具（`scripts/bench-standard.mjs` 与 `src/cli/bench.ts`/`synapsedb cypher` 组合）
+- [x] 性能基准对比工具（`scripts/bench-standard.mjs` 与 `src/cli/bench.ts`/`nervusdb cypher` 组合）
 
 ## ✅ 验收标准
 

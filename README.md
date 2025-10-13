@@ -1,4 +1,4 @@
-# SynapseDB
+# NervusDB
 
 > 嵌入式三元组（SPO）知识库，服务本地/边缘场景的知识管理、链式联想与轻量推理。
 
@@ -28,7 +28,7 @@
 
 ## 项目概览
 
-- **定位**：SynapseDB 是一个单机嵌入式知识库，核心围绕“事实三元组（subject/predicate/object）+ 属性”存储和链式联想查询。以 TypeScript/Node.js 实现，强调 _可恢复、可治理、可扩展_。
+- **定位**：NervusDB 是一个单机嵌入式知识库，核心围绕“事实三元组（subject/predicate/object）+ 属性”存储和链式联想查询。以 TypeScript/Node.js 实现，强调 _可恢复、可治理、可扩展_。
 - **运行环境**：Node.js ≥ 18（推荐 20/22），macOS / Linux / Windows 均可。仓库采用 ESM，代码、注释与文档全部中文。
 - **适用场景**：代码知识图谱、配置依赖图、嵌入式 AI 记忆体、数据血缘审计、DevOps 知识库、轻量边缘部署、离线推理/召回。
 - **技术现状**：主干版本 v1.1.x；WAL v2、增量/整序 compaction、链式联想、QueryBuilder/Cypher/GraphQL/Gremlin、多属性索引、全文检索、空间索引、图算法、自动化治理 CLI 均已稳定。
@@ -62,9 +62,9 @@
                 │ fs 底层
 ┌───────────────┴──────────────────────────────┐
 │                 持久化文件布局                 │
-│  - <db>.synapsedb                              │
-│  - <db>.synapsedb.pages/                       │
-│  - <db>.synapsedb.wal                          │
+│  - <db>.nervusdb                              │
+│  - <db>.nervusdb.pages/                       │
+│  - <db>.nervusdb.wal                          │
 └──────────────────────────────────────────────┘
 ```
 
@@ -98,13 +98,13 @@
 ```bash
 pnpm install              # 安装依赖
 pnpm build                # TypeScript -> dist/
-npm i -g .                # 可选：全局安装 CLI（生成 synapsedb 命令）
+npm i -g .                # 可选：全局安装 CLI（生成 nervusdb 命令）
 ```
 
 ### 其他选择
 
-- **包管理器**：`npm install synapsedb` 或 `yarn add synapsedb`
-- **Bun**：`bun add synapsedb`
+- **包管理器**：`npm install nervusdb` 或 `yarn add nervusdb`
+- **Bun**：`bun add nervusdb`
 - **Docker**（只读示例）：社区镜像见 `docs/教学文档/教程-08-部署与最佳实践.md`
 - **repl/脚本化**：`pnpm dlx tsx scripts/dump-graph.mjs`
 
@@ -115,16 +115,16 @@ npm i -g .                # 可选：全局安装 CLI（生成 synapsedb 命令�
 ### 1. 准备示例库
 
 ```bash
-synapsedb bench demo.synapsedb 200 lsm   # 生成 200 条演示数据，启用 LSM 暂存
-synapsedb stats demo.synapsedb           # 查看基本统计
+nervusdb bench demo.nervusdb 200 lsm   # 生成 200 条演示数据，启用 LSM 暂存
+nervusdb stats demo.nervusdb           # 查看基本统计
 ```
 
 ### 2. Node.js 程序调用
 
 ```ts
-import { SynapseDB } from 'synapsedb';
+import { NervusDB } from 'nervusdb';
 
-const db = await SynapseDB.open('demo.synapsedb', {
+const db = await NervusDB.open('demo.nervusdb', {
   enableLock: true,
   registerReader: true,
   enablePersistentTxDedupe: true,
@@ -152,7 +152,7 @@ await db.close();
 ### 3. 类型安全封装
 
 ```ts
-import { TypedSynapseDB } from '@/typedSynapseDb';
+import { TypedNervusDB } from '@/typedSynapseDb';
 
 interface PersonNode {
   labels: string[];
@@ -163,7 +163,7 @@ interface RelationEdge {
   strength: number;
 }
 
-const social = await TypedSynapseDB.open<PersonNode, RelationEdge>('social.synapsedb');
+const social = await TypedNervusDB.open<PersonNode, RelationEdge>('social.nervusdb');
 const good = await social
   .find({ predicate: 'FRIEND_OF' })
   .where((edge) => edge.edgeProperties?.strength! > 0.75)
@@ -174,10 +174,10 @@ const good = await social
 ### 4. CLI 体验
 
 ```bash
-synapsedb auto-compact demo.synapsedb \
+nervusdb auto-compact demo.nervusdb \
   --mode=incremental --hot-threshold=1.2 --max-primary=5 --auto-gc
-synapsedb txids demo.synapsedb --list=20
-synapsedb dump demo.synapsedb SPO 1
+nervusdb txids demo.nervusdb --list=20
+nervusdb dump demo.nervusdb SPO 1
 ```
 
 更多场景见 [示例与学习资源](#示例与学习资源)。
@@ -228,21 +228,21 @@ const res = await db
 ## 存储格式与持久化
 
 ```
-brain.synapsedb               # 主数据文件
+brain.nervusdb               # 主数据文件
   ├─ 64B Header (魔数 SYNAPSEDB, version=2)
   ├─ dictionary section       # 字符串 <-> ID 映射
   ├─ triples section          # 主体/谓词/客体按主键排序
   ├─ indexes (staging)        # LSM-Lite 暂存段（可选）
   └─ properties section       # 节点/边属性 JSON
 
-brain.synapsedb.pages/        # 分页索引目录
+brain.nervusdb.pages/        # 分页索引目录
   ├─ SPO.idxpage / SOP.idxpage / ...      # 各顺序页文件
   ├─ index-manifest.json                  # 页映射、epoch、tombstones、orphans
   ├─ hotness.json                         # primary 热度计数 + 半衰
   ├─ readers.json                         # 活跃读者信息
   └─ txids.json                           # 幂等事务注册表（可选）
 
-brain.synapsedb.wal           # WAL v2（追加写）
+brain.nervusdb.wal           # WAL v2（追加写）
 ```
 
 特性说明：
@@ -325,7 +325,7 @@ g.V('user:alice').repeat(out('FRIEND_OF')).times(2).values('dept');
   1. 打开数据库
   2. 读取 WAL 并重放
   3. 合并幂等事务
-  4. 如 manifest 异常，执行 `synapsedb check --strict`
+  4. 如 manifest 异常，执行 `nervusdb check --strict`
 
 更多细节见 `docs/教学文档/教程-04-事务-WAL-幂等.md`。
 
@@ -344,7 +344,7 @@ g.V('user:alice').repeat(out('FRIEND_OF')).times(2).values('dept');
 
 ### 热度驱动压实
 
-- `synapsedb auto-compact`：基于热度、页数量、墓碑比例决定增量/整序策略
+- `nervusdb auto-compact`：基于热度、页数量、墓碑比例决定增量/整序策略
 - 支持 `--include-lsm-segments` 自动并入 LSM 暂存
 
 ### 性能建议
@@ -358,33 +358,33 @@ g.V('user:alice').repeat(out('FRIEND_OF')).times(2).values('dept');
 
 ## 运维与治理工具
 
-| 类别     | 命令                                           | 典型场景                               |
-| -------- | ---------------------------------------------- | -------------------------------------- |
-| 诊断     | `synapsedb stats <db>`                         | 综合统计、热度、事务 ID、页分布        |
-| 校验     | `synapsedb check <db> [--strict]`              | 索引/manifest/WAL 一致性校验           |
-| 修复     | `synapsedb repair <db> [--fast]`               | 页映射修复或重建索引                   |
-| 压实     | `synapsedb compact <db>`                       | 手动指定 orders/pageSize/压缩策略      |
-| 自动治理 | `synapsedb auto-compact <db>`                  | 基于热度/墓碑阈值，增量压实并可自动 GC |
-| 垃圾回收 | `synapsedb gc <db> [--respect-readers]`        | 清理孤页与无引用文件                   |
-| 热点分析 | `synapsedb hot <db>`                           | 观察多页 primary / 热度排行            |
-| 事务观测 | `synapsedb txids <db>`                         | 查询/清理事务 ID 注册表                |
-| 导出调试 | `synapsedb dump <db> <order> <primary>`        | 查看指定主键所在页内容                 |
-| 页级修复 | `synapsedb repair-page <db> <order> <primary>` | 对单个 primary 重建索引页              |
+| 类别     | 命令                                          | 典型场景                               |
+| -------- | --------------------------------------------- | -------------------------------------- |
+| 诊断     | `nervusdb stats <db>`                         | 综合统计、热度、事务 ID、页分布        |
+| 校验     | `nervusdb check <db> [--strict]`              | 索引/manifest/WAL 一致性校验           |
+| 修复     | `nervusdb repair <db> [--fast]`               | 页映射修复或重建索引                   |
+| 压实     | `nervusdb compact <db>`                       | 手动指定 orders/pageSize/压缩策略      |
+| 自动治理 | `nervusdb auto-compact <db>`                  | 基于热度/墓碑阈值，增量压实并可自动 GC |
+| 垃圾回收 | `nervusdb gc <db> [--respect-readers]`        | 清理孤页与无引用文件                   |
+| 热点分析 | `nervusdb hot <db>`                           | 观察多页 primary / 热度排行            |
+| 事务观测 | `nervusdb txids <db>`                         | 查询/清理事务 ID 注册表                |
+| 导出调试 | `nervusdb dump <db> <order> <primary>`        | 查看指定主键所在页内容                 |
+| 页级修复 | `nervusdb repair-page <db> <order> <primary>` | 对单个 primary 重建索引页              |
 
 所有命令在 `pnpm db:*` 下有等价脚本。
 
 推荐运维流程：
 
-1. 日常运行：`synapsedb stats` + `synapsedb hot`
-2. 周期治理：`synapsedb auto-compact` + `synapsedb gc`
-3. 故障处理：`synapsedb check --strict` → `synapsedb repair`
-4. 事务监控：`synapsedb stats --txids` / `synapsedb txids`
+1. 日常运行：`nervusdb stats` + `nervusdb hot`
+2. 周期治理：`nervusdb auto-compact` + `nervusdb gc`
+3. 故障处理：`nervusdb check --strict` → `nervusdb repair`
+4. 事务监控：`nervusdb stats --txids` / `nervusdb txids`
 
 ## 监控诊断与可观察性
 
 - **日志**：CLI 默认输出 JSON-Like 日志，可重定向到文件
 - **临时目录**：`tempfs.ts` 帮助在测试中验证持久化行为
-- **统计采集**：`synapsedb stats` 支持 `--txids-window` 观察事务速率
+- **统计采集**：`nervusdb stats` 支持 `--txids-window` 观察事务速率
 - **热度与墓碑**：`hotness.json` / `index-manifest.json` 内含详细数据，可辅助二次分析
 - **Benchmark 报表**：`benchmarks/*` 输出 TPS、延迟、内存、页分布
 - **故障注入**：`src/utils/fault.ts` 支持模拟异常流程
@@ -392,7 +392,7 @@ g.V('user:alice').repeat(out('FRIEND_OF')).times(2).values('dept');
 ## 集成模式与实践
 
 - **嵌入后端服务**：直接在 Node.js 服务中 `open()`，结合 GraphQL/REST 层封装查询
-- **CLI 自动化**：在 CI/CD 或定时任务中执行 `synapsedb auto-compact`、`synapsedb stats --summary`
+- **CLI 自动化**：在 CI/CD 或定时任务中执行 `nervusdb auto-compact`、`nervusdb stats --summary`
 - **MCP/LLM 生态**：配合 `repomix` 打包代码，作为 AI 助手的知识载体
 - **VSCode 扩展**：可与自定义命令组合，实现一键导出/分析
 - **数据导入/导出**：使用 `scripts/migrate-ndjson.mjs`、`benchmarks/*` 构建专用管道
@@ -410,9 +410,9 @@ g.V('user:alice').repeat(out('FRIEND_OF')).times(2).values('dept');
 ## 安全备份与合规
 
 - 启用 `enableLock` 避免多进程并发写
-- 备份策略：复制 `<db>.synapsedb` + `<db>.synapsedb.pages/` + `<db>.synapsedb.wal`
-- 建议在备份前执行 `db.flush()` 或 `synapsedb auto-compact --auto-gc`
-- 事务 ID 注册表可在恢复后清理：`synapsedb txids <db> --clear`
+- 备份策略：复制 `<db>.nervusdb` + `<db>.nervusdb.pages/` + `<db>.nervusdb.wal`
+- 建议在备份前执行 `db.flush()` 或 `nervusdb auto-compact --auto-gc`
+- 事务 ID 注册表可在恢复后清理：`nervusdb txids <db> --clear`
 - CLI 默认启用路径校验，避免误写系统目录
 - 不要将真实凭据写入属性；使用外部秘钥管理
 
@@ -431,7 +431,7 @@ g.V('user:alice').repeat(out('FRIEND_OF')).times(2).values('dept');
 1. **为何读取不到刚写入的数据？**
    - 写入后未 `flush()` 或未在同一快照内查询。调用 `db.flush()` 或使用 `withSnapshot(fn)`。
 2. **WAL 文件持续增大怎么办？**
-   - 定期 `db.flush()`；执行 `synapsedb auto-compact` + `synapsedb gc` 清理。
+   - 定期 `db.flush()`；执行 `nervusdb auto-compact` + `nervusdb gc` 清理。
 3. **多节点部署如何避免冲突？**
    - 每个实例配置独立路径；需要共享只读时，保持 `enableLock: false`。
 4. **属性索引查询为什么慢？**
@@ -441,7 +441,7 @@ g.V('user:alice').repeat(out('FRIEND_OF')).times(2).values('dept');
 6. **GraphQL/Gremlin 查询抛错？**
    - 检查 schema 及查询语法是否符合支持范围；参考 `docs/使用示例` 中语法说明。
 7. **如何导出全库？**
-   - `synapsedb dump` + `scripts/dump-graph.mjs`；或使用 `repomix` 打包配合说明。
+   - `nervusdb dump` + `scripts/dump-graph.mjs`；或使用 `repomix` 打包配合说明。
 8. **如何接入现有系统？**
    - 参阅 `docs/使用示例/迁移指南-从Neo4j与TinkerGraph.md`，提供字段映射与脚本模板。
 
@@ -461,7 +461,7 @@ g.V('user:alice').repeat(out('FRIEND_OF')).times(2).values('dept');
 
 - **ISC License**
 - 提交代码前请确认不包含真实凭据、私钥或生产数据
-- 任何基于 SynapseDB 的分发请保留原许可证说明
+- 任何基于 NervusDB 的分发请保留原许可证说明
 
 ---
 

@@ -2,16 +2,16 @@
 
 ## 目标
 
-- 汇总使用 SynapseDB 过程中常见的问题与诊断步骤
+- 汇总使用 NervusDB 过程中常见的问题与诊断步骤
 - 提供脚本化排查工具与参考命令
 - 形成运维值班时的快速手册
 
 ## 快速诊断清单
 
-1. `synapsedb stats <db> --summary`
-2. `synapsedb check <db> --summary`
-3. `synapsedb txids <db> --since=60`
-4. `synapsedb hot <db> --top=10`
+1. `nervusdb stats <db> --summary`
+2. `nervusdb check <db> --summary`
+3. `nervusdb txids <db> --since=60`
+4. `nervusdb hot <db> --top=10`
 5. `tail -n 200 logs/<service>.log`
 
 ## 常见问题列表
@@ -30,23 +30,23 @@
 
 ### 3. WAL 文件越来越大
 
-- **现象**：`synapsedb stats` 显示 `walBytes` > 1GB
+- **现象**：`nervusdb stats` 显示 `walBytes` > 1GB
 - **原因**：长时间未 `flush` 或自动压实
-- **处理**：`db.flush()`；执行 `synapsedb auto-compact --auto-gc`
+- **处理**：`db.flush()`；执行 `nervusdb auto-compact --auto-gc`
 
 ### 4. manifest 缺失或损坏
 
-- **现象**：`synapsedb stats` 报错 “manifest not found”
+- **现象**：`nervusdb stats` 报错 “manifest not found”
 - **处理步骤**：
   1. 备份当前目录
-  2. 执行 `synapsedb repair <db>`
-  3. 如失败，`synapsedb compact <db> --rebuild`（需较长时间）
+  2. 执行 `nervusdb repair <db>`
+  3. 如失败，`nervusdb compact <db> --rebuild`（需较长时间）
 
 ### 5. 属性索引查询无结果
 
 - **原因**：属性未同步写入或类型不匹配
 - **检查**：
-  - `synapsedb dump` 查看属性 JSON
+  - `nervusdb dump` 查看属性 JSON
   - 确认查询条件与属性类型一致（数值/字符串）
 
 ### 6. auto-compact 跳过执行
@@ -75,10 +75,10 @@
 ```bash
 # scripts/diagnose.sh
 DB=$1
-synapsedb stats "$DB" --summary
-synapsedb check "$DB" --summary || true
-synapsedb txids "$DB" --since=240
-synapsedb hot "$DB" --top=20
+nervusdb stats "$DB" --summary
+nervusdb check "$DB" --summary || true
+nervusdb txids "$DB" --since=240
+nervusdb hot "$DB" --top=20
 ```
 
 ## 支持渠道

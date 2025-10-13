@@ -20,11 +20,11 @@ describe('QueryBuilder warnings · 大结果集内存处理提示', () => {
   });
 
   it('all(): 大于阈值时输出一次警告', async () => {
-    const { SynapseDB } = await import('@/synapseDb');
+    const { NervusDB } = await import('@/synapseDb');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => void 0);
     const { makeWorkspace, cleanupWorkspace, within } = await import('../../helpers/tempfs');
     const dir = await makeWorkspace('unit-warn-all');
-    const db = await SynapseDB.open(within(dir, 'db.synapsedb'));
+    const db = await NervusDB.open(within(dir, 'db.synapsedb'));
     db.addFact({ subject: 'S', predicate: 'R', object: 'O1' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O2' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O3' });
@@ -33,18 +33,18 @@ describe('QueryBuilder warnings · 大结果集内存处理提示', () => {
     const res = q.all();
     expect(res.length).toBe(3);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][0]).toContain('SynapseDB: all()');
+    expect(warn.mock.calls[0][0]).toContain('NervusDB: all()');
 
     await db.close();
     await cleanupWorkspace(dir);
   });
 
   it('where(): 大于阈值时输出一次警告', async () => {
-    const { SynapseDB } = await import('@/synapseDb');
+    const { NervusDB } = await import('@/synapseDb');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => void 0);
     const { makeWorkspace, cleanupWorkspace, within } = await import('../../helpers/tempfs');
     const dir = await makeWorkspace('unit-warn-where');
-    const db = await SynapseDB.open(within(dir, 'db.synapsedb'));
+    const db = await NervusDB.open(within(dir, 'db.synapsedb'));
     db.addFact({ subject: 'S', predicate: 'R', object: 'O1' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O2' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O3' });
@@ -53,7 +53,7 @@ describe('QueryBuilder warnings · 大结果集内存处理提示', () => {
     const q2 = q.where(() => true);
     // 只在 where 调用时发出一次警告
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][0]).toContain('SynapseDB: where()');
+    expect(warn.mock.calls[0][0]).toContain('NervusDB: where()');
     expect(q2.all().length).toBe(3);
 
     await db.close();

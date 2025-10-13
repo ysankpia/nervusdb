@@ -3,7 +3,7 @@ import { mkdtemp, rm, readFile, readdir, unlink, rmdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { compactDatabase } from '@/maintenance/compaction';
 
 describe('LSM 段参与 compaction 合并并清理', () => {
@@ -49,7 +49,7 @@ describe('LSM 段参与 compaction 合并并清理', () => {
   });
 
   it('compaction(includeLsmSegments) 将 LSM 段并入并清空清单', async () => {
-    const db = await SynapseDB.open(dbPath, { stagingMode: 'lsm-lite' as any, pageSize: 2 });
+    const db = await NervusDB.open(dbPath, { stagingMode: 'lsm-lite' as any, pageSize: 2 });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O1' });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O2' });
     await db.flush(); // 生成段

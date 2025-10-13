@@ -1,10 +1,10 @@
 /**
- * SynapseDB 全文搜索扩展
+ * NervusDB 全文搜索扩展
  *
- * 为 SynapseDB 添加全文搜索功能，支持三元组内容的高级文本检索
+ * 为 NervusDB 添加全文搜索功能，支持三元组内容的高级文本检索
  */
 
-import { SynapseDB } from '../synapseDb.js';
+import { NervusDB } from '../synapseDb.js';
 import { FactRecord } from '../storage/persistentStore.js';
 
 import {
@@ -47,9 +47,9 @@ export interface FullTextSearchResultWithFacts {
 }
 
 /**
- * SynapseDB 全文搜索扩展类
+ * NervusDB 全文搜索扩展类
  */
-export class SynapseDBFullTextExtension {
+export class NervusDBFullTextExtension {
   private searchEngine: FullTextSearchEngine;
   private batchProcessor: FullTextBatchProcessor;
   private performanceMonitor?: SearchPerformanceMonitor;
@@ -60,7 +60,7 @@ export class SynapseDBFullTextExtension {
   private readonly EDGE_INDEX_NAME = 'edges';
 
   constructor(
-    private db: SynapseDB,
+    private db: NervusDB,
     config: FullTextExtensionConfig = {},
   ) {
     this.config = {
@@ -430,17 +430,17 @@ export class SynapseDBFullTextExtension {
 }
 
 /**
- * SynapseDB 全文搜索扩展工厂
+ * NervusDB 全文搜索扩展工厂
  */
-export class SynapseDBFullTextExtensionFactory {
+export class NervusDBFullTextExtensionFactory {
   /**
-   * 为 SynapseDB 实例创建全文搜索扩展
+   * 为 NervusDB 实例创建全文搜索扩展
    */
   static async create(
-    db: SynapseDB,
+    db: NervusDB,
     config?: FullTextExtensionConfig,
-  ): Promise<SynapseDBFullTextExtension> {
-    const extension = new SynapseDBFullTextExtension(db, config);
+  ): Promise<NervusDBFullTextExtension> {
+    const extension = new NervusDBFullTextExtension(db, config);
     // 等待初始化完成
     await new Promise((resolve) => setTimeout(resolve, 100)); // 简单延迟，实际应该等待初始化
     return extension;
@@ -449,7 +449,7 @@ export class SynapseDBFullTextExtensionFactory {
   /**
    * 创建高性能配置的扩展
    */
-  static async createHighPerformance(db: SynapseDB): Promise<SynapseDBFullTextExtension> {
+  static async createHighPerformance(db: NervusDB): Promise<NervusDBFullTextExtension> {
     return this.create(db, {
       enablePerformanceMonitoring: true,
       autoIndexTriples: true,
@@ -460,7 +460,7 @@ export class SynapseDBFullTextExtensionFactory {
   /**
    * 创建最小配置的扩展
    */
-  static async createMinimal(db: SynapseDB): Promise<SynapseDBFullTextExtension> {
+  static async createMinimal(db: NervusDB): Promise<NervusDBFullTextExtension> {
     return this.create(db, {
       autoIndexTriples: false,
       enablePerformanceMonitoring: false,

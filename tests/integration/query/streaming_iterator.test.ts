@@ -1,17 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
 describe('流式查询迭代器', () => {
   let tempDir: string;
-  let db: SynapseDB;
+  let db: NervusDB;
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'synapse-streaming-test-'));
     const dbPath = join(tempDir, 'test.synapsedb');
-    db = await SynapseDB.open(dbPath);
+    db = await NervusDB.open(dbPath);
   });
 
   afterEach(async () => {

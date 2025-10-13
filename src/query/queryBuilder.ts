@@ -869,7 +869,7 @@ export class QueryBuilder {
     this.warnedOps?.add(op);
 
     console.warn(
-      `SynapseDB: ${op}() 正在对 ~${this.facts.length} 条结果在内存中处理。这可能非常慢并占用大量内存。` +
+      `NervusDB: ${op}() 正在对 ~${this.facts.length} 条结果在内存中处理。这可能非常慢并占用大量内存。` +
         ' 建议：优先使用 whereProperty()/whereLabel()/followWithNodeProperty() 下推过滤；' +
         ' 或使用 db.findStreaming().' +
         ' 设置环境变量 SYNAPSEDB_SILENCE_QUERY_WARNINGS=1 可关闭警告，SYNAPSEDB_QUERY_WARN_THRESHOLD 可调整阈值。',
@@ -975,7 +975,7 @@ export class StreamingQueryBuilder {
  * 惰性执行版 QueryBuilder（灰度）：
  * - 不在链接口阶段物化结果，保存操作计划；
  * - 执行时基于底层 streamFactRecords/逐节点拓展按需产出；
- * - 通过 SynapseDB.findLazy() 暴露，默认 find() 行为不变。
+ * - 通过 NervusDB.findLazy() 暴露，默认 find() 行为不变。
  */
 export class LazyQueryBuilder extends QueryBuilder {
   // 仅用于 explain() 的返回体类型（避免 any）
@@ -1112,7 +1112,7 @@ export class LazyQueryBuilder extends QueryBuilder {
       this.lazyWarnedOps?.add('where');
 
       console.warn(
-        'SynapseDB: where() 在惰性链上可能触发大结果的内存处理。建议使用 whereProperty()/whereLabel() 或异步流。',
+        'NervusDB: where() 在惰性链上可能触发大结果的内存处理。建议使用 whereProperty()/whereLabel() 或异步流。',
       );
     }
     const qb = new LazyQueryBuilder(this.lazyStore, { subject: undefined }, this.lazyOrientation);
@@ -1951,7 +1951,7 @@ export function buildFindContext(
     return EMPTY_CONTEXT;
   }
 
-  // 注意：空条件优化在上层（SynapseDB.find）根据是否存在分页索引决定，
+  // 注意：空条件优化在上层（NervusDB.find）根据是否存在分页索引决定，
   // 这里保持常规行为以兼容内存场景。
 
   const matches = store.query(query);

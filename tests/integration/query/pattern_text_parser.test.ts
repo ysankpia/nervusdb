@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
 import { cleanupWorkspace, makeWorkspace } from '../../helpers/tempfs';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 import {
   CypherLexer,
   CypherParser,
@@ -22,13 +22,13 @@ import {
 
 describe('Cypher 文本解析器', () => {
   let testDir: string;
-  let db: SynapseDB;
+  let db: NervusDB;
   let store: any;
   let engine: CypherEngine;
 
   beforeEach(async () => {
     testDir = await makeWorkspace('pattern-parser');
-    db = await SynapseDB.open(join(testDir, 'test.synapsedb'));
+    db = await NervusDB.open(join(testDir, 'test.synapsedb'));
     store = db.getStore(); // 访问内部的 store
 
     engine = new CypherEngine(store);

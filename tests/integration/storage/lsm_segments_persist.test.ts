@@ -3,7 +3,7 @@ import { mkdtemp, rm, readFile, readdir, unlink, rmdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SynapseDB } from '@/synapseDb';
+import { NervusDB } from '@/synapseDb';
 
 describe('LSM-Lite 段落盘（实验性旁路）', () => {
   let workspace: string;
@@ -48,7 +48,7 @@ describe('LSM-Lite 段落盘（实验性旁路）', () => {
   });
 
   it('flush 后生成 lsm-manifest.json 并记录段信息；二次 flush 合并并清理段', async () => {
-    const db = await SynapseDB.open(dbPath, { stagingMode: 'lsm-lite' as any });
+    const db = await NervusDB.open(dbPath, { stagingMode: 'lsm-lite' as any });
     db.addFact({ subject: 'S', predicate: 'R', object: 'O1' });
     db.addFact({ subject: 'T', predicate: 'R', object: 'P1' });
     await db.flush();

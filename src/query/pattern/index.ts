@@ -1,5 +1,5 @@
 /**
- * SynapseDB 模式匹配模块入口
+ * NervusDB 模式匹配模块入口
  *
  * 提供完整的 Cypher 模式匹配功能：
  * - 文本解析（词法分析 + 语法分析）
@@ -173,9 +173,9 @@ export function createCypherEngine(store: PersistentStore): CypherEngine {
 }
 
 /**
- * 扩展类型定义：为 SynapseDB 添加 Cypher 支持
+ * 扩展类型定义：为 NervusDB 添加 Cypher 支持
  */
-export interface SynapseDBWithCypher {
+export interface NervusDBWithCypher {
   cypher(
     query: string,
     parameters?: Record<string, unknown>,
@@ -184,12 +184,12 @@ export interface SynapseDBWithCypher {
 }
 
 /**
- * 为 SynapseDB 实例添加 Cypher 功能
+ * 为 NervusDB 实例添加 Cypher 功能
  */
 export function enhanceWithCypher<T extends { store?: PersistentStore }>(
   dbInstance: T,
   store: PersistentStore,
-): T & SynapseDBWithCypher {
+): T & NervusDBWithCypher {
   const engine = new CypherEngine(store);
 
   const enhanced = Object.assign(dbInstance, {
@@ -199,7 +199,7 @@ export function enhanceWithCypher<T extends { store?: PersistentStore }>(
     cypherEngine: engine,
   });
 
-  return enhanced as T & SynapseDBWithCypher;
+  return enhanced as T & NervusDBWithCypher;
 }
 
 // 导出类型守卫和工具函数

@@ -2,7 +2,7 @@
 
 ## 目标
 
-- 将 SynapseDB 以 tgz 包形式安装到现有项目
+- 将 NervusDB 以 tgz 包形式安装到现有项目
 - 验证构建产物与 TypeScript 类型无缝工作
 
 ## 前提
@@ -16,16 +16,16 @@
 pnpm pack
 ```
 
-生成文件形如：`synapsedb-1.1.0.tgz`
+生成文件形如：`nervusdb-1.1.0.tgz`
 
 ## 步骤 2：在目标项目安装
 
 ```bash
 cd /path/to/your-app
-pnpm add ../SynapseDB/synapsedb-1.1.0.tgz
+pnpm add ../NervusDB/nervusdb-1.1.0.tgz
 ```
 
-或使用 npm：`npm install ../SynapseDB/synapsedb-1.1.0.tgz`
+或使用 npm：`npm install ../NervusDB/nervusdb-1.1.0.tgz`
 
 ## 步骤 3：TypeScript 配置
 
@@ -45,9 +45,9 @@ pnpm add ../SynapseDB/synapsedb-1.1.0.tgz
 ## 步骤 4：编写测试代码
 
 ```ts
-import { SynapseDB } from 'synapsedb';
+import { NervusDB } from 'nervusdb';
 
-const db = await SynapseDB.open('app.synapsedb', { enableLock: true });
+const db = await NervusDB.open('app.nervusdb', { enableLock: true });
 await db.addFact({ subject: 'user:alice', predicate: 'FRIEND_OF', object: 'user:bob' });
 console.log(await db.find({ predicate: 'FRIEND_OF' }).all());
 await db.close();
@@ -55,7 +55,7 @@ await db.close();
 
 ## 步骤 5：打包或部署
 
-- Webpack / Vite / tsup：确保 `external` 排除 `synapsedb` 或配置为 ESM
+- Webpack / Vite / tsup：确保 `external` 排除 `nervusdb` 或配置为 ESM
 - 若使用 Docker，记得将 `node_modules` 与数据目录一并复制
 
 ## 常见问题

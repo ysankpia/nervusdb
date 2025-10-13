@@ -8,7 +8,7 @@
 
 ## 🎯 里程碑概述
 
-本里程碑专注于实现高级图数据库特性，包括全文搜索、地理空间索引、图算法库和分布式支持，使 SynapseDB 具备企业级图数据库的完整功能集。
+本里程碑专注于实现高级图数据库特性，包括全文搜索、地理空间索引、图算法库和分布式支持，使 NervusDB 具备企业级图数据库的完整功能集。
 
 ## 📋 功能清单
 
@@ -273,8 +273,8 @@ interface SearchOptions {
   filters?: Record<string, any>;
 }
 
-// 扩展 SynapseDB
-class SynapseDB implements FullTextAPI {
+// 扩展 NervusDB
+class NervusDB implements FullTextAPI {
   async search(query: string, options?: SearchOptions): Promise<SearchResult[]> {
     const searcher = new FullTextSearcher(this);
     return await searcher.search(query, options);
@@ -490,7 +490,7 @@ interface SpatialAPI {
   spatial(): SpatialQueryBuilder;
 }
 
-class SynapseDB implements SpatialAPI {
+class NervusDB implements SpatialAPI {
   spatial(): SpatialQueryBuilder {
     return new SpatialQueryBuilder(this);
   }
@@ -842,7 +842,7 @@ interface ClusterAPI {
 }
 
 // 使用示例
-const cluster = await SynapseDB.createCluster({
+const cluster = await NervusDB.createCluster({
   nodes: [
     { id: 'node1', host: 'localhost', port: 7687, role: 'master' },
     { id: 'node2', host: 'localhost', port: 7688, role: 'replica' },
@@ -950,7 +950,7 @@ describe('高级特性性能', () => {
 - ✅ 倒排索引存储引擎（增量更新、压缩优化）
 - ✅ TF-IDF和BM25相关性评分算法
 - ✅ 布尔查询、模糊搜索和短语查询处理引擎
-- ✅ 统一搜索API集成到SynapseDB
+- ✅ 统一搜索API集成到NervusDB
 
 #### 2. **空间几何计算** - 完全实现
 
@@ -1006,7 +1006,7 @@ describe('高级特性性能', () => {
 
 ## 🚀 成就与影响
 
-SynapseDB v1.4.0 成功实现了企业级图数据库的完整功能集：
+NervusDB v1.4.0 成功实现了企业级图数据库的完整功能集：
 
 1. ✅ **多模态查询能力**: 支持三种标准查询语言（Cypher/GraphQL/Gremlin）
 2. ✅ **全文搜索集成**: 提供强大的文本检索和相关性排序
@@ -1014,4 +1014,4 @@ SynapseDB v1.4.0 成功实现了企业级图数据库的完整功能集：
 4. ✅ **图算法分析**: 丰富的图分析和挖掘算法库
 5. ✅ **性能监控**: 完备的基准测试和性能回归检测
 
-**SynapseDB 现已具备生产环境部署能力，可满足知识图谱、推荐系统、地理信息分析等多种企业应用场景需求。** 🎉
+**NervusDB 现已具备生产环境部署能力，可满足知识图谱、推荐系统、地理信息分析等多种企业应用场景需求。** 🎉

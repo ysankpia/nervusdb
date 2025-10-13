@@ -1,31 +1,31 @@
 /**
- * SynapseDB 打开选项运行时守卫测试
+ * NervusDB 打开选项运行时守卫测试
  */
 
 import { describe, it, expect } from 'vitest';
-import { assertSynapseDBOpenOptions, isSynapseDBOpenOptions } from '@/types/openOptions';
+import { assertNervusDBOpenOptions, isNervusDBOpenOptions } from '@/types/openOptions';
 
-describe('SynapseDB 打开选项运行时守卫', () => {
-  it('isSynapseDBOpenOptions: 非对象输入返回 false', () => {
-    expect(isSynapseDBOpenOptions(null)).toBe(false);
-    expect(isSynapseDBOpenOptions(undefined)).toBe(false);
-    expect(isSynapseDBOpenOptions(123)).toBe(false);
-    expect(isSynapseDBOpenOptions('options')).toBe(false);
+describe('NervusDB 打开选项运行时守卫', () => {
+  it('isNervusDBOpenOptions: 非对象输入返回 false', () => {
+    expect(isNervusDBOpenOptions(null)).toBe(false);
+    expect(isNervusDBOpenOptions(undefined)).toBe(false);
+    expect(isNervusDBOpenOptions(123)).toBe(false);
+    expect(isNervusDBOpenOptions('options')).toBe(false);
   });
 
-  it('isSynapseDBOpenOptions: 检查字段约束', () => {
-    expect(isSynapseDBOpenOptions({ pageSize: 0 })).toBe(false);
-    expect(isSynapseDBOpenOptions({ pageSize: 1, compression: { codec: 'invalid' } })).toBe(false);
-    expect(isSynapseDBOpenOptions({ stagingMode: 'unknown' })).toBe(false);
-    expect(isSynapseDBOpenOptions({ enablePersistentTxDedupe: true, maxRememberTxIds: 50 })).toBe(
+  it('isNervusDBOpenOptions: 检查字段约束', () => {
+    expect(isNervusDBOpenOptions({ pageSize: 0 })).toBe(false);
+    expect(isNervusDBOpenOptions({ pageSize: 1, compression: { codec: 'invalid' } })).toBe(false);
+    expect(isNervusDBOpenOptions({ stagingMode: 'unknown' })).toBe(false);
+    expect(isNervusDBOpenOptions({ enablePersistentTxDedupe: true, maxRememberTxIds: 50 })).toBe(
       false,
     );
   });
 
-  it('isSynapseDBOpenOptions: 合法输入返回 true', () => {
-    expect(isSynapseDBOpenOptions({})).toBe(true);
+  it('isNervusDBOpenOptions: 合法输入返回 true', () => {
+    expect(isNervusDBOpenOptions({})).toBe(true);
     expect(
-      isSynapseDBOpenOptions({
+      isNervusDBOpenOptions({
         indexDirectory: '/tmp/index',
         pageSize: 2000,
         rebuildIndexes: false,
@@ -39,8 +39,8 @@ describe('SynapseDB 打开选项运行时守卫', () => {
     ).toBe(true);
   });
 
-  it('assertSynapseDBOpenOptions: 非法输入抛出 TypeError，合法输入不抛', () => {
-    expect(() => assertSynapseDBOpenOptions({ pageSize: 0 })).toThrowError(TypeError);
-    expect(() => assertSynapseDBOpenOptions({ pageSize: 100 })).not.toThrow();
+  it('assertNervusDBOpenOptions: 非法输入抛出 TypeError，合法输入不抛', () => {
+    expect(() => assertNervusDBOpenOptions({ pageSize: 0 })).toThrowError(TypeError);
+    expect(() => assertNervusDBOpenOptions({ pageSize: 100 })).not.toThrow();
   });
 });
