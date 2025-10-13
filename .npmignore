@@ -1,0 +1,43 @@
+# .npmignore - 控制 npm 发布内容
+# 注意：这个文件存在时，会覆盖 .gitignore 的规则
+
+# 开发文件
+src/
+tests/
+scripts/
+benchmarks/
+docs/
+.agents/
+.github/
+.husky/
+memory-snapshots/
+
+# 配置文件
+tsconfig.json
+tsconfig.build.json
+vitest.config.ts
+build.config.mjs
+.lintstaged.cjs
+.prettierrc
+.eslintrc.json
+.editorconfig
+
+# Rust 开发
+nervusdb-wasm/
+
+# 临时文件
+*.log
+*.tsbuildinfo
+.DS_Store
+coverage/
+.nyc_output/
+node_modules/
+
+# 只保留以下文件会被发布（通过 package.json 的 files 字段）:
+# - dist/index.mjs
+# - dist/cli.js
+# - dist/index.d.ts
+# - dist/synapseDb.d.ts
+# - dist/typedNervusDb.d.ts
+# - README.md
+# - LICENSE
