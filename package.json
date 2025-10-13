@@ -1,6 +1,6 @@
 {
   "name": "@nervusdb/core",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "NervusDB v1.1 - 高性能神经知识图谱数据库，支持流式查询、类型安全、属性索引与变长路径",
   "main": "dist/index.mjs",
   "types": "dist/index.d.ts",
