@@ -118,7 +118,13 @@ export class PersistentStore {
     // 架构重构：不再加载完整TripleStore到内存，改为仅加载增量数据
     // 历史数据通过分页索引访问，只有WAL重放数据加载到内存
     const triples = new TripleStore(); // 创建空的TripleStore，仅用于WAL重放和新增数据
-    const propertyStore = PropertyStore.deserialize(sections.properties);
+
+    // 架构重构（阶段一-Issue #7）：PropertyStore 迁移策略
+    // 1. 从主文件反序列化属性数据（用于数据迁移）
+    // 2. 后续将迁移到 PropertyDataStore 的分页存储
+    const propertyStoreFromFile = PropertyStore.deserialize(sections.properties);
+    const propertyStore = new PropertyStore(); // 创建空实例，仅用于增量缓存
+
     const indexes = TripleIndexes.deserialize(sections.indexes);
     // 初次打开且无 manifest 时，将以全量方式重建分页索引，无需在内存中保有全部索引
     const indexDirectory = options.indexDirectory ?? `${effectivePath}.pages`;
@@ -155,6 +161,25 @@ export class PersistentStore {
     // 初始化属性索引管理器
     store.propertyIndexManager = new PropertyIndexManager(indexDirectory);
     await store.propertyIndexManager.initialize();
+
+    // 数据迁移：将主文件中的属性数据迁移到 PropertyDataStore
+    // 这一步在首次打开时执行，后续打开将直接从 PropertyDataStore 加载
+    const nodePropsToMigrate = propertyStoreFromFile.getAllNodeProperties();
+    const edgePropsToMigrate = propertyStoreFromFile.getAllEdgeProperties();
+
+    // 迁移节点属性到 PropertyDataStore
+    for (const [nodeId, properties] of nodePropsToMigrate.entries()) {
+      store.propertyIndexManager.setNodeProperties(nodeId, properties);
+    }
+
+    // 迁移边属性到 PropertyDataStore
+    for (const [edgeKey, properties] of edgePropsToMigrate.entries()) {
+      const [subjectId, predicateId, objectId] = edgeKey.split(':').map(Number);
+      store.propertyIndexManager.setEdgeProperties(
+        { subjectId, predicateId, objectId },
+        properties,
+      );
+    }
 
     // 初始化标签管理器
     store.labelManager = new LabelManager(indexDirectory);
@@ -214,6 +239,8 @@ export class PersistentStore {
       getMemoryTriples: () => store.triples.list(),
       tombstones: store.tombstones,
       bumpHot: (order, primary) => store.bumpHot(order, primary),
+      // 架构重构（Issue #7）：传入propertyIndexManager用于属性查询
+      propertyIndexManager: store.propertyIndexManager,
     };
     store.queryEngine = new QueryEngine(queryContext);
 
@@ -386,6 +413,9 @@ export class PersistentStore {
       this.properties.setNodeProperties(nodeId, properties);
       this.dirty = true;
 
+      // 架构重构（Issue #7）：同时更新 PropertyDataStore 缓存
+      this.propertyIndexManager.setNodeProperties(nodeId, properties);
+
       // 更新属性索引
       this.updateNodePropertyIndex(nodeId, oldProperties, properties);
 
@@ -407,6 +437,9 @@ export class PersistentStore {
     } else {
       this.properties.setEdgeProperties(key, properties);
       this.dirty = true;
+
+      // 架构重构（Issue #7）：同时更新 PropertyDataStore 缓存
+      this.propertyIndexManager.setEdgeProperties(key, properties);
 
       // 更新属性索引
       this.updateEdgePropertyIndex(edgeKey, oldProperties, properties);
@@ -443,6 +476,9 @@ export class PersistentStore {
     this.properties.setNodeProperties(nodeId, properties);
     this.dirty = true;
 
+    // 架构重构（Issue #7）：同时更新 PropertyDataStore 缓存
+    this.propertyIndexManager.setNodeProperties(nodeId, properties);
+
     // 更新属性索引
     this.updateNodePropertyIndex(nodeId, oldProperties, properties);
   }
@@ -455,6 +491,9 @@ export class PersistentStore {
     this.properties.setEdgeProperties(key, properties);
     this.dirty = true;
 
+    // 架构重构（Issue #7）：同时更新 PropertyDataStore 缓存
+    this.propertyIndexManager.setEdgeProperties(key, properties);
+
     // 更新属性索引
     this.updateEdgePropertyIndex(edgeKey, oldProperties, properties);
   }
@@ -463,7 +502,14 @@ export class PersistentStore {
     // 若处于事务中，优先返回事务暂存视图
     const txValue = this.transactionManager.getNodePropertiesFromTransaction(nodeId);
     if (txValue !== undefined) return txValue;
-    return this.properties.getNodeProperties(nodeId);
+
+    // 架构重构（Issue #7）：从 PropertyIndexManager 读取（缓存优先）
+    // 1. 首先尝试从增量缓存（PropertyStore）读取
+    const fromCache = this.properties.getNodeProperties(nodeId);
+    if (fromCache !== undefined) return fromCache;
+
+    // 2. 从 PropertyDataStore 读取（已预加载到缓存）
+    return this.propertyIndexManager.getNodePropertiesSync(nodeId);
   }
 
   getEdgeProperties(key: TripleKey): Record<string, unknown> | undefined {
@@ -471,7 +517,14 @@ export class PersistentStore {
     // 若处于事务中，优先返回事务暂存视图
     const txValue = this.transactionManager.getEdgePropertiesFromTransaction(edgeKey);
     if (txValue !== undefined) return txValue;
-    return this.properties.getEdgeProperties(key);
+
+    // 架构重构（Issue #7）：从 PropertyIndexManager 读取
+    // 1. 首先尝试从增量缓存（PropertyStore）读取
+    const fromCache = this.properties.getEdgeProperties(key);
+    if (fromCache !== undefined) return fromCache;
+
+    // 2. 从 PropertyDataStore 读取
+    return this.propertyIndexManager.getEdgePropertiesSync(key);
   }
 
   private getTriplesByPrimarySet(order: IndexOrder, primaryIds: Set<number>): EncodedTriple[] {
@@ -659,6 +712,10 @@ export class PersistentStore {
       const oldProperties = this.properties.getNodeProperties(nodeId) || {};
       this.properties.setNodeProperties(nodeId, newProperties);
       this.dirty = true;
+
+      // 架构重构（Issue #7）：同时更新 PropertyDataStore 缓存
+      this.propertyIndexManager.setNodeProperties(nodeId, newProperties);
+
       // 更新属性索引
       this.updateNodePropertyIndex(nodeId, oldProperties, newProperties);
     });
@@ -668,6 +725,10 @@ export class PersistentStore {
       const oldProperties = this.properties.getEdgeProperties(ids) || {};
       this.properties.setEdgeProperties(ids, newProperties);
       this.dirty = true;
+
+      // 架构重构（Issue #7）：同时更新 PropertyDataStore 缓存
+      this.propertyIndexManager.setEdgeProperties(ids, newProperties);
+
       // 更新属性索引
       this.updateEdgePropertyIndex(edgeKey, oldProperties, newProperties);
     });
@@ -675,11 +736,20 @@ export class PersistentStore {
 
   /**
    * 重建属性索引
+   *
+   * 架构重构（Issue #7）：优先从 PropertyIndexManager 的缓存获取数据
    */
   private async rebuildPropertyIndex(): Promise<void> {
-    // 从PropertyStore收集所有现有属性数据
-    const nodeProperties = this.properties.getAllNodeProperties();
-    const edgeProperties = this.properties.getAllEdgeProperties();
+    // 从 PropertyIndexManager 的缓存获取数据（已迁移的数据）
+    const cached = this.propertyIndexManager.getAllCachedProperties();
+    let nodeProperties = cached.nodeProperties;
+    let edgeProperties = cached.edgeProperties;
+
+    // 如果缓存为空，回退到从 PropertyStore 获取（向后兼容）
+    if (nodeProperties.size === 0) {
+      nodeProperties = this.properties.getAllNodeProperties();
+      edgeProperties = this.properties.getAllEdgeProperties();
+    }
 
     // 重建属性索引
     await this.propertyIndexManager.rebuildFromProperties(nodeProperties, edgeProperties);

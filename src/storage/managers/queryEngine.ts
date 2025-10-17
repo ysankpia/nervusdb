@@ -22,6 +22,15 @@ export interface QueryContext {
   getMemoryTriples: () => EncodedTriple[];
   tombstones: Set<string>;
   bumpHot?: (order: IndexOrder, primary: number) => void;
+  // 架构重构（Issue #7）：添加propertyIndexManager用于读取属性
+  propertyIndexManager?: {
+    getNodePropertiesSync: (nodeId: number) => Record<string, unknown> | undefined;
+    getEdgePropertiesSync: (key: {
+      subjectId: number;
+      predicateId: number;
+      objectId: number;
+    }) => Record<string, unknown> | undefined;
+  };
 }
 
 /**
@@ -512,6 +521,29 @@ export class QueryEngine {
       objectId: triple.objectId,
     };
 
+    // 架构重构（Issue #7）：优先从PropertyIndexManager读取属性
+    const getNodeProps = (nodeId: number): Record<string, unknown> | undefined => {
+      if (!includeProps) return undefined;
+
+      // 1. 先从PropertyStore（增量缓存）读取
+      const fromStore = this.context.properties.getNodeProperties(nodeId);
+      if (fromStore !== undefined) return fromStore;
+
+      // 2. 从PropertyIndexManager读取（磁盘数据）
+      return this.context.propertyIndexManager?.getNodePropertiesSync(nodeId);
+    };
+
+    const getEdgeProps = (): Record<string, unknown> | undefined => {
+      if (!includeProps) return undefined;
+
+      // 1. 先从PropertyStore读取
+      const fromStore = this.context.properties.getEdgeProperties(tripleKey);
+      if (fromStore !== undefined) return fromStore;
+
+      // 2. 从PropertyIndexManager读取
+      return this.context.propertyIndexManager?.getEdgePropertiesSync(tripleKey);
+    };
+
     return {
       subject: this.context.dictionary.getValue(triple.subjectId) ?? '',
       predicate: this.context.dictionary.getValue(triple.predicateId) ?? '',
@@ -519,15 +551,9 @@ export class QueryEngine {
       subjectId: triple.subjectId,
       predicateId: triple.predicateId,
       objectId: triple.objectId,
-      subjectProperties: includeProps
-        ? this.context.properties.getNodeProperties(triple.subjectId)
-        : undefined,
-      objectProperties: includeProps
-        ? this.context.properties.getNodeProperties(triple.objectId)
-        : undefined,
-      edgeProperties: includeProps
-        ? this.context.properties.getEdgeProperties(tripleKey)
-        : undefined,
+      subjectProperties: getNodeProps(triple.subjectId),
+      objectProperties: getNodeProps(triple.objectId),
+      edgeProperties: getEdgeProps(),
     };
   }
 
