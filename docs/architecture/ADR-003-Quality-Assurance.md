@@ -19,6 +19,7 @@ NervusDB 作为嵌入式数据库，数据可靠性和代码质量至关重要�
 5. **提交质量**：如何防止低质量代码进入仓库？
 
 业务/技术约束：
+
 - **零容忍数据损坏**：数据库 bug 可能导致用户数据丢失
 - **性能敏感**：质量检查不能拖慢开发流程（CI 需 <5min）
 - **开发体验**：工具链需要易用，不能增加开发者负担
@@ -34,14 +35,15 @@ NervusDB 作为嵌入式数据库，数据可靠性和代码质量至关重要�
 // tsconfig.json
 {
   "compilerOptions": {
-    "strict": true,                         // 最严格类型检查
-    "noFallthroughCasesInSwitch": true,    // 防止 switch 穿透
-    "noImplicitOverride": true             // 显式标记 override
+    "strict": true, // 最严格类型检查
+    "noFallthroughCasesInSwitch": true, // 防止 switch 穿透
+    "noImplicitOverride": true // 显式标记 override
   }
 }
 ```
 
 **作用**：
+
 - 捕获 90% 以上的类型错误
 - 防止空指针引用（`undefined` / `null` 检查）
 - 强制函数签名一致性
@@ -59,11 +61,13 @@ NervusDB 作为嵌入式数据库，数据可靠性和代码质量至关重要�
 ```
 
 **ESLint 规则**：
+
 - `@typescript-eslint/recommended`：TypeScript 最佳实践
 - `eslint-plugin-prettier`：Prettier 规则集成
 - `eslint-config-prettier`：禁用与 Prettier 冲突的规则
 
 **Prettier 配置**：
+
 - 统一格式化 Markdown、YAML、JSON
 - 强制一致的缩进、引号、分号
 
@@ -77,11 +81,13 @@ NervusDB 作为嵌入式数据库，数据可靠性和代码质量至关重要�
 ```
 
 **测试覆盖率要求**：
+
 - **每文件覆盖率 ≥75%**（通过 `scripts/check-coverage-per-file.mjs` 强制）
 - **分支覆盖率 ≥70%**
 - **核心模块覆盖率 ≥90%**（storage/query）
 
 **测试框架选择**：Vitest（而非 Jest）
+
 - 原生 ESM 支持
 - 速度快（比 Jest 快 2-5 倍）
 - TypeScript 无需额外配置
@@ -92,17 +98,19 @@ NervusDB 作为嵌入式数据库，数据可靠性和代码质量至关重要�
 // package.json
 {
   "scripts": {
-    "prepare": "husky"  // npm install 后自动安装 hooks
+    "prepare": "husky" // npm install 后自动安装 hooks
   }
 }
 ```
 
 **pre-commit hook**（推测配置）：
+
 - 运行 `lint-staged`：只检查暂存文件
 - 执行格式化检查
 - 运行相关测试
 
 **pre-push hook**：
+
 - 执行完整测试套件（可选）
 - 确保 CI 必然通过
 
@@ -123,6 +131,7 @@ jobs:
 ```
 
 **CI 策略**：
+
 - **只在 main 分支和 PR 触发**
 - **并发控制**：同一 ref 的构建会取消旧构建
 - **矩阵策略**：只测试 Node.js 20.x（锁定单版本保证一致性）
@@ -130,12 +139,12 @@ jobs:
 
 ### 6. 质量门禁
 
-| 阶段 | 检查项 | 失败策略 |
-|------|--------|---------|
-| **本地开发** | TypeScript 报错 | IDE 红线提示 |
-| **Git commit** | Lint + Format | pre-commit hook 阻止提交 |
-| **Git push** | 完整测试（可选） | pre-push hook 阻止推送 |
-| **PR 合并** | CI 全部通过 | GitHub 分支保护规则阻止合并 |
+| 阶段           | 检查项           | 失败策略                    |
+| -------------- | ---------------- | --------------------------- |
+| **本地开发**   | TypeScript 报错  | IDE 红线提示                |
+| **Git commit** | Lint + Format    | pre-commit hook 阻止提交    |
+| **Git push**   | 完整测试（可选） | pre-push hook 阻止推送      |
+| **PR 合并**    | CI 全部通过      | GitHub 分支保护规则阻止合并 |
 
 ## 备选方案 (Alternatives Considered)
 
@@ -266,6 +275,7 @@ jobs:
 - ✅ **回归问题**：0 例（v1.1.0 发布后无回归 bug）
 
 **性能指标**（CI 构建时间）：
+
 - Typecheck：~30s
 - Lint：~20s
 - Format check：~10s
@@ -275,14 +285,14 @@ jobs:
 
 ## 工具链版本
 
-| 工具 | 版本 | 说明 |
-|------|------|------|
-| TypeScript | 5.9.2 | 最新稳定版 |
-| ESLint | 9.35.0 | Flat config 支持 |
-| Prettier | 3.6.2 | 最新格式化规则 |
-| Vitest | 3.2.4 | 原生 ESM 支持 |
-| Husky | 9.1.3 | Git hooks 管理 |
-| lint-staged | 15.2.7 | 暂存文件检查 |
+| 工具        | 版本   | 说明             |
+| ----------- | ------ | ---------------- |
+| TypeScript  | 5.9.2  | 最新稳定版       |
+| ESLint      | 9.35.0 | Flat config 支持 |
+| Prettier    | 3.6.2  | 最新格式化规则   |
+| Vitest      | 3.2.4  | 原生 ESM 支持    |
+| Husky       | 9.1.3  | Git hooks 管理   |
+| lint-staged | 15.2.7 | 暂存文件检查     |
 
 ## 参考资料
 

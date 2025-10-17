@@ -450,8 +450,8 @@ async function updateBaseMd() {
   const content = await fs.readFile(TARGET_FILE, 'utf8');
   const headerIdx = content.indexOf(HEADER);
   if (headerIdx === -1) {
-    console.error(`[update-dir-tree] 未找到段落标题：${HEADER}`);
-    process.exit(2);
+    console.warn(`[update-dir-tree] 未找到段落标题：${HEADER}，跳过更新`);
+    return; // 优雅退出，不阻塞 commit
   }
   const fenceStart = content.indexOf('```', headerIdx);
   if (fenceStart === -1) {

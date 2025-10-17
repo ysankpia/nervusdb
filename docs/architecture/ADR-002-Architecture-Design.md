@@ -19,6 +19,7 @@ NervusDB 作为嵌入式知识图谱数据库，需要在单机环境下提供�
 5. **开发维护性**：如何让代码结构清晰，方便长期维护？
 
 业务/技术约束：
+
 - 嵌入式场景：必须是进程内调用，不能依赖外部服务
 - 性能要求：TPS >10K，查询延迟 <100ms（P99）
 - 数据可靠性：崩溃后必须能恢复到一致状态
@@ -68,6 +69,7 @@ NervusDB 作为嵌入式知识图谱数据库，需要在单机环境下提供�
 ```
 
 **核心理由**：
+
 - **关注点分离**：每层职责单一，存储层不关心查询语法，查询层不关心索引细节
 - **可测试性**：每层可独立测试，降低集成测试复杂度
 - **可替换性**：可以替换任意层的实现而不影响其他层（如替换存储引擎）
@@ -84,15 +86,16 @@ NervusDB 作为嵌入式知识图谱数据库，需要在单机环境下提供�
 - **OPS**：按 object → predicate → subject 排序
 
 **查询优化器自动选择最佳索引**：
+
 ```typescript
 // 查询 subject="alice" → 使用 SPO/SOP
-db.find({ subject: "alice" });
+db.find({ subject: 'alice' });
 
 // 查询 predicate="FRIEND_OF" → 使用 POS/PSO
-db.find({ predicate: "FRIEND_OF" });
+db.find({ predicate: 'FRIEND_OF' });
 
 // 查询 object="bob" → 使用 OSP/OPS
-db.find({ object: "bob" });
+db.find({ object: 'bob' });
 ```
 
 ### 3. WAL v2 + 事务幂等
@@ -117,6 +120,7 @@ db.find({ object: "bob" });
 Cypher/GraphQL/Gremlin → 解析为 AST → 编译为 QueryBuilder 调用 → 执行
 
 **优势**：
+
 - 避免重复实现查询逻辑
 - 所有查询语言共享性能优化（如属性下推）
 - 新增查询语言只需实现解析器
@@ -228,7 +232,7 @@ Cypher/GraphQL/Gremlin → 解析为 AST → 编译为 QueryBuilder 调用 → �
    - README 包含架构总览图
    - 每层有独立的测试用例，方便理解
 
-4. **学习曲线陡峭**（新人需要理解分层架构）** → **缓解**：
+4. **学习曲线陡峭**（新人需要理解分层架构）** → **缓解\*\*：
    - 提供快速上手指南（`docs/教学文档/教程-00-概览.md`）
    - 核心 API 只需理解 QueryBuilder，无需了解存储细节
    - 示例代码覆盖90%常见场景
@@ -268,14 +272,17 @@ Cypher/GraphQL/Gremlin → 解析为 AST → 编译为 QueryBuilder 调用 → �
 ## 架构演进历史
 
 ### v0.1.0 初始版本
+
 - 单索引 SPO
 - 无 WAL
 
 ### v0.2.0 可靠性提升
+
 - 引入 WAL v2
 - 事务幂等机制
 
 ### v1.1.0 性能优化（当前版本）
+
 - 完整六序索引
 - LSM-Lite 暂存
 - 插件系统
