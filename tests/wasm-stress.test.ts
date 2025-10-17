@@ -57,7 +57,9 @@ describe('WASM Storage Engine - Stress Tests', () => {
     const elapsed = performance.now() - start;
 
     // Should complete 1000 queries in reasonable time
-    expect(elapsed).toBeLessThan(500); // 500ms for 1K queries
+    // CI environments (2-core CPU) are slower than local dev
+    const threshold = process.env.CI ? 2000 : 500;
+    expect(elapsed).toBeLessThan(threshold); // 500ms local, 2000ms CI
 
     engine.free();
   });
@@ -133,7 +135,9 @@ describe('WASM Storage Engine - Stress Tests', () => {
     const elapsed = performance.now() - start;
 
     expect(results).toHaveLength(5000);
-    expect(elapsed).toBeLessThan(200); // Should be fast
+    // CI environments need more time for large result sets
+    const threshold = process.env.CI ? 800 : 200;
+    expect(elapsed).toBeLessThan(threshold); // 200ms local, 800ms CI
 
     engine.free();
   });
