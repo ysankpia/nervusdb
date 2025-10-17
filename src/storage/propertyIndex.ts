@@ -10,6 +10,8 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { PropertyDataStore } from './propertyDataStore.js';
+import type { TripleKey } from './propertyStore.js';
 
 // 索引条目：属性名 -> 值 -> ID集合
 export interface PropertyIndexEntry {
@@ -322,6 +324,10 @@ export class MemoryPropertyIndex {
 
 /**
  * 持久化属性索引管理器
+ *
+ * 架构演进（v2.0）：
+ * - 倒排索引（已有）：属性名->值->ID集合（用于whereProperty查询）
+ * - 正向索引（新增）：ID->属性数据（用于getNodeProperties查询）
  */
 export class PropertyIndexManager {
   private readonly memoryIndex = new MemoryPropertyIndex();
@@ -330,9 +336,13 @@ export class PropertyIndexManager {
   private readonly indexPaths = new Map<string, string>(); // 属性名 -> 索引文件路径
   private manifestLoaded = false;
 
-  constructor(indexDirectory: string) {
+  // 新增：正向属性数据存储（磁盘分页 + 内存缓存）
+  private readonly propertyDataStore: PropertyDataStore;
+
+  constructor(indexDirectory: string, pageSize = 1024) {
     this.indexDirectory = indexDirectory;
     this.manifestPath = path.join(indexDirectory, 'property-index.manifest.json');
+    this.propertyDataStore = new PropertyDataStore(indexDirectory, pageSize);
   }
 
   /**
@@ -343,16 +353,21 @@ export class PropertyIndexManager {
   }
 
   /**
-   * 初始化属性索引目录
+   * 初始化属性索引目录和数据存储
    */
   async initialize(): Promise<void> {
     try {
       await fs.mkdir(this.indexDirectory, { recursive: true });
     } catch {}
+
+    // 初始化属性数据存储
+    await this.propertyDataStore.initialize();
   }
 
   /**
    * 从现有属性数据重建索引
+   *
+   * 架构重构（Issue #7）：同时将数据迁移到 PropertyDataStore
    */
   async rebuildFromProperties(
     nodeProperties: Map<number, Record<string, unknown>>,
@@ -372,16 +387,24 @@ export class PropertyIndexManager {
 
     // 重建节点属性索引
     for (const [nodeId, props] of nodeProperties.entries()) {
+      // 更新倒排索引
       for (const [propName, value] of Object.entries(props)) {
         this.memoryIndex.indexNodeProperty(nodeId, propName, value);
       }
+
+      // 架构重构（Issue #7）：同时设置到 PropertyDataStore 缓存
+      this.propertyDataStore.setNodeProperties(nodeId, props);
     }
 
     // 重建边属性索引
     for (const [edgeKey, props] of edgeProperties.entries()) {
+      // 更新倒排索引
       for (const [propName, value] of Object.entries(props)) {
         this.memoryIndex.indexEdgeProperty(edgeKey, propName, value);
       }
+
+      // 架构重构（Issue #7）：同时设置到 PropertyDataStore 缓存
+      this.propertyDataStore.setEdgeProperties(edgeKey, props);
     }
   }
 
@@ -423,14 +446,14 @@ export class PropertyIndexManager {
   }
 
   /**
-   * 持久化索引到磁盘
+   * 持久化索引到磁盘（包括倒排索引和正向数据）
    */
   async flush(): Promise<void> {
     try {
       await fs.mkdir(this.indexDirectory, { recursive: true });
     } catch {}
 
-    // 收集所有属性数据并序列化
+    // 1. 持久化倒排索引（现有逻辑）
     const indexData = this.serializeIndex();
 
     // 写入索引文件
@@ -454,6 +477,74 @@ export class PropertyIndexManager {
 
     // 写入清单文件
     await fs.writeFile(this.manifestPath, JSON.stringify(manifest, null, 2));
+
+    // 2. 持久化正向属性数据（新增）
+    await this.propertyDataStore.flush();
+  }
+
+  /**
+   * 正向查询：通过节点ID获取属性（同步，从缓存）
+   */
+  getNodePropertiesSync(nodeId: number): Record<string, unknown> | undefined {
+    return this.propertyDataStore.getNodePropertiesSync(nodeId);
+  }
+
+  /**
+   * 正向查询：通过边键获取属性（同步，从缓存）
+   */
+  getEdgePropertiesSync(key: TripleKey): Record<string, unknown> | undefined {
+    const edgeKey = encodeTripleKey(key);
+    return this.propertyDataStore.getEdgePropertiesSync(edgeKey);
+  }
+
+  /**
+   * 正向查询：通过节点ID获取属性（异步，支持磁盘加载）
+   */
+  async getNodeProperties(nodeId: number): Promise<Record<string, unknown> | undefined> {
+    return this.propertyDataStore.getNodeProperties(nodeId);
+  }
+
+  /**
+   * 正向查询：通过边键获取属性（异步，支持磁盘加载）
+   */
+  async getEdgeProperties(key: TripleKey): Promise<Record<string, unknown> | undefined> {
+    const edgeKey = encodeTripleKey(key);
+    return this.propertyDataStore.getEdgeProperties(edgeKey);
+  }
+
+  /**
+   * 设置节点属性（更新缓存和索引）
+   */
+  setNodeProperties(nodeId: number, properties: Record<string, unknown>): void {
+    // 更新正向数据存储
+    this.propertyDataStore.setNodeProperties(nodeId, properties);
+
+    // 更新倒排索引（现有逻辑，通过PropertyChange）
+    // 注意：调用者需要通过applyPropertyChange更新倒排索引
+  }
+
+  /**
+   * 设置边属性（更新缓存和索引）
+   */
+  setEdgeProperties(key: TripleKey, properties: Record<string, unknown>): void {
+    const edgeKey = encodeTripleKey(key);
+    // 更新正向数据存储
+    this.propertyDataStore.setEdgeProperties(edgeKey, properties);
+
+    // 更新倒排索引（通过PropertyChange）
+  }
+
+  /**
+   * 获取所有缓存的属性数据（用于重建索引等场景）
+   */
+  getAllCachedProperties(): {
+    nodeProperties: Map<number, Record<string, unknown>>;
+    edgeProperties: Map<string, Record<string, unknown>>;
+  } {
+    return {
+      nodeProperties: this.propertyDataStore.getAllCachedNodeProperties(),
+      edgeProperties: this.propertyDataStore.getAllCachedEdgeProperties(),
+    };
   }
 
   /**
@@ -751,4 +842,9 @@ export class PropertyIndexManager {
   ): Map<string | number | boolean | null, Set<string>> | undefined {
     return this.memoryIndex.getEdgePropertyMap(propertyName);
   }
+}
+
+// 辅助函数：编码TripleKey为字符串
+function encodeTripleKey({ subjectId, predicateId, objectId }: TripleKey): string {
+  return `${subjectId}:${predicateId}:${objectId}`;
 }
