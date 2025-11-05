@@ -15,6 +15,8 @@ memory-snapshots/
 # Rust
 nervusdb-wasm/target/
 nervusdb-wasm/Cargo.lock
+nervusdb-core/target/
+native/nervusdb-node/target/
 
 # OS
 .DS_Store

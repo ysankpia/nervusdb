@@ -425,6 +425,15 @@ g.V('user:alice').repeat(out('FRIEND_OF')).times(2).values('dept');
 - 更多调优技巧见 `docs/使用示例/性能基准测试指南.md`
 - 快速回归检测：`pnpm bench:baseline`（默认 dry-run，无需额外参数）
 
+### 构建 Rust 原生绑定（可选）
+
+```bash
+# 需要安装 Rust toolchain 与 @napi-rs/cli
+pnpm run build:native
+```
+
+构建成功后会在 `native/nervusdb-node/npm/<platform>/index.node` 生成 N-API 模块。运行环境若未检测到该模块（或设置 `NERVUSDB_DISABLE_NATIVE=1`），系统会自动回退到 TypeScript 实现。
+
 ## 运维与治理工具
 
 | 类别     | 命令                                          | 典型场景                               |

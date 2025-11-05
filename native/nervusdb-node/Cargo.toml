@@ -1,0 +1,15 @@
+[package]
+name = "nervusdb-node"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2.15.0", features = ["napi4"] }
+napi-derive = "2.15.0"
+nervusdb-core = { path = "../../nervusdb-core" }
+
+[build-dependencies]
+napi-build = "2.0.1"

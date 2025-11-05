@@ -1,4 +1,7 @@
 import { createRequire } from 'node:module';
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Minimal loader for the upcoming Rust native bindings.
@@ -12,8 +15,14 @@ export interface NativeOpenOptions {
   dataPath: string;
 }
 
+export interface NativeAddFactOutput {
+  subject_id: number;
+  predicate_id: number;
+  object_id: number;
+}
+
 export interface NativeDatabaseHandle {
-  addFact(subject: string, predicate: string, object: string): number;
+  addFact(subject: string, predicate: string, object: string): NativeAddFactOutput;
   close(): void;
 }
 
@@ -22,6 +31,25 @@ export interface NativeCoreBinding {
 }
 
 let cachedBinding: NativeCoreBinding | null | undefined;
+
+function resolveNativeAddonPath(): string | null {
+  const baseDir = fileURLToPath(new URL('../../native/nervusdb-node', import.meta.url));
+  const direct = join(baseDir, 'index.node');
+  if (existsSync(direct)) return direct;
+
+  const npmDir = join(baseDir, 'npm');
+  if (existsSync(npmDir)) {
+    for (const entry of readdirSync(npmDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const candidate = join(npmDir, entry.name, 'index.node');
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  return null;
+}
 
 /**
  * Loads the native binding in a resilient way. If the addon is missing
@@ -40,8 +68,13 @@ export function loadNativeCore(): NativeCoreBinding | null {
 
   try {
     const requireNative = createRequire(import.meta.url);
-    const binding = requireNative('../build/Release/nervusdb_core.node') as NativeCoreBinding;
-    cachedBinding = binding;
+    const addonPath = resolveNativeAddonPath();
+    if (addonPath) {
+      const binding = requireNative(addonPath) as NativeCoreBinding;
+      cachedBinding = binding;
+    } else {
+      cachedBinding = null;
+    }
   } catch {
     cachedBinding = null;
   }
@@ -52,5 +85,5 @@ export function loadNativeCore(): NativeCoreBinding | null {
  * Allows tests to override the cached binding.
  */
 export function __setNativeCoreForTesting(binding: NativeCoreBinding | null | undefined): void {
-  cachedBinding = binding;
+  cachedBinding = binding ?? null;
 }

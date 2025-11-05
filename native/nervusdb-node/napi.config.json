@@ -1,0 +1,5 @@
+{
+  "name": "nervusdb-node",
+  "targets": ["node20"],
+  "outputDir": "npm"
+}

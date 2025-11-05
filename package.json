@@ -57,6 +57,7 @@
     "bench:path-agg": "node benchmarks/path_agg.mjs",
     "bench:baseline": "pnpm build && node benchmarks/quick.mjs",
     "perf:smoke": "node benchmarks/insert_scan.mjs 2000 && node benchmarks/path_agg.mjs",
+    "build:native": "pnpm exec @napi-rs/cli build --directory native/nervusdb-node --release",
     "benchmark": "tsx src/cli/benchmark.ts run",
     "benchmark:core": "tsx src/cli/benchmark.ts core",
     "benchmark:search": "tsx src/cli/benchmark.ts search",
@@ -110,7 +111,8 @@
     "tsx": "^4.20.5",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.44.0",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "@napi-rs/cli": "^2.18.0"
   },
   "dependencies": {
     "lru-cache": "^11.2.2"

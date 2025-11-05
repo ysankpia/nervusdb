@@ -20,7 +20,7 @@ describe('native core loader', () => {
   it('returns cached binding', () => {
     const binding: NativeCoreBinding = {
       open: () => ({
-        addFact: () => 1,
+        addFact: () => ({ subject_id: 1, predicate_id: 2, object_id: 3 }),
         close: () => {},
       }),
     };
