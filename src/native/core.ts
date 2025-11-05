@@ -21,8 +21,18 @@ export interface NativeAddFactOutput {
   object_id: number;
 }
 
+export interface NativeQueryCriteria {
+  subject_id?: number;
+  predicate_id?: number;
+  object_id?: number;
+}
+
+export type NativeTriple = NativeAddFactOutput;
+
 export interface NativeDatabaseHandle {
-  addFact(subject: string, predicate: string, object: string): NativeAddFactOutput;
+  addFact(subject: string, predicate: string, object: string): NativeTriple;
+  query(criteria?: NativeQueryCriteria): NativeTriple[];
+  hydrate(dictionary: string[], triples: NativeTriple[]): void;
   close(): void;
 }
 

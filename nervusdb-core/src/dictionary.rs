@@ -18,6 +18,22 @@ impl Dictionary {
         Self::default()
     }
 
+    pub fn from_vec(values: Vec<String>) -> Self {
+        let mut id_to_str = Vec::with_capacity(values.len());
+        let mut str_to_id = HashMap::with_capacity(values.len());
+
+        for (idx, value) in values.into_iter().enumerate() {
+            let id = idx as StringId;
+            str_to_id.insert(value.clone(), id);
+            id_to_str.push(value);
+        }
+
+        Self {
+            str_to_id,
+            id_to_str,
+        }
+    }
+
     /// Returns the identifier for `value`, inserting it if missing.
     pub fn get_or_insert<S: AsRef<str>>(&mut self, value: S) -> StringId {
         let key = value.as_ref();

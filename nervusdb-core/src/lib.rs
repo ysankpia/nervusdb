@@ -46,6 +46,13 @@ pub struct Database {
     triples: Vec<Triple>,
 }
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct QueryCriteria {
+    pub subject_id: Option<StringId>,
+    pub predicate_id: Option<StringId>,
+    pub object_id: Option<StringId>,
+}
+
 impl Database {
     pub fn open(options: Options) -> Result<Self> {
         let wal_path = options.data_path.join("wal.log");
@@ -56,6 +63,28 @@ impl Database {
             index: GlobalIndex::new(),
             triples: Vec::new(),
         })
+    }
+
+    pub fn hydrate(
+        &mut self,
+        dictionary_values: Vec<String>,
+        triples: Vec<(StringId, StringId, StringId)>,
+    ) -> Result<()> {
+        self.dictionary = Dictionary::from_vec(dictionary_values);
+        self.index = GlobalIndex::new();
+        self.triples = Vec::with_capacity(triples.len());
+
+        for (subject_id, predicate_id, object_id) in triples {
+            let triple = Triple::new(subject_id, predicate_id, object_id);
+            let partition =
+                self.options
+                    .partition
+                    .partition_for(subject_id, predicate_id, object_id);
+            self.index.insert(triple, partition);
+            self.triples.push(triple);
+        }
+
+        Ok(())
     }
 
     pub fn add_fact(&mut self, fact: Fact<'_>) -> Result<Triple> {
@@ -84,6 +113,31 @@ impl Database {
     pub fn dictionary(&self) -> &Dictionary {
         &self.dictionary
     }
+
+    pub fn query(&self, criteria: QueryCriteria) -> Vec<Triple> {
+        self.triples
+            .iter()
+            .copied()
+            .filter(|triple| {
+                if let Some(subject_id) = criteria.subject_id {
+                    if triple.subject_id != subject_id {
+                        return false;
+                    }
+                }
+                if let Some(predicate_id) = criteria.predicate_id {
+                    if triple.predicate_id != predicate_id {
+                        return false;
+                    }
+                }
+                if let Some(object_id) = criteria.object_id {
+                    if triple.object_id != object_id {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -100,5 +154,12 @@ mod tests {
             db.dictionary().lookup_value(triple.subject_id).unwrap(),
             "alice"
         );
+
+        let results = db.query(QueryCriteria {
+            subject_id: Some(triple.subject_id),
+            predicate_id: None,
+            object_id: None,
+        });
+        assert_eq!(results, vec![triple]);
     }
 }

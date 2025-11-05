@@ -3,7 +3,12 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { initializeIfMissing, readStorageFile } from './fileHeader.js';
-import { loadNativeCore, type NativeDatabaseHandle } from '../../native/core.js';
+import {
+  loadNativeCore,
+  type NativeDatabaseHandle,
+  type NativeQueryCriteria,
+  type NativeTriple,
+} from '../../native/core.js';
 import { StringDictionary } from './dictionary.js';
 import { PropertyStore, TripleKey } from './propertyStore.js';
 import { TripleIndexes, type IndexOrder } from './tripleIndexes.js';
@@ -75,6 +80,8 @@ export class PersistentStore {
   private labelManager!: LabelManager;
   private lsm?: LsmLiteStaging<EncodedTriple>;
   private nativeHandle?: NativeDatabaseHandle;
+  private nativeQueryReady = false;
+  private nativeStrict = process.env.NERVUSDB_NATIVE_STRICT === '1';
   // 内存模式（:memory:）支持：使用临时文件路径并在关闭时清理
   private memoryMode = false;
   private memoryBasePath?: string;
@@ -258,6 +265,8 @@ export class PersistentStore {
 
     // 初始化刷新管理器
     store.flushManager = new FlushManager();
+
+    store.bootstrapNativeState();
 
     if (options.registerReader !== false) {
       await store.concurrencyControl.registerReader(store.concurrencyControl.getCurrentEpoch());
@@ -592,6 +601,10 @@ export class PersistentStore {
   }
 
   query(criteria: Partial<EncodedTriple>): EncodedTriple[] {
+    const nativeResult = this.tryNativeQuery(criteria);
+    if (nativeResult !== undefined) {
+      return nativeResult;
+    }
     return this.queryEngine.query(criteria);
   }
 
@@ -599,6 +612,14 @@ export class PersistentStore {
    * 流式查询：统一委托给QueryEngine
    */
   async *queryStreaming(criteria: Partial<EncodedTriple>): AsyncIterableIterator<EncodedTriple> {
+    const nativeResult = this.tryNativeQuery(criteria);
+    if (nativeResult !== undefined) {
+      for (const triple of nativeResult) {
+        yield triple;
+      }
+      return;
+    }
+
     for await (const batch of this.queryEngine.streamQuery(criteria)) {
       yield* batch;
     }
@@ -609,6 +630,62 @@ export class PersistentStore {
     options?: { includeProperties?: boolean },
   ): FactRecord[] {
     return this.queryEngine.resolveRecords(triples, options);
+  }
+
+  private bootstrapNativeState(): void {
+    if (!this.nativeHandle || typeof this.nativeHandle.hydrate !== 'function') {
+      this.nativeQueryReady = false;
+      return;
+    }
+
+    const dictionaryValues = this.dictionary.getValuesSnapshot();
+
+    try {
+      const triples = this.queryEngine.query({});
+      const payload: NativeTriple[] = triples.map((triple) => ({
+        subject_id: triple.subjectId,
+        predicate_id: triple.predicateId,
+        object_id: triple.objectId,
+      }));
+      this.nativeHandle.hydrate(dictionaryValues, payload);
+      this.nativeQueryReady = true;
+    } catch (error) {
+      this.nativeQueryReady = false;
+      if (this.nativeStrict) {
+        throw error;
+      }
+    }
+  }
+
+  private tryNativeQuery(criteria: Partial<EncodedTriple>): EncodedTriple[] | undefined {
+    if (
+      !this.nativeHandle ||
+      !this.nativeQueryReady ||
+      typeof this.nativeHandle.query !== 'function'
+    ) {
+      return undefined;
+    }
+
+    const nativeCriteria: NativeQueryCriteria = {};
+    if (criteria.subjectId !== undefined) nativeCriteria.subject_id = criteria.subjectId;
+    if (criteria.predicateId !== undefined) nativeCriteria.predicate_id = criteria.predicateId;
+    if (criteria.objectId !== undefined) nativeCriteria.object_id = criteria.objectId;
+
+    try {
+      const result = this.nativeHandle.query(
+        Object.keys(nativeCriteria).length > 0 ? nativeCriteria : undefined,
+      );
+      return result.map((triple) => ({
+        subjectId: triple.subject_id,
+        predicateId: triple.predicate_id,
+        objectId: triple.object_id,
+      }));
+    } catch (error) {
+      if (this.nativeStrict) {
+        throw error;
+      }
+      return undefined;
+    }
   }
 
   async flush(): Promise<void> {
@@ -663,6 +740,7 @@ export class PersistentStore {
         }
       }
       this.nativeHandle = undefined;
+      this.nativeQueryReady = false;
     }
 
     // 如果存在未持久化的数据，优先刷新到磁盘，避免依赖重放

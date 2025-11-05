@@ -37,6 +37,10 @@ export class StringDictionary {
     return this.idToValue[id];
   }
 
+  getValuesSnapshot(): string[] {
+    return [...this.idToValue];
+  }
+
   serialize(): Buffer {
     const buffers: Buffer[] = [];
     const countBuffer = Buffer.allocUnsafe(4);
