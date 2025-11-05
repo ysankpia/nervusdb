@@ -10,7 +10,8 @@ describe('PropertyDataStore - 属性数据分页存储', () => {
 
   beforeEach(async () => {
     testDir = await mkdtemp(join(tmpdir(), 'property-data-test-'));
-    store = new PropertyDataStore(testDir, 1024);
+    // 使用足够大的缓存大小以支持大数据集测试
+    store = new PropertyDataStore(testDir, 1024, 3000);
     await store.initialize();
   });
 

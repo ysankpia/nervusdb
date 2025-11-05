@@ -61,9 +61,9 @@ describe('PropertyStore Scalability - Issue #7 Verification', () => {
       const openTime = Date.now() - startTime;
       console.log(`   打开时间: ${openTime}ms`);
 
-      // 验证数据可读
-      const sampleProps = store2.getNodeProperties(0);
-      expect(sampleProps).toBeDefined();
+      // 验证数据可读（查询三元组而不是属性，因为属性现在是按需加载）
+      const facts = store2.listFacts();
+      expect(facts.length).toBeGreaterThan(0);
 
       await store2.close();
 

@@ -1,39 +1,4 @@
 # Add patterns to ignore here, one per line
 # Example:
-*.log
-tmp/
-.qoder/repowiki/zh/meta
-# Node & TypeScript
-node_modules/
-coverage/
-*.tsbuildinfo
-*.log
-npm-debug.log*
-yarn-debug.log*
-pnpm-debug.log*
-
-# Editor/OS
-.DS_Store
-.idea/
-.vscode/
-
-# Build outputs (keep tracked dist if already committed)
-dist/
-
-# Local databases generated during tests/bench
-*.synapsedb
-*.synapsedb.wal
-*.synapsedb.pages/
-
-# Test temp databases (e.g. temp-test-snapshot-memory)
-temp-*
-temp-*.wal
-temp-*.pages/
-
-# Repomix output
-repomix-output.xml
-
-# Temp
-tmp/
-.tmp/
-*.tmp
+# *.log
+# tmp/

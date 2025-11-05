@@ -5,6 +5,7 @@
  * - 正向索引：ID -> 属性数据（与PropertyIndexManager的倒排索引配合）
  * - 分页存储：按需加载，内存友好
  * - 增量持久化：只写入变更的页面
+ * - LRU缓存：限制内存占用，自动淘汰冷数据
  *
  * 存储格式：
  * - manifest.json: 页面元数据管理
@@ -13,6 +14,7 @@
 
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
+import { LRUCache } from 'lru-cache';
 
 export interface PropertyPageMeta {
   startId: number; // 页面起始ID
@@ -44,35 +46,50 @@ export class PropertyDataStore {
   private readonly nodeDataPath: string;
   private readonly edgeDataPath: string;
 
-  // 内存缓存（LRU或简单Map）
-  private readonly nodeCache = new Map<number, Buffer>();
-  private readonly edgeCache = new Map<string, Buffer>();
+  // LRU缓存：限制内存占用，自动淘汰最少使用的数据
+  private readonly nodeCache: LRUCache<number, Buffer>;
+  private readonly edgeCache: LRUCache<string, Buffer>;
 
   // 分页元数据
   private manifest: PropertyDataManifest | null = null;
   private readonly pageSize: number;
 
-  constructor(dataDirectory: string, pageSize = 1024) {
+  constructor(dataDirectory: string, pageSize = 1024, cacheSize = 1000) {
     this.dataDirectory = dataDirectory;
     this.manifestPath = join(dataDirectory, 'property-data.manifest.json');
     this.nodeDataPath = join(dataDirectory, 'property-data.nodes.pages');
     this.edgeDataPath = join(dataDirectory, 'property-data.edges.pages');
     this.pageSize = pageSize;
+
+    // 初始化LRU缓存
+    this.nodeCache = new LRUCache<number, Buffer>({
+      max: cacheSize, // 最多缓存1000个节点属性
+      // 可选：设置内存限制
+      // maxSize: 10 * 1024 * 1024, // 10MB
+      // sizeCalculation: (value) => value.length,
+    });
+
+    this.edgeCache = new LRUCache<string, Buffer>({
+      max: cacheSize / 2, // 边属性通常较少
+    });
   }
 
   /**
-   * 初始化：创建目录和manifest
+   * 初始化：创建目录和manifest（按需加载策略）
+   *
+   * 性能优化（Issue #12）：
+   * - 移除预加载逻辑，仅加载manifest元数据
+   * - 实现O(1)启动时间，数据按需从磁盘加载
    */
   async initialize(): Promise<void> {
     try {
       await fs.mkdir(this.dataDirectory, { recursive: true });
     } catch {}
 
-    // 尝试加载现有manifest
+    // 尝试加载现有manifest（仅元数据，不加载实际数据）
     try {
       await this.loadManifest();
-      // manifest存在，预加载所有数据到缓存
-      await this.preloadAllDataToCache();
+      // 成功：manifest已加载，数据将按需加载
     } catch {
       // manifest不存在，创建空的
       this.manifest = {
@@ -87,36 +104,12 @@ export class PropertyDataStore {
   }
 
   /**
-   * 预加载所有节点属性数据到缓存（启动时调用）
+   * 同步读取节点属性（仅从LRU缓存）
    *
-   * 渐进式迁移策略：
-   * - 虽然仍是预加载，但从分页文件加载比从主文件反序列化更快
-   * - 未来可以改为LRU缓存 + 按需加载
-   */
-  private async preloadAllDataToCache(): Promise<void> {
-    if (!this.manifest || this.manifest.nodePages.length === 0) {
-      return;
-    }
-
-    // 加载所有节点属性页面
-    for (const page of this.manifest.nodePages) {
-      const pageData = await this.loadNodePage(page);
-      // 将整页数据加载到缓存
-      for (const [nodeId, data] of pageData.entries()) {
-        this.nodeCache.set(nodeId, data);
-      }
-    }
-
-    // 边属性暂时不预加载（数量较少，按需加载即可）
-  }
-
-  /**
-   * 同步读取节点属性（仅从缓存）
-   *
-   * 渐进式迁移策略：
-   * - 启动时将所有属性加载到缓存
-   * - 第一次flush后持久化到分页文件
-   * - 下次启动时从分页文件预加载到缓存，跳过主文件
+   * 性能优化（Issue #12）：
+   * - 仅从缓存读取，不触发磁盘I/O
+   * - 缓存未命中返回undefined
+   * - 调用者应使用异步方法getNodeProperties()触发加载
    */
   getNodePropertiesSync(nodeId: number): Record<string, unknown> | undefined {
     const cached = this.nodeCache.get(nodeId);
@@ -127,16 +120,20 @@ export class PropertyDataStore {
   }
 
   /**
-   * 异步加载节点属性（从磁盘，支持未来懒加载）
+   * 异步加载节点属性（从磁盘按需加载 + LRU缓存）
+   *
+   * 性能优化（Issue #12）：
+   * - 缓存命中：O(1)，直接返回
+   * - 缓存未命中：从磁盘加载整页，缓存所有条目（提高命中率）
    */
   async getNodeProperties(nodeId: number): Promise<Record<string, unknown> | undefined> {
-    // 1. 检查内存缓存
+    // 1. 检查LRU缓存
     const cached = this.nodeCache.get(nodeId);
     if (cached) {
       return this.decodePropertyData(cached);
     }
 
-    // 2. 从磁盘加载
+    // 2. 从磁盘按需加载
     if (!this.manifest) {
       return undefined;
     }
@@ -146,15 +143,20 @@ export class PropertyDataStore {
       return undefined;
     }
 
-    // 加载整个页面并缓存
+    // 加载整个页面（一次I/O加载多个条目，提高缓存命中率）
     const pageData = await this.loadNodePage(page);
+
+    // 将整页数据缓存到LRU（自动淘汰旧数据）
+    for (const [id, buffer] of pageData.entries()) {
+      this.nodeCache.set(id, buffer);
+    }
+
+    // 返回查询的条目
     const entry = pageData.get(nodeId);
     if (!entry) {
       return undefined;
     }
 
-    // 缓存结果
-    this.nodeCache.set(nodeId, entry);
     return this.decodePropertyData(entry);
   }
 
@@ -429,10 +431,11 @@ export class PropertyDataStore {
   }
 
   /**
-   * 获取所有缓存的节点属性（用于重建索引）
+   * 获取所有缓存的节点属性（用于重建索引和flush）
    */
   getAllCachedNodeProperties(): Map<number, Record<string, unknown>> {
     const result = new Map<number, Record<string, unknown>>();
+    // LRUCache 支持 entries() 迭代器
     for (const [nodeId, buffer] of this.nodeCache.entries()) {
       const properties = this.decodePropertyData(buffer);
       if (properties && Object.keys(properties).length > 0) {
@@ -443,7 +446,7 @@ export class PropertyDataStore {
   }
 
   /**
-   * 获取所有缓存的边属性（用于重建索引）
+   * 获取所有缓存的边属性（用于重建索引和flush）
    */
   getAllCachedEdgeProperties(): Map<string, Record<string, unknown>> {
     const result = new Map<string, Record<string, unknown>>();
@@ -459,10 +462,16 @@ export class PropertyDataStore {
   /**
    * 获取缓存统计信息
    */
-  getCacheStats(): { nodeCacheSize: number; edgeCacheSize: number } {
+  getCacheStats(): {
+    nodeCacheSize: number;
+    edgeCacheSize: number;
+    nodeHitRate?: number;
+    edgeHitRate?: number;
+  } {
     return {
       nodeCacheSize: this.nodeCache.size,
       edgeCacheSize: this.edgeCache.size,
+      // LRU缓存暂不提供命中率统计，可后续添加
     };
   }
 
