@@ -433,6 +433,7 @@ pnpm run build:native
 ```
 
 构建成功后会在 `native/nervusdb-node/npm/<platform>/index.node` 生成 N-API 模块。运行环境若未检测到该模块（或设置 `NERVUSDB_DISABLE_NATIVE=1`），系统会自动回退到 TypeScript 实现。
+CI 会在构建阶段执行 `pnpm run build:native` 与针对原生加载器的 vitest 子集，确保 Node 层随时可用。
 
 ## 运维与治理工具
 

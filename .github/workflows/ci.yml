@@ -16,6 +16,8 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      PNPM_CACHE_FOLDER: ~/.pnpm-store
     strategy:
       matrix:
         node-version: [20.x] # 锁定一个版本以保证一致性
@@ -34,6 +36,9 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: 'pnpm'
 
+      - name: Configure pnpm store
+        run: pnpm config set store-dir $PNPM_CACHE_FOLDER
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -42,14 +47,33 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PNPM_CACHE_FOLDER }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-
       - name: Rust core format check
         run: cargo fmt --manifest-path nervusdb-core/Cargo.toml -- --check
 
       - name: Rust core tests
         run: cargo test --manifest-path nervusdb-core/Cargo.toml
+
+      - name: Build native addon (napi)
+        run: pnpm exec napi build --release --cargo-cwd native/nervusdb-node native/nervusdb-node/npm
+
+      - name: Test native addon loading (vitest subset)
+        run: pnpm vitest run tests/unit/native/native_loader.test.ts tests/integration/native/native_binding.test.ts
 
       - name: Build WASM module
         run: |
