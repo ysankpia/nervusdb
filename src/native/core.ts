@@ -88,11 +88,32 @@ function resolveNativeAddonPath(): string | null {
     return join(npmDir, fallbackFile.name);
   }
 
-  const legacyEntry = entries.find((entry) => entry.isDirectory());
-  if (legacyEntry) {
-    const candidate = join(npmDir, legacyEntry.name, 'index.node');
-    if (existsSync(candidate)) {
-      return candidate;
+  // Check platform-specific subdirectories (e.g., darwin-arm64/)
+  const dirEntries = entries.filter((entry) => entry.isDirectory());
+  for (const dirEntry of dirEntries) {
+    const dirPath = join(npmDir, dirEntry.name);
+    try {
+      const dirFiles = readdirSync(dirPath, { withFileTypes: true });
+      const nodeFiles = dirFiles.filter((f) => f.isFile() && f.name.endsWith('.node'));
+
+      // Try exact match first (directory name matches platform-arch)
+      if (dirEntry.name.includes(platformToken) && nodeFiles.length > 0) {
+        const exactMatch = nodeFiles.find((f) => f.name.includes(platformToken));
+        if (exactMatch) {
+          return join(dirPath, exactMatch.name);
+        }
+        // Fallback to any .node file in matching directory
+        return join(dirPath, nodeFiles[0].name);
+      }
+
+      // Legacy: check for index.node in any subdirectory
+      const indexNode = nodeFiles.find((f) => f.name === 'index.node');
+      if (indexNode) {
+        return join(dirPath, indexNode.name);
+      }
+    } catch {
+      // Skip directories that can't be read
+      continue;
     }
   }
 
