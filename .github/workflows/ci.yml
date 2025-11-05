@@ -34,7 +34,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          cache: 'pnpm'
 
       - name: Configure pnpm store
         run: pnpm config set store-dir $PNPM_CACHE_FOLDER
@@ -59,7 +58,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.PNPM_CACHE_FOLDER }}
-          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
