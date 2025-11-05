@@ -14,13 +14,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  core-ci:
     runs-on: ubuntu-latest
     env:
       PNPM_CACHE_FOLDER: ~/.pnpm-store
     strategy:
       matrix:
-        node-version: [20.x] # 锁定一个版本以保证一致性
+        node-version: [20.x]
 
     steps:
       - name: Checkout
@@ -28,7 +28,6 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        # The version is automatically read from the package.json's packageManager field
 
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
@@ -62,6 +61,7 @@ jobs:
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
       - name: Rust core format check
         run: cargo fmt --manifest-path nervusdb-core/Cargo.toml -- --check
 
@@ -103,7 +103,6 @@ jobs:
       - name: Assert no tmp synapsedb leftovers
         run: |
           set -euo pipefail
-          # 查找工作区根目录是否存在测试产生的临时数据库残留
           COUNT=$(find . -maxdepth 1 \
             \( -name "tmp-*.synapsedb" -o \
                -name "tmp-*.synapsedb.wal" -o \
@@ -120,3 +119,91 @@ jobs:
           else
             echo "No leftover tmp-*.synapsedb artifacts"
           fi
+
+  native-matrix:
+    needs: core-ci
+    runs-on: ${{ matrix.runner }}
+    env:
+      PNPM_CACHE_FOLDER: ~/.pnpm-store
+      NERVUSDB_EXPECT_NATIVE: '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            node: 20.x
+            platform: linux-x64-gnu
+          - runner: macos-14
+            node: 20.x
+            platform: darwin-arm64
+          - runner: macos-13
+            node: 20.x
+            platform: darwin-x64
+          - runner: windows-latest
+            node: 20.x
+            platform: win32-x64-msvc
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Configure pnpm store
+        run: pnpm config set store-dir $PNPM_CACHE_FOLDER
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: native-cargo-${{ matrix.platform }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PNPM_CACHE_FOLDER }}
+          key: native-pnpm-${{ matrix.platform }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build native addon
+        run: pnpm exec napi build --release --platform --cargo-cwd native/nervusdb-node native/nervusdb-node/npm
+
+      - name: Place platform binary
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          base="native/nervusdb-node/npm"
+          target_dir="$base/$PLATFORM"
+          rm -rf "$target_dir"
+          mkdir -p "$target_dir"
+          node_file=$(find "$base" -type f -name "*.node" -print -quit)
+          if [ -z "$node_file" ]; then
+            echo "::error::No .node artifact produced for $PLATFORM" >&2
+            ls -al "$base"
+            exit 1
+          fi
+          mv "$node_file" "$target_dir/index.node"
+
+      - name: Run native vitest subset
+        run: pnpm vitest run tests/unit/native/native_loader.test.ts tests/unit/storage/persistentStore.native.test.ts tests/integration/native/native_binding.test.ts
+
+      - name: Upload native artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: napi-${{ matrix.platform }}
+          path: native/nervusdb-node/npm/${{ matrix.platform }}

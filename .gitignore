@@ -17,6 +17,7 @@ nervusdb-wasm/target/
 nervusdb-wasm/Cargo.lock
 nervusdb-core/target/
 native/nervusdb-node/target/
+native/nervusdb-node/npm/**/*.node
 
 # OS
 .DS_Store
