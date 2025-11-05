@@ -181,24 +181,6 @@ jobs:
       - name: Build native addon
         run: pnpm exec napi build --release --platform --cargo-cwd native/nervusdb-node native/nervusdb-node/npm
 
-      - name: Place platform binary
-        shell: bash
-        env:
-          PLATFORM: ${{ matrix.platform }}
-        run: |
-          set -euo pipefail
-          base="native/nervusdb-node/npm"
-          target_dir="$base/$PLATFORM"
-          rm -rf "$target_dir"
-          mkdir -p "$target_dir"
-          node_file=$(find "$base" -type f -name "*.node" -print -quit)
-          if [ -z "$node_file" ]; then
-            echo "::error::No .node artifact produced for $PLATFORM" >&2
-            ls -al "$base"
-            exit 1
-          fi
-          mv "$node_file" "$target_dir/index.node"
-
       - name: Run native vitest subset
         run: pnpm vitest run tests/unit/native/native_loader.test.ts tests/unit/storage/persistentStore.native.test.ts tests/integration/native/native_binding.test.ts
 
@@ -206,4 +188,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: napi-${{ matrix.platform }}
-          path: native/nervusdb-node/npm/${{ matrix.platform }}
+          path: native/nervusdb-node/npm/nervusdb-node*.node

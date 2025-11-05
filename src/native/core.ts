@@ -50,57 +50,56 @@ function resolveNativeAddonPath(): string | null {
   if (existsSync(direct)) return direct;
 
   const npmDir = join(baseDir, 'npm');
-  const candidates: string[] = [];
-
-  const platform = process.platform;
-  const arch = process.arch;
-
-  if (platform === 'win32') {
-    if (arch === 'x64') candidates.push('win32-x64-msvc');
-    if (arch === 'arm64') candidates.push('win32-arm64-msvc');
-  } else if (platform === 'darwin') {
-    if (arch === 'arm64') candidates.push('darwin-arm64');
-    if (arch === 'x64') candidates.push('darwin-x64');
-  } else if (platform === 'linux') {
-    if (arch === 'x64') {
-      candidates.push('linux-x64-gnu', 'linux-x64-musl');
+  if (!existsSync(npmDir)) {
+    if (process.env.NERVUSDB_EXPECT_NATIVE === '1') {
+      console.error(`[Native Loader] Native npm directory not found: ${npmDir}`);
     }
-    if (arch === 'arm64') {
-      candidates.push('linux-arm64-gnu', 'linux-arm64-musl');
-    }
-    if (arch === 'arm') {
-      candidates.push('linux-arm-gnueabihf');
-    }
+    return null;
   }
 
-  if (existsSync(npmDir)) {
-    for (const triplet of candidates) {
-      const candidatePath = join(npmDir, triplet, 'index.node');
-      if (existsSync(candidatePath)) {
-        return candidatePath;
-      }
-    }
+  const packageName = 'nervusdb-node';
+  const platform = process.platform;
+  const arch = process.arch;
+  const entries = readdirSync(npmDir, { withFileTypes: true });
 
-    // Fallback: scan directories (legacy behaviour / dev environments)
-    for (const entry of readdirSync(npmDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const candidate = join(npmDir, entry.name, 'index.node');
-      if (existsSync(candidate)) {
-        return candidate;
-      }
+  const fileEntries = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.node'));
+  const platformToken = `${platform}-${arch}`;
+
+  const exactMatch = fileEntries.find(
+    (entry) =>
+      entry.name.startsWith(`${packageName}.`) &&
+      entry.name.includes(platform) &&
+      entry.name.includes(arch),
+  );
+  if (exactMatch) {
+    return join(npmDir, exactMatch.name);
+  }
+
+  // Some platforms may include libc info (e.g. gnu/musl). Try partial match on platform token.
+  const libcAwareMatch = fileEntries.find(
+    (entry) => entry.name.startsWith(`${packageName}.`) && entry.name.includes(platformToken),
+  );
+  if (libcAwareMatch) {
+    return join(npmDir, libcAwareMatch.name);
+  }
+
+  const fallbackFile = fileEntries.find((entry) => entry.name.startsWith(`${packageName}.`));
+  if (fallbackFile) {
+    return join(npmDir, fallbackFile.name);
+  }
+
+  const legacyEntry = entries.find((entry) => entry.isDirectory());
+  if (legacyEntry) {
+    const candidate = join(npmDir, legacyEntry.name, 'index.node');
+    if (existsSync(candidate)) {
+      return candidate;
     }
   }
 
   if (process.env.NERVUSDB_EXPECT_NATIVE === '1') {
-    const available = existsSync(npmDir)
-      ? readdirSync(npmDir, { withFileTypes: true })
-          .filter((d) => d.isDirectory())
-          .map((d) => d.name)
-      : [];
-    const tripletList = candidates.length ? candidates.join(', ') : '[]';
-    const availableList = available.length ? available.join(', ') : 'none';
+    const availableFiles = fileEntries.map((entry) => entry.name);
     console.error(
-      `[Native Loader] Failed to resolve addon. Platform=${platform}, arch=${arch}, searched triplets=${tripletList}. Available directories: ${availableList}.`,
+      `[Native Loader] Failed to resolve addon. Platform=${platform}, arch=${arch}. Expecting file like "${packageName}.${platformToken}.node" in ${npmDir}. Available files: ${availableFiles.join(', ') || 'none'}.`,
     );
   }
 
