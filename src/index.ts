@@ -8,6 +8,10 @@ export * as Core from './core/index.js';
 // 扩展层：应用层功能（TypeScript 独有）
 export * as Extensions from './extensions/index.js';
 
+// 记忆层：时间感知记忆组件
+export { TemporalMemoryStore } from './core/storage/temporal/temporalStore.js';
+export { TemporalMemoryIngestor } from './memory/temporal/ingestor.js';
+
 // =======================
 // 核心导出
 // =======================

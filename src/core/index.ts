@@ -21,6 +21,7 @@ export * from './storage/persistentStore.js';
 export * from './storage/propertyDataStore.js';
 export * from './storage/propertyIndex.js';
 export * from './storage/managers/transactionManager.js';
+export * from './storage/temporal/temporalStore.js';
 
 // 查询层
 export * from './query/queryBuilder.js';

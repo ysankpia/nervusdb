@@ -27,6 +27,15 @@ import { QueryEngine, type QueryContext } from './managers/queryEngine.js';
 import { FlushManager, type FlushContext } from './managers/flushManager.js';
 import { encodeTripleKey, decodeTripleKey } from './helpers/tripleOrdering.js';
 import type { FactInput } from './types.js';
+import {
+  TemporalMemoryStore,
+  type EpisodeInput,
+  type FactWriteInput,
+  type EnsureEntityOptions,
+  type StoredEpisode,
+  type StoredFact,
+  type TimelineQuery,
+} from './temporal/temporalStore.js';
 
 export interface PersistedFact extends FactInput {
   subjectId: number;
@@ -82,6 +91,7 @@ export class PersistentStore {
   private nativeHandle?: NativeDatabaseHandle;
   private nativeQueryReady = false;
   private nativeStrict = process.env.NERVUSDB_NATIVE_STRICT === '1';
+  private temporal?: TemporalMemoryStore;
   // 内存模式（:memory:）支持：使用临时文件路径并在关闭时清理
   private memoryMode = false;
   private memoryBasePath?: string;
@@ -166,6 +176,7 @@ export class PersistentStore {
     store.memoryMode = memoryMode;
     store.memoryBasePath = effectivePath;
     store.nativeHandle = nativeHandle;
+    store.temporal = await TemporalMemoryStore.initialize(effectivePath);
 
     // 初始化并发控制管理器（需要在锁操作之前初始化）
     store.concurrencyControl = new ConcurrencyControl(indexDirectory, effectivePath);
@@ -874,6 +885,8 @@ export class PersistentStore {
       this.lsm = undefined;
     }
 
+    await this.temporal?.close();
+
     // 若为内存模式（:memory:），清理临时文件与目录
     if (this.memoryMode && this.memoryBasePath) {
       try {
@@ -1071,5 +1084,47 @@ export class PersistentStore {
         });
       }
     }
+  }
+
+  getTemporalMemory(): TemporalMemoryStore | undefined {
+    return this.temporal;
+  }
+
+  async addEpisodeToTemporalStore(input: EpisodeInput): Promise<StoredEpisode> {
+    if (!this.temporal) throw new Error('Temporal memory is disabled');
+    return this.temporal.addEpisode(input);
+  }
+
+  async ensureTemporalEntity(
+    kind: string,
+    canonicalName: string,
+    options: EnsureEntityOptions = {},
+  ): Promise<number> {
+    if (!this.temporal) throw new Error('Temporal memory is disabled');
+    const entity = await this.temporal.ensureEntity(kind, canonicalName, options);
+    return entity.entityId;
+  }
+
+  async upsertTemporalFact(input: FactWriteInput): Promise<StoredFact> {
+    if (!this.temporal) throw new Error('Temporal memory is disabled');
+    return this.temporal.upsertFact(input);
+  }
+
+  async linkTemporalEpisode(
+    episodeId: number,
+    options: { entityId?: number | null; factId?: number | null; role: string },
+  ): Promise<void> {
+    if (!this.temporal) throw new Error('Temporal memory is disabled');
+    await this.temporal.linkEpisode(episodeId, options);
+  }
+
+  queryTemporalTimeline(query: TimelineQuery): StoredFact[] {
+    if (!this.temporal) throw new Error('Temporal memory is disabled');
+    return this.temporal.queryTimeline(query);
+  }
+
+  traceTemporalFact(factId: number): StoredEpisode[] {
+    if (!this.temporal) throw new Error('Temporal memory is disabled');
+    return this.temporal.traceBack(factId);
   }
 }
