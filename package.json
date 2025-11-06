@@ -56,6 +56,7 @@
     "bench:insert-scan": "node benchmarks/insert_scan.mjs",
     "bench:path-agg": "node benchmarks/path_agg.mjs",
     "bench:baseline": "pnpm build && node benchmarks/quick.mjs",
+    "bench:temporal": "pnpm build && node benchmarks/temporal-memory.mjs",
     "perf:smoke": "node benchmarks/insert_scan.mjs 2000 && node benchmarks/path_agg.mjs",
     "build:native": "pnpm exec napi build --release --cargo-cwd native/nervusdb-node native/nervusdb-node/npm",
     "benchmark": "tsx src/cli/benchmark.ts run",
