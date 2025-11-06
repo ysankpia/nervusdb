@@ -23,8 +23,9 @@
 17. [路线图与版本策略](#路线图与版本策略)
 18. [常见问题 FAQ](#常见问题-faq)
 19. [基准测试与性能验证](#基准测试与性能验证)
-20. [参与贡献与支持](#参与贡献与支持)
-21. [许可证](#许可证)
+20. [项目治理与里程碑](#项目治理与里程碑)
+21. [参与贡献与支持](#参与贡献与支持)
+22. [许可证](#许可证)
 
 ---
 
@@ -557,6 +558,14 @@ CI 会在构建阶段执行 `pnpm run build:native` 与针对原生加载器的 
 - `pnpm bench:temporal`：时间记忆基准；输出结果与扩展说明见 `docs/benchmarks/temporal-memory.md`。
 - 其他脚本位于 `benchmarks/` 目录，可按需扩展或接入 CI。
 - 时间记忆默认启用，无需额外配置；若需自定义解析，可调用 `db.memory.ingestMessages()` 接入自有抽取逻辑。
+
+## 项目治理与里程碑
+
+- [Program Governance](docs/program/README.md)：目录结构说明。
+- [Program Definition](docs/program/programs/nervusdb.md)：核心目标与指标。
+- [Release Train](docs/program/releases.md)：v0.5.0 / v0.6.0 状态。
+- [Milestone Board](docs/program/milestones/v0.6.0-native-temporal-core.md)：当前 Milestone 细化拆分。
+- [Status Snapshot](docs/program/status.md)：最新进展与风险。
 
 ## 参与贡献与支持
 
