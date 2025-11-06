@@ -10,6 +10,7 @@
 - `timelineBuilder` 直接调用现有 `PersistentStore.queryTemporalTimeline`/`traceTemporalFact`，避免额外复制。
 - 保留原有 `memory.timeline()` 同步 API 以兼容早期代码。
 - 记录 Rust 核心尚未支持 `as_of`/`between` 的事实，后续版本会在 `nervusdb_core` 中实现同等语义。
+- 自 v0.5.0 起，`NervusDB.open()` 默认初始化 `TemporalMemoryStore`（生成 `<db>.temporal.json`），`db.memory` API 无需额外 wiring 即可使用。
 
 ## 后果
 
@@ -19,3 +20,4 @@
 ## 变更记录
 
 - 2025-11-06：初始决策，发布时间线查询构建器并补充单元测试。
+- 2025-11-06：时间记忆默认集成，补充 README、Release Notes 及冒烟测试。

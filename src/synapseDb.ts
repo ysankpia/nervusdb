@@ -39,6 +39,11 @@ import { AggregationPipeline } from './extensions/query/aggregation.js';
 import type { CypherResult, CypherExecutionOptions } from './extensions/query/cypher.js';
 import type { TemporalMemoryStore } from './core/storage/temporal/temporalStore.js';
 import { TemporalTimelineBuilder } from './memory/temporal/timelineBuilder.js';
+import {
+  TemporalMemoryIngestor,
+  type MessageInput as TemporalMessageInput,
+  type ConversationContext as TemporalConversationContext,
+} from './memory/temporal/ingestor.js';
 
 export interface FactOptions {
   subjectProperties?: Record<string, unknown>;
@@ -65,6 +70,10 @@ export interface TemporalMemoryAPI {
   timeline(query: TemporalTimelineQuery): TemporalStoredFact[];
   traceBack(factId: number): TemporalStoredEpisode[];
   timelineBuilder(entityId: number): TemporalTimelineBuilder;
+  ingestMessages(
+    messages: TemporalMessageInput[],
+    context?: TemporalConversationContext,
+  ): Promise<void>;
 }
 
 export type {
@@ -76,6 +85,8 @@ export type {
   TemporalStoredEntity,
   TemporalStoredFact,
   TemporalTimelineQuery,
+  TemporalMessageInput,
+  TemporalConversationContext,
 };
 
 /**
@@ -140,6 +151,12 @@ export class NervusDB {
           (query) => this.store.queryTemporalTimeline(query),
           (factId) => this.store.traceTemporalFact(factId),
         ),
+      ingestMessages: async (messages, context) => {
+        const store = this.store.getTemporalMemory();
+        if (!store) throw new Error('Temporal memory is disabled');
+        const ingestor = new TemporalMemoryIngestor(store);
+        await ingestor.ingestMessages(messages, context);
+      },
     };
   }
 

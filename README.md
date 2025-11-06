@@ -34,6 +34,7 @@
 - **运行环境**：Node.js ≥ 18（推荐 20/22），macOS / Linux / Windows 均可。仓库采用 ESM，代码、注释与文档全部中文。
 - **适用场景**：代码知识图谱、配置依赖图、嵌入式 AI 记忆体、数据血缘审计、DevOps 知识库、轻量边缘部署、离线推理/召回。
 - **技术现状**：主干版本 v1.1.x；WAL v2、增量/整序 compaction、链式联想、QueryBuilder/Cypher/GraphQL/Gremlin、多属性索引、全文检索、空间索引、图算法、自动化治理 CLI 均已稳定。
+- **时间记忆**：自 v0.5.0 起默认启用 Temporal Memory（时间线存储 + 抽取管线），无需额外配置即可追踪会话脉络。
 - **近期验证（2025-09-28）**：
   - ✅ `pnpm test`（132 个测试文件，629 个用例：628 通过 / 1 跳过）
   - ✅ `repomix__pack_codebase` 输出 ID `fe8ec9a35849d45e`（440 文件，842,228 tokens）
@@ -144,6 +145,7 @@ import { FullTextSearch } from 'nervusdb';
 | ---------- | ------------------------------------------------- | --------------------------------------------------------------------------- |
 | 三元组存储 | `src/storage/tripleStore.ts`                      | 单文件主库 + 六序分页索引，按主键排序分页                                   |
 | 链式查询   | `src/query/queryBuilder.ts`                       | 正反向 follow、anchor、属性过滤、Streaming、聚合                            |
+| 时间记忆   | `src/core/storage/temporal/temporalStore.ts`      | 默认启用时间线存储 + 提取管线，支持 `db.memory.timelineBuilder()` 与追溯    |
 | 多语言接口 | `src/query/cypher.ts` / `graphql/*` / `gremlin/*` | Cypher、GraphQL、Gremlin 与 QueryBuilder 共用执行管线                       |
 | 事务与 WAL | `src/storage/wal.ts` / `txidRegistry.ts`          | WAL v2、批次提交、崩溃恢复、事务 ID 幂等                                    |
 | 热度与治理 | `src/storage/hotness.ts` / `src/maintenance/*`    | 热度统计、自动压实、GC、页修复、读者尊重策略                                |
@@ -251,6 +253,30 @@ nervusdb dump demo.nervusdb SPO 1
 ```
 
 更多场景见 [示例与学习资源](#示例与学习资源)。
+
+### 5. 时间记忆（默认启用）
+
+```ts
+import { NervusDB } from 'nervusdb';
+
+const db = await NervusDB.open(':memory:');
+
+await db.memory.ingestMessages(
+  [
+    { author: 'Alice', text: 'Met Bob at #OpenAI HQ.', timestamp: '2025-05-01T09:00:00Z' },
+    { author: 'Bob', text: 'Great catching up, Alice!', timestamp: '2025-05-01T09:05:00Z' },
+  ],
+  { conversationId: 'conv-1', channel: 'chat' },
+);
+
+const store = db.memory.getStore();
+const alice = store?.getEntities().find((entity) => entity.canonicalName === 'alice');
+const mentions = db.memory.timelineBuilder(alice!.entityId).predicate('mentions').all();
+
+console.log('Alice mentions:', mentions.length);
+```
+
+> `db.memory` 无需手工初始化：数据库文件会自动生成 `<db>.temporal.json` 来存储时间线，适用于对话记忆、回溯、实体抽取等场景。
 
 ## 数据模型与 API
 
@@ -530,6 +556,7 @@ CI 会在构建阶段执行 `pnpm run build:native` 与针对原生加载器的 
 - `pnpm bench:baseline`：快速性能冒烟验证（插入/查询/路径/聚合）。
 - `pnpm bench:temporal`：时间记忆基准；输出结果与扩展说明见 `docs/benchmarks/temporal-memory.md`。
 - 其他脚本位于 `benchmarks/` 目录，可按需扩展或接入 CI。
+- 时间记忆默认启用，无需额外配置；若需自定义解析，可调用 `db.memory.ingestMessages()` 接入自有抽取逻辑。
 
 ## 参与贡献与支持
 

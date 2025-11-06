@@ -30,6 +30,8 @@ export type {
   TemporalStoredEntity,
   TemporalStoredFact,
   TemporalTimelineQuery,
+  TemporalMessageInput,
+  TemporalConversationContext,
 } from './synapseDb.js';
 
 // 向后兼容别名（保留旧 API）
