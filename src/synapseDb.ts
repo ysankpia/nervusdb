@@ -38,6 +38,7 @@ import { PatternBuilder } from './extensions/query/pattern/match.js';
 import { AggregationPipeline } from './extensions/query/aggregation.js';
 import type { CypherResult, CypherExecutionOptions } from './extensions/query/cypher.js';
 import type { TemporalMemoryStore } from './core/storage/temporal/temporalStore.js';
+import { TemporalTimelineBuilder } from './memory/temporal/timelineBuilder.js';
 
 export interface FactOptions {
   subjectProperties?: Record<string, unknown>;
@@ -63,6 +64,7 @@ export interface TemporalMemoryAPI {
   ): Promise<TemporalEpisodeLinkRecord>;
   timeline(query: TemporalTimelineQuery): TemporalStoredFact[];
   traceBack(factId: number): TemporalStoredEpisode[];
+  timelineBuilder(entityId: number): TemporalTimelineBuilder;
 }
 
 export type {
@@ -132,6 +134,12 @@ export class NervusDB {
       linkEpisode: (episodeId, options) => this.store.linkTemporalEpisode(episodeId, options),
       timeline: (query) => this.store.queryTemporalTimeline(query),
       traceBack: (factId) => this.store.traceTemporalFact(factId),
+      timelineBuilder: (entityId) =>
+        new TemporalTimelineBuilder(
+          entityId,
+          (query) => this.store.queryTemporalTimeline(query),
+          (factId) => this.store.traceTemporalFact(factId),
+        ),
     };
   }
 

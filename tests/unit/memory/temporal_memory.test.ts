@@ -95,6 +95,7 @@ describe('NervusDB memory facade', () => {
         subjectEntityId: entity.entityId,
         predicateKey: 'mentions',
         objectValue: 'graph databases',
+        validFrom: '2025-03-01T09:00:00Z',
         sourceEpisodeId: episode.episodeId,
       });
 
@@ -105,6 +106,15 @@ describe('NervusDB memory facade', () => {
 
       const traced = db.memory.traceBack(fact.factId);
       expect(traced.some((ep) => ep.episodeId === episode.episodeId)).toBe(true);
+
+      const timelineFacts = db.memory.timelineBuilder(entity.entityId).predicate('mentions').all();
+      expect(timelineFacts).toHaveLength(1);
+
+      const timelineAsOf = db.memory
+        .timelineBuilder(entity.entityId)
+        .asOf('2025-03-01T09:00:00Z')
+        .all();
+      expect(timelineAsOf).toHaveLength(1);
     } finally {
       await db.close();
     }

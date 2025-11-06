@@ -11,6 +11,7 @@ export * as Extensions from './extensions/index.js';
 // 记忆层：时间感知记忆组件
 export { TemporalMemoryStore } from './core/storage/temporal/temporalStore.js';
 export { TemporalMemoryIngestor } from './memory/temporal/ingestor.js';
+export { TemporalTimelineBuilder } from './memory/temporal/timelineBuilder.js';
 
 // =======================
 // 核心导出
