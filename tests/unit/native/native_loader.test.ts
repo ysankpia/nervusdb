@@ -14,6 +14,7 @@ describe('native core loader', () => {
 
   it('returns null when binding is not available', () => {
     __setNativeCoreForTesting(undefined);
+    process.env.NERVUSDB_DISABLE_NATIVE = '1';
     expect(loadNativeCore()).toBeNull();
   });
 
