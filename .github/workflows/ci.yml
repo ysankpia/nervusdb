@@ -184,30 +184,13 @@ jobs:
       - name: Organize native artifact
         run: node scripts/organize-native-artifact.mjs "${{ matrix.platform }}"
 
-      - name: Debug - List generated files (POSIX)
+      - name: Debug - List generated files
         if: runner.os != 'Windows'
         run: |
           echo "=== Files in native/nervusdb-node/npm/ ==="
           ls -la native/nervusdb-node/npm/ || echo "Directory not found"
           echo "=== .node files ==="
           find native/nervusdb-node/npm/ -name "*.node" -type f || echo "No .node files found"
-
-      - name: Debug - List generated files (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Write-Host "=== Files in native/nervusdb-node/npm/ ==="
-          if (Test-Path 'native/nervusdb-node/npm') {
-            Get-ChildItem 'native/nervusdb-node/npm'
-          } else {
-            Write-Host 'Directory not found'
-          }
-          Write-Host "=== .node files ==="
-          if (Test-Path 'native/nervusdb-node/npm') {
-            Get-ChildItem -Recurse -Filter *.node 'native/nervusdb-node/npm'
-          } else {
-            Write-Host 'No .node files found'
-          }
 
       - name: Run native vitest subset
         run: pnpm vitest run tests/unit/native/native_loader.test.ts tests/unit/storage/persistentStore.native.test.ts tests/integration/native/native_binding.test.ts
