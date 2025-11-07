@@ -5,6 +5,120 @@ import { dirname } from 'node:path';
 const DATA_SUFFIX = '.temporal.json';
 const INFINITY_TS = '9999-12-31T23:59:59.999Z';
 
+type NativeTimelineQueryInput = {
+  entity_id: string;
+  predicate_key?: string;
+  role?: string;
+  as_of?: string;
+  between_start?: string;
+  between_end?: string;
+};
+
+interface NativeTimelineFactOutput {
+  fact_id: string;
+  subject_entity_id: string;
+  predicate_key: string;
+  object_entity_id?: string | null;
+  object_value?: string | null;
+  valid_from: string;
+  valid_to?: string | null;
+  confidence: number;
+  source_episode_id: string;
+}
+
+interface NativeTimelineEpisodeOutput {
+  episode_id: string;
+  source_type: string;
+  payload: string;
+  occurred_at: string;
+  ingested_at: string;
+  trace_hash: string;
+}
+
+interface NativeTemporalEpisodeInput {
+  source_type: string;
+  payload_json: string;
+  occurred_at: string;
+  trace_hash?: string | null;
+}
+
+type NativeTemporalEpisodeOutput = NativeTimelineEpisodeOutput;
+
+interface NativeTemporalEnsureEntityInput {
+  kind: string;
+  canonical_name: string;
+  alias?: string | null;
+  confidence?: number | null;
+  occurred_at?: string | null;
+  version_increment?: boolean | null;
+}
+
+interface NativeTemporalEntityOutput {
+  entity_id: string;
+  kind: string;
+  canonical_name: string;
+  fingerprint: string;
+  first_seen: string;
+  last_seen: string;
+  version: string;
+}
+
+interface NativeTemporalFactInput {
+  subject_entity_id: string;
+  predicate_key: string;
+  object_entity_id?: string | null;
+  object_value_json?: string | null;
+  valid_from?: string | null;
+  valid_to?: string | null;
+  confidence?: number | null;
+  source_episode_id: string;
+}
+
+type NativeTemporalFactOutput = NativeTimelineFactOutput;
+
+interface NativeTemporalLinkInput {
+  episode_id: string;
+  entity_id?: string | null;
+  fact_id?: string | null;
+  role: string;
+}
+
+interface NativeTemporalLinkOutput {
+  link_id: string;
+  episode_id: string;
+  entity_id?: string | null;
+  fact_id?: string | null;
+  role: string;
+}
+
+interface NativeTemporalHandle {
+  temporalListEpisodes(): NativeTemporalEpisodeOutput[];
+  temporalListEntities(): NativeTemporalEntityOutput[];
+  temporalListFacts(): NativeTemporalFactOutput[];
+  temporalAddEpisode(input: NativeTemporalEpisodeInput): NativeTemporalEpisodeOutput;
+  temporalEnsureEntity(input: NativeTemporalEnsureEntityInput): NativeTemporalEntityOutput;
+  temporalUpsertFact(input: NativeTemporalFactInput): NativeTemporalFactOutput;
+  temporalLinkEpisode(input: NativeTemporalLinkInput): NativeTemporalLinkOutput;
+  timelineQuery(input: NativeTimelineQueryInput): NativeTimelineFactOutput[];
+  timelineTrace(factId: string): NativeTimelineEpisodeOutput[];
+}
+
+function isNativeTemporalHandle(value: unknown): value is NativeTemporalHandle {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Partial<NativeTemporalHandle>;
+  return (
+    typeof candidate.temporalListEpisodes === 'function' &&
+    typeof candidate.temporalListEntities === 'function' &&
+    typeof candidate.temporalListFacts === 'function' &&
+    typeof candidate.temporalAddEpisode === 'function' &&
+    typeof candidate.temporalEnsureEntity === 'function' &&
+    typeof candidate.temporalUpsertFact === 'function' &&
+    typeof candidate.temporalLinkEpisode === 'function' &&
+    typeof candidate.timelineQuery === 'function' &&
+    typeof candidate.timelineTrace === 'function'
+  );
+}
+
 export type TimestampInput = Date | string | number;
 
 export interface EpisodeInput {
@@ -79,6 +193,33 @@ export interface TimelineQuery {
   between?: [TimestampInput, TimestampInput];
 }
 
+interface TemporalBackend {
+  close(): Promise<void>;
+  getEpisodes(): StoredEpisode[];
+  getEntities(): StoredEntity[];
+  getFacts(): StoredFact[];
+  addEpisode(input: EpisodeInput): Promise<StoredEpisode>;
+  ensureEntity(
+    kind: string,
+    canonicalName: string,
+    options: EnsureEntityOptions,
+  ): Promise<StoredEntity>;
+  upsertFact(input: FactWriteInput): Promise<StoredFact>;
+  linkEpisode(
+    episodeId: number,
+    options: { entityId?: number | null; factId?: number | null; role: string },
+  ): Promise<EpisodeLinkRecord>;
+  queryTimeline(query: TimelineQuery): StoredFact[];
+  traceBack(factId: number): StoredEpisode[];
+}
+
+export interface EnsureEntityOptions {
+  alias?: string;
+  confidence?: number;
+  occurredAt?: TimestampInput;
+  versionIncrement?: boolean;
+}
+
 interface TemporalMemoryData {
   counters: {
     episode: number;
@@ -92,13 +233,6 @@ interface TemporalMemoryData {
   aliases: StoredAlias[];
   facts: StoredFact[];
   links: EpisodeLinkRecord[];
-}
-
-export interface EnsureEntityOptions {
-  alias?: string;
-  confidence?: number;
-  occurredAt?: TimestampInput;
-  versionIncrement?: boolean;
 }
 
 function normaliseTimestamp(value: TimestampInput): string {
@@ -127,8 +261,8 @@ function defaultData(): TemporalMemoryData {
   };
 }
 
-export class TemporalMemoryStore {
-  static async initialize(dataPath: string): Promise<TemporalMemoryStore> {
+class JsonTemporalBackend implements TemporalBackend {
+  static async create(dataPath: string): Promise<JsonTemporalBackend> {
     const filePath = `${dataPath}${DATA_SUFFIX}`;
     const dir = dirname(filePath);
     await fsp.mkdir(dir, { recursive: true });
@@ -154,7 +288,8 @@ export class TemporalMemoryStore {
         throw error;
       }
     }
-    return new TemporalMemoryStore(filePath, payload);
+
+    return new JsonTemporalBackend(filePath, payload);
   }
 
   private dirty = false;
@@ -235,15 +370,20 @@ export class TemporalMemoryStore {
       entity.firstSeen = occurredAt < entity.firstSeen ? occurredAt : entity.firstSeen;
     }
 
+    const ensured = entity;
+    if (!ensured) {
+      throw new Error('Temporal entity was not initialised');
+    }
+
     if (options.alias) {
       const aliasLower = options.alias.toLowerCase();
       const existingAlias = this.data.aliases.find((alias) => {
-        return alias.entityId === entity.entityId && alias.aliasText.toLowerCase() === aliasLower;
+        return alias.entityId === ensured.entityId && alias.aliasText.toLowerCase() === aliasLower;
       });
       if (!existingAlias) {
         const aliasRecord: StoredAlias = {
           aliasId: this.data.counters.alias++,
-          entityId: entity.entityId,
+          entityId: ensured.entityId,
           aliasText: options.alias,
           confidence: options.confidence ?? 1,
         };
@@ -253,7 +393,7 @@ export class TemporalMemoryStore {
 
     this.dirty = true;
     await this.persist();
-    return entity;
+    return ensured;
   }
 
   async upsertFact(input: FactWriteInput): Promise<StoredFact> {
@@ -369,5 +509,229 @@ export class TemporalMemoryStore {
     const serialised = JSON.stringify(this.data, null, 2);
     await fsp.writeFile(this.filePath, serialised, 'utf8');
     this.dirty = false;
+  }
+}
+
+class NativeTemporalBackend implements TemporalBackend {
+  constructor(private readonly handle: NativeTemporalHandle) {}
+
+  close(): Promise<void> {
+    // Native handle lifecycle is managed by PersistentStore; no additional flush required here.
+    return Promise.resolve();
+  }
+
+  getEpisodes(): StoredEpisode[] {
+    return this.handle.temporalListEpisodes().map((episode) => fromNativeEpisode(episode));
+  }
+
+  getEntities(): StoredEntity[] {
+    return this.handle.temporalListEntities().map((entity) => fromNativeEntity(entity));
+  }
+
+  getFacts(): StoredFact[] {
+    return this.handle.temporalListFacts().map((fact) => fromNativeFact(fact));
+  }
+
+  addEpisode(input: EpisodeInput): Promise<StoredEpisode> {
+    const nativeInput: NativeTemporalEpisodeInput = {
+      source_type: input.sourceType,
+      payload_json: JSON.stringify(input.payload ?? null),
+      occurred_at: normaliseTimestamp(input.occurredAt),
+      trace_hash: input.traceHash ?? null,
+    };
+    const result = this.handle.temporalAddEpisode(nativeInput);
+    return Promise.resolve(fromNativeEpisode(result));
+  }
+
+  ensureEntity(
+    kind: string,
+    canonicalName: string,
+    options: EnsureEntityOptions,
+  ): Promise<StoredEntity> {
+    const nativeInput: NativeTemporalEnsureEntityInput = {
+      kind,
+      canonical_name: canonicalName,
+      alias: options.alias ?? null,
+      confidence: options.confidence ?? null,
+      occurred_at: options.occurredAt ? normaliseTimestamp(options.occurredAt) : null,
+      version_increment: options.versionIncrement ?? null,
+    };
+    const result = this.handle.temporalEnsureEntity(nativeInput);
+    return Promise.resolve(fromNativeEntity(result));
+  }
+
+  upsertFact(input: FactWriteInput): Promise<StoredFact> {
+    const nativeInput: NativeTemporalFactInput = {
+      subject_entity_id: input.subjectEntityId.toString(),
+      predicate_key: input.predicateKey,
+      object_entity_id: input.objectEntityId != null ? input.objectEntityId.toString() : null,
+      object_value_json:
+        input.objectValue === undefined ? null : JSON.stringify(input.objectValue ?? null),
+      valid_from: input.validFrom ? normaliseTimestamp(input.validFrom) : null,
+      valid_to: input.validTo ? normaliseTimestamp(input.validTo) : null,
+      confidence: input.confidence ?? null,
+      source_episode_id: input.sourceEpisodeId.toString(),
+    };
+    const result = this.handle.temporalUpsertFact(nativeInput);
+    return Promise.resolve(fromNativeFact(result));
+  }
+
+  linkEpisode(
+    episodeId: number,
+    options: { entityId?: number | null; factId?: number | null; role: string },
+  ): Promise<EpisodeLinkRecord> {
+    const nativeInput: NativeTemporalLinkInput = {
+      episode_id: episodeId.toString(),
+      entity_id: options.entityId != null ? options.entityId.toString() : null,
+      fact_id: options.factId != null ? options.factId.toString() : null,
+      role: options.role,
+    };
+    const result = this.handle.temporalLinkEpisode(nativeInput);
+    return Promise.resolve(fromNativeLink(result));
+  }
+
+  queryTimeline(query: TimelineQuery): StoredFact[] {
+    const nativeQuery: NativeTimelineQueryInput = {
+      entity_id: query.entityId.toString(),
+      predicate_key: query.predicateKey,
+      role: query.role,
+      as_of: query.asOf ? normaliseTimestamp(query.asOf) : undefined,
+      between_start: query.between ? normaliseTimestamp(query.between[0]) : undefined,
+      between_end: query.between ? normaliseTimestamp(query.between[1]) : undefined,
+    };
+    return this.handle.timelineQuery(nativeQuery).map((fact) => fromNativeFact(fact));
+  }
+
+  traceBack(factId: number): StoredEpisode[] {
+    return this.handle
+      .timelineTrace(factId.toString())
+      .map((episode) => fromNativeEpisode(episode));
+  }
+}
+
+export class TemporalMemoryStore {
+  private constructor(private readonly backend: TemporalBackend) {}
+
+  static async initialize(dataPath: string, nativeHandle?: unknown): Promise<TemporalMemoryStore> {
+    if (isNativeTemporalHandle(nativeHandle)) {
+      return new TemporalMemoryStore(new NativeTemporalBackend(nativeHandle));
+    }
+    const backend = await JsonTemporalBackend.create(dataPath);
+    return new TemporalMemoryStore(backend);
+  }
+
+  async close(): Promise<void> {
+    await this.backend.close();
+  }
+
+  getEpisodes(): StoredEpisode[] {
+    return this.backend.getEpisodes();
+  }
+
+  getEntities(): StoredEntity[] {
+    return this.backend.getEntities();
+  }
+
+  getFacts(): StoredFact[] {
+    return this.backend.getFacts();
+  }
+
+  async addEpisode(input: EpisodeInput): Promise<StoredEpisode> {
+    return this.backend.addEpisode(input);
+  }
+
+  async ensureEntity(
+    kind: string,
+    canonicalName: string,
+    options: EnsureEntityOptions = {},
+  ): Promise<StoredEntity> {
+    return this.backend.ensureEntity(kind, canonicalName, options);
+  }
+
+  async upsertFact(input: FactWriteInput): Promise<StoredFact> {
+    return this.backend.upsertFact(input);
+  }
+
+  async linkEpisode(
+    episodeId: number,
+    options: { entityId?: number | null; factId?: number | null; role: string },
+  ): Promise<EpisodeLinkRecord> {
+    return this.backend.linkEpisode(episodeId, options);
+  }
+
+  queryTimeline(query: TimelineQuery): StoredFact[] {
+    return this.backend.queryTimeline(query);
+  }
+
+  traceBack(factId: number): StoredEpisode[] {
+    return this.backend.traceBack(factId);
+  }
+}
+
+function fromNativeEpisode(episode: NativeTimelineEpisodeOutput): StoredEpisode {
+  return {
+    episodeId: parseNativeInt(episode.episode_id, 'episode_id'),
+    sourceType: episode.source_type,
+    payload: parseNativeJson(episode.payload, 'payload'),
+    occurredAt: episode.occurred_at,
+    ingestedAt: episode.ingested_at,
+    traceHash: episode.trace_hash,
+  };
+}
+
+function fromNativeEntity(entity: NativeTemporalEntityOutput): StoredEntity {
+  return {
+    entityId: parseNativeInt(entity.entity_id, 'entity_id'),
+    kind: entity.kind,
+    canonicalName: entity.canonical_name,
+    fingerprint: entity.fingerprint,
+    firstSeen: entity.first_seen,
+    lastSeen: entity.last_seen,
+    version: parseNativeInt(entity.version, 'version'),
+  };
+}
+
+function fromNativeFact(fact: NativeTimelineFactOutput): StoredFact {
+  return {
+    factId: parseNativeInt(fact.fact_id, 'fact_id'),
+    subjectEntityId: parseNativeInt(fact.subject_entity_id, 'subject_entity_id'),
+    predicateKey: fact.predicate_key,
+    objectEntityId:
+      fact.object_entity_id == null
+        ? null
+        : parseNativeInt(fact.object_entity_id, 'object_entity_id'),
+    objectValue:
+      fact.object_value == null ? null : parseNativeJson(fact.object_value, 'object_value'),
+    validFrom: fact.valid_from,
+    validTo: fact.valid_to ?? null,
+    confidence: fact.confidence,
+    sourceEpisodeId: parseNativeInt(fact.source_episode_id, 'source_episode_id'),
+  };
+}
+
+function fromNativeLink(record: NativeTemporalLinkOutput): EpisodeLinkRecord {
+  return {
+    linkId: parseNativeInt(record.link_id, 'link_id'),
+    episodeId: parseNativeInt(record.episode_id, 'episode_id'),
+    entityId: record.entity_id == null ? null : parseNativeInt(record.entity_id, 'entity_id'),
+    factId: record.fact_id == null ? null : parseNativeInt(record.fact_id, 'fact_id'),
+    role: record.role,
+  };
+}
+
+function parseNativeInt(value: string, field: string): number {
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isNaN(parsed)) {
+    throw new Error(`Invalid numeric value for ${field}: ${value}`);
+  }
+  return parsed;
+}
+
+function parseNativeJson(raw: string, field: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to parse JSON for ${field}: ${reason}`);
   }
 }

@@ -3,12 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { initializeIfMissing, readStorageFile } from './fileHeader.js';
-import {
-  loadNativeCore,
-  type NativeDatabaseHandle,
-  type NativeQueryCriteria,
-  type NativeTriple,
-} from '../../native/core.js';
+import { loadNativeCore } from '../../native/core.js';
 import { StringDictionary } from './dictionary.js';
 import { PropertyStore, TripleKey } from './propertyStore.js';
 import { TripleIndexes, type IndexOrder } from './tripleIndexes.js';
@@ -38,6 +33,28 @@ import {
   type StoredFact,
   type TimelineQuery,
 } from './temporal/temporalStore.js';
+
+interface NativeTriple {
+  subject_id: number;
+  predicate_id: number;
+  object_id: number;
+}
+
+interface NativeQueryCriteria {
+  subject_id?: number;
+  predicate_id?: number;
+  object_id?: number;
+}
+
+interface NativeDatabaseHandle {
+  addFact(subject: string, predicate: string, object: string): NativeTriple;
+  query(criteria?: NativeQueryCriteria): NativeTriple[];
+  openCursor(criteria?: NativeQueryCriteria): { id: number };
+  readCursor(cursorId: number, batchSize: number): { triples: NativeTriple[]; done: boolean };
+  closeCursor(cursorId: number): void;
+  hydrate(dictionary: string[], triples: NativeTriple[]): void;
+  close(): void;
+}
 
 export interface PersistedFact extends FactInput {
   subjectId: number;
@@ -188,7 +205,7 @@ export class PersistentStore {
     store.memoryMode = memoryMode;
     store.memoryBasePath = effectivePath;
     store.nativeHandle = nativeHandle;
-    store.temporal = await TemporalMemoryStore.initialize(effectivePath);
+    store.temporal = await TemporalMemoryStore.initialize(effectivePath, nativeHandle);
 
     // 初始化并发控制管理器（需要在锁操作之前初始化）
     store.concurrencyControl = new ConcurrencyControl(indexDirectory, effectivePath);
