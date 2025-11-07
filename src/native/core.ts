@@ -28,6 +28,96 @@ export interface NativeQueryCriteria {
 
 export type NativeTriple = NativeAddFactOutput;
 
+export interface NativeTimelineQueryInput {
+  entity_id: string;
+  predicate_key?: string;
+  role?: string;
+  as_of?: string;
+  between_start?: string;
+  between_end?: string;
+}
+
+export interface NativeTimelineFactOutput {
+  fact_id: string;
+  subject_entity_id: string;
+  predicate_key: string;
+  object_entity_id?: string | null;
+  object_value?: string | null;
+  valid_from: string;
+  valid_to?: string | null;
+  confidence: number;
+  source_episode_id: string;
+}
+
+export interface NativeTimelineEpisodeOutput {
+  episode_id: string;
+  source_type: string;
+  payload: string;
+  occurred_at: string;
+  ingested_at: string;
+  trace_hash: string;
+}
+
+export interface NativeTemporalEpisodeInput {
+  source_type: string;
+  payload_json: string;
+  occurred_at: string;
+  trace_hash?: string | null;
+}
+
+export interface NativeTemporalEpisodeOutput extends NativeTimelineEpisodeOutput {
+  __brand_temporalEpisode?: true;
+}
+
+export interface NativeTemporalEnsureEntityInput {
+  kind: string;
+  canonical_name: string;
+  alias?: string | null;
+  confidence?: number | null;
+  occurred_at?: string | null;
+  version_increment?: boolean | null;
+}
+
+export interface NativeTemporalEntityOutput {
+  entity_id: string;
+  kind: string;
+  canonical_name: string;
+  fingerprint: string;
+  first_seen: string;
+  last_seen: string;
+  version: string;
+}
+
+export interface NativeTemporalFactInput {
+  subject_entity_id: string;
+  predicate_key: string;
+  object_entity_id?: string | null;
+  object_value_json?: string | null;
+  valid_from?: string | null;
+  valid_to?: string | null;
+  confidence?: number | null;
+  source_episode_id: string;
+}
+
+export interface NativeTemporalFactOutput extends NativeTimelineFactOutput {
+  __brand_temporalFact?: true;
+}
+
+export interface NativeTemporalLinkInput {
+  episode_id: string;
+  entity_id?: string | null;
+  fact_id?: string | null;
+  role: string;
+}
+
+export interface NativeTemporalLinkOutput {
+  link_id: string;
+  episode_id: string;
+  entity_id?: string | null;
+  fact_id?: string | null;
+  role: string;
+}
+
 export interface NativeDatabaseHandle {
   addFact(subject: string, predicate: string, object: string): NativeTriple;
   query(criteria?: NativeQueryCriteria): NativeTriple[];
@@ -35,7 +125,28 @@ export interface NativeDatabaseHandle {
   readCursor(cursorId: number, batchSize: number): { triples: NativeTriple[]; done: boolean };
   closeCursor(cursorId: number): void;
   hydrate(dictionary: string[], triples: NativeTriple[]): void;
+  timelineQuery?(input: NativeTimelineQueryInput): NativeTimelineFactOutput[];
+  timelineTrace?(factId: string): NativeTimelineEpisodeOutput[];
+  temporalAddEpisode?(input: NativeTemporalEpisodeInput): NativeTemporalEpisodeOutput;
+  temporalEnsureEntity?(input: NativeTemporalEnsureEntityInput): NativeTemporalEntityOutput;
+  temporalUpsertFact?(input: NativeTemporalFactInput): NativeTemporalFactOutput;
+  temporalLinkEpisode?(input: NativeTemporalLinkInput): NativeTemporalLinkOutput;
+  temporalListEntities?(): NativeTemporalEntityOutput[];
+  temporalListEpisodes?(): NativeTemporalEpisodeOutput[];
+  temporalListFacts?(): NativeTemporalFactOutput[];
   close(): void;
+}
+
+export interface NativeTemporalHandle extends NativeDatabaseHandle {
+  timelineQuery(input: NativeTimelineQueryInput): NativeTimelineFactOutput[];
+  timelineTrace(factId: string): NativeTimelineEpisodeOutput[];
+  temporalAddEpisode(input: NativeTemporalEpisodeInput): NativeTemporalEpisodeOutput;
+  temporalEnsureEntity(input: NativeTemporalEnsureEntityInput): NativeTemporalEntityOutput;
+  temporalUpsertFact(input: NativeTemporalFactInput): NativeTemporalFactOutput;
+  temporalLinkEpisode(input: NativeTemporalLinkInput): NativeTemporalLinkOutput;
+  temporalListEntities(): NativeTemporalEntityOutput[];
+  temporalListEpisodes(): NativeTemporalEpisodeOutput[];
+  temporalListFacts(): NativeTemporalFactOutput[];
 }
 
 export interface NativeCoreBinding {
@@ -172,4 +283,21 @@ export function __setNativeCoreForTesting(binding: NativeCoreBinding | null | un
     return;
   }
   cachedBinding = binding ?? null;
+}
+
+export function nativeTemporalSupported(
+  handle: NativeDatabaseHandle | null | undefined,
+): handle is NativeTemporalHandle {
+  return Boolean(
+    handle &&
+      typeof handle.timelineQuery === 'function' &&
+      typeof handle.timelineTrace === 'function' &&
+      typeof handle.temporalAddEpisode === 'function' &&
+      typeof handle.temporalEnsureEntity === 'function' &&
+      typeof handle.temporalUpsertFact === 'function' &&
+      typeof handle.temporalLinkEpisode === 'function' &&
+      typeof handle.temporalListEntities === 'function' &&
+      typeof handle.temporalListEpisodes === 'function' &&
+      typeof handle.temporalListFacts === 'function',
+  );
 }
