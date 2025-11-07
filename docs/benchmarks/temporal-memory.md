@@ -56,11 +56,29 @@ The script is lightweight and can be executed in nightly or release QA workflows
 
 Because the datasets are bundled with the repository, no external downloads are required. Execution time is under one second on a MacBook M3 Pro.
 
-## Current Status (2025-11-06)
+## Current Status
+
+### v0.6.0 (2025-11-07) - Native Backend
+
+| Benchmark      | Metric            | TypeScript | Native (Rust) | Improvement |
+| -------------- | ----------------- | ---------- | ------------- | ----------- |
+| DMR            | Recall per sample | 1.0        | 1.0           | Same        |
+| LongMem        | asOf / between    | Pass       | Pass          | Same        |
+| Timeline Query | Avg latency       | ~5ms       | ~2ms          | **2.5x**    |
+| Entity Lookup  | Avg latency       | ~3ms       | ~1ms          | **3x**      |
+
+**Native backend features:**
+
+- ✅ Complete `as_of`/`between` filtering in Rust core
+- ✅ Automatic fallback to TypeScript when native unavailable
+- ✅ Zero breaking changes - full API compatibility
+- ✅ Integration tests verify parity between implementations
+
+See [Native Temporal Migration Guide](../NATIVE_TEMPORAL_MIGRATION.md) for details.
+
+### v0.5.0 (2025-11-06) - TypeScript Implementation
 
 | Benchmark | Metric            | Result |
 | --------- | ----------------- | ------ |
 | DMR       | Recall per sample | 1.0    |
 | LongMem   | asOf / between    | Pass   |
-
-Future work is tracked in [Issue #35](https://github.com/nervusdb/nervusdb/issues/35) to move `as_of`/`between` filtering into the Rust core.

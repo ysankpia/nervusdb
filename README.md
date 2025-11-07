@@ -35,7 +35,7 @@
 - **运行环境**：Node.js ≥ 18（推荐 20/22），macOS / Linux / Windows 均可。仓库采用 ESM，代码、注释与文档全部中文。
 - **适用场景**：代码知识图谱、配置依赖图、嵌入式 AI 记忆体、数据血缘审计、DevOps 知识库、轻量边缘部署、离线推理/召回。
 - **技术现状**：主干版本 v1.1.x；WAL v2、增量/整序 compaction、链式联想、QueryBuilder/Cypher/GraphQL/Gremlin、多属性索引、全文检索、空间索引、图算法、自动化治理 CLI 均已稳定。
-- **时间记忆**：自 v0.5.0 起默认启用 Temporal Memory（时间线存储 + 抽取管线），无需额外配置即可追踪会话脉络。
+- **时间记忆**：自 v0.5.0 起默认启用 Temporal Memory（时间线存储 + 抽取管线），无需额外配置即可追踪会话脉络。v0.6.0 起支持 Rust 原生实现，提供更好的性能和跨平台支持。
 - **近期验证（2025-09-28）**：
   - ✅ `pnpm test`（132 个测试文件，629 个用例：628 通过 / 1 跳过）
   - ✅ `repomix__pack_codebase` 输出 ID `fe8ec9a35849d45e`（440 文件，842,228 tokens）
@@ -278,6 +278,8 @@ console.log('Alice mentions:', mentions.length);
 ```
 
 > `db.memory` 无需手工初始化：数据库文件会自动生成 `<db>.temporal.json` 来存储时间线，适用于对话记忆、回溯、实体抽取等场景。
+>
+> **v0.6.0 原生支持**：当原生 addon 可用时，自动使用 Rust 实现的高性能时间线查询，无需代码修改。详见 [ADR-006](docs/architecture/ADR-006-Temporal-Memory-Graph.md)。
 
 ## 数据模型与 API
 
