@@ -45,7 +45,7 @@ describe('Native Temporal E2E Smoke Tests', () => {
           entityId: alice.entityId,
           role: 'subject',
         });
-        expect(timeline).toHaveLength(expect.any(Number));
+        expect(Array.isArray(timeline)).toBe(true);
         expect(timeline.length).toBeGreaterThan(0);
       }
     } finally {
