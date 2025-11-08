@@ -235,9 +235,9 @@ describe('Cypher 文本解析器', () => {
     });
 
     it('应该编译带参数的查询', async () => {
-      // 暂时跳过参数化查询，因为编译器还不支持 $param 语法
-      // TODO: 在后续版本中实现参数化查询支持
-      const results = await engine.execute('MATCH (n:Person {name: "Alice"}) RETURN n');
+      const results = await engine.execute('MATCH (n:Person {name: $name}) RETURN n', {
+        name: 'Alice',
+      });
       expect(results).toBeDefined();
       expect(results.length).toBeGreaterThan(0);
     });
