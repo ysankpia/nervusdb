@@ -6,11 +6,18 @@ const decoder = new TextDecoder('utf8');
 export class StringDictionary {
   private readonly valueToId = new Map<string, number>();
   private readonly idToValue: string[] = [];
+  private version = 0;
+  private seeding = false;
 
   constructor(initialValues: string[] = []) {
-    initialValues.forEach((value) => {
-      this.getOrCreateId(value);
-    });
+    if (initialValues.length > 0) {
+      this.seeding = true;
+      initialValues.forEach((value) => {
+        this.getOrCreateId(value);
+      });
+      this.seeding = false;
+      this.version = 0;
+    }
   }
 
   get size(): number {
@@ -26,7 +33,14 @@ export class StringDictionary {
     const id = this.idToValue.length;
     this.idToValue.push(value);
     this.valueToId.set(value, id);
+    if (!this.seeding) {
+      this.version += 1;
+    }
     return id;
+  }
+
+  getVersion(): number {
+    return this.version;
   }
 
   getId(value: string): number | undefined {

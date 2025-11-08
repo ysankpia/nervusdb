@@ -7,9 +7,16 @@ export interface EncodedTriple {
 export class TripleStore {
   private readonly triples: EncodedTriple[] = [];
   private readonly keys = new Set<string>();
+  private version = 0;
+  private seeding = false;
 
   constructor(initialTriples: EncodedTriple[] = []) {
-    initialTriples.forEach((triple) => this.add(triple));
+    if (initialTriples.length > 0) {
+      this.seeding = true;
+      initialTriples.forEach((triple) => this.add(triple));
+      this.seeding = false;
+      this.version = 0;
+    }
   }
 
   get size(): number {
@@ -23,6 +30,9 @@ export class TripleStore {
     }
     this.keys.add(key);
     this.triples.push({ ...triple });
+    if (!this.seeding) {
+      this.version += 1;
+    }
   }
 
   list(): EncodedTriple[] {
@@ -45,6 +55,10 @@ export class TripleStore {
     });
 
     return Buffer.concat([countBuffer, body]);
+  }
+
+  getVersion(): number {
+    return this.version;
   }
 
   static deserialize(buffer: Buffer): TripleStore {

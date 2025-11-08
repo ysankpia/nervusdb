@@ -305,6 +305,11 @@ export class PersistentStore {
 
     // 初始化刷新管理器
     store.flushManager = new FlushManager();
+    store.flushManager.seedPersistedState({
+      dictionary: store.dictionary,
+      triples: store.triples,
+      properties: store.properties,
+    });
 
     store.bootstrapNativeState();
 
