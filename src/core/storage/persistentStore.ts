@@ -855,7 +855,11 @@ export class PersistentStore {
       lsm: this.lsm,
     };
 
+    const wasDirty = this.dirty;
     await this.flushManager.flush(context, this.dirty);
+    if (wasDirty) {
+      await this.labelManager.flush();
+    }
     this.dirty = false;
   }
 
@@ -1014,8 +1018,11 @@ export class PersistentStore {
     // 重建属性索引
     await this.propertyIndexManager.rebuildFromProperties(nodeProperties, edgeProperties);
 
-    // 重建标签索引
-    await this.labelManager.rebuildFromNodeProperties(nodeProperties);
+    // 优先从快照加载标签索引，失败则回退至重建
+    const labelsLoaded = await this.labelManager.tryLoad();
+    if (!labelsLoaded) {
+      await this.labelManager.rebuildFromNodeProperties(nodeProperties);
+    }
   }
 
   /**

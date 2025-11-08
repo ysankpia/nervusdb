@@ -1,3 +1,6 @@
+import { promises as fsp } from 'node:fs';
+import { dirname, join } from 'node:path';
+
 /**
  * 节点标签系统 - Neo4j 风格的节点分类与查询
  *
@@ -221,6 +224,38 @@ export class MemoryLabelIndex {
     this.nodeToLabels.clear();
   }
 
+  toSnapshot(): LabelSnapshot {
+    const labelToNodes: Record<string, number[]> = {};
+    for (const [label, nodes] of this.labelToNodes.entries()) {
+      labelToNodes[label] = [...nodes].sort((a, b) => a - b);
+    }
+
+    const nodeToLabels: Record<string, string[]> = {};
+    for (const [nodeId, labels] of this.nodeToLabels.entries()) {
+      nodeToLabels[String(nodeId)] = [...labels].sort();
+    }
+
+    return {
+      version: 1,
+      labelToNodes,
+      nodeToLabels,
+    };
+  }
+
+  hydrate(snapshot: LabelSnapshot): void {
+    this.clear();
+    for (const [label, nodes] of Object.entries(snapshot.labelToNodes)) {
+      if (!Array.isArray(nodes) || nodes.length === 0) continue;
+      this.labelToNodes.set(label, new Set(nodes));
+    }
+
+    for (const [nodeIdRaw, labels] of Object.entries(snapshot.nodeToLabels)) {
+      if (!Array.isArray(labels) || labels.length === 0) continue;
+      const nodeId = Number(nodeIdRaw);
+      this.nodeToLabels.set(nodeId, new Set(labels));
+    }
+  }
+
   /**
    * 获取统计摘要
    */
@@ -247,13 +282,22 @@ export class MemoryLabelIndex {
   }
 }
 
+interface LabelSnapshot {
+  version: number;
+  labelToNodes: Record<string, number[]>;
+  nodeToLabels: Record<string, string[]>;
+}
+
 /**
  * 持久化标签管理器
  */
 export class LabelManager {
   private readonly memoryIndex = new MemoryLabelIndex();
+  private readonly filePath: string;
 
-  constructor(private readonly indexDirectory: string) {}
+  constructor(private readonly indexDirectory: string) {
+    this.filePath = join(indexDirectory, 'labels.index.json');
+  }
 
   /**
    * 获取内存标签索引
@@ -304,16 +348,74 @@ export class LabelManager {
   }
 
   /**
-   * 持久化标签索引（未来实现）
+   * 持久化标签索引
    */
   async flush(): Promise<void> {
-    // TODO: 实现持久化
+    const snapshot = this.memoryIndex.toSnapshot();
+    await this.writeSnapshot(snapshot);
   }
 
   /**
-   * 加载标签索引（未来实现）
+   * 加载标签索引
    */
   async load(): Promise<void> {
-    // TODO: 实现加载
+    const snapshot = await this.readSnapshot();
+    if (!snapshot) {
+      throw new Error('Label snapshot missing');
+    }
+    this.memoryIndex.hydrate(snapshot);
   }
+
+  async tryLoad(): Promise<boolean> {
+    try {
+      const snapshot = await this.readSnapshot();
+      if (!snapshot) return false;
+      this.memoryIndex.hydrate(snapshot);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async writeSnapshot(snapshot: LabelSnapshot): Promise<void> {
+    const payload = Buffer.from(JSON.stringify(snapshot, null, 2), 'utf8');
+    const tmp = `${this.filePath}.tmp`;
+    await fsp.mkdir(dirname(this.filePath), { recursive: true });
+    const handle = await fsp.open(tmp, 'w');
+    try {
+      await handle.write(payload, 0, payload.length, 0);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await fsp.rename(tmp, this.filePath);
+    try {
+      const dirHandle = await fsp.open(this.indexDirectory, 'r');
+      try {
+        await dirHandle.sync();
+      } finally {
+        await dirHandle.close();
+      }
+    } catch {
+      // ignore directory sync failures
+    }
+  }
+
+  private async readSnapshot(): Promise<LabelSnapshot | null> {
+    try {
+      const buf = await fsp.readFile(this.filePath);
+      return JSON.parse(buf.toString('utf8')) as LabelSnapshot;
+    } catch (error: unknown) {
+      if (isErrno(error) && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) {
+        return null;
+      }
+      throw error;
+    }
+  }
+}
+
+function isErrno(error: unknown): error is NodeJS.ErrnoException {
+  return (
+    typeof error === 'object' && error !== null && 'code' in (error as Record<string, unknown>)
+  );
 }
