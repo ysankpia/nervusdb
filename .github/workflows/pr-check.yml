@@ -17,8 +17,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # 直接从事件JSON中读取原始body，避免shell对反引号/美元符号做命令替换
-          PR_BODY=$(jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH")
+          # 直接从事件JSON中读取原始body，避免 shell 对反引号/美元符号做命令替换
+          PR_BODY=$(node -e "const fs=require('fs');const path=process.env.GITHUB_EVENT_PATH;let body='';if(path&&fs.existsSync(path)){const data=JSON.parse(fs.readFileSync(path,'utf8'));body=data?.pull_request?.body||'';}process.stdout.write(body);")
 
           # 检查是否包含 Closes #数字 格式
           if printf '%s' "$PR_BODY" | grep -qE "Closes #[0-9]+"; then
