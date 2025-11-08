@@ -46,10 +46,20 @@ function isWithData(obj: Record<string, unknown>): obj is { data?: unknown } {
 export class PropertyStore {
   private readonly nodeProperties = new Map<number, Buffer>();
   private readonly edgeProperties = new Map<string, Buffer>();
+  private version = 0;
+
+  private bumpVersion(): void {
+    this.version += 1;
+  }
 
   setNodeProperties(nodeId: number, value: Record<string, unknown>): void {
     const prev = this.nodeProperties.get(nodeId);
-    this.nodeProperties.set(nodeId, encodeJson(value, prev));
+    const encoded = encodeJson(value, prev);
+    if (prev && buffersEqual(prev, encoded)) {
+      return;
+    }
+    this.nodeProperties.set(nodeId, encoded);
+    this.bumpVersion();
   }
 
   getNodeProperties<T extends Record<string, unknown>>(nodeId: number): T | undefined {
@@ -63,7 +73,12 @@ export class PropertyStore {
   setEdgeProperties(key: TripleKey, value: Record<string, unknown>): void {
     const k = encodeTripleKey(key);
     const prev = this.edgeProperties.get(k);
-    this.edgeProperties.set(k, encodeJson(value, prev));
+    const encoded = encodeJson(value, prev);
+    if (prev && buffersEqual(prev, encoded)) {
+      return;
+    }
+    this.edgeProperties.set(k, encoded);
+    this.bumpVersion();
   }
 
   getEdgeProperties<T extends Record<string, unknown>>(key: TripleKey): T | undefined {
@@ -172,6 +187,10 @@ export class PropertyStore {
     }
     return result;
   }
+
+  getVersion(): number {
+    return this.version;
+  }
 }
 
 function encodeTripleKey({ subjectId, predicateId, objectId }: TripleKey): string {
@@ -181,4 +200,9 @@ function encodeTripleKey({ subjectId, predicateId, objectId }: TripleKey): strin
 function decodeTripleKey(key: string): TripleKey {
   const [subjectId, predicateId, objectId] = key.split(':').map((value) => Number(value));
   return { subjectId, predicateId, objectId };
+}
+
+function buffersEqual(a: Buffer, b: Buffer): boolean {
+  if (a.length !== b.length) return false;
+  return a.compare(b) === 0;
 }

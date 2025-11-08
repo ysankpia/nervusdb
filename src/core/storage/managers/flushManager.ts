@@ -52,6 +52,9 @@ export class FlushManager {
   private lastHotnessUpdate = 0;
   private lastPropertyIndexFlush = 0;
   private cachedDecayFactor = 1.0;
+  private lastDictionaryVersion = 0;
+  private lastTripleVersion = 0;
+  private lastPropertyVersion = 0;
   private readonly HOTNESS_UPDATE_INTERVAL = 5 * 60 * 1000; // 5分钟才更新一次热度
   private readonly PROPERTY_INDEX_FLUSH_INTERVAL = 10 * 60 * 1000; // 10分钟才flush一次属性索引
 
@@ -113,6 +116,8 @@ export class FlushManager {
     triggerCrash('before-wal-reset');
     await context.wal.reset();
 
+    this.capturePersistedVersions(context);
+
     metrics.duration = Date.now() - startTime;
     return metrics;
   }
@@ -121,12 +126,11 @@ export class FlushManager {
    * 检查是否需要更新主文件：真正的增量检查
    */
   private shouldUpdateMainFile(context: FlushContext): boolean {
-    // 只有在字典或属性真正有变化时才更新
-    // TODO: 添加更精确的变更检测，而不是简单的 size > 0
-    const hasDictionaryChanges = context.dictionary.size > 0;
-    const hasPropertyChanges = Object.keys(context.properties.serialize()).length > 0;
+    const dictionaryChanged = context.dictionary.getVersion() !== this.lastDictionaryVersion;
+    const tripleChanged = context.triples.getVersion() !== this.lastTripleVersion;
+    const propertyChanged = context.properties.getVersion() !== this.lastPropertyVersion;
 
-    return hasDictionaryChanges || hasPropertyChanges;
+    return dictionaryChanged || tripleChanged || propertyChanged;
   }
 
   /**
@@ -373,5 +377,22 @@ export class FlushManager {
     this.lastHotnessUpdate = 0;
     this.lastPropertyIndexFlush = 0;
     this.cachedDecayFactor = 1.0;
+    this.lastDictionaryVersion = 0;
+    this.lastTripleVersion = 0;
+    this.lastPropertyVersion = 0;
+  }
+
+  seedPersistedState(context: Pick<FlushContext, 'dictionary' | 'triples' | 'properties'>): void {
+    this.lastDictionaryVersion = context.dictionary.getVersion();
+    this.lastTripleVersion = context.triples.getVersion();
+    this.lastPropertyVersion = context.properties.getVersion();
+  }
+
+  private capturePersistedVersions(
+    context: Pick<FlushContext, 'dictionary' | 'triples' | 'properties'>,
+  ): void {
+    this.lastDictionaryVersion = context.dictionary.getVersion();
+    this.lastTripleVersion = context.triples.getVersion();
+    this.lastPropertyVersion = context.properties.getVersion();
   }
 }
