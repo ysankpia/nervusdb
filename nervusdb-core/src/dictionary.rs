@@ -1,6 +1,6 @@
 //! Simple in-memory dictionary that maps strings to compact numeric identifiers.
 
-use std::collections::HashMap;
+use indexmap::IndexSet;
 
 use crate::error::{Error, Result};
 
@@ -9,8 +9,7 @@ pub type StringId = u64;
 
 #[derive(Default, Debug)]
 pub struct Dictionary {
-    str_to_id: HashMap<String, StringId>,
-    id_to_str: Vec<String>,
+    inner: IndexSet<String>,
 }
 
 impl Dictionary {
@@ -19,55 +18,41 @@ impl Dictionary {
     }
 
     pub fn from_vec(values: Vec<String>) -> Self {
-        let mut id_to_str = Vec::with_capacity(values.len());
-        let mut str_to_id = HashMap::with_capacity(values.len());
-
-        for (idx, value) in values.into_iter().enumerate() {
-            let id = idx as StringId;
-            str_to_id.insert(value.clone(), id);
-            id_to_str.push(value);
+        let mut inner = IndexSet::with_capacity(values.len());
+        for value in values {
+            inner.insert(value);
         }
-
-        Self {
-            str_to_id,
-            id_to_str,
-        }
+        Self { inner }
     }
 
     /// Returns the identifier for `value`, inserting it if missing.
     pub fn get_or_insert<S: AsRef<str>>(&mut self, value: S) -> StringId {
-        let key = value.as_ref();
-        if let Some(&id) = self.str_to_id.get(key) {
-            return id;
-        }
-
-        let id = self.id_to_str.len() as StringId;
-        let owned = key.to_owned();
-        self.id_to_str.push(owned.clone());
-        self.str_to_id.insert(owned, id);
-        id
+        let (index, _) = self.inner.insert_full(value.as_ref().to_owned());
+        index as StringId
     }
 
     /// Returns the identifier for `value`, or `None` if it is unknown.
     pub fn lookup_id<S: AsRef<str>>(&self, value: S) -> Option<StringId> {
-        self.str_to_id.get(value.as_ref()).copied()
+        self.inner
+            .get_index_of(value.as_ref())
+            .map(|i| i as StringId)
     }
 
     /// Returns the string associated with `id`.
     pub fn lookup_value(&self, id: StringId) -> Result<&str> {
-        self.id_to_str
-            .get(id as usize)
+        self.inner
+            .get_index(id as usize)
             .map(|s| s.as_str())
             .ok_or_else(|| Error::UnknownString(format!("id {id}")))
     }
 
     /// Current number of unique entries in the dictionary.
     pub fn len(&self) -> usize {
-        self.id_to_str.len()
+        self.inner.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.id_to_str.is_empty()
+        self.inner.is_empty()
     }
 }
 

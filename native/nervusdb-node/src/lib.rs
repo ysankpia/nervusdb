@@ -283,6 +283,7 @@ impl DatabaseHandle {
         let payload = parse_payload_json(&input.payload_json)?;
         let episode = db
             .temporal_store_mut()
+            .expect("temporal store not available")
             .add_episode(CoreEpisodeInput {
                 source_type: input.source_type,
                 payload,
@@ -315,6 +316,7 @@ impl DatabaseHandle {
 
         let entity = db
             .temporal_store_mut()
+            .expect("temporal store not available")
             .ensure_entity(&input.kind, &input.canonical_name, options)
             .map_err(map_error)?;
         Ok(entity_to_output(entity))
@@ -340,6 +342,7 @@ impl DatabaseHandle {
 
         let fact = db
             .temporal_store_mut()
+            .expect("temporal store not available")
             .upsert_fact(CoreFactWriteInput {
                 subject_entity_id,
                 predicate_key: input.predicate_key,
@@ -373,6 +376,7 @@ impl DatabaseHandle {
 
         let record = db
             .temporal_store_mut()
+            .expect("temporal store not available")
             .link_episode(
                 episode_id,
                 CoreEpisodeLinkOptions {
@@ -397,6 +401,7 @@ impl DatabaseHandle {
 
         Ok(db
             .temporal_store()
+            .expect("temporal store not available")
             .get_entities()
             .iter()
             .cloned()
@@ -416,6 +421,7 @@ impl DatabaseHandle {
 
         Ok(db
             .temporal_store()
+            .expect("temporal store not available")
             .get_episodes()
             .iter()
             .cloned()
@@ -435,6 +441,7 @@ impl DatabaseHandle {
 
         Ok(db
             .temporal_store()
+            .expect("temporal store not available")
             .get_facts()
             .iter()
             .cloned()
@@ -481,7 +488,7 @@ impl DatabaseHandle {
             predicate_id: convert_string_id(criteria.predicate_id),
             object_id: convert_string_id(criteria.object_id),
         };
-        let triples = db.query(query);
+        let triples: Vec<_> = db.query(query).collect();
         triples
             .into_iter()
             .map(triple_to_output)

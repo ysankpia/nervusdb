@@ -2,7 +2,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use crate::triple::Triple;
@@ -33,11 +33,11 @@ pub struct WriteAheadLog {
 }
 
 impl WriteAheadLog {
-    pub fn new(path: PathBuf) -> Self {
-        Self {
-            path,
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Ok(Self {
+            path: path.as_ref().to_owned(),
             buffer: Vec::new(),
-        }
+        })
     }
 
     pub fn append(&mut self, entry: WalEntry) {
@@ -93,7 +93,7 @@ mod tests {
     fn flush_writes_entries_to_disk() {
         let dir = tempdir().unwrap();
         let wal_path = dir.path().join("wal.log");
-        let mut wal = WriteAheadLog::new(wal_path.clone());
+        let mut wal = WriteAheadLog::open(wal_path.clone()).unwrap();
 
         let triple = Triple::new(1, 2, 3);
         wal.append(WalEntry {
@@ -116,7 +116,7 @@ mod tests {
     fn flush_appends_multiple_batches() {
         let dir = tempdir().unwrap();
         let wal_path = dir.path().join("nested").join("wal.log");
-        let mut wal = WriteAheadLog::new(wal_path.clone());
+        let mut wal = WriteAheadLog::open(wal_path.clone()).unwrap();
 
         wal.append(WalEntry {
             record_type: WalRecordType::AddTriple,
