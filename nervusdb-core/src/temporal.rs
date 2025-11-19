@@ -2,8 +2,9 @@ use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
-use std::fs;
+use std::collections::{HashMap, HashSet};
+use std::fs::{self, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -38,6 +39,16 @@ struct TemporalData {
     aliases: Vec<StoredAlias>,
     facts: Vec<StoredFact>,
     links: Vec<EpisodeLinkRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+enum TemporalLogEntry {
+    Episode(StoredEpisode),
+    Entity(StoredEntity),
+    Alias(StoredAlias),
+    Fact(StoredFact),
+    Link(EpisodeLinkRecord),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,60 +164,209 @@ pub struct EpisodeLinkOptions {
     pub role: String,
 }
 
+#[derive(Debug, Default, Clone)]
+struct TemporalIndices {
+    subject_lookup: HashMap<u64, Vec<usize>>,
+    object_lookup: HashMap<u64, Vec<usize>>,
+}
+
 #[derive(Debug)]
 pub struct TemporalStore {
-    file_path: PathBuf,
+    log_path: PathBuf,
     data: TemporalData,
-    dirty: bool,
+    indices: TemporalIndices,
 }
 
 impl TemporalStore {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let file_path = path.as_ref().to_owned();
-        let data = if file_path.exists() {
-            let raw = fs::read_to_string(&file_path).map_err(|err| {
-                Error::Other(format!(
-                    "failed to read temporal store {}: {err}",
-                    file_path.display()
-                ))
-            })?;
-            serde_json::from_str::<TemporalData>(&raw).map_err(|err| {
-                Error::Other(format!(
-                    "failed to parse temporal store {}: {err}",
-                    file_path.display()
-                ))
-            })?
-        } else {
-            TemporalData::default()
+        let json_path = path.as_ref().to_owned();
+        let log_path = json_path.with_extension("log");
+
+        // Migration: if json exists but log doesn't, migrate
+        if json_path.exists() && !log_path.exists() {
+            Self::migrate_json_to_log(&json_path, &log_path)?;
+        }
+
+        let mut store = Self {
+            log_path,
+            data: TemporalData::default(),
+            indices: TemporalIndices::default(),
         };
 
-        Ok(Self {
-            file_path,
-            data,
-            dirty: false,
-        })
+        store.replay_log()?;
+
+        Ok(store)
     }
 
-    fn persist(&mut self) -> Result<()> {
-        if !self.dirty {
+    fn migrate_json_to_log(json_path: &Path, log_path: &Path) -> Result<()> {
+        let raw = fs::read_to_string(json_path)
+            .map_err(|err| Error::Other(format!("failed to read legacy json: {err}")))?;
+        let data: TemporalData = serde_json::from_str(&raw)
+            .map_err(|err| Error::Other(format!("failed to parse legacy json: {err}")))?;
+
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)
+            .map_err(|err| Error::Other(format!("failed to create log file: {err}")))?;
+        let mut writer = std::io::BufWriter::new(file);
+
+        for episode in data.episodes {
+            let entry = TemporalLogEntry::Episode(episode);
+            serde_json::to_writer(&mut writer, &entry)
+                .map_err(|err| Error::Other(format!("failed to write migration entry: {err}")))?;
+            writer
+                .write_all(b"\n")
+                .map_err(|err| Error::Other(format!("failed to write newline: {err}")))?;
+        }
+        for entity in data.entities {
+            let entry = TemporalLogEntry::Entity(entity);
+            serde_json::to_writer(&mut writer, &entry)
+                .map_err(|err| Error::Other(format!("failed to write migration entry: {err}")))?;
+            writer
+                .write_all(b"\n")
+                .map_err(|err| Error::Other(format!("failed to write newline: {err}")))?;
+        }
+        for alias in data.aliases {
+            let entry = TemporalLogEntry::Alias(alias);
+            serde_json::to_writer(&mut writer, &entry)
+                .map_err(|err| Error::Other(format!("failed to write migration entry: {err}")))?;
+            writer
+                .write_all(b"\n")
+                .map_err(|err| Error::Other(format!("failed to write newline: {err}")))?;
+        }
+        for fact in data.facts {
+            let entry = TemporalLogEntry::Fact(fact);
+            serde_json::to_writer(&mut writer, &entry)
+                .map_err(|err| Error::Other(format!("failed to write migration entry: {err}")))?;
+            writer
+                .write_all(b"\n")
+                .map_err(|err| Error::Other(format!("failed to write newline: {err}")))?;
+        }
+        for link in data.links {
+            let entry = TemporalLogEntry::Link(link);
+            serde_json::to_writer(&mut writer, &entry)
+                .map_err(|err| Error::Other(format!("failed to write migration entry: {err}")))?;
+            writer
+                .write_all(b"\n")
+                .map_err(|err| Error::Other(format!("failed to write newline: {err}")))?;
+        }
+        writer
+            .flush()
+            .map_err(|err| Error::Other(format!("failed to flush migration: {err}")))?;
+
+        // Rename old json to .json.bak to indicate migration complete
+        let bak_path = json_path.with_extension("json.bak");
+        fs::rename(json_path, bak_path)
+            .map_err(|err| Error::Other(format!("failed to rename legacy json: {err}")))?;
+
+        Ok(())
+    }
+
+    fn replay_log(&mut self) -> Result<()> {
+        if !self.log_path.exists() {
             return Ok(());
         }
-        if let Some(parent) = self.file_path.parent() {
-            fs::create_dir_all(parent).map_err(|err| {
-                Error::Other(format!(
-                    "failed to create temporal directory {}: {err}",
-                    parent.display()
-                ))
-            })?;
+
+        let file = fs::File::open(&self.log_path)
+            .map_err(|err| Error::Other(format!("failed to open log file: {err}")))?;
+        let reader = BufReader::new(file);
+
+        for line in reader.lines() {
+            let line =
+                line.map_err(|err| Error::Other(format!("failed to read log line: {err}")))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let entry: TemporalLogEntry = serde_json::from_str(&line)
+                .map_err(|err| Error::Other(format!("failed to parse log entry: {err}")))?;
+            self.apply_entry(entry);
         }
-        let tmp = self.file_path.with_extension("temporal.tmp");
-        let serialized = serde_json::to_string_pretty(&self.data)
-            .map_err(|err| Error::Other(format!("failed to serialize temporal store: {err}")))?;
-        fs::write(&tmp, serialized)
-            .map_err(|err| Error::Other(format!("failed to write temporal store tmp: {err}")))?;
-        fs::rename(&tmp, &self.file_path)
-            .map_err(|err| Error::Other(format!("failed to persist temporal store: {err}")))?;
-        self.dirty = false;
+        Ok(())
+    }
+
+    fn apply_entry(&mut self, entry: TemporalLogEntry) {
+        match entry {
+            TemporalLogEntry::Episode(e) => {
+                if e.episode_id > self.data.counters.episode {
+                    self.data.counters.episode = e.episode_id;
+                }
+                self.data.episodes.push(e);
+            }
+            TemporalLogEntry::Entity(e) => {
+                if e.entity_id > self.data.counters.entity {
+                    self.data.counters.entity = e.entity_id;
+                }
+                // Handle updates (version increment) by replacing existing
+                if let Some(idx) = self
+                    .data
+                    .entities
+                    .iter()
+                    .position(|x| x.entity_id == e.entity_id)
+                {
+                    self.data.entities[idx] = e;
+                } else {
+                    self.data.entities.push(e);
+                }
+            }
+            TemporalLogEntry::Alias(a) => {
+                if a.alias_id > self.data.counters.alias {
+                    self.data.counters.alias = a.alias_id;
+                }
+                self.data.aliases.push(a);
+            }
+            TemporalLogEntry::Fact(f) => {
+                if f.fact_id > self.data.counters.fact {
+                    self.data.counters.fact = f.fact_id;
+                }
+                // Handle updates
+                if let Some(idx) = self.data.facts.iter().position(|x| x.fact_id == f.fact_id) {
+                    self.data.facts[idx] = f;
+                    // Note: Index update for modify is tricky if subject/object changes,
+                    // but Fact is append-only logically. We assume subject/object don't change for same ID.
+                } else {
+                    let idx = self.data.facts.len();
+                    self.indices
+                        .subject_lookup
+                        .entry(f.subject_entity_id)
+                        .or_default()
+                        .push(idx);
+                    if let Some(obj_id) = f.object_entity_id {
+                        self.indices
+                            .object_lookup
+                            .entry(obj_id)
+                            .or_default()
+                            .push(idx);
+                    }
+                    self.data.facts.push(f);
+                }
+            }
+            TemporalLogEntry::Link(l) => {
+                if l.link_id > self.data.counters.link {
+                    self.data.counters.link = l.link_id;
+                }
+                self.data.links.push(l);
+            }
+        }
+    }
+
+    fn append(&mut self, entry: TemporalLogEntry) -> Result<()> {
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.log_path)
+            .map_err(|err| Error::Other(format!("failed to open log for appending: {err}")))?;
+        let mut writer = std::io::BufWriter::new(file);
+        serde_json::to_writer(&mut writer, &entry)
+            .map_err(|err| Error::Other(format!("failed to serialize entry: {err}")))?;
+        writer
+            .write_all(b"\n")
+            .map_err(|err| Error::Other(format!("failed to write newline: {err}")))?;
+        writer
+            .flush()
+            .map_err(|err| Error::Other(format!("failed to flush log: {err}")))?;
+
+        self.apply_entry(entry);
         Ok(())
     }
 
@@ -271,9 +431,7 @@ impl TemporalStore {
             ingested_at: canonicalize_timestamp(OffsetDateTime::now_utc()),
             trace_hash,
         };
-        self.data.episodes.push(episode.clone());
-        self.dirty = true;
-        self.persist()?;
+        self.append(TemporalLogEntry::Episode(episode.clone()))?;
         Ok(episode)
     }
 
@@ -301,20 +459,27 @@ impl TemporalStore {
             .position(|entity| entity.fingerprint == fingerprint)
         {
             let mut entity = self.data.entities[index].clone();
+            let mut changed = false;
             if version_increment {
                 entity.version += 1;
+                changed = true;
             }
             if occurred_at < entity.first_seen {
                 entity.first_seen = occurred_at.clone();
+                changed = true;
             }
             if occurred_at > entity.last_seen {
                 entity.last_seen = occurred_at.clone();
+                changed = true;
             }
-            self.data.entities[index] = entity.clone();
+
+            if changed {
+                self.append(TemporalLogEntry::Entity(entity.clone()))?;
+            }
+
             if let Some(alias_text) = alias {
                 self.ensure_alias(entity.entity_id, alias_text, confidence)?;
             }
-            self.persist()?;
             return Ok(entity);
         }
 
@@ -327,12 +492,10 @@ impl TemporalStore {
             last_seen: occurred_at.clone(),
             version: 1,
         };
-        self.data.entities.push(entity.clone());
+        self.append(TemporalLogEntry::Entity(entity.clone()))?;
         if let Some(alias_text) = alias {
             self.ensure_alias(entity.entity_id, alias_text, confidence)?;
         }
-        self.dirty = true;
-        self.persist()?;
         Ok(entity)
     }
 
@@ -353,9 +516,7 @@ impl TemporalStore {
             alias_text,
             confidence: confidence.unwrap_or(1.0),
         };
-        self.data.aliases.push(alias);
-        self.dirty = true;
-        self.persist()?;
+        self.append(TemporalLogEntry::Alias(alias))?;
         Ok(())
     }
 
@@ -381,20 +542,31 @@ impl TemporalStore {
                 && fact.valid_to.is_none()
         }) {
             let mut fact = self.data.facts[index].clone();
+            let mut changed = false;
             if valid_from < fact.valid_from {
                 fact.valid_from = valid_from.clone();
+                changed = true;
             }
             if let Some(to) = valid_to {
                 if fact.valid_to.as_ref().map_or(true, |current| &to < current) {
                     fact.valid_to = Some(to);
+                    changed = true;
                 }
             }
             if let Some(value) = input.object_value {
                 fact.object_value = Some(value);
+                changed = true;
             }
-            fact.confidence = input.confidence.unwrap_or(fact.confidence);
-            self.data.facts[index] = fact.clone();
-            self.persist()?;
+            if let Some(conf) = input.confidence {
+                if (fact.confidence - conf).abs() > f64::EPSILON {
+                    fact.confidence = conf;
+                    changed = true;
+                }
+            }
+
+            if changed {
+                self.append(TemporalLogEntry::Fact(fact.clone()))?;
+            }
             return Ok(fact);
         }
 
@@ -409,9 +581,7 @@ impl TemporalStore {
             confidence: input.confidence.unwrap_or(1.0),
             source_episode_id: input.source_episode_id,
         };
-        self.data.facts.push(fact.clone());
-        self.dirty = true;
-        self.persist()?;
+        self.append(TemporalLogEntry::Fact(fact.clone()))?;
         Ok(fact)
     }
 
@@ -446,9 +616,7 @@ impl TemporalStore {
             fact_id: options.fact_id,
             role: options.role,
         };
-        self.data.links.push(record.clone());
-        self.dirty = true;
-        self.persist()?;
+        self.append(TemporalLogEntry::Link(record.clone()))?;
         Ok(record)
     }
 
@@ -463,7 +631,26 @@ impl TemporalStore {
             Some((start_dt, end_dt))
         });
         let mut results = Vec::new();
-        for fact in &self.data.facts {
+
+        let candidate_indices: Box<dyn Iterator<Item = &usize>> = match query.role {
+            Some(TimelineRole::Object) => {
+                if let Some(indices) = self.indices.object_lookup.get(&query.entity_id) {
+                    Box::new(indices.iter())
+                } else {
+                    Box::new(std::iter::empty())
+                }
+            }
+            _ => {
+                if let Some(indices) = self.indices.subject_lookup.get(&query.entity_id) {
+                    Box::new(indices.iter())
+                } else {
+                    Box::new(std::iter::empty())
+                }
+            }
+        };
+
+        for &idx in candidate_indices {
+            let fact = &self.data.facts[idx];
             if query
                 .predicate_key
                 .as_ref()
@@ -471,13 +658,8 @@ impl TemporalStore {
             {
                 continue;
             }
-            let match_entity = match query.role {
-                Some(TimelineRole::Object) => fact.object_entity_id == Some(query.entity_id),
-                _ => fact.subject_entity_id == query.entity_id,
-            };
-            if !match_entity {
-                continue;
-            }
+            // Role check is implicit by lookup, but double check for safety if needed (omitted for speed)
+
             if let Some((start, end)) = between {
                 let from = OffsetDateTime::parse(&fact.valid_from, &Rfc3339);
                 let to = fact

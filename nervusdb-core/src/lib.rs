@@ -2,84 +2,85 @@
 
 mod dictionary;
 mod error;
-mod global_index;
-mod partition;
-mod temporal;
-mod triple;
-mod wal;
+pub mod parser;
+pub mod storage;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod temporal;
+pub mod triple;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod wal;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use storage::{Hexastore, open_store};
+
 pub use dictionary::{Dictionary, StringId};
 pub use error::{Error, Result};
-pub use global_index::GlobalIndex;
-pub use partition::{PartitionConfig, PartitionId};
+#[cfg(not(target_arch = "wasm32"))]
 pub use temporal::{
     EnsureEntityOptions, EpisodeInput, EpisodeLinkOptions, EpisodeLinkRecord, FactWriteInput,
     StoredEntity, StoredEpisode, StoredFact, TemporalStore, TimelineQuery, TimelineRole,
 };
 pub use triple::{Fact, Triple};
+#[cfg(not(target_arch = "wasm32"))]
 pub use wal::{WalEntry, WalRecordType, WriteAheadLog};
 
 /// Database configuration used when opening an instance.
 #[derive(Debug, Clone)]
 pub struct Options {
     data_path: PathBuf,
-    partition: PartitionConfig,
 }
 
 impl Options {
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
         Self {
             data_path: path.as_ref().to_owned(),
-            partition: PartitionConfig::default(),
         }
     }
-
-    pub fn with_partition_config(mut self, config: PartitionConfig) -> Self {
-        self.partition = config;
-        self
-    }
 }
 
-#[derive(Debug)]
+use std::io::Write; // For dict persistence
+
 pub struct Database {
-    options: Options,
     dictionary: Dictionary,
-    index: GlobalIndex,
+    store: Box<dyn Hexastore + Send>,
+    #[cfg(not(target_arch = "wasm32"))]
+    temporal: TemporalStore,
+    #[cfg(not(target_arch = "wasm32"))]
     wal: WriteAheadLog,
-    triples: Vec<Triple>,
+    #[cfg(not(target_arch = "wasm32"))]
+    dict_log: Option<std::fs::File>,
     cursors: HashMap<u64, QueryCursor>,
     next_cursor_id: u64,
-    temporal: temporal::TemporalStore,
 }
 
-#[derive(Debug)]
 struct QueryCursor {
-    triples: Vec<Triple>,
-    position: usize,
+    iter: crate::storage::HexastoreIter,
+    finished: bool,
 }
 
 impl QueryCursor {
-    fn new(triples: Vec<Triple>) -> Self {
+    fn new(iter: crate::storage::HexastoreIter) -> Self {
         Self {
-            triples,
-            position: 0,
+            iter,
+            finished: false,
         }
     }
 
     fn next_batch(&mut self, batch_size: usize) -> (Vec<Triple>, bool) {
-        let chunk = if self.position >= self.triples.len() {
-            Vec::new()
-        } else {
-            let end = (self.position + batch_size).min(self.triples.len());
-            let batch = self.triples[self.position..end].to_vec();
-            self.position = end;
-            batch
-        };
-        let done = self.position >= self.triples.len();
-        (chunk, done)
+        let mut batch = Vec::with_capacity(batch_size);
+        for _ in 0..batch_size.max(1) {
+            match self.iter.next() {
+                Some(triple) => batch.push(triple),
+                None => {
+                    self.finished = true;
+                    break;
+                }
+            }
+        }
+        let done = self.finished || batch.is_empty();
+        (batch, done)
     }
 }
 
@@ -91,21 +92,102 @@ pub struct QueryCriteria {
 }
 
 impl Database {
+    /// Opens a database at the specified path.
+    ///
+    /// The path should be a base path or directory.
+    /// We will create:
+    /// - path.redb (Graph storage)
+    /// - path.temporal.log (Temporal storage)
+    /// - path.wal (Write-Ahead Log)
     pub fn open(options: Options) -> Result<Self> {
-        let wal_path = options.data_path.join("wal.log");
-        let temporal_path = options.data_path.with_extension("temporal.json");
-        let temporal = TemporalStore::open(temporal_path)?;
+        let path = options.data_path;
+        // Ensure parent dir exists
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| Error::Other(e.to_string()))?;
+        }
 
-        Ok(Self {
-            wal: WriteAheadLog::new(wal_path),
-            options,
+        let _redb_path = path.with_extension("redb");
+        #[cfg(not(target_arch = "wasm32"))]
+        let temporal_path = path.with_extension("temporal"); // TemporalStore::open expects a path and appends .log.
+        // Let's pass the base path with .temporal extension so it creates .temporal.log
+        #[cfg(not(target_arch = "wasm32"))]
+        let wal_path = path.with_extension("wal");
+
+        let store = open_store(&_redb_path)?;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let temporal = TemporalStore::open(&temporal_path)?;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let wal = WriteAheadLog::open(&wal_path)?;
+
+        // Note: We are NOT loading the hexastore from WAL anymore because redb is persistent.
+        // The WAL might still be useful for the Dictionary or TemporalStore if they were not persistent,
+        // but TemporalStore IS persistent (AOL).
+        // Dictionary is NOT persistent yet! We need to persist Dictionary.
+        // Wait, Dictionary is in-memory. If we restart, Dictionary is empty.
+        // We need to rebuild Dictionary or persist it.
+        //
+        // CRITICAL MISSING PIECE: Dictionary Persistence.
+        // Phase 1 plan didn't explicitly mention Dictionary persistence, but "Disk-Based" implies full persistence.
+        // If Dictionary is lost, the u64 IDs in redb are meaningless.
+        //
+        // For now, I will assume the WAL replays the dictionary?
+        // The WAL stores `WalEntry::Insert(s, p, o)`.
+        // Replaying WAL would re-insert strings into Dictionary.
+        // BUT `redb` already has the triples. Re-inserting into `redb` is idempotent (we check existence).
+        // So replaying WAL is actually the correct way to restore Dictionary state for now!
+        //
+        // So:
+        // 1. Open redb (persistent triples).
+        // 2. Open WAL.
+        // 3. Replay WAL -> updates Dictionary (in-memory) AND tries to insert into redb (idempotent).
+        //
+        // This works, but it means startup time is O(Total Writes) to rebuild Dictionary.
+        // Ideally Dictionary should also be in redb.
+        // But for Phase 1, let's stick to the plan: "DiskHexastore".
+        // I will keep WAL replay to restore Dictionary.
+
+        let mut db = Self {
             dictionary: Dictionary::new(),
-            index: GlobalIndex::new(),
-            triples: Vec::new(),
+            store,
+            #[cfg(not(target_arch = "wasm32"))]
+            temporal,
+            #[cfg(not(target_arch = "wasm32"))]
+            wal,
+            #[cfg(not(target_arch = "wasm32"))]
+            dict_log: None,
             cursors: HashMap::new(),
             next_cursor_id: 1,
-            temporal,
-        })
+        };
+
+        // Replay WAL to restore dictionary
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let dict_path = path.with_extension("dict");
+            if dict_path.exists() {
+                let file =
+                    std::fs::File::open(&dict_path).map_err(|e| Error::Other(e.to_string()))?;
+                let reader = std::io::BufReader::new(file);
+                use std::io::BufRead;
+                for line in reader.lines() {
+                    let line = line.map_err(|e| Error::Other(e.to_string()))?;
+                    if !line.is_empty() {
+                        db.dictionary.get_or_insert(&line);
+                    }
+                }
+            }
+
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&dict_path)
+                .map_err(|e| Error::Other(e.to_string()))?;
+            db.dict_log = Some(file);
+        }
+
+        Ok(db)
     }
 
     pub fn hydrate(
@@ -114,17 +196,13 @@ impl Database {
         triples: Vec<(StringId, StringId, StringId)>,
     ) -> Result<()> {
         self.dictionary = Dictionary::from_vec(dictionary_values);
-        self.index = GlobalIndex::new();
-        self.triples = Vec::with_capacity(triples.len());
+        // Note: We cannot easily clear DiskHexastore here without dropping the database.
+        // For now, we assume hydrate is called on an empty database or appends to it.
+        // Ideally, hydrate should be used only for initialization.
 
         for (subject_id, predicate_id, object_id) in triples {
             let triple = Triple::new(subject_id, predicate_id, object_id);
-            let partition =
-                self.options
-                    .partition
-                    .partition_for(subject_id, predicate_id, object_id);
-            self.index.insert(triple, partition);
-            self.triples.push(triple);
+            self.store.insert(&triple)?;
         }
 
         self.reset_cursors();
@@ -133,62 +211,62 @@ impl Database {
     }
 
     pub fn add_fact(&mut self, fact: Fact<'_>) -> Result<Triple> {
+        // Check if we need to persist new dictionary entries
+        #[cfg(not(target_arch = "wasm32"))]
+        let start_len = self.dictionary.len();
+
         let subject = self.dictionary.get_or_insert(fact.subject);
         let predicate = self.dictionary.get_or_insert(fact.predicate);
         let object = self.dictionary.get_or_insert(fact.object);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.dictionary.len() > start_len {
+            if let Some(ref mut file) = self.dict_log {
+                if (subject as usize) >= start_len {
+                    writeln!(file, "{}", fact.subject).map_err(|e| Error::Other(e.to_string()))?;
+                }
+                if (predicate as usize) >= start_len {
+                    writeln!(file, "{}", fact.predicate)
+                        .map_err(|e| Error::Other(e.to_string()))?;
+                }
+                if (object as usize) >= start_len {
+                    writeln!(file, "{}", fact.object).map_err(|e| Error::Other(e.to_string()))?;
+                }
+            }
+        }
+
         let triple = Triple::new(subject, predicate, object);
 
-        let partition = self
-            .options
-            .partition
-            .partition_for(subject, predicate, object);
-        self.index.insert(triple, partition);
+        self.store.insert(&triple)?;
+        #[cfg(not(target_arch = "wasm32"))]
         self.wal.append(WalEntry {
             record_type: WalRecordType::AddTriple,
             triple,
         });
-        self.triples.push(triple);
         Ok(triple)
     }
 
-    pub fn all_triples(&self) -> &[Triple] {
-        &self.triples
+    pub fn all_triples(&self) -> Vec<Triple> {
+        self.store.iter().collect()
     }
 
     pub fn dictionary(&self) -> &Dictionary {
         &self.dictionary
     }
 
-    pub fn query(&self, criteria: QueryCriteria) -> Vec<Triple> {
-        self.triples
-            .iter()
-            .copied()
-            .filter(|triple| {
-                if let Some(subject_id) = criteria.subject_id {
-                    if triple.subject_id != subject_id {
-                        return false;
-                    }
-                }
-                if let Some(predicate_id) = criteria.predicate_id {
-                    if triple.predicate_id != predicate_id {
-                        return false;
-                    }
-                }
-                if let Some(object_id) = criteria.object_id {
-                    if triple.object_id != object_id {
-                        return false;
-                    }
-                }
-                true
-            })
-            .collect()
+    pub fn query(&self, criteria: QueryCriteria) -> crate::storage::HexastoreIter {
+        self.store.query(
+            criteria.subject_id,
+            criteria.predicate_id,
+            criteria.object_id,
+        )
     }
 
     pub fn open_cursor(&mut self, criteria: QueryCriteria) -> Result<u64> {
-        let triples = self.query(criteria);
+        let iter = self.query(criteria);
         let cursor_id = self.next_cursor_id;
         self.next_cursor_id = self.next_cursor_id.wrapping_add(1).max(1);
-        self.cursors.insert(cursor_id, QueryCursor::new(triples));
+        self.cursors.insert(cursor_id, QueryCursor::new(iter));
         Ok(cursor_id)
     }
 
@@ -220,20 +298,36 @@ impl Database {
         self.next_cursor_id = 1;
     }
 
-    pub fn temporal_store(&self) -> &TemporalStore {
-        &self.temporal
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn temporal_store(&self) -> Option<&TemporalStore> {
+        return Some(&self.temporal);
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub fn temporal_store(&self) -> Option<&()> {
+        return None;
     }
 
-    pub fn temporal_store_mut(&mut self) -> &mut TemporalStore {
-        &mut self.temporal
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn temporal_store_mut(&mut self) -> Option<&mut TemporalStore> {
+        return Some(&mut self.temporal);
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub fn temporal_store_mut(&mut self) -> Option<&mut ()> {
+        return None;
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn timeline_query(&self, query: TimelineQuery) -> Vec<StoredFact> {
-        self.temporal.query_timeline(&query)
+        return self.temporal.query_timeline(&query);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn timeline_trace(&self, fact_id: u64) -> Vec<StoredEpisode> {
-        self.temporal.trace_back(fact_id)
+        return self.temporal.trace_back(fact_id);
+    }
+
+    pub fn execute_query(&self, query: &str) -> Result<Vec<Triple>> {
+        parser::execute(self, query)
     }
 }
 
@@ -247,17 +341,19 @@ mod tests {
         let tmp = tempdir().unwrap();
         let mut db = Database::open(Options::new(tmp.path())).unwrap();
         let triple = db.add_fact(Fact::new("alice", "knows", "bob")).unwrap();
-        assert_eq!(db.all_triples(), &[triple]);
+        assert_eq!(db.all_triples(), vec![triple]);
         assert_eq!(
             db.dictionary().lookup_value(triple.subject_id).unwrap(),
             "alice"
         );
 
-        let results = db.query(QueryCriteria {
-            subject_id: Some(triple.subject_id),
-            predicate_id: None,
-            object_id: None,
-        });
+        let results: Vec<_> = db
+            .query(QueryCriteria {
+                subject_id: Some(triple.subject_id),
+                predicate_id: None,
+                object_id: None,
+            })
+            .collect();
         assert_eq!(results, vec![triple]);
 
         let cursor_id = db
@@ -279,7 +375,9 @@ mod tests {
         let mut db = Database::open(Options::new(&path)).unwrap();
 
         {
-            let store = db.temporal_store_mut();
+            let store = db
+                .temporal_store_mut()
+                .expect("temporal store not available");
             let alice = store
                 .ensure_entity(
                     "agent",
@@ -334,7 +432,11 @@ mod tests {
                 .unwrap();
         }
 
-        let alice_id = db.temporal_store().get_entities()[0].entity_id;
+        let alice_id = db
+            .temporal_store()
+            .expect("temporal store not available")
+            .get_entities()[0]
+            .entity_id;
         let timeline = db.timeline_query(TimelineQuery {
             entity_id: alice_id,
             predicate_key: Some("mentions".into()),
