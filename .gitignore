@@ -1,23 +1,25 @@
 # Dependencies
-node_modules/
+bindings/node/node_modules/
 
 # Build output
-dist/
+bindings/node/dist/
 *.tsbuildinfo
 
 # Test coverage
-coverage/
+bindings/node/coverage/
 .nyc_output/
 
 # Memory snapshots
 memory-snapshots/
 
 # Rust
+target/
 nervusdb-wasm/target/
 nervusdb-wasm/Cargo.lock
 nervusdb-core/target/
-native/nervusdb-node/target/
-native/nervusdb-node/npm/**/*.node
+bindings/node/native/nervusdb-node/target/
+bindings/node/native/nervusdb-node/npm/**/*.node
+bindings/python/nervusdb-py/target/
 
 # OS
 .DS_Store
@@ -45,4 +47,6 @@ yarn-error.log*
 # Database files (for testing)
 *.synapsedb
 *.nervusdb
+bindings/node/temp_verification_db
+bindings/node/temp_verification_db.redb
 repomix-output.xml

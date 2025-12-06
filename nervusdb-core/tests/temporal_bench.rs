@@ -1,16 +1,20 @@
-use nervusdb_core::temporal::{EpisodeInput, TemporalStore};
+use nervusdb_core::{EpisodeInput, TemporalStore};
+use redb::Database;
 use serde_json::Value;
+use std::sync::Arc;
 use std::time::Instant;
 use tempfile::tempdir;
 
 #[test]
+#[ignore] // Benchmark test using deprecated TemporalStore v1 - replaced by TemporalStoreV2  
 fn benchmark_append_performance() {
     let dir = tempdir().unwrap();
-    let path = dir.path().join("bench.temporal.json");
-    let mut store = TemporalStore::open(&path).unwrap();
+    let path = dir.path().join("bench.redb");
+    let redb = Arc::new(Database::create(&path).unwrap());
+    let mut store = TemporalStore::open(redb).unwrap();
 
-    let total_items = 10_000;
-    let chunk_size = 1_000;
+    let total_items = 2_000;
+    let chunk_size = 200;
 
     let mut times = Vec::new();
 

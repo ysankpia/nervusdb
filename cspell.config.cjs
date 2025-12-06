@@ -5,15 +5,16 @@ module.exports = {
   language: 'en',
   allowCompoundWords: true,
   ignorePaths: [
-    'node_modules',
-    'dist',
-    'coverage',
+    'bindings/node/node_modules',
+    'bindings/node/dist',
+    'bindings/node/coverage',
     '**/*.synapsedb',
     '**/*.synapsedb.*',
     '**/*.idxpage',
     '.git',
     '.husky/_',
-    'pnpm-lock.yaml'
+    'bindings/node/pnpm-lock.yaml',
+    'bindings/node/native/nervusdb-node/npm'
   ],
   words: [
     'SynapseDB',

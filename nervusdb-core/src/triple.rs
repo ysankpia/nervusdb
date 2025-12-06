@@ -1,9 +1,10 @@
 //! Basic triple/fact representation helpers.
 
-use crate::dictionary::StringId;
+use crate::StringId;
+use serde::{Deserialize, Serialize};
 
 /// Fully encoded triple referencing dictionary identifiers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Triple {
     pub subject_id: StringId,
     pub predicate_id: StringId,

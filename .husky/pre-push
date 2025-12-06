@@ -1,20 +1,11 @@
 #!/usr/bin/env sh
 set -e
 
-echo "[husky] pre-push: verify docs directory tree"
-pnpm run docs:tree
+echo "[husky] pre-push: cargo fmt check"
+cargo fmt --all -- --check
 
-# 若目录树在 pre-push 阶段被刷新产生变更，阻止推送，提示先提交
-if ! git diff --quiet -- .agents/rules/base.md; then
-  echo "[husky] pre-push: 目录结构（详细）已更新，请先提交该变更后再推送"
-  exit 1
-fi
+echo "[husky] pre-push: cargo clippy"
+cargo clippy --workspace --all-targets -- -W warnings
 
-echo "[husky] pre-push: prettier format check"
-pnpm run format:check
-
-echo "[husky] pre-push: running complete CI pipeline (typecheck + lint + test + build)"
-pnpm run typecheck
-pnpm run lint
-pnpm test -- --exclude '**/incremental_flush_performance.test.ts' --exclude '**/lazy_loading_performance.test.ts' --exclude '**/disk_centric_performance.test.ts'
-pnpm run build
+echo "[husky] pre-push: cargo test"
+cargo test --workspace

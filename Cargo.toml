@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "nervusdb-core",
+    "bindings/node/native/nervusdb-node",
+    "bindings/python/nervusdb-py"
+]
+resolver = "2"

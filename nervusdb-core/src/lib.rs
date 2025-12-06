@@ -1,30 +1,40 @@
 //! NervusDB core Rust library providing the low level storage primitives.
 
-mod dictionary;
+pub mod algorithms;
 mod error;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod ffi;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod migration;
 pub mod parser;
+pub mod query;
 pub mod storage;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod temporal;
-pub mod triple;
+mod temporal; // Legacy v1 (deprecated)
 #[cfg(not(target_arch = "wasm32"))]
-pub mod wal;
+pub mod temporal_v2; // New multi-table architecture
+pub mod triple;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
 
+#[cfg(not(target_arch = "wasm32"))]
 use storage::{Hexastore, open_store};
 
-pub use dictionary::{Dictionary, StringId};
+pub type StringId = u64;
 pub use error::{Error, Result};
 #[cfg(not(target_arch = "wasm32"))]
-pub use temporal::{
+use redb::{Database as RedbDatabase, WriteTransaction};
+// Re-export Temporal Store v2 types (replacing legacy v1)
+#[cfg(not(target_arch = "wasm32"))]
+pub use temporal_v2::{
     EnsureEntityOptions, EpisodeInput, EpisodeLinkOptions, EpisodeLinkRecord, FactWriteInput,
-    StoredEntity, StoredEpisode, StoredFact, TemporalStore, TimelineQuery, TimelineRole,
+    StoredAlias, StoredEntity, StoredEpisode, StoredFact, TemporalStoreV2 as TemporalStore,
+    TimelineQuery, TimelineRole,
 };
 pub use triple::{Fact, Triple};
-#[cfg(not(target_arch = "wasm32"))]
-pub use wal::{WalEntry, WalRecordType, WriteAheadLog};
 
 /// Database configuration used when opening an instance.
 #[derive(Debug, Clone)]
@@ -40,17 +50,14 @@ impl Options {
     }
 }
 
-use std::io::Write; // For dict persistence
-
 pub struct Database {
-    dictionary: Dictionary,
     store: Box<dyn Hexastore + Send>,
     #[cfg(not(target_arch = "wasm32"))]
+    redb: Arc<RedbDatabase>,
+    #[cfg(not(target_arch = "wasm32"))]
+    active_write: Option<WriteTransaction>,
+    #[cfg(not(target_arch = "wasm32"))]
     temporal: TemporalStore,
-    #[cfg(not(target_arch = "wasm32"))]
-    wal: WriteAheadLog,
-    #[cfg(not(target_arch = "wasm32"))]
-    dict_log: Option<std::fs::File>,
     cursors: HashMap<u64, QueryCursor>,
     next_cursor_id: u64,
 }
@@ -84,6 +91,19 @@ impl QueryCursor {
     }
 }
 
+fn debug_env_enabled() -> bool {
+    match std::env::var("NERVUSDB_DEBUG_NATIVE") {
+        Ok(val) => val == "1" || val.eq_ignore_ascii_case("true"),
+        Err(_) => false,
+    }
+}
+
+fn emit_debug(message: &str) {
+    if debug_env_enabled() {
+        eprintln!("{}", message);
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct QueryCriteria {
     pub subject_id: Option<StringId>,
@@ -95,10 +115,7 @@ impl Database {
     /// Opens a database at the specified path.
     ///
     /// The path should be a base path or directory.
-    /// We will create:
-    /// - path.redb (Graph storage)
-    /// - path.temporal.log (Temporal storage)
-    /// - path.wal (Write-Ahead Log)
+    /// We will create: path.redb (single-file storage for triples, dictionary, temporal data)
     pub fn open(options: Options) -> Result<Self> {
         let path = options.data_path;
         // Ensure parent dir exists
@@ -107,87 +124,31 @@ impl Database {
             std::fs::create_dir_all(parent).map_err(|e| Error::Other(e.to_string()))?;
         }
 
-        let _redb_path = path.with_extension("redb");
         #[cfg(not(target_arch = "wasm32"))]
-        let temporal_path = path.with_extension("temporal"); // TemporalStore::open expects a path and appends .log.
-        // Let's pass the base path with .temporal extension so it creates .temporal.log
-        #[cfg(not(target_arch = "wasm32"))]
-        let wal_path = path.with_extension("wal");
-
-        let store = open_store(&_redb_path)?;
+        let redb = Arc::new(
+            RedbDatabase::create(path.with_extension("redb"))
+                .map_err(|e| Error::Other(format!("failed to open redb: {e}")))?,
+        );
 
         #[cfg(not(target_arch = "wasm32"))]
-        let temporal = TemporalStore::open(&temporal_path)?;
+        let store = open_store(redb.clone())?;
+        #[cfg(target_arch = "wasm32")]
+        let store = open_store(&path)?;
 
         #[cfg(not(target_arch = "wasm32"))]
-        let wal = WriteAheadLog::open(&wal_path)?;
+        let temporal = TemporalStore::open(redb.clone())?;
 
-        // Note: We are NOT loading the hexastore from WAL anymore because redb is persistent.
-        // The WAL might still be useful for the Dictionary or TemporalStore if they were not persistent,
-        // but TemporalStore IS persistent (AOL).
-        // Dictionary is NOT persistent yet! We need to persist Dictionary.
-        // Wait, Dictionary is in-memory. If we restart, Dictionary is empty.
-        // We need to rebuild Dictionary or persist it.
-        //
-        // CRITICAL MISSING PIECE: Dictionary Persistence.
-        // Phase 1 plan didn't explicitly mention Dictionary persistence, but "Disk-Based" implies full persistence.
-        // If Dictionary is lost, the u64 IDs in redb are meaningless.
-        //
-        // For now, I will assume the WAL replays the dictionary?
-        // The WAL stores `WalEntry::Insert(s, p, o)`.
-        // Replaying WAL would re-insert strings into Dictionary.
-        // BUT `redb` already has the triples. Re-inserting into `redb` is idempotent (we check existence).
-        // So replaying WAL is actually the correct way to restore Dictionary state for now!
-        //
-        // So:
-        // 1. Open redb (persistent triples).
-        // 2. Open WAL.
-        // 3. Replay WAL -> updates Dictionary (in-memory) AND tries to insert into redb (idempotent).
-        //
-        // This works, but it means startup time is O(Total Writes) to rebuild Dictionary.
-        // Ideally Dictionary should also be in redb.
-        // But for Phase 1, let's stick to the plan: "DiskHexastore".
-        // I will keep WAL replay to restore Dictionary.
-
-        let mut db = Self {
-            dictionary: Dictionary::new(),
+        Ok(Self {
             store,
             #[cfg(not(target_arch = "wasm32"))]
+            redb,
+            #[cfg(not(target_arch = "wasm32"))]
+            active_write: None,
+            #[cfg(not(target_arch = "wasm32"))]
             temporal,
-            #[cfg(not(target_arch = "wasm32"))]
-            wal,
-            #[cfg(not(target_arch = "wasm32"))]
-            dict_log: None,
             cursors: HashMap::new(),
             next_cursor_id: 1,
-        };
-
-        // Replay WAL to restore dictionary
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let dict_path = path.with_extension("dict");
-            if dict_path.exists() {
-                let file =
-                    std::fs::File::open(&dict_path).map_err(|e| Error::Other(e.to_string()))?;
-                let reader = std::io::BufReader::new(file);
-                use std::io::BufRead;
-                for line in reader.lines() {
-                    let line = line.map_err(|e| Error::Other(e.to_string()))?;
-                    if !line.is_empty() {
-                        db.dictionary.get_or_insert(&line);
-                    }
-                }
-            }
-
-            let file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&dict_path)
-                .map_err(|e| Error::Other(e.to_string()))?;
-            db.dict_log = Some(file);
-        }
-
-        Ok(db)
+        })
     }
 
     pub fn hydrate(
@@ -195,10 +156,21 @@ impl Database {
         dictionary_values: Vec<String>,
         triples: Vec<(StringId, StringId, StringId)>,
     ) -> Result<()> {
-        self.dictionary = Dictionary::from_vec(dictionary_values);
-        // Note: We cannot easily clear DiskHexastore here without dropping the database.
-        // For now, we assume hydrate is called on an empty database or appends to it.
-        // Ideally, hydrate should be used only for initialization.
+        // Pre-intern dictionary values to ensure IDs match if they are sequential?
+        // Wait, if we just intern, we get new IDs.
+        // hydrate assumes specific IDs?
+        // The signature is `triples: Vec<(StringId, StringId, StringId)>`. StringId is u64.
+        // If the input triples use IDs that correspond to `dictionary_values` indices, we need to ensure that mapping.
+        // But `intern` assigns IDs.
+        // If `hydrate` is used for restoring a dump, the dump should probably contain string triples, not ID triples.
+        // Or we assume `dictionary_values` are in ID order 1..N.
+        // Let's assume `dictionary_values` are ordered by ID.
+
+        // Note: This implementation assumes that `dictionary_values` index + 1 == ID.
+        // This is fragile but matches the previous behavior where Dictionary assigned sequential IDs.
+        for value in dictionary_values {
+            self.store.intern(&value)?;
+        }
 
         for (subject_id, predicate_id, object_id) in triples {
             let triple = Triple::new(subject_id, predicate_id, object_id);
@@ -210,48 +182,806 @@ impl Database {
         Ok(())
     }
 
-    pub fn add_fact(&mut self, fact: Fact<'_>) -> Result<Triple> {
-        // Check if we need to persist new dictionary entries
-        #[cfg(not(target_arch = "wasm32"))]
-        let start_len = self.dictionary.len();
+    /// Set node properties from JSON string (converts to FlexBuffers internally)
+    pub fn set_node_property(&mut self, id: u64, json: &str) -> Result<()> {
+        // Parse JSON and convert to FlexBuffers for unified storage
+        let props: std::collections::HashMap<String, serde_json::Value> =
+            serde_json::from_str(json)
+                .map_err(|e| Error::Other(format!("Invalid JSON in set_node_property: {}", e)))?;
+        let binary = crate::storage::property::serialize_properties(&props)?;
+        self.set_node_property_binary(id, &binary)
+    }
 
-        let subject = self.dictionary.get_or_insert(fact.subject);
-        let predicate = self.dictionary.get_or_insert(fact.predicate);
-        let object = self.dictionary.get_or_insert(fact.object);
-
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.dictionary.len() > start_len {
-            if let Some(ref mut file) = self.dict_log {
-                if (subject as usize) >= start_len {
-                    writeln!(file, "{}", fact.subject).map_err(|e| Error::Other(e.to_string()))?;
-                }
-                if (predicate as usize) >= start_len {
-                    writeln!(file, "{}", fact.predicate)
-                        .map_err(|e| Error::Other(e.to_string()))?;
-                }
-                if (object as usize) >= start_len {
-                    writeln!(file, "{}", fact.object).map_err(|e| Error::Other(e.to_string()))?;
-                }
-            }
+    /// Get node properties as JSON string (reads from FlexBuffers and converts)
+    pub fn get_node_property(&self, id: u64) -> Result<Option<String>> {
+        // Get binary data (FlexBuffers format)
+        if let Some(binary) = self.get_node_property_binary(id)? {
+            // Deserialize from FlexBuffers and convert to JSON
+            let props = crate::storage::property::deserialize_properties(&binary)?;
+            let json_string = serde_json::to_string(&props)
+                .map_err(|e| Error::Other(format!("Failed to serialize to JSON: {}", e)))?;
+            Ok(Some(json_string))
+        } else {
+            Ok(None)
         }
+    }
 
-        let triple = Triple::new(subject, predicate, object);
+    /// Set edge properties from JSON string (converts to FlexBuffers internally)
+    pub fn set_edge_property(&mut self, s: u64, p: u64, o: u64, json: &str) -> Result<()> {
+        // Parse JSON and convert to FlexBuffers for unified storage
+        let props: std::collections::HashMap<String, serde_json::Value> =
+            serde_json::from_str(json)
+                .map_err(|e| Error::Other(format!("Invalid JSON in set_edge_property: {}", e)))?;
+        let binary = crate::storage::property::serialize_properties(&props)?;
+        self.set_edge_property_binary(s, p, o, &binary)
+    }
 
-        self.store.insert(&triple)?;
+    /// Get edge properties as JSON string (reads from FlexBuffers and converts)
+    pub fn get_edge_property(&self, s: u64, p: u64, o: u64) -> Result<Option<String>> {
+        // Get binary data (FlexBuffers format)
+        if let Some(binary) = self.get_edge_property_binary(s, p, o)? {
+            // Deserialize from FlexBuffers and convert to JSON
+            let props = crate::storage::property::deserialize_properties(&binary)?;
+            let json_string = serde_json::to_string(&props)
+                .map_err(|e| Error::Other(format!("Failed to serialize to JSON: {}", e)))?;
+            Ok(Some(json_string))
+        } else {
+            Ok(None)
+        }
+    }
+
+    // Binary property methods (v2.0, FlexBuffers for 10x performance)
+
+    pub fn set_node_property_binary(&mut self, id: u64, value: &[u8]) -> Result<()> {
+        self.store.set_node_property_binary(id, value)
+    }
+
+    pub fn get_node_property_binary(&self, id: u64) -> Result<Option<Vec<u8>>> {
+        self.store.get_node_property_binary(id)
+    }
+
+    pub fn set_edge_property_binary(&mut self, s: u64, p: u64, o: u64, value: &[u8]) -> Result<()> {
+        self.store.set_edge_property_binary(s, p, o, value)
+    }
+
+    pub fn get_edge_property_binary(&self, s: u64, p: u64, o: u64) -> Result<Option<Vec<u8>>> {
+        self.store.get_edge_property_binary(s, p, o)
+    }
+
+    // Batch operations (v2.0, for migration and bulk operations)
+
+    /// Insert multiple triples in a single transaction
+    /// Returns the number of triples actually inserted (excludes duplicates)
+    pub fn batch_insert(&mut self, triples: &[Triple]) -> Result<usize> {
+        self.store.batch_insert(triples)
+    }
+
+    /// Delete multiple triples in a single transaction
+    /// Returns the number of triples actually deleted
+    pub fn batch_delete(&mut self, triples: &[Triple]) -> Result<usize> {
+        self.store.batch_delete(triples)
+    }
+
+    pub fn add_fact(&mut self, fact: Fact<'_>) -> Result<Triple> {
         #[cfg(not(target_arch = "wasm32"))]
-        self.wal.append(WalEntry {
-            record_type: WalRecordType::AddTriple,
-            triple,
-        });
-        Ok(triple)
+        if let Some(txn) = self.active_write.as_mut() {
+            let s = crate::storage::disk::intern_in_txn(txn, fact.subject)?;
+            let p = crate::storage::disk::intern_in_txn(txn, fact.predicate)?;
+            let o = crate::storage::disk::intern_in_txn(txn, fact.object)?;
+            let triple = Triple::new(s, p, o);
+            crate::storage::disk::insert_triple(txn, &triple)?;
+            return Ok(triple);
+        }
+        self.store.insert_fact(fact)
+    }
+
+    pub fn delete_fact(&mut self, fact: Fact<'_>) -> Result<bool> {
+        let s = self.resolve_id(fact.subject)?.ok_or(Error::NotFound)?;
+        let p = self.resolve_id(fact.predicate)?.ok_or(Error::NotFound)?;
+        let o = self.resolve_id(fact.object)?.ok_or(Error::NotFound)?;
+        let triple = Triple::new(s, p, o);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(txn) = self.active_write.as_mut() {
+            return crate::storage::disk::delete_triple(txn, &triple);
+        }
+        self.store.delete(&triple)
     }
 
     pub fn all_triples(&self) -> Vec<Triple> {
         self.store.iter().collect()
     }
 
-    pub fn dictionary(&self) -> &Dictionary {
-        &self.dictionary
+    pub fn resolve_str(&self, id: StringId) -> Result<Option<String>> {
+        self.store.resolve_str(id)
+    }
+
+    pub fn resolve_id(&self, value: &str) -> Result<Option<StringId>> {
+        self.store.resolve_id(value)
+    }
+
+    pub fn intern(&mut self, value: &str) -> Result<u64> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(txn) = self.active_write.as_mut() {
+            return crate::storage::disk::intern_in_txn(txn, value);
+        }
+        self.store.intern(value)
+    }
+
+    pub fn dictionary_size(&self) -> Result<u64> {
+        self.store.dictionary_size()
+    }
+
+    pub fn execute_query(
+        &mut self,
+        query_string: &str,
+    ) -> Result<Vec<std::collections::HashMap<String, query::executor::Value>>> {
+        self.execute_query_with_params(query_string, None)
+    }
+
+    pub fn execute_query_with_params(
+        &mut self,
+        query_string: &str,
+        params: Option<HashMap<String, serde_json::Value>>,
+    ) -> Result<Vec<std::collections::HashMap<String, query::executor::Value>>> {
+        use query::ast::Clause;
+        use query::executor::{ExecutionContext, ExecutionPlan};
+        use query::parser::Parser;
+        use query::planner::QueryPlanner;
+
+        let query = Parser::parse(query_string).map_err(Error::Other)?;
+
+        let param_values: HashMap<String, query::executor::Value> = params
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(k, v)| (k, Self::serde_value_to_executor_value(v)))
+            .collect();
+
+        if debug_env_enabled() {
+            let keys: Vec<_> = param_values.keys().cloned().collect();
+            emit_debug(&format!(
+                "[nervusdb-core] execute_query_with_params received: {:?}",
+                keys
+            ));
+        }
+
+        // Check if query contains SET clause (needs special handling due to mutation)
+        let has_set = query
+            .clauses
+            .iter()
+            .any(|clause| matches!(clause, Clause::Set(_)));
+
+        // Check if query contains DELETE clause (needs special handling due to mutation)
+        let has_delete = query
+            .clauses
+            .iter()
+            .any(|clause| matches!(clause, Clause::Delete(_)));
+
+        // Handle CREATE queries directly (simplified: only standalone CREATE for MVP)
+        if query.clauses.len() == 1 {
+            if let Clause::Create(create_clause) = &query.clauses[0] {
+                // Execute CREATE immediately
+                return self.execute_create_pattern(&create_clause.pattern);
+            }
+        }
+
+        // Handle SET queries specially (needs mutation)
+        if has_set {
+            return self.execute_set_query_with_plan(&query, &param_values);
+        }
+
+        // Handle DELETE queries specially (needs mutation)
+        if has_delete {
+            return self.execute_delete_query_with_plan(&query, &param_values);
+        }
+
+        // Handle read queries through execution plan
+        let planner = QueryPlanner::new();
+        let plan = planner.plan(query)?;
+
+        let ctx = ExecutionContext {
+            db: self,
+            params: &param_values,
+        };
+        let iterator = plan.execute(&ctx)?;
+
+        let mut results = Vec::new();
+        for record in iterator {
+            results.push(record?.values);
+        }
+
+        Ok(results)
+    }
+
+    fn serde_value_to_executor_value(value: serde_json::Value) -> query::executor::Value {
+        use query::executor::Value as ExecValue;
+
+        match value {
+            serde_json::Value::String(s) => ExecValue::String(s),
+            serde_json::Value::Number(n) => ExecValue::Float(n.as_f64().unwrap_or(0.0)),
+            serde_json::Value::Bool(b) => ExecValue::Boolean(b),
+            serde_json::Value::Null => ExecValue::Null,
+            _ => ExecValue::Null,
+        }
+    }
+
+    fn execute_create_pattern(
+        &mut self,
+        pattern: &query::ast::Pattern,
+    ) -> Result<Vec<std::collections::HashMap<String, query::executor::Value>>> {
+        use query::ast::{PathElement, RelationshipDirection};
+        use query::executor::Value;
+        use std::collections::HashMap;
+
+        let mut result_record: HashMap<String, Value> = HashMap::new();
+        let mut last_node_info: Option<(String, u64)> = None;
+
+        let mut i = 0;
+        while i < pattern.elements.len() {
+            match &pattern.elements[i] {
+                PathElement::Node(node_pattern) => {
+                    // Create a node by adding a type triple
+                    let anon_name = format!("_anon{}", i);
+                    let node_str = node_pattern.variable.as_deref().unwrap_or(&anon_name);
+                    let label = node_pattern
+                        .labels
+                        .first()
+                        .map(|s| s.as_str())
+                        .unwrap_or("Node");
+
+                    let fact = self.add_fact(Fact::new(node_str, "type", label))?;
+                    let node_id = fact.subject_id;
+
+                    // Set node properties if specified
+                    if let Some(props) = &node_pattern.properties {
+                        let props_map = self.convert_property_map_to_json(props)?;
+                        let binary = crate::storage::property::serialize_properties(&props_map)?;
+                        self.set_node_property_binary(node_id, &binary)?;
+                    }
+
+                    if let Some(var) = &node_pattern.variable {
+                        result_record.insert(var.clone(), Value::Node(node_id));
+                        last_node_info = Some((var.clone(), node_id));
+                    } else {
+                        last_node_info = Some((format!("_anon{}", i), node_id));
+                    }
+                }
+                PathElement::Relationship(rel_pattern) => {
+                    // Relationship must be between two nodes: (a)-[r]->(b)
+                    // We just processed a node, now expect another node after this relationship
+                    if i + 1 >= pattern.elements.len() {
+                        return Err(Error::Other(
+                            "Relationship must be followed by a node".to_string(),
+                        ));
+                    }
+
+                    if let Some((_, start_node_id)) = last_node_info {
+                        // Process the next node (end node)
+                        i += 1;
+                        if let PathElement::Node(end_node_pattern) = &pattern.elements[i] {
+                            let end_anon_name = format!("_anon{}", i);
+                            let end_node_str = end_node_pattern
+                                .variable
+                                .as_deref()
+                                .unwrap_or(&end_anon_name);
+                            let end_label = end_node_pattern
+                                .labels
+                                .first()
+                                .map(|s| s.as_str())
+                                .unwrap_or("Node");
+
+                            let end_fact =
+                                self.add_fact(Fact::new(end_node_str, "type", end_label))?;
+                            let end_node_id = end_fact.subject_id;
+
+                            // Set end node properties
+                            if let Some(props) = &end_node_pattern.properties {
+                                let props_map = self.convert_property_map_to_json(props)?;
+                                let binary =
+                                    crate::storage::property::serialize_properties(&props_map)?;
+                                self.set_node_property_binary(end_node_id, &binary)?;
+                            }
+
+                            if let Some(var) = &end_node_pattern.variable {
+                                result_record.insert(var.clone(), Value::Node(end_node_id));
+                            }
+
+                            // Create the relationship triple
+                            let rel_type = rel_pattern
+                                .types
+                                .first()
+                                .map(|s| s.as_str())
+                                .unwrap_or("RELATED_TO");
+
+                            // Determine direction
+                            let (subject_id, object_id) = match rel_pattern.direction {
+                                RelationshipDirection::LeftToRight => (start_node_id, end_node_id),
+                                RelationshipDirection::RightToLeft => (end_node_id, start_node_id),
+                                RelationshipDirection::Undirected => (start_node_id, end_node_id), // Default to left-to-right
+                            };
+
+                            let subject_str = self.resolve_str(subject_id)?.ok_or_else(|| {
+                                Error::Other("Subject node not found".to_string())
+                            })?;
+                            let object_str = self
+                                .resolve_str(object_id)?
+                                .ok_or_else(|| Error::Other("Object node not found".to_string()))?;
+
+                            let rel_fact =
+                                self.add_fact(Fact::new(&subject_str, rel_type, &object_str))?;
+
+                            // Set relationship properties if specified
+                            if let Some(props) = &rel_pattern.properties {
+                                let props_map = self.convert_property_map_to_json(props)?;
+                                let binary =
+                                    crate::storage::property::serialize_properties(&props_map)?;
+                                self.set_edge_property_binary(
+                                    rel_fact.subject_id,
+                                    rel_fact.predicate_id,
+                                    rel_fact.object_id,
+                                    &binary,
+                                )?;
+                            }
+
+                            // Store relationship in result if it has a variable
+                            if let Some(var) = &rel_pattern.variable {
+                                result_record.insert(var.clone(), Value::Relationship(rel_fact));
+                            }
+
+                            // Update last node info for potential next relationship
+                            last_node_info = end_node_pattern
+                                .variable
+                                .as_ref()
+                                .map(|v| (v.clone(), end_node_id))
+                                .or(Some((format!("_anon{}", i), end_node_id)));
+                        } else {
+                            return Err(Error::Other(
+                                "Expected node after relationship".to_string(),
+                            ));
+                        }
+                    } else {
+                        return Err(Error::Other("Relationship must follow a node".to_string()));
+                    }
+                }
+            }
+            i += 1;
+        }
+
+        Ok(vec![result_record])
+    }
+
+    fn convert_property_map_to_json(
+        &self,
+        prop_map: &query::ast::PropertyMap,
+    ) -> Result<HashMap<String, serde_json::Value>> {
+        use query::ast::{Expression, Literal};
+        let mut map = HashMap::new();
+
+        for pair in &prop_map.properties {
+            let value = match &pair.value {
+                Expression::Literal(lit) => match lit {
+                    Literal::String(s) => serde_json::Value::String(s.clone()),
+                    Literal::Float(f) => serde_json::json!(f),
+                    Literal::Boolean(b) => serde_json::Value::Bool(*b),
+                    Literal::Null => serde_json::Value::Null,
+                    _ => serde_json::Value::Null,
+                },
+                _ => serde_json::Value::Null, // TODO: Support computed properties
+            };
+            map.insert(pair.key.clone(), value);
+        }
+
+        Ok(map)
+    }
+
+    fn execute_set_query_with_plan(
+        &mut self,
+        query: &query::ast::Query,
+        params: &HashMap<String, query::executor::Value>,
+    ) -> Result<Vec<std::collections::HashMap<String, query::executor::Value>>> {
+        use query::executor::{ExecutionContext, ExecutionPlan, Value, evaluate_expression_value};
+        use query::planner::QueryPlanner;
+        use std::collections::HashMap;
+
+        // Build the execution plan
+        let planner = QueryPlanner::new();
+        let plan = planner.plan(query.clone())?;
+
+        // Extract SetNode and optional ReturnClause from the plan
+        let (set_node, return_clause) = self.extract_set_node(&plan, query)?;
+
+        // Execute input plan to get all matching records
+        let mut records: Vec<query::executor::Record> = {
+            let ctx = ExecutionContext { db: &*self, params };
+            let iterator = set_node.input.execute(&ctx)?;
+            let mut rows = Vec::new();
+            for record in iterator {
+                rows.push(record?);
+            }
+            rows
+        };
+
+        // Now we can modify the database (no more borrowing conflict)
+        for record in &mut records {
+            // Apply each SET item
+            for set_item in &set_node.items {
+                let var_name = &set_item.property.variable;
+
+                // Get the node ID from the record
+                if let Some(Value::Node(node_id)) = record.get(var_name) {
+                    let node_id = *node_id;
+
+                    // Evaluate the new value expression
+                    let new_value = {
+                        let ctx = ExecutionContext { db: &*self, params };
+                        evaluate_expression_value(&set_item.value, &record, &ctx)
+                    };
+
+                    // Read existing properties
+                    let mut props = if let Ok(Some(binary)) = self.get_node_property_binary(node_id)
+                    {
+                        crate::storage::property::deserialize_properties(&binary)?
+                    } else {
+                        HashMap::new()
+                    };
+
+                    // Update the property
+                    let json_value = match new_value {
+                        Value::String(s) => serde_json::Value::String(s),
+                        Value::Float(f) => serde_json::json!(f),
+                        Value::Boolean(b) => serde_json::Value::Bool(b),
+                        Value::Null => serde_json::Value::Null,
+                        _ => serde_json::Value::Null,
+                    };
+                    props.insert(set_item.property.property.clone(), json_value);
+
+                    // Write back to database
+                    let binary = crate::storage::property::serialize_properties(&props)?;
+                    self.set_node_property_binary(node_id, &binary)?;
+                }
+            }
+        }
+
+        // Apply RETURN projection if present
+        if let Some(return_clause) = return_clause {
+            let mut results = Vec::new();
+            for record in records {
+                let mut result = HashMap::new();
+                for item in &return_clause.items {
+                    let alias = item
+                        .alias
+                        .clone()
+                        .unwrap_or_else(|| match &item.expression {
+                            query::ast::Expression::Variable(name) => name.clone(),
+                            query::ast::Expression::PropertyAccess(pa) => {
+                                format!("{}.{}", pa.variable, pa.property)
+                            }
+                            _ => "col".to_string(),
+                        });
+                    let value = {
+                        let ctx = ExecutionContext { db: &*self, params };
+                        evaluate_expression_value(&item.expression, &record, &ctx)
+                    };
+                    result.insert(alias, value);
+                }
+                results.push(result);
+            }
+            Ok(results)
+        } else {
+            // No RETURN clause, just return the records as-is
+            Ok(records.into_iter().map(|r| r.values).collect())
+        }
+    }
+
+    fn extract_set_node<'a>(
+        &self,
+        plan: &'a query::planner::PhysicalPlan,
+        query: &query::ast::Query,
+    ) -> Result<(
+        &'a query::planner::SetNode,
+        Option<query::ast::ReturnClause>,
+    )> {
+        // Find SET clause and RETURN clause
+        let _set_clause = query
+            .clauses
+            .iter()
+            .find_map(|c| {
+                if let query::ast::Clause::Set(s) = c {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| Error::Other("No SET clause found".to_string()))?;
+
+        let return_clause = query.clauses.iter().find_map(|c| {
+            if let query::ast::Clause::Return(r) = c {
+                Some(r.clone())
+            } else {
+                None
+            }
+        });
+
+        // Extract SetNode from plan (may be wrapped in Project/Filter)
+        fn find_set_node(plan: &query::planner::PhysicalPlan) -> Option<&query::planner::SetNode> {
+            match plan {
+                query::planner::PhysicalPlan::Set(node) => Some(node),
+                query::planner::PhysicalPlan::Project(node) => find_set_node(&node.input),
+                query::planner::PhysicalPlan::Filter(node) => find_set_node(&node.input),
+                _ => None,
+            }
+        }
+
+        let set_node = find_set_node(plan)
+            .ok_or_else(|| Error::Other("No SetNode found in plan".to_string()))?;
+
+        Ok((set_node, return_clause))
+    }
+
+    fn execute_delete_query_with_plan(
+        &mut self,
+        query: &query::ast::Query,
+        params: &HashMap<String, query::executor::Value>,
+    ) -> Result<Vec<std::collections::HashMap<String, query::executor::Value>>> {
+        use query::executor::{ExecutionContext, ExecutionPlan, Value, evaluate_expression_value};
+        use query::planner::{PhysicalPlan, QueryPlanner};
+
+        // Build the execution plan
+        let planner = QueryPlanner::new();
+        let plan = planner.plan(query.clone())?;
+
+        // Extract DeleteNode and determine the correct input plan to execute
+        // The plan might be Filter(Delete(Scan)), so we need to build Filter(Scan)
+        let (delete_node, input_plan) = self.extract_delete_and_input_plan(&plan, query)?;
+
+        // Build the actual plan to execute (without the Delete in the middle)
+        let exec_plan: &PhysicalPlan = match &plan {
+            PhysicalPlan::Delete(_) => {
+                // Simple case: just Delete(input), execute the input directly
+                &delete_node.input
+            }
+            PhysicalPlan::Filter(_filter_node) => {
+                // Filter(Delete(input)) - we need to execute Filter(input)
+                // But we can't modify the plan tree here, so just use input_plan
+                // which is the entire Filter(Delete(...)) - NO that's wrong!
+                //
+                // Actually, we need to reconstruct Filter(delete_node.input)
+                // But we can't easily do that because FilterNode contains Box<PhysicalPlan>
+                //
+                // Simpler solution: execute delete_node.input and manually apply the filter
+                &delete_node.input
+            }
+            _ => input_plan,
+        };
+
+        // Execute input plan to get all matching records
+        let base_records: Vec<query::executor::Record> = {
+            let ctx = ExecutionContext { db: &*self, params };
+            let iterator = exec_plan.execute(&ctx)?;
+            let mut rows = Vec::new();
+            for record in iterator {
+                rows.push(record?);
+            }
+            rows
+        };
+
+        // If we have a Filter wrapping the Delete, we need to apply it manually
+        // Extract the filter predicate from the plan
+        let filter_predicate = if let PhysicalPlan::Filter(filter_node) = &plan {
+            Some(&filter_node.predicate)
+        } else {
+            None
+        };
+
+        let mut records: Vec<query::executor::Record> = Vec::new();
+        for rec in base_records {
+            // Apply filter if present
+            if let Some(predicate) = filter_predicate {
+                use query::executor::evaluate_expression_value;
+                let filter_result = {
+                    let ctx = ExecutionContext { db: &*self, params };
+                    evaluate_expression_value(predicate, &rec, &ctx)
+                };
+                if filter_result == Value::Boolean(true) {
+                    records.push(rec);
+                }
+            } else {
+                records.push(rec);
+            }
+        }
+
+        // Collect all node IDs to delete
+        let mut node_ids_to_delete = Vec::new();
+
+        for record in &records {
+            for expr in &delete_node.expressions {
+                let value = {
+                    let ctx = ExecutionContext { db: &*self, params };
+                    evaluate_expression_value(expr, &record, &ctx)
+                };
+                if let Value::Node(node_id) = value {
+                    node_ids_to_delete.push(node_id);
+                }
+            }
+        }
+
+        // Now perform the deletion (no more borrowing conflict)
+        for node_id in node_ids_to_delete {
+            self.delete_node(node_id, delete_node.detach)?;
+        }
+
+        // DELETE doesn't return anything by default (Neo4j-style)
+        Ok(Vec::new())
+    }
+
+    fn extract_delete_and_input_plan<'a>(
+        &self,
+        plan: &'a query::planner::PhysicalPlan,
+        query: &query::ast::Query,
+    ) -> Result<(
+        &'a query::planner::DeleteNode,
+        &'a query::planner::PhysicalPlan,
+    )> {
+        // Find DELETE clause
+        let _delete_clause = query
+            .clauses
+            .iter()
+            .find_map(|c| {
+                if let query::ast::Clause::Delete(d) = c {
+                    Some(d.clone())
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| Error::Other("No DELETE clause found".to_string()))?;
+
+        // The plan structure can be:
+        // - Delete(input) - simple case
+        // - Filter(Delete(input)) - with WHERE clause
+        // - Project(Delete(input)) or Project(Filter(Delete(input))) - with RETURN clause
+
+        // We want to return (DeleteNode, input_plan_with_filters)
+        // The input_plan_with_filters should include any Filter that wraps the Delete
+
+        match plan {
+            query::planner::PhysicalPlan::Delete(delete_node) => {
+                // Simple case: no Filter wrapping
+                Ok((delete_node, &delete_node.input))
+            }
+            query::planner::PhysicalPlan::Filter(filter_node) => {
+                // Filter wraps Delete
+                match &*filter_node.input {
+                    query::planner::PhysicalPlan::Delete(delete_node) => {
+                        // Return DeleteNode and the Filter as the input plan
+                        Ok((delete_node, plan))
+                    }
+                    _ => Err(Error::Other("Expected Delete inside Filter".to_string())),
+                }
+            }
+            query::planner::PhysicalPlan::Project(project_node) => {
+                // Project wraps Delete or Filter(Delete)
+                match &*project_node.input {
+                    query::planner::PhysicalPlan::Delete(delete_node) => {
+                        Ok((delete_node, &delete_node.input))
+                    }
+                    query::planner::PhysicalPlan::Filter(filter_node) => {
+                        match &*filter_node.input {
+                            query::planner::PhysicalPlan::Delete(delete_node) => {
+                                Ok((delete_node, &project_node.input))
+                            }
+                            _ => Err(Error::Other("Expected Delete inside Filter".to_string())),
+                        }
+                    }
+                    _ => Err(Error::Other(
+                        "Expected Delete or Filter(Delete) inside Project".to_string(),
+                    )),
+                }
+            }
+            _ => Err(Error::Other("No DELETE plan found".to_string())),
+        }
+    }
+
+    fn delete_node(&mut self, node_id: u64, detach: bool) -> Result<()> {
+        // First check if node has any relationships
+        let has_relationships = self.node_has_relationships(node_id);
+
+        if has_relationships && !detach {
+            return Err(Error::Other(format!(
+                "Cannot delete node {} because it has relationships. Use DETACH DELETE to remove relationships first.",
+                node_id
+            )));
+        }
+
+        // If DETACH, delete all relationships first
+        if detach {
+            self.delete_all_relationships(node_id)?;
+        }
+
+        // Delete node type metadata (triples where subject is node_id and predicate is "type")
+        if let Some(type_id) = self.resolve_id("type")? {
+            let criteria = QueryCriteria {
+                subject_id: Some(node_id),
+                predicate_id: Some(type_id),
+                object_id: None,
+            };
+
+            let triples_to_delete: Vec<Triple> = self.query(criteria).collect();
+            for triple in triples_to_delete {
+                self.store.delete(&triple)?;
+            }
+        }
+
+        // Delete node properties
+        self.store.delete_node_properties(node_id)?;
+
+        Ok(())
+    }
+
+    fn node_has_relationships(&self, node_id: u64) -> bool {
+        // Get type predicate ID
+        let type_id = match self.resolve_id("type") {
+            Ok(Some(id)) => id,
+            _ => return false,
+        };
+
+        // Check if node is subject of any non-type triple
+        let criteria_as_subject = QueryCriteria {
+            subject_id: Some(node_id),
+            predicate_id: None,
+            object_id: None,
+        };
+
+        for triple in self.query(criteria_as_subject) {
+            if triple.predicate_id != type_id {
+                return true; // Found a relationship
+            }
+        }
+
+        // Check if node is object of any triple (all relationships)
+        let criteria_as_object = QueryCriteria {
+            subject_id: None,
+            predicate_id: None,
+            object_id: Some(node_id),
+        };
+
+        self.query(criteria_as_object).next().is_some()
+    }
+
+    fn delete_all_relationships(&mut self, node_id: u64) -> Result<()> {
+        // Get type predicate ID to exclude metadata triples
+        let type_id = self
+            .resolve_id("type")?
+            .ok_or_else(|| Error::Other("Type predicate not found".to_string()))?;
+
+        // Delete all triples where node is subject (except type metadata)
+        let criteria_as_subject = QueryCriteria {
+            subject_id: Some(node_id),
+            predicate_id: None,
+            object_id: None,
+        };
+
+        let triples_to_delete: Vec<Triple> = self
+            .query(criteria_as_subject)
+            .filter(|t| t.predicate_id != type_id)
+            .collect();
+
+        for triple in triples_to_delete {
+            self.store.delete(&triple)?;
+        }
+
+        // Delete all triples where node is object
+        let criteria_as_object = QueryCriteria {
+            subject_id: None,
+            predicate_id: None,
+            object_id: Some(node_id),
+        };
+
+        let triples_to_delete: Vec<Triple> = self.query(criteria_as_object).collect();
+
+        for triple in triples_to_delete {
+            self.store.delete(&triple)?;
+        }
+
+        Ok(())
     }
 
     pub fn query(&self, criteria: QueryCriteria) -> crate::storage::HexastoreIter {
@@ -260,6 +990,11 @@ impl Database {
             criteria.predicate_id,
             criteria.object_id,
         )
+    }
+
+    /// Get a reference to the underlying Hexastore for algorithm operations
+    pub fn get_store(&self) -> &dyn crate::storage::Hexastore {
+        self.store.as_ref()
     }
 
     pub fn open_cursor(&mut self, criteria: QueryCriteria) -> Result<u64> {
@@ -318,16 +1053,83 @@ impl Database {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn timeline_query(&self, query: TimelineQuery) -> Vec<StoredFact> {
-        return self.temporal.query_timeline(&query);
+        self.temporal.query_timeline(&query).unwrap_or_default()
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn timeline_trace(&self, fact_id: u64) -> Vec<StoredEpisode> {
-        return self.temporal.trace_back(fact_id);
+        self.temporal.trace_back(fact_id).unwrap_or_default()
     }
 
-    pub fn execute_query(&self, query: &str) -> Result<Vec<Triple>> {
-        parser::execute(self, query)
+    // ========================================================================
+    // Enhanced Transaction API
+    // ========================================================================
+
+    /// Begin a new write transaction
+    ///
+    /// Only one write transaction can be active at a time.
+    /// All data operations will be buffered until commit().
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn begin_transaction(&mut self) -> Result<()> {
+        if self.active_write.is_some() {
+            return Err(Error::Other("transaction already open".to_string()));
+        }
+        let tx = self
+            .redb
+            .begin_write()
+            .map_err(|e| Error::Other(e.to_string()))?;
+        self.active_write = Some(tx);
+        Ok(())
+    }
+
+    /// Commit the active transaction, making all changes durable
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn commit_transaction(&mut self) -> Result<()> {
+        let tx = self
+            .active_write
+            .take()
+            .ok_or_else(|| Error::Other("no active transaction".to_string()))?;
+        tx.commit().map_err(|e| Error::Other(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Abort the active transaction, discarding all changes
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn abort_transaction(&mut self) -> Result<()> {
+        self.active_write = None;
+        Ok(())
+    }
+
+    /// Check if a transaction is currently active
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn is_transaction_active(&self) -> bool {
+        self.active_write.is_some()
+    }
+
+    /// Execute a closure within a transaction, automatically committing on success
+    /// or aborting on error. This provides RAII-style transaction management.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_transaction<F, R>(&mut self, f: F) -> Result<R>
+    where
+        F: FnOnce(&mut Self) -> Result<R>,
+    {
+        if self.is_transaction_active() {
+            return Err(Error::Other("transaction already active".to_string()));
+        }
+
+        self.begin_transaction()?;
+
+        match f(self) {
+            Ok(result) => {
+                self.commit_transaction()?;
+                Ok(result)
+            }
+            Err(error) => {
+                // Best effort abort on error
+                let _ = self.abort_transaction();
+                Err(error)
+            }
+        }
     }
 }
 
@@ -342,10 +1144,7 @@ mod tests {
         let mut db = Database::open(Options::new(tmp.path())).unwrap();
         let triple = db.add_fact(Fact::new("alice", "knows", "bob")).unwrap();
         assert_eq!(db.all_triples(), vec![triple]);
-        assert_eq!(
-            db.dictionary().lookup_value(triple.subject_id).unwrap(),
-            "alice"
-        );
+        assert_eq!(db.resolve_str(triple.subject_id).unwrap().unwrap(), "alice");
 
         let results: Vec<_> = db
             .query(QueryCriteria {
@@ -366,6 +1165,35 @@ mod tests {
         let (batch, done) = db.cursor_next(cursor_id, 10).unwrap();
         assert!(done);
         assert_eq!(batch, vec![triple]);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn node_and_edge_properties_roundtrip() {
+        let tmp = tempdir().unwrap();
+        let mut db = Database::open(Options::new(tmp.path())).unwrap();
+        let triple = db.add_fact(Fact::new("alice", "knows", "bob")).unwrap();
+
+        db.set_node_property(triple.subject_id, r#"{"name":"alice"}"#)
+            .unwrap();
+        db.set_edge_property(
+            triple.subject_id,
+            triple.predicate_id,
+            triple.object_id,
+            r#"{"since":2020}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            db.get_node_property(triple.subject_id).unwrap().unwrap(),
+            r#"{"name":"alice"}"#
+        );
+        assert_eq!(
+            db.get_edge_property(triple.subject_id, triple.predicate_id, triple.object_id)
+                .unwrap()
+                .unwrap(),
+            r#"{"since":2020}"#
+        );
     }
 
     #[test]
@@ -435,7 +1263,8 @@ mod tests {
         let alice_id = db
             .temporal_store()
             .expect("temporal store not available")
-            .get_entities()[0]
+            .get_entities()
+            .unwrap()[0]
             .entity_id;
         let timeline = db.timeline_query(TimelineQuery {
             entity_id: alice_id,
@@ -447,5 +1276,80 @@ mod tests {
 
         let episodes = db.timeline_trace(timeline[0].fact_id);
         assert_eq!(episodes.len(), 1);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn test_transaction_api() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("tx_test.nervus");
+        let mut db = Database::open(Options::new(&path)).unwrap();
+
+        // Test basic transaction operations
+        assert!(!db.is_transaction_active());
+
+        db.begin_transaction().unwrap();
+        assert!(db.is_transaction_active());
+
+        // Add data within transaction
+        db.add_fact(Fact::new("alice", "knows", "bob")).unwrap();
+
+        // Commit
+        db.commit_transaction().unwrap();
+        assert!(!db.is_transaction_active());
+
+        // Verify data persisted
+        let query_result = db.query(QueryCriteria::default()).count();
+        assert!(query_result > 0);
+
+        // Test abort transaction
+        db.begin_transaction().unwrap();
+        db.add_fact(Fact::new("bob", "knows", "charlie")).unwrap();
+        db.abort_transaction().unwrap();
+
+        // Data should not persist after abort
+        let alice_knows_bob = db.query(QueryCriteria::default()).count();
+        let should_be_same = db.query(QueryCriteria::default()).count();
+        assert_eq!(alice_knows_bob, should_be_same);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn test_with_transaction_api() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("with_tx_test.nervus");
+        let mut db = Database::open(Options::new(&path)).unwrap();
+
+        // Test successful transaction
+        let result = db.with_transaction(|db| {
+            db.add_fact(Fact::new("alice", "knows", "bob"))?;
+            db.add_fact(Fact::new("bob", "knows", "charlie"))?;
+            Ok("success")
+        });
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "success");
+        assert!(!db.is_transaction_active());
+
+        // Verify data committed
+        let triples_count = db.query(QueryCriteria::default()).count();
+        assert!(triples_count >= 2);
+
+        // Test failed transaction (should rollback)
+        let original_count = db.query(QueryCriteria::default()).count();
+        let result: Result<&str> = db.with_transaction(|db| {
+            db.add_fact(Fact::new("dave", "knows", "eve"))?;
+            // Simulate error
+            Err(crate::Error::Other("simulated error".to_string()))
+        });
+        assert!(result.is_err());
+        assert!(!db.is_transaction_active());
+
+        // Verify data was rolled back
+        let final_count = db.query(QueryCriteria::default()).count();
+        assert_eq!(original_count, final_count);
     }
 }

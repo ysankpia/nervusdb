@@ -1,19 +1,11 @@
 #!/usr/bin/env sh
 set -e
 
-echo "[husky] pre-commit: update docs directory tree"
-pnpm run docs:tree
+echo "[husky] pre-commit: cargo fmt"
+cargo fmt --all
 
-# 若目录树更新，则将修改加入暂存区，确保随本次提交生效
-if ! git diff --quiet -- .agents/rules/base.md; then
-  git add .agents/rules/base.md
-fi
-
-echo "[husky] pre-commit: lint-staged"
-pnpm exec lint-staged -c .lintstaged.cjs
-
-echo "[husky] pre-commit: prettier format write"
-pnpm run format:write
+echo "[husky] pre-commit: cargo clippy (warnings only)"
+cargo clippy --workspace --all-targets -- -W warnings || true
 
 # 将格式化产生的变更加入本次提交
-git add README.md docs/**/*.md .agents/**/*.md .github/**/*.yml package.json || true
+git add -u

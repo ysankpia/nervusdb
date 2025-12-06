@@ -27,7 +27,7 @@ fn main() {
     println!("\nBenchmarking S?? queries (10,000 random lookups)...");
     let start = Instant::now();
     for i in (0..n).step_by(10) {
-        let s_id = db.dictionary().lookup_id(&format!("subject_{}", i));
+        let s_id = db.resolve_id(&format!("subject_{}", i)).unwrap();
         let criteria = QueryCriteria {
             subject_id: s_id,
             predicate_id: None,
@@ -48,7 +48,7 @@ fn main() {
     println!("\nBenchmarking ??O queries (10,000 random lookups)...");
     let start = Instant::now();
     for i in (0..n).step_by(10) {
-        let o_id = db.dictionary().lookup_id(&format!("object_{}", i + 1));
+        let o_id = db.resolve_id(&format!("object_{}", i + 1)).unwrap();
         let criteria = QueryCriteria {
             subject_id: None,
             predicate_id: None,

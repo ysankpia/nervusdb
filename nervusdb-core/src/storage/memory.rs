@@ -4,7 +4,7 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 
 use ouroboros::self_referencing;
 
-use crate::triple::Triple;
+use crate::triple::{Fact, Triple};
 
 #[derive(Debug)]
 pub struct MemoryHexastore {
@@ -13,6 +13,9 @@ pub struct MemoryHexastore {
     pos: Arc<RwLock<BTreeSet<(u64, u64, u64)>>>,
     pso: Arc<RwLock<BTreeSet<(u64, u64, u64)>>>,
     osp: Arc<RwLock<BTreeSet<(u64, u64, u64)>>>,
+    id_to_str: Arc<RwLock<std::collections::HashMap<u64, String>>>,
+    str_to_id: Arc<RwLock<std::collections::HashMap<String, u64>>>,
+    next_id: Arc<RwLock<u64>>,
 }
 
 impl MemoryHexastore {
@@ -23,6 +26,9 @@ impl MemoryHexastore {
             pos: Arc::new(RwLock::new(BTreeSet::new())),
             pso: Arc::new(RwLock::new(BTreeSet::new())),
             osp: Arc::new(RwLock::new(BTreeSet::new())),
+            id_to_str: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            str_to_id: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            next_id: Arc::new(RwLock::new(1)),
         }
     }
 
@@ -121,6 +127,35 @@ impl crate::storage::Hexastore for MemoryHexastore {
         Ok(true)
     }
 
+    fn delete(&mut self, triple: &Triple) -> crate::Result<bool> {
+        let s = triple.subject_id;
+        let p = triple.predicate_id;
+        let o = triple.object_id;
+
+        {
+            let mut spo = self.spo.write().unwrap();
+            if !spo.contains(&(s, p, o)) {
+                return Ok(false);
+            }
+            spo.remove(&(s, p, o));
+        }
+        self.sop.write().unwrap().remove(&(s, o, p));
+        self.pos.write().unwrap().remove(&(p, o, s));
+        self.pso.write().unwrap().remove(&(p, s, o));
+        self.osp.write().unwrap().remove(&(o, s, p));
+
+        Ok(true)
+    }
+
+    fn insert_fact(&mut self, fact: Fact<'_>) -> crate::Result<Triple> {
+        let s = self.intern(fact.subject)?;
+        let p = self.intern(fact.predicate)?;
+        let o = self.intern(fact.object)?;
+        let triple = Triple::new(s, p, o);
+        self.insert(&triple)?;
+        Ok(triple)
+    }
+
     fn query(
         &self,
         subject: Option<u64>,
@@ -140,6 +175,51 @@ impl crate::storage::Hexastore for MemoryHexastore {
                 Err(_) => Box::new(std::iter::empty()),
             },
         }
+    }
+
+    fn resolve_str(&self, id: u64) -> crate::Result<Option<String>> {
+        Ok(self.id_to_str.read().unwrap().get(&id).cloned())
+    }
+
+    fn resolve_id(&self, value: &str) -> crate::Result<Option<u64>> {
+        Ok(self.str_to_id.read().unwrap().get(value).cloned())
+    }
+
+    fn intern(&mut self, value: &str) -> crate::Result<u64> {
+        let mut str_to_id = self.str_to_id.write().unwrap();
+        if let Some(&id) = str_to_id.get(value) {
+            return Ok(id);
+        }
+        let mut next_id = self.next_id.write().unwrap();
+        let id = *next_id;
+        *next_id += 1;
+        str_to_id.insert(value.to_string(), id);
+        self.id_to_str
+            .write()
+            .unwrap()
+            .insert(id, value.to_string());
+        Ok(id)
+    }
+
+    fn dictionary_size(&self) -> crate::Result<u64> {
+        Ok(self.id_to_str.read().unwrap().len() as u64)
+    }
+
+    fn set_node_property(&mut self, _id: u64, _value: &str) -> crate::Result<()> {
+        // TODO: Implement in-memory property storage if needed
+        Ok(())
+    }
+
+    fn get_node_property(&self, _id: u64) -> crate::Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn set_edge_property(&mut self, _s: u64, _p: u64, _o: u64, _value: &str) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn get_edge_property(&self, _s: u64, _p: u64, _o: u64) -> crate::Result<Option<String>> {
+        Ok(None)
     }
 }
 

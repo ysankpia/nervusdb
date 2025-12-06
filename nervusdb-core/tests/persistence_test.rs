@@ -16,17 +16,14 @@ fn test_persistence() {
         let db = Database::open(Options::new(&db_path)).unwrap();
         let results: Vec<_> = db
             .query(QueryCriteria {
-                subject_id: db.dictionary().lookup_id("alice"),
-                predicate_id: db.dictionary().lookup_id("likes"),
-                object_id: db.dictionary().lookup_id("rust"),
+                subject_id: db.resolve_id("alice").unwrap(),
+                predicate_id: db.resolve_id("likes").unwrap(),
+                object_id: db.resolve_id("rust").unwrap(),
             })
             .collect();
         assert_eq!(results.len(), 1);
 
         let triple = &results[0];
-        assert_eq!(
-            db.dictionary().lookup_value(triple.subject_id).unwrap(),
-            "alice"
-        );
+        assert_eq!(db.resolve_str(triple.subject_id).unwrap().unwrap(), "alice");
     }
 }

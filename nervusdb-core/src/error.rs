@@ -18,6 +18,8 @@ pub enum Error {
     NotImplemented(&'static str),
     /// Miscellaneous error message.
     Other(String),
+    /// Entity or Fact not found.
+    NotFound,
 }
 
 impl std::fmt::Display for Error {
@@ -28,6 +30,7 @@ impl std::fmt::Display for Error {
             Error::InvalidCursor(id) => write!(f, "invalid cursor id: {id}"),
             Error::NotImplemented(msg) => write!(f, "not implemented: {msg}"),
             Error::Other(msg) => write!(f, "{msg}"),
+            Error::NotFound => write!(f, "not found"),
         }
     }
 }

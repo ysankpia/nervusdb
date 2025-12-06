@@ -55,6 +55,8 @@ CLI 示例：
 ```bash
 nervusdb bench demo.nervusdb 200 lsm
 nervusdb stats demo.nervusdb
+nervusdb db:migrate <旧目录> <新文件>   # 目录 -> 单文件 redb（需要 native 绑定）
+# engine 选项：默认 auto（优先 native，失败回退 JS）；engine=js 仅兼容，事务 ACID 需 native
 ```
 
 ## 核心特性

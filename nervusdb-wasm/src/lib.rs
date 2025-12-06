@@ -106,8 +106,8 @@ impl StorageEngine {
     pub fn query_by_subject(&mut self, subject: &str) -> Result<JsValue, JsValue> {
         self.query_count += 1;
         
-        let dict = self.db.dictionary();
-        let subject_id = dict.lookup_id(subject);
+        let subject_id = self.db.resolve_id(subject)
+            .map_err(|e| JsValue::from_str(&format!("Database error: {}", e)))?;
         
         if subject_id.is_none() {
             return serde_wasm_bindgen::to_value(&Vec::<Triple>::new())
@@ -121,12 +121,9 @@ impl StorageEngine {
         };
         
         let results: Vec<Triple> = self.db.query(criteria).map(|t| {
-            // We can safely unwrap because ids in triples MUST exist in dictionary if database is consistent
-            // But for safety we defaults to empty string or panic? 
-            // core::Database ensures consistency.
-            let s = self.db.dictionary().lookup_value(t.subject_id).unwrap_or_default().to_string();
-            let p = self.db.dictionary().lookup_value(t.predicate_id).unwrap_or_default().to_string();
-            let o = self.db.dictionary().lookup_value(t.object_id).unwrap_or_default().to_string();
+            let s = self.db.resolve_str(t.subject_id).unwrap_or_default().unwrap_or_default();
+            let p = self.db.resolve_str(t.predicate_id).unwrap_or_default().unwrap_or_default();
+            let o = self.db.resolve_str(t.object_id).unwrap_or_default().unwrap_or_default();
             Triple { subject: s, predicate: p, object: o }
         }).collect();
 
@@ -139,8 +136,8 @@ impl StorageEngine {
     pub fn query_by_predicate(&mut self, predicate: &str) -> Result<JsValue, JsValue> {
         self.query_count += 1;
 
-        let dict = self.db.dictionary();
-        let predicate_id = dict.lookup_id(predicate);
+        let predicate_id = self.db.resolve_id(predicate)
+            .map_err(|e| JsValue::from_str(&format!("Database error: {}", e)))?;
         
         if predicate_id.is_none() {
             return serde_wasm_bindgen::to_value(&Vec::<Triple>::new())
@@ -154,9 +151,9 @@ impl StorageEngine {
         };
         
         let results: Vec<Triple> = self.db.query(criteria).map(|t| {
-            let s = self.db.dictionary().lookup_value(t.subject_id).unwrap_or_default().to_string();
-            let p = self.db.dictionary().lookup_value(t.predicate_id).unwrap_or_default().to_string();
-            let o = self.db.dictionary().lookup_value(t.object_id).unwrap_or_default().to_string();
+            let s = self.db.resolve_str(t.subject_id).unwrap_or_default().unwrap_or_default();
+            let p = self.db.resolve_str(t.predicate_id).unwrap_or_default().unwrap_or_default();
+            let o = self.db.resolve_str(t.object_id).unwrap_or_default().unwrap_or_default();
             Triple { subject: s, predicate: p, object: o }
         }).collect();
 
@@ -173,9 +170,9 @@ impl StorageEngine {
             .map_err(|e| JsValue::from_str(&format!("Query execution error: {}", e)))?;
 
         let results: Vec<Triple> = core_triples.into_iter().map(|t| {
-            let s = self.db.dictionary().lookup_value(t.subject_id).unwrap_or_default().to_string();
-            let p = self.db.dictionary().lookup_value(t.predicate_id).unwrap_or_default().to_string();
-            let o = self.db.dictionary().lookup_value(t.object_id).unwrap_or_default().to_string();
+            let s = self.db.resolve_str(t.subject_id).unwrap_or_default().unwrap_or_default();
+            let p = self.db.resolve_str(t.predicate_id).unwrap_or_default().unwrap_or_default();
+            let o = self.db.resolve_str(t.object_id).unwrap_or_default().unwrap_or_default();
             Triple { subject: s, predicate: p, object: o }
         }).collect();
 

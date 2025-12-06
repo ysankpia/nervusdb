@@ -1,12 +1,15 @@
 use nervusdb_core::{EpisodeInput, TemporalStore};
+use redb::Database;
 use serde_json::Value;
+use std::sync::Arc;
 use std::time::Instant;
 use tempfile::tempdir;
 
 fn main() {
     let dir = tempdir().unwrap();
-    let path = dir.path().join("bench.temporal.json");
-    let mut store = TemporalStore::open(&path).unwrap();
+    let path = dir.path().join("bench.redb");
+    let redb = Arc::new(Database::create(&path).unwrap());
+    let mut store = TemporalStore::open(redb).unwrap();
 
     let start = Instant::now();
     let count = 10_000;
@@ -37,8 +40,6 @@ fn main() {
         count as f64 / duration.as_secs_f64()
     );
 
-    // Verify log file size
-    let log_path = path.with_extension("log");
-    let metadata = std::fs::metadata(&log_path).unwrap();
-    println!("Log file size: {} bytes", metadata.len());
+    let metadata = std::fs::metadata(&path).unwrap();
+    println!("Store file size: {} bytes", metadata.len());
 }
