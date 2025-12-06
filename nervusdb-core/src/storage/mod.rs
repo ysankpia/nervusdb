@@ -76,7 +76,7 @@ pub trait Hexastore: Send {
     }
 
     /// Delete node properties (both legacy and binary)
-    fn delete_node_properties(&mut self, id: u64) -> Result<()> {
+    fn delete_node_properties(&mut self, _id: u64) -> Result<()> {
         // Default implementation: no-op for backward compatibility
         // Implementations should override this
         Ok(())

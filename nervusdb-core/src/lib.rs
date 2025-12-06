@@ -10,8 +10,6 @@ pub mod parser;
 pub mod query;
 pub mod storage;
 #[cfg(not(target_arch = "wasm32"))]
-mod temporal; // Legacy v1 (deprecated)
-#[cfg(not(target_arch = "wasm32"))]
 pub mod temporal_v2; // New multi-table architecture
 pub mod triple;
 
