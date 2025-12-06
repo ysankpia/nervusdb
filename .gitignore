@@ -50,3 +50,4 @@ yarn-error.log*
 bindings/node/temp_verification_db
 bindings/node/temp_verification_db.redb
 repomix-output.xml
+repomix-output.md
