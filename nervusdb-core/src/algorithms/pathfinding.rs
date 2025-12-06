@@ -187,7 +187,7 @@ where
 
             let is_better = distances
                 .get(&neighbor_id)
-                .map_or(true, |&current| new_cost < current);
+                .is_none_or(|&current| new_cost < current);
 
             if is_better {
                 distances.insert(neighbor_id, new_cost);

@@ -1,3 +1,8 @@
+//! C FFI bindings for NervusDB.
+//!
+//! Safety requirements are documented in the C header file: `include/nervusdb.h`
+#![allow(clippy::missing_safety_doc)]
+
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
 use std::ptr;

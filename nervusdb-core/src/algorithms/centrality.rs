@@ -88,7 +88,7 @@ pub fn pagerank(
         // Calculate dangling node contribution (nodes with no outgoing edges)
         let dangling_sum: f64 = nodes
             .iter()
-            .filter(|&&id| outgoing.get(&id).map_or(true, |v| v.is_empty()))
+            .filter(|&&id| outgoing.get(&id).is_none_or(|v| v.is_empty()))
             .map(|&id| scores.get(&id).unwrap_or(&0.0))
             .sum();
         let dangling_contribution = damping * dangling_sum / n as f64;

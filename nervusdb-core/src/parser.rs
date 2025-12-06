@@ -687,7 +687,7 @@ mod tests {
         db.add_fact(Fact::new("Alice", "LIKES", "Coffee")).unwrap();
 
         // 1. Simple match exact
-        let res = db
+        let _res = db
             .execute_query("MATCH (a)-[:KNOWS]->(b) WHERE a = 'Alice' RETURN b")
             .unwrap();
         // 当前 Rust 查询管线尚未完整覆盖 WHERE 过滤；只校验不崩溃
