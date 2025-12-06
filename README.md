@@ -1,109 +1,147 @@
 # NervusDB
 
-嵌入式三元组数据库，定位在本地/边缘环境下的知识管理、链式联想与轻量推理。核心以 TypeScript 实现，默认提供 QueryBuilder、Cypher、GraphQL、Gremlin 多语言入口，并可启用 Rust Native 后端以获得更高性能。
+嵌入式三元组知识图谱数据库，纯 Rust 实现，专注于本地/边缘环境下的知识管理、链式联想与轻量推理。支持六序索引（Hexastore）、时序存储、Cypher 查询以及图算法。
 
-## 当前状态
+## 项目结构
 
-- 最新 npm 版本：`@nervusdb/core@0.1.4`（2025-11-08 发布，包含 Temporal Memory 与 Native Core 增强）
-- Node.js ≥ 18，推荐 20/22；依赖 `pnpm` 作为包管理器
-- CI 步骤：`pnpm typecheck && pnpm lint && pnpm test && pnpm build`
-- 架构与技术决策全部迁移至 `docs/architecture/`，其余文档目录已清理
+```
+nervusdb/
+├── nervusdb-core/       # Rust 核心库
+│   ├── src/
+│   │   ├── lib.rs       # 主入口：Database、Options、QueryCriteria
+│   │   ├── storage/     # 存储层：Hexastore、TemporalStore
+│   │   ├── query/       # Cypher 查询解析器和执行器
+│   │   ├── algorithms/  # 图算法：路径查找、中心性分析
+│   │   ├── ffi.rs       # C FFI 接口
+│   │   └── migration/   # 旧版数据迁移工具
+│   └── include/nervusdb.h  # C 头文件
+├── bindings/
+│   ├── node/            # Node.js 绑定 (NAPI-RS)
+│   └── python/          # Python 绑定 (PyO3)
+├── nervusdb-wasm/       # WebAssembly 模块
+└── examples/
+    └── c/               # C 语言示例
+```
 
 ## 安装
 
-```bash
-# 首选
-pnpm add @nervusdb/core
+### Rust (Cargo)
 
-# 其他
-npm install @nervusdb/core
-bun add @nervusdb/core
+```toml
+[dependencies]
+nervusdb-core = { git = "https://github.com/LuQing-Studio/nervusdb" }
 ```
 
-可选：在仓库内执行 `pnpm install && pnpm build`，再使用 `npm i -g .` 安装 CLI（生成 `nervusdb` 命令）。
+### 从源码构建
+
+```bash
+git clone https://github.com/LuQing-Studio/nervusdb.git
+cd nervusdb
+cargo build --release
+```
 
 ## 快速上手
 
-```ts
-import { NervusDB } from '@nervusdb/core';
+### Rust
 
-const db = await NervusDB.open('demo.nervusdb', {
-  temporal: true,
-  enableLock: true,
-});
+```rust
+use nervusdb_core::{Database, Options, Fact};
 
-await db.insertFact({
-  subject: 'alice',
-  predicate: 'knows',
-  object: 'bob',
-  properties: { since: 2021 },
-});
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 打开数据库
+    let mut db = Database::open(Options::new("demo.nervusdb"))?;
 
-const result = await db
-  .query()
-  .anchor('alice')
-  .out('knows')
-  .withProperty('since', (v) => v >= 2020)
-  .all();
+    // 添加事实
+    let alice = db.intern("alice")?;
+    let knows = db.intern("knows")?;
+    let bob = db.intern("bob")?;
 
-console.log(result);
-await db.close();
+    db.add_fact(Fact {
+        subject: "alice",
+        predicate: "knows",
+        object: "bob",
+        properties: None,
+    })?;
+
+    // 执行 Cypher 查询
+    let results = db.execute_query("MATCH (a)-[:knows]->(b) RETURN a, b")?;
+    println!("{:?}", results);
+
+    Ok(())
+}
 ```
 
-CLI 示例：
+### C
 
-```bash
-nervusdb bench demo.nervusdb 200 lsm
-nervusdb stats demo.nervusdb
-nervusdb db:migrate <旧目录> <新文件>   # 目录 -> 单文件 redb（需要 native 绑定）
-# engine 选项：默认 auto（优先 native，失败回退 JS）；engine=js 仅兼容，事务 ACID 需 native
+```c
+#include "nervusdb.h"
+
+int main() {
+    nervusdb_db *db;
+    nervusdb_error *err = NULL;
+
+    nervusdb_open("demo.nervusdb", &db, &err);
+
+    uint64_t alice, knows, bob;
+    nervusdb_intern(db, "alice", &alice, &err);
+    nervusdb_intern(db, "knows", &knows, &err);
+    nervusdb_intern(db, "bob", &bob, &err);
+
+    nervusdb_add_triple(db, alice, knows, bob, &err);
+    nervusdb_close(db);
+
+    return 0;
+}
 ```
 
 ## 核心特性
 
-- 六序索引 + WAL v2，支持快照查询和批量事务
-- Temporal Memory：默认开启时间线存储与抽取管线
-- QueryBuilder + Cypher/GraphQL/Gremlin 解析，共享执行计划
-- 属性/全文/空间索引与图算法插件，可通过 `src/plugins/*` 扩展
-- CLI 工具链覆盖统计、压实、修复、快照治理等日常运维场景
-
-## 架构文档
-
-所有 ADR、架构和质量决策均收敛到 `docs/architecture/`。每份 ADR 记录编号、背景、决策、影响与跟进，可直接阅读对应 Markdown 文件。
+- **六序索引 (Hexastore)**：SPO/SOP/PSO/POS/OSP/OPS 六种索引顺序，高效支持任意模式查询
+- **时序存储 (Temporal Store)**：支持 Episode、Fact 时间线追溯与查询
+- **Cypher 查询**：支持 MATCH/WHERE/RETURN/WITH/ORDER BY/LIMIT 等语法
+- **图算法**：内置 BFS/DFS/Dijkstra/A* 路径查找、PageRank/度中心性分析
+- **事务支持**：`begin_transaction()`/`commit_transaction()`/`abort_transaction()`
+- **多语言绑定**：Node.js (NAPI-RS)、Python (PyO3)、C (FFI)、WebAssembly
 
 ## 开发与测试
 
 ```bash
-pnpm install
-pnpm typecheck
-pnpm lint
-pnpm test           # 完整 vitest 套件
-pnpm build          # 产出 dist/
-pnpm bench:baseline # 核心基准（需构建完成）
+# 格式检查
+cargo fmt --all -- --check
+
+# Lint 检查
+cargo clippy --workspace --all-targets
+
+# 运行测试
+cargo test --workspace
+
+# 构建 release
+cargo build --workspace --release
 ```
 
-性能/系统测试可能耗时较长，可用以下命令跳过重型用例：
+### 运行示例
 
 ```bash
-pnpm test -- --exclude "**/incremental_flush_performance.test.ts" \
-             --exclude "**/lazy_loading_performance.test.ts" \
-             --exclude "**/disk_centric_performance.test.ts"
+# Hexastore 基准测试
+cargo run --example bench_hexastore -p nervusdb-core
+
+# 时序存储基准测试
+cargo run --example bench_temporal -p nervusdb-core
 ```
 
-## 发布流程（npm）
+## 数据迁移
 
-1. `pnpm version <patch|minor|major> --no-git-tag-version`
-2. `git commit -am "chore: bump version to X.Y.Z" && git tag vX.Y.Z`
-3. `pnpm typecheck && pnpm lint && pnpm test && pnpm build`
-4. `npm pack --dry-run` 检查 tarball，仅包含 dist + README + LICENSE
-5. `npm publish --access public`
-6. `git push origin main --tags`
+从旧版目录格式迁移到新版 redb 单文件格式：
+
+```bash
+cargo run --bin nervus-migrate --features migration-cli -- <旧目录> <新文件>
+```
 
 ## 贡献
 
-- Issue/PR 仍遵循 GitHub 流程；所有代码必须关联 Milestone 或 Backlog Issue
-- pre-commit 与 pre-push 已启用 husky，禁止跳过
-- 讨论与架构升级请在 `docs/architecture/` 创建或更新 ADR
+- Issue/PR 遵循 GitHub 流程
+- pre-commit 和 pre-push 钩子已启用 (cargo fmt / clippy / test)
+- 架构文档位于 `docs/architecture/`
 
 ## 许可证
 
