@@ -3,9 +3,7 @@
 use redb::TableDefinition;
 
 pub const TABLE_SPO: TableDefinition<(u64, u64, u64), ()> = TableDefinition::new("spo");
-pub const TABLE_SOP: TableDefinition<(u64, u64, u64), ()> = TableDefinition::new("sop");
 pub const TABLE_POS: TableDefinition<(u64, u64, u64), ()> = TableDefinition::new("pos");
-pub const TABLE_PSO: TableDefinition<(u64, u64, u64), ()> = TableDefinition::new("pso");
 pub const TABLE_OSP: TableDefinition<(u64, u64, u64), ()> = TableDefinition::new("osp");
 
 pub const TABLE_ID_TO_STR: TableDefinition<u64, &str> = TableDefinition::new("id_to_str");

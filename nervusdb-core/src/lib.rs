@@ -260,6 +260,13 @@ impl Database {
         self.store.batch_delete(triples)
     }
 
+    /// Insert multiple facts in a single optimized transaction
+    /// Uses cached table handles for maximum performance
+    /// Returns the triples that were inserted
+    pub fn batch_add_facts(&mut self, facts: &[Fact<'_>]) -> Result<Vec<Triple>> {
+        self.store.batch_insert_facts(facts)
+    }
+
     pub fn add_fact(&mut self, fact: Fact<'_>) -> Result<Triple> {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(txn) = self.active_write.as_mut() {
@@ -303,6 +310,11 @@ impl Database {
             return crate::storage::disk::intern_in_txn(txn, value);
         }
         self.store.intern(value)
+    }
+
+    /// Bulk intern strings in a single transaction (order preserving).
+    pub fn bulk_intern(&mut self, values: &[&str]) -> Result<Vec<u64>> {
+        self.store.bulk_intern(values)
     }
 
     pub fn dictionary_size(&self) -> Result<u64> {

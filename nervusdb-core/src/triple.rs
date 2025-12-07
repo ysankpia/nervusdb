@@ -39,7 +39,7 @@ impl Triple {
 }
 
 /// User-facing fact used when inserting new data.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Fact<'a> {
     pub subject: &'a str,
     pub predicate: &'a str,

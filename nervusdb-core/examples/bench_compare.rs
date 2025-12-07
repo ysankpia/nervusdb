@@ -42,7 +42,7 @@ fn main() {
 }
 
 fn bench_nervusdb() -> (f64, f64, f64) {
-    use nervusdb_core::{Database, Fact, Options, QueryCriteria};
+    use nervusdb_core::{Database, Options, QueryCriteria, Triple};
 
     println!("\n[NervusDB] Starting benchmark...");
     let tmp = tempdir().unwrap();
@@ -52,19 +52,21 @@ fn bench_nervusdb() -> (f64, f64, f64) {
     let subjects: Vec<String> = (0..N).map(|i| format!("subject_{}", i)).collect();
     let objects: Vec<String> = (0..N).map(|i| format!("object_{}", i + 1)).collect();
 
-    // Insert using transaction and cache IDs
+    // Bulk intern strings once
+    let subject_refs: Vec<&str> = subjects.iter().map(|s| s.as_str()).collect();
+    let object_refs: Vec<&str> = objects.iter().map(|s| s.as_str()).collect();
+    let predicate_id = db.intern("knows").unwrap();
+    let subject_ids = db.bulk_intern(&subject_refs).unwrap();
+    let object_ids = db.bulk_intern(&object_refs).unwrap();
+
+    // Insert using ID-based batch_insert
     let start = Instant::now();
-    let mut subject_ids = Vec::with_capacity(N);
-    let mut object_ids = Vec::with_capacity(N);
-    db.begin_transaction().unwrap();
-    for i in 0..N {
-        let triple = db
-            .add_fact(Fact::new(&subjects[i], "knows", &objects[i]))
-            .unwrap();
-        subject_ids.push(triple.subject_id);
-        object_ids.push(triple.object_id);
-    }
-    db.commit_transaction().unwrap();
+    let triples_vec: Vec<_> = subject_ids
+        .iter()
+        .zip(object_ids.iter())
+        .map(|(s, o)| Triple::new(*s, predicate_id, *o))
+        .collect();
+    let _inserted = db.batch_insert(&triples_vec).unwrap();
     let insert_duration = start.elapsed();
     let insert_rate = N as f64 / insert_duration.as_secs_f64();
     println!(

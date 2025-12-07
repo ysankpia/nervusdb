@@ -126,6 +126,25 @@ pub trait Hexastore: Send {
         }
         Ok(())
     }
+
+    /// Insert multiple facts (string form) in a single optimized transaction
+    /// Opens all tables once and reuses handles for maximum performance
+    fn batch_insert_facts(&mut self, facts: &[Fact<'_>]) -> Result<Vec<Triple>> {
+        let mut results = Vec::with_capacity(facts.len());
+        for fact in facts {
+            results.push(self.insert_fact(*fact)?);
+        }
+        Ok(results)
+    }
+
+    /// Bulk intern strings in a single transaction; returns ids in the same order as input.
+    fn bulk_intern(&mut self, values: &[&str]) -> Result<Vec<u64>> {
+        let mut ids = Vec::with_capacity(values.len());
+        for v in values {
+            ids.push(self.intern(v)?);
+        }
+        Ok(ids)
+    }
 }
 
 /// Instantiate the default storage backend for the current target.
