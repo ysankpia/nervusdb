@@ -23,6 +23,7 @@ redb = "3.1.0"
 
 [dev-dependencies]
 tempfile = "3"
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 [features]
 default = []

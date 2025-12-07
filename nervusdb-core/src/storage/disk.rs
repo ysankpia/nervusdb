@@ -1,28 +1,37 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc, RwLock,
+    atomic::{AtomicU64, Ordering},
+};
 
 use ouroboros::self_referencing;
 use redb::{
     Database, Range, ReadTransaction, ReadableDatabase, ReadableTable, ReadableTableMetadata,
-    TableDefinition,
+    Table, WriteTransaction,
 };
+use std::collections::HashMap;
 
 use crate::error::{Error, Result};
 use crate::storage::schema::{
     TABLE_EDGE_PROPS, TABLE_EDGE_PROPS_BINARY, TABLE_ID_TO_STR, TABLE_META, TABLE_NODE_PROPS,
-    TABLE_NODE_PROPS_BINARY, TABLE_OSP, TABLE_POS, TABLE_PSO, TABLE_SOP, TABLE_SPO,
-    TABLE_STR_TO_ID,
+    TABLE_NODE_PROPS_BINARY, TABLE_OSP, TABLE_POS, TABLE_SPO, TABLE_STR_TO_ID,
 };
 use crate::storage::{Hexastore, HexastoreIter};
 use crate::triple::{Fact, Triple};
 #[derive(Debug)]
 pub struct DiskHexastore {
     db: Arc<Database>,
+    read_cache: RwLock<Option<(u64, Arc<ReadHandles>)>>,
+    generation: AtomicU64,
 }
 
 impl DiskHexastore {
     pub fn new(db: Arc<Database>) -> Result<Self> {
         Self::init_tables(&db)?;
-        Ok(Self { db })
+        Ok(Self {
+            db,
+            read_cache: RwLock::new(None),
+            generation: AtomicU64::new(0),
+        })
     }
 
     fn init_tables(db: &Database) -> Result<()> {
@@ -32,13 +41,7 @@ impl DiskHexastore {
                 .open_table(TABLE_SPO)
                 .map_err(|e| Error::Other(e.to_string()))?;
             let _ = write_txn
-                .open_table(TABLE_SOP)
-                .map_err(|e| Error::Other(e.to_string()))?;
-            let _ = write_txn
                 .open_table(TABLE_POS)
-                .map_err(|e| Error::Other(e.to_string()))?;
-            let _ = write_txn
-                .open_table(TABLE_PSO)
                 .map_err(|e| Error::Other(e.to_string()))?;
             let _ = write_txn
                 .open_table(TABLE_OSP)
@@ -83,7 +86,7 @@ impl DiskHexastore {
                 QuerySpec::range(IndexKind::Spo, (s, p, u64::MIN), (s, p, u64::MAX))
             }
             (Some(s), None, Some(o)) => {
-                QuerySpec::range(IndexKind::Sop, (s, o, u64::MIN), (s, o, u64::MAX))
+                QuerySpec::range(IndexKind::Osp, (o, s, u64::MIN), (o, s, u64::MAX))
             }
             (None, Some(p), Some(o)) => {
                 QuerySpec::range(IndexKind::Pos, (p, o, u64::MIN), (p, o, u64::MAX))
@@ -94,7 +97,7 @@ impl DiskHexastore {
                 (s, u64::MAX, u64::MAX),
             ),
             (None, Some(p), None) => QuerySpec::range(
-                IndexKind::Pso,
+                IndexKind::Pos,
                 (p, u64::MIN, u64::MIN),
                 (p, u64::MAX, u64::MAX),
             ),
@@ -111,15 +114,33 @@ impl DiskHexastore {
         }
     }
 
+    fn invalidate_read_cache(&self) {
+        self.generation.fetch_add(1, Ordering::Relaxed);
+        let mut guard = self.read_cache.write().expect("read cache poisoned");
+        *guard = None;
+    }
+
+    fn read_handles(&self) -> Result<Arc<ReadHandles>> {
+        let r#gen = self.generation.load(Ordering::Relaxed);
+        {
+            let guard = self.read_cache.read().expect("read cache poisoned");
+            if let Some((cached_gen, handles)) = guard.as_ref() {
+                if *cached_gen == r#gen {
+                    return Ok(handles.clone());
+                }
+            }
+        }
+
+        let handles = Arc::new(ReadHandles::build(&self.db)?);
+        let mut guard = self.read_cache.write().expect("read cache poisoned");
+        *guard = Some((r#gen, handles.clone()));
+        Ok(handles)
+    }
+
     fn lookup_exact(&self, triple: &Triple) -> Result<bool> {
-        let txn = self
-            .db
-            .begin_read()
-            .map_err(|e| Error::Other(e.to_string()))?;
-        let table = txn
-            .open_table(TABLE_SPO)
-            .map_err(|e| Error::Other(e.to_string()))?;
-        table
+        let handles = self.read_handles()?;
+        handles
+            .spo
             .get((triple.subject_id, triple.predicate_id, triple.object_id))
             .map_err(|e| Error::Other(e.to_string()))
             .map(|opt| opt.is_some())
@@ -136,6 +157,7 @@ impl Hexastore for DiskHexastore {
         write_txn
             .commit()
             .map_err(|e| Error::Other(e.to_string()))?;
+        self.invalidate_read_cache();
         Ok(inserted)
     }
 
@@ -148,6 +170,7 @@ impl Hexastore for DiskHexastore {
         write_txn
             .commit()
             .map_err(|e| Error::Other(e.to_string()))?;
+        self.invalidate_read_cache();
         Ok(deleted)
     }
 
@@ -165,6 +188,7 @@ impl Hexastore for DiskHexastore {
         write_txn
             .commit()
             .map_err(|e| Error::Other(e.to_string()))?;
+        self.invalidate_read_cache();
         Ok(triple)
     }
 
@@ -179,22 +203,20 @@ impl Hexastore for DiskHexastore {
                 Ok(true) => Box::new(std::iter::once(triple)),
                 Ok(false) | Err(_) => Box::new(std::iter::empty()),
             },
-            QuerySpec::Range(range) => match DiskCursor::create(&self.db, range) {
-                Ok(cursor) => Box::new(cursor),
+            QuerySpec::Range(range) => match self.read_handles() {
+                Ok(handles) => match CachedCursor::create(handles, range) {
+                    Ok(cursor) => Box::new(cursor),
+                    Err(_) => Box::new(std::iter::empty()),
+                },
                 Err(_) => Box::new(std::iter::empty()),
             },
         }
     }
 
     fn resolve_str(&self, id: u64) -> Result<Option<String>> {
-        let txn = self
-            .db
-            .begin_read()
-            .map_err(|e| Error::Other(e.to_string()))?;
-        let table = txn
-            .open_table(TABLE_ID_TO_STR)
-            .map_err(|e| Error::Other(e.to_string()))?;
-        let result = table
+        let handles = self.read_handles()?;
+        let result = handles
+            .id_to_str
             .get(id)
             .map_err(|e| Error::Other(e.to_string()))?
             .map(|v| v.value().to_string());
@@ -202,18 +224,32 @@ impl Hexastore for DiskHexastore {
     }
 
     fn resolve_id(&self, value: &str) -> Result<Option<u64>> {
-        let txn = self
-            .db
-            .begin_read()
-            .map_err(|e| Error::Other(e.to_string()))?;
-        let table = txn
-            .open_table(TABLE_STR_TO_ID)
-            .map_err(|e| Error::Other(e.to_string()))?;
-        let result = table
+        let handles = self.read_handles()?;
+        let result = handles
+            .str_to_id
             .get(value)
             .map_err(|e| Error::Other(e.to_string()))?
             .map(|v| v.value());
         Ok(result)
+    }
+
+    fn bulk_intern(&mut self, values: &[&str]) -> Result<Vec<u64>> {
+        if values.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let write_txn = self
+            .db
+            .begin_write()
+            .map_err(|e| Error::Other(e.to_string()))?;
+        let mut handles = WriteTableHandles::new(&write_txn)?;
+        let ids = handles.intern_bulk(values)?;
+        drop(handles);
+        write_txn
+            .commit()
+            .map_err(|e| Error::Other(e.to_string()))?;
+        self.invalidate_read_cache();
+        Ok(ids)
     }
 
     fn intern(&mut self, value: &str) -> Result<u64> {
@@ -253,6 +289,7 @@ impl Hexastore for DiskHexastore {
                 .map_err(|e| Error::Other(e.to_string()))?;
         }
         tx.commit().map_err(|e| Error::Other(e.to_string()))?;
+        self.invalidate_read_cache();
         Ok(())
     }
 
@@ -284,6 +321,7 @@ impl Hexastore for DiskHexastore {
                 .map_err(|e| Error::Other(e.to_string()))?;
         }
         tx.commit().map_err(|e| Error::Other(e.to_string()))?;
+        self.invalidate_read_cache();
         Ok(())
     }
 
@@ -310,21 +348,26 @@ impl Hexastore for DiskHexastore {
             return Ok(0);
         }
 
-        let mut write_txn = self
+        let write_txn = self
             .db
             .begin_write()
             .map_err(|e| Error::Other(e.to_string()))?;
 
+        // Use cached table handles for performance
+        let mut handles = WriteTableHandles::new(&write_txn)?;
+
         let mut count = 0;
         for triple in triples {
-            if insert_triple(&mut write_txn, triple)? {
+            if handles.insert_triple(triple)? {
                 count += 1;
             }
         }
 
+        drop(handles);
         write_txn
             .commit()
             .map_err(|e| Error::Other(e.to_string()))?;
+        self.invalidate_read_cache();
         Ok(count)
     }
 
@@ -348,6 +391,7 @@ impl Hexastore for DiskHexastore {
         write_txn
             .commit()
             .map_err(|e| Error::Other(e.to_string()))?;
+        self.invalidate_read_cache();
         Ok(count)
     }
 
@@ -397,6 +441,34 @@ impl Hexastore for DiskHexastore {
         Ok(())
     }
 
+    /// Optimized batch insert for facts using cached table handles
+    fn batch_insert_facts(&mut self, facts: &[Fact<'_>]) -> Result<Vec<Triple>> {
+        if facts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let write_txn = self
+            .db
+            .begin_write()
+            .map_err(|e| Error::Other(e.to_string()))?;
+
+        let mut handles = WriteTableHandles::new(&write_txn)?;
+        let mut results = Vec::with_capacity(facts.len());
+
+        for fact in facts {
+            let triple = handles.insert_fact(*fact)?;
+            results.push(triple);
+        }
+
+        drop(handles);
+        write_txn
+            .commit()
+            .map_err(|e| Error::Other(e.to_string()))?;
+        self.invalidate_read_cache();
+
+        Ok(results)
+    }
+
     // Binary property methods (v2.0, FlexBuffers for performance)
 
     fn set_node_property_binary(&mut self, id: u64, value: &[u8]) -> Result<()> {
@@ -413,6 +485,7 @@ impl Hexastore for DiskHexastore {
                 .map_err(|e| Error::Other(e.to_string()))?;
         }
         tx.commit().map_err(|e| Error::Other(e.to_string()))?;
+        self.invalidate_read_cache();
         Ok(())
     }
 
@@ -468,6 +541,7 @@ impl Hexastore for DiskHexastore {
                 .map_err(|e| Error::Other(e.to_string()))?;
         }
         tx.commit().map_err(|e| Error::Other(e.to_string()))?;
+        self.invalidate_read_cache();
         Ok(())
     }
 
@@ -485,6 +559,7 @@ impl Hexastore for DiskHexastore {
                 .map_err(|e| Error::Other(e.to_string()))?;
         }
         tx.commit().map_err(|e| Error::Other(e.to_string()))?;
+        self.invalidate_read_cache();
         Ok(())
     }
 
@@ -515,6 +590,244 @@ impl Hexastore for DiskHexastore {
             .get((s, p, o))
             .map_err(|e| Error::Other(e.to_string()))?
             .map(|v| v.value().as_bytes().to_vec()))
+    }
+}
+
+/// Cached table handles for write operations
+/// Opens all tables once and reuses handles for maximum performance
+pub(crate) struct WriteTableHandles<'txn> {
+    pub spo: Table<'txn, (u64, u64, u64), ()>,
+    pub pos: Table<'txn, (u64, u64, u64), ()>,
+    pub osp: Table<'txn, (u64, u64, u64), ()>,
+    pub str_to_id: Table<'txn, &'static str, u64>,
+    pub id_to_str: Table<'txn, u64, &'static str>,
+    string_cache: HashMap<String, u64>,
+    fast_intern: bool,
+    next_id: u64,
+}
+
+const STRING_CACHE_LIMIT: usize = 100_000;
+
+impl<'txn> WriteTableHandles<'txn> {
+    pub fn new(txn: &'txn WriteTransaction) -> Result<Self> {
+        let spo = txn
+            .open_table(TABLE_SPO)
+            .map_err(|e| Error::Other(e.to_string()))?;
+        let pos = txn
+            .open_table(TABLE_POS)
+            .map_err(|e| Error::Other(e.to_string()))?;
+        let osp = txn
+            .open_table(TABLE_OSP)
+            .map_err(|e| Error::Other(e.to_string()))?;
+        let str_to_id = txn
+            .open_table(TABLE_STR_TO_ID)
+            .map_err(|e| Error::Other(e.to_string()))?;
+        let id_to_str = txn
+            .open_table(TABLE_ID_TO_STR)
+            .map_err(|e| Error::Other(e.to_string()))?;
+
+        // Get current max ID
+        let next_id = id_to_str
+            .last()
+            .map_err(|e| Error::Other(e.to_string()))?
+            .map(|(id, _)| id.value() + 1)
+            .unwrap_or(1);
+        let fast_intern = next_id == 1;
+
+        Ok(Self {
+            spo,
+            pos,
+            osp,
+            str_to_id,
+            id_to_str,
+            string_cache: HashMap::new(),
+            fast_intern,
+            next_id,
+        })
+    }
+
+    /// Intern a string using cached table handles
+    pub fn intern(&mut self, value: &str) -> Result<u64> {
+        if let Some(id) = self.string_cache.remove(value) {
+            self.string_cache.insert(value.to_owned(), id);
+            return Ok(id);
+        }
+
+        if self.fast_intern {
+            let id = self.next_id;
+            self.next_id += 1;
+            self.str_to_id
+                .insert(value, id)
+                .map_err(|e| Error::Other(e.to_string()))?;
+            self.id_to_str
+                .insert(id, value)
+                .map_err(|e| Error::Other(e.to_string()))?;
+            self.cache_insert(value, id);
+            return Ok(id);
+        }
+
+        let existing_id = if let Some(id_guard) = self
+            .str_to_id
+            .get(value)
+            .map_err(|e| Error::Other(e.to_string()))?
+        {
+            Some(id_guard.value())
+        } else {
+            None
+        };
+        if let Some(id) = existing_id {
+            self.cache_insert(value, id);
+            return Ok(id);
+        }
+
+        let id = self.next_id;
+        self.next_id += 1;
+        self.str_to_id
+            .insert(value, id)
+            .map_err(|e| Error::Other(e.to_string()))?;
+        self.id_to_str
+            .insert(id, value)
+            .map_err(|e| Error::Other(e.to_string()))?;
+        self.cache_insert(value, id);
+        Ok(id)
+    }
+
+    fn cache_insert(&mut self, value: &str, id: u64) {
+        if self.string_cache.len() < STRING_CACHE_LIMIT {
+            self.string_cache.insert(value.to_owned(), id);
+        }
+    }
+
+    /// Insert a triple using cached table handles
+    pub fn insert_triple(&mut self, triple: &Triple) -> Result<bool> {
+        let s = triple.subject_id;
+        let p = triple.predicate_id;
+        let o = triple.object_id;
+
+        match self.spo.insert((s, p, o), ()) {
+            Ok(Some(_)) => return Ok(false),
+            Ok(None) => {}
+            Err(e) => return Err(Error::Other(e.to_string())),
+        }
+
+        self.pos
+            .insert((p, o, s), ())
+            .map_err(|e| Error::Other(e.to_string()))?;
+        self.osp
+            .insert((o, s, p), ())
+            .map_err(|e| Error::Other(e.to_string()))?;
+
+        Ok(true)
+    }
+
+    /// Insert a fact (intern strings + insert triple)
+    pub fn insert_fact(&mut self, fact: Fact<'_>) -> Result<Triple> {
+        let s = self.intern(fact.subject)?;
+        let p = self.intern(fact.predicate)?;
+        let o = self.intern(fact.object)?;
+        let triple = Triple::new(s, p, o);
+        self.insert_triple(&triple)?;
+        Ok(triple)
+    }
+
+    pub fn intern_bulk<'a>(&mut self, values: &[&'a str]) -> Result<Vec<u64>> {
+        let mut out = Vec::with_capacity(values.len());
+        for v in values {
+            out.push(self.intern(v)?);
+        }
+        Ok(out)
+    }
+}
+
+#[derive(Debug)]
+struct ReadHandles {
+    _txn: ReadTransaction,
+    spo: redb::ReadOnlyTable<(u64, u64, u64), ()>,
+    pos: redb::ReadOnlyTable<(u64, u64, u64), ()>,
+    osp: redb::ReadOnlyTable<(u64, u64, u64), ()>,
+    id_to_str: redb::ReadOnlyTable<u64, &'static str>,
+    str_to_id: redb::ReadOnlyTable<&'static str, u64>,
+}
+
+impl ReadHandles {
+    fn build(db: &Database) -> Result<Self> {
+        let txn = db.begin_read().map_err(|e| Error::Other(e.to_string()))?;
+        let spo = txn
+            .open_table(TABLE_SPO)
+            .map_err(|e| Error::Other(e.to_string()))?;
+        let pos = txn
+            .open_table(TABLE_POS)
+            .map_err(|e| Error::Other(e.to_string()))?;
+        let osp = txn
+            .open_table(TABLE_OSP)
+            .map_err(|e| Error::Other(e.to_string()))?;
+        let id_to_str = txn
+            .open_table(TABLE_ID_TO_STR)
+            .map_err(|e| Error::Other(e.to_string()))?;
+        let str_to_id = txn
+            .open_table(TABLE_STR_TO_ID)
+            .map_err(|e| Error::Other(e.to_string()))?;
+
+        Ok(Self {
+            _txn: txn,
+            spo,
+            pos,
+            osp,
+            id_to_str,
+            str_to_id,
+        })
+    }
+}
+
+#[self_referencing]
+struct CachedCursor {
+    handles: Arc<ReadHandles>,
+    index: IndexKind,
+    start: (u64, u64, u64),
+    end: (u64, u64, u64),
+    #[borrows(handles)]
+    #[covariant]
+    iter: Range<'this, (u64, u64, u64), ()>,
+}
+
+impl CachedCursor {
+    fn create(handles: Arc<ReadHandles>, range: QueryRange) -> Result<Self> {
+        let QueryRange { index, start, end } = range;
+        let start_bounds = start;
+        let end_bounds = end;
+        CachedCursorTryBuilder {
+            handles,
+            index,
+            start,
+            end,
+            iter_builder: move |handles| {
+                let bounds = start_bounds..=end_bounds;
+                match index {
+                    IndexKind::Spo => handles.spo.range(bounds),
+                    IndexKind::Pos => handles.pos.range(bounds),
+                    IndexKind::Osp => handles.osp.range(bounds),
+                }
+                .map_err(|e| Error::Other(e.to_string()))
+            },
+        }
+        .try_build()
+    }
+}
+
+impl Iterator for CachedCursor {
+    type Item = Triple;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let index = *self.borrow_index();
+        self.with_iter_mut(|iter| {
+            while let Some(entry) = iter.next() {
+                if let Ok((key, _)) = entry {
+                    let raw = key.value();
+                    return Some(index.decode(raw));
+                }
+            }
+            None
+        })
     }
 }
 
@@ -556,33 +869,16 @@ pub(crate) fn insert_triple(txn: &mut redb::WriteTransaction, triple: &Triple) -
         .open_table(TABLE_SPO)
         .map_err(|e| Error::Other(e.to_string()))?;
 
-    if spo
-        .get((s, p, o))
-        .map_err(|e| Error::Other(e.to_string()))?
-        .is_some()
-    {
-        return Ok(false);
+    match spo.insert((s, p, o), ()) {
+        Ok(Some(_)) => return Ok(false),
+        Ok(None) => {}
+        Err(e) => return Err(Error::Other(e.to_string())),
     }
-
-    spo.insert((s, p, o), ())
-        .map_err(|e| Error::Other(e.to_string()))?;
-
-    let mut sop = txn
-        .open_table(TABLE_SOP)
-        .map_err(|e| Error::Other(e.to_string()))?;
-    sop.insert((s, o, p), ())
-        .map_err(|e| Error::Other(e.to_string()))?;
 
     let mut pos = txn
         .open_table(TABLE_POS)
         .map_err(|e| Error::Other(e.to_string()))?;
     pos.insert((p, o, s), ())
-        .map_err(|e| Error::Other(e.to_string()))?;
-
-    let mut pso = txn
-        .open_table(TABLE_PSO)
-        .map_err(|e| Error::Other(e.to_string()))?;
-    pso.insert((p, s, o), ())
         .map_err(|e| Error::Other(e.to_string()))?;
 
     let mut osp = txn
@@ -597,29 +893,15 @@ pub(crate) fn insert_triple(txn: &mut redb::WriteTransaction, triple: &Triple) -
 #[derive(Clone, Copy)]
 enum IndexKind {
     Spo,
-    Sop,
     Pos,
-    Pso,
     Osp,
 }
 
 impl IndexKind {
-    fn table(self) -> TableDefinition<'static, (u64, u64, u64), ()> {
-        match self {
-            IndexKind::Spo => TABLE_SPO,
-            IndexKind::Sop => TABLE_SOP,
-            IndexKind::Pos => TABLE_POS,
-            IndexKind::Pso => TABLE_PSO,
-            IndexKind::Osp => TABLE_OSP,
-        }
-    }
-
     fn decode(self, raw: (u64, u64, u64)) -> Triple {
         match self {
             IndexKind::Spo => Triple::new(raw.0, raw.1, raw.2),
-            IndexKind::Sop => Triple::new(raw.0, raw.2, raw.1),
             IndexKind::Pos => Triple::new(raw.2, raw.0, raw.1),
-            IndexKind::Pso => Triple::new(raw.1, raw.0, raw.2),
             IndexKind::Osp => Triple::new(raw.1, raw.2, raw.0),
         }
     }
@@ -639,55 +921,6 @@ enum QuerySpec {
 impl QuerySpec {
     fn range(index: IndexKind, start: (u64, u64, u64), end: (u64, u64, u64)) -> Self {
         QuerySpec::Range(QueryRange { index, start, end })
-    }
-}
-
-#[self_referencing]
-struct DiskCursor {
-    txn: ReadTransaction,
-    table: redb::ReadOnlyTable<(u64, u64, u64), ()>,
-    #[borrows(table)]
-    #[covariant]
-    iter: Range<'this, (u64, u64, u64), ()>,
-    index: IndexKind,
-}
-
-impl DiskCursor {
-    fn create(db: &Database, range: QueryRange) -> Result<Self> {
-        let QueryRange { index, start, end } = range;
-        let bounds = start..=end;
-        let txn = db.begin_read().map_err(|e| Error::Other(e.to_string()))?;
-        let table = txn
-            .open_table(index.table())
-            .map_err(|e| Error::Other(e.to_string()))?;
-        DiskCursorTryBuilder {
-            txn,
-            table,
-            iter_builder: move |table| {
-                table
-                    .range(bounds.clone())
-                    .map_err(|e| Error::Other(e.to_string()))
-            },
-            index,
-        }
-        .try_build()
-    }
-}
-
-impl Iterator for DiskCursor {
-    type Item = Triple;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let index = *self.borrow_index();
-        self.with_iter_mut(|iter| {
-            while let Some(entry) = iter.next() {
-                if let Ok((key, _)) = entry {
-                    let raw = key.value();
-                    return Some(index.decode(raw));
-                }
-            }
-            None
-        })
     }
 }
 
@@ -711,22 +944,10 @@ pub(crate) fn delete_triple(txn: &mut redb::WriteTransaction, triple: &Triple) -
     spo.remove((s, p, o))
         .map_err(|e| Error::Other(e.to_string()))?;
 
-    let mut sop = txn
-        .open_table(TABLE_SOP)
-        .map_err(|e| Error::Other(e.to_string()))?;
-    sop.remove((s, o, p))
-        .map_err(|e| Error::Other(e.to_string()))?;
-
     let mut pos = txn
         .open_table(TABLE_POS)
         .map_err(|e| Error::Other(e.to_string()))?;
     pos.remove((p, o, s))
-        .map_err(|e| Error::Other(e.to_string()))?;
-
-    let mut pso = txn
-        .open_table(TABLE_PSO)
-        .map_err(|e| Error::Other(e.to_string()))?;
-    pso.remove((p, s, o))
         .map_err(|e| Error::Other(e.to_string()))?;
 
     let mut osp = txn

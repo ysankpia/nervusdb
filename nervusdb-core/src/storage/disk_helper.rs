@@ -19,22 +19,10 @@ fn delete_triple(txn: &mut redb::WriteTransaction, triple: &Triple) -> Result<bo
     spo.remove((s, p, o))
         .map_err(|e| Error::Other(e.to_string()))?;
 
-    let mut sop = txn
-        .open_table(TABLE_SOP)
-        .map_err(|e| Error::Other(e.to_string()))?;
-    sop.remove((s, o, p))
-        .map_err(|e| Error::Other(e.to_string()))?;
-
     let mut pos = txn
         .open_table(TABLE_POS)
         .map_err(|e| Error::Other(e.to_string()))?;
     pos.remove((p, o, s))
-        .map_err(|e| Error::Other(e.to_string()))?;
-
-    let mut pso = txn
-        .open_table(TABLE_PSO)
-        .map_err(|e| Error::Other(e.to_string()))?;
-    pso.remove((p, s, o))
         .map_err(|e| Error::Other(e.to_string()))?;
 
     let mut osp = txn

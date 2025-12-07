@@ -9,9 +9,7 @@ use crate::triple::{Fact, Triple};
 #[derive(Debug)]
 pub struct MemoryHexastore {
     spo: Arc<RwLock<BTreeSet<(u64, u64, u64)>>>,
-    sop: Arc<RwLock<BTreeSet<(u64, u64, u64)>>>,
     pos: Arc<RwLock<BTreeSet<(u64, u64, u64)>>>,
-    pso: Arc<RwLock<BTreeSet<(u64, u64, u64)>>>,
     osp: Arc<RwLock<BTreeSet<(u64, u64, u64)>>>,
     id_to_str: Arc<RwLock<std::collections::HashMap<u64, String>>>,
     str_to_id: Arc<RwLock<std::collections::HashMap<String, u64>>>,
@@ -22,9 +20,7 @@ impl MemoryHexastore {
     pub fn new() -> Self {
         Self {
             spo: Arc::new(RwLock::new(BTreeSet::new())),
-            sop: Arc::new(RwLock::new(BTreeSet::new())),
             pos: Arc::new(RwLock::new(BTreeSet::new())),
-            pso: Arc::new(RwLock::new(BTreeSet::new())),
             osp: Arc::new(RwLock::new(BTreeSet::new())),
             id_to_str: Arc::new(RwLock::new(std::collections::HashMap::new())),
             str_to_id: Arc::new(RwLock::new(std::collections::HashMap::new())),
@@ -37,9 +33,7 @@ impl MemoryHexastore {
         let p = triple.predicate_id;
         let o = triple.object_id;
         self.spo.write().unwrap().remove(&(s, p, o));
-        self.sop.write().unwrap().remove(&(s, o, p));
         self.pos.write().unwrap().remove(&(p, o, s));
-        self.pso.write().unwrap().remove(&(p, s, o));
         self.osp.write().unwrap().remove(&(o, s, p));
     }
 
@@ -53,10 +47,10 @@ impl MemoryHexastore {
                 IndexKind::Spo.decode_fn(),
             ),
             (Some(s), None, Some(o)) => QuerySpec::range(
-                self.index(IndexKind::Sop),
-                (s, o, u64::MIN),
-                (s, o, u64::MAX),
-                IndexKind::Sop.decode_fn(),
+                self.index(IndexKind::Osp),
+                (o, s, u64::MIN),
+                (o, s, u64::MAX),
+                IndexKind::Osp.decode_fn(),
             ),
             (None, Some(p), Some(o)) => QuerySpec::range(
                 self.index(IndexKind::Pos),
@@ -71,10 +65,10 @@ impl MemoryHexastore {
                 IndexKind::Spo.decode_fn(),
             ),
             (None, Some(p), None) => QuerySpec::range(
-                self.index(IndexKind::Pso),
+                self.index(IndexKind::Pos),
                 (p, u64::MIN, u64::MIN),
                 (p, u64::MAX, u64::MAX),
-                IndexKind::Pso.decode_fn(),
+                IndexKind::Pos.decode_fn(),
             ),
             (None, None, Some(o)) => QuerySpec::range(
                 self.index(IndexKind::Osp),
@@ -94,9 +88,7 @@ impl MemoryHexastore {
     fn index(&self, kind: IndexKind) -> Arc<RwLock<BTreeSet<(u64, u64, u64)>>> {
         match kind {
             IndexKind::Spo => Arc::clone(&self.spo),
-            IndexKind::Sop => Arc::clone(&self.sop),
             IndexKind::Pos => Arc::clone(&self.pos),
-            IndexKind::Pso => Arc::clone(&self.pso),
             IndexKind::Osp => Arc::clone(&self.osp),
         }
     }
@@ -119,9 +111,7 @@ impl crate::storage::Hexastore for MemoryHexastore {
             }
             spo.insert((s, p, o));
         }
-        self.sop.write().unwrap().insert((s, o, p));
         self.pos.write().unwrap().insert((p, o, s));
-        self.pso.write().unwrap().insert((p, s, o));
         self.osp.write().unwrap().insert((o, s, p));
 
         Ok(true)
@@ -139,9 +129,7 @@ impl crate::storage::Hexastore for MemoryHexastore {
             }
             spo.remove(&(s, p, o));
         }
-        self.sop.write().unwrap().remove(&(s, o, p));
         self.pos.write().unwrap().remove(&(p, o, s));
-        self.pso.write().unwrap().remove(&(p, s, o));
         self.osp.write().unwrap().remove(&(o, s, p));
 
         Ok(true)
@@ -226,9 +214,7 @@ impl crate::storage::Hexastore for MemoryHexastore {
 #[derive(Clone, Copy)]
 enum IndexKind {
     Spo,
-    Sop,
     Pos,
-    Pso,
     Osp,
 }
 
@@ -236,9 +222,7 @@ impl IndexKind {
     fn decode_fn(self) -> fn((u64, u64, u64)) -> Triple {
         match self {
             IndexKind::Spo => |(s, p, o)| Triple::new(s, p, o),
-            IndexKind::Sop => |(s, o, p)| Triple::new(s, p, o),
             IndexKind::Pos => |(p, o, s)| Triple::new(s, p, o),
-            IndexKind::Pso => |(p, s, o)| Triple::new(s, p, o),
             IndexKind::Osp => |(o, s, p)| Triple::new(s, p, o),
         }
     }
@@ -346,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn predicate_only_scan_uses_pso_index() {
+    fn predicate_only_scan_uses_pos_index() {
         let mut store = MemoryHexastore::new();
         store.insert(&triple(1, 11, 3)).unwrap();
         store.insert(&triple(2, 11, 4)).unwrap();
