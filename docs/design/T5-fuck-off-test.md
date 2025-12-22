@@ -21,13 +21,13 @@
 
 ## 4. Solution
 
-1. 新增一个 writer 程序（bin 或 example）：
-   - 循环：开始事务 → 批量写入随机 facts → commit。
-2. 新增一个 verifier：
-   - 打开 DB，扫描三张索引表与字典表，做引用一致性检查。
-3. 测试驱动：
-   - 父进程 spawn writer，sleep 随机短时间后 `kill -9`，随后运行 verifier。
-   - 重复 N 次（N 可通过 env/参数控制）。
+1. 新增一个工具二进制：`nervusdb-core/src/bin/nervus-crash-test.rs`
+   - `writer`：循环 `begin tx → 批量写入 → commit`（让外部 `kill -9` 命中事务中间）
+   - `verify`：做一致性检查（字典双向 + 三元组引用）
+   - `driver`：spawn `writer` → 随机 sleep → `kill -9` → `verify`，重复 N 次
+2. 运行方式（示例）
+   - `cargo run -p nervusdb-core --bin nervus-crash-test -- driver ./tmp-fuckoff --iterations 200`
+   - `cargo run -p nervusdb-core --bin nervus-crash-test -- verify ./tmp-fuckoff`
 
 ## 5. Testing Strategy
 
@@ -37,4 +37,3 @@
 ## 6. Risks
 
 - 进程/信号导致的 flakiness：必须把迭代次数与时间控制在可接受范围，并且让失败输出足够可诊断。
-
