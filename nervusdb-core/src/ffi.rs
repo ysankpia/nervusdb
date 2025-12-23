@@ -18,6 +18,20 @@ pub const NERVUSDB_ERR_INVALID_ARGUMENT: nervusdb_status = 1;
 pub const NERVUSDB_ERR_OPEN: nervusdb_status = 2;
 pub const NERVUSDB_ERR_INTERNAL: nervusdb_status = 3;
 pub const NERVUSDB_ERR_CALLBACK: nervusdb_status = 4;
+pub const NERVUSDB_ROW: nervusdb_status = 100;
+pub const NERVUSDB_DONE: nervusdb_status = 101;
+
+pub const NERVUSDB_ABI_VERSION: u32 = 1;
+
+#[allow(non_camel_case_types)]
+pub type nervusdb_value_type = i32;
+
+pub const NERVUSDB_VALUE_NULL: nervusdb_value_type = 0;
+pub const NERVUSDB_VALUE_TEXT: nervusdb_value_type = 1;
+pub const NERVUSDB_VALUE_FLOAT: nervusdb_value_type = 2;
+pub const NERVUSDB_VALUE_BOOL: nervusdb_value_type = 3;
+pub const NERVUSDB_VALUE_NODE: nervusdb_value_type = 4;
+pub const NERVUSDB_VALUE_RELATIONSHIP: nervusdb_value_type = 5;
 
 #[repr(C)]
 pub struct nervusdb_db {
@@ -25,9 +39,22 @@ pub struct nervusdb_db {
 }
 
 #[repr(C)]
+pub struct nervusdb_stmt {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
 pub struct nervusdb_error {
     pub code: nervusdb_status,
     pub message: *mut c_char,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct nervusdb_relationship {
+    pub subject_id: u64,
+    pub predicate_id: u64,
+    pub object_id: u64,
 }
 
 #[repr(C)]
@@ -137,6 +164,11 @@ fn criteria_from_ffi(ffi: &nervusdb_query_criteria) -> QueryCriteria {
             None
         },
     }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nervusdb_abi_version() -> u32 {
+    NERVUSDB_ABI_VERSION
 }
 
 #[unsafe(no_mangle)]
@@ -593,6 +625,396 @@ pub unsafe extern "C" fn nervusdb_exec_cypher(
     NERVUSDB_OK
 }
 
+// ---------------------------------------------------------------------------
+// Statement API (SQLite-style row iterator)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+enum StmtValue {
+    Null,
+    Text(Box<[u8]>), // NUL-terminated; may contain embedded NULs (use column_bytes)
+    Float(f64),
+    Boolean(bool),
+    Node(u64),
+    Relationship(Triple),
+}
+
+struct CypherStatement {
+    columns: Vec<CString>, // stable until finalize
+    rows: Vec<Vec<StmtValue>>,
+    next_row: usize,
+    current_row: Option<usize>,
+}
+
+fn stmt_from_ptr<'a>(
+    stmt: *mut nervusdb_stmt,
+    out_error: *mut *mut nervusdb_error,
+) -> Result<&'a mut CypherStatement, nervusdb_status> {
+    if stmt.is_null() {
+        set_error(
+            out_error,
+            NERVUSDB_ERR_INVALID_ARGUMENT,
+            "statement pointer is null",
+        );
+        return Err(NERVUSDB_ERR_INVALID_ARGUMENT);
+    }
+    unsafe { Ok(&mut *(stmt as *mut CypherStatement)) }
+}
+
+fn parse_params_json(
+    params_json: *const c_char,
+    out_error: *mut *mut nervusdb_error,
+) -> Result<Option<HashMap<String, serde_json::Value>>, nervusdb_status> {
+    if params_json.is_null() {
+        return Ok(None);
+    }
+    let raw = cstr_to_owned(params_json, out_error, "params_json")?;
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str::<HashMap<String, serde_json::Value>>(&raw)
+        .map(Some)
+        .map_err(|_| {
+            set_error(
+                out_error,
+                NERVUSDB_ERR_INVALID_ARGUMENT,
+                "params_json must be a JSON object",
+            );
+            NERVUSDB_ERR_INVALID_ARGUMENT
+        })
+}
+
+fn infer_projection_alias(expr: &crate::query::ast::Expression) -> String {
+    use crate::query::ast::Expression;
+    match expr {
+        Expression::Variable(name) => name.clone(),
+        Expression::PropertyAccess(pa) => format!("{}.{}", pa.variable, pa.property),
+        _ => "col".to_string(),
+    }
+}
+
+fn convert_stmt_value(value: crate::query::executor::Value) -> StmtValue {
+    match value {
+        crate::query::executor::Value::String(s) => {
+            let mut bytes = s.into_bytes();
+            bytes.push(0);
+            StmtValue::Text(bytes.into_boxed_slice())
+        }
+        crate::query::executor::Value::Float(f) => StmtValue::Float(f),
+        crate::query::executor::Value::Boolean(b) => StmtValue::Boolean(b),
+        crate::query::executor::Value::Null => StmtValue::Null,
+        crate::query::executor::Value::Node(id) => StmtValue::Node(id),
+        crate::query::executor::Value::Relationship(triple) => StmtValue::Relationship(triple),
+    }
+}
+
+fn stmt_cell<'a>(stmt: &'a CypherStatement, column: i32) -> Option<&'a StmtValue> {
+    let idx = usize::try_from(column).ok()?;
+    let row_idx = stmt.current_row?;
+    stmt.rows.get(row_idx)?.get(idx)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nervusdb_prepare_v2(
+    db: *mut nervusdb_db,
+    query: *const c_char,
+    params_json: *const c_char,
+    out_stmt: *mut *mut nervusdb_stmt,
+    out_error: *mut *mut nervusdb_error,
+) -> nervusdb_status {
+    clear_error(out_error);
+    if query.is_null() || out_stmt.is_null() {
+        set_error(
+            out_error,
+            NERVUSDB_ERR_INVALID_ARGUMENT,
+            "query/out_stmt pointer is null",
+        );
+        return NERVUSDB_ERR_INVALID_ARGUMENT;
+    }
+    unsafe {
+        *out_stmt = ptr::null_mut();
+    }
+
+    let db = match db_from_ptr(db, out_error) {
+        Ok(db) => db,
+        Err(code) => return code,
+    };
+
+    let query_str = match cstr_to_owned(query, out_error, "query") {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+
+    let params = match parse_params_json(params_json, out_error) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+
+    // Derive column order from RETURN clause (if any).
+    let mut projection_names: Vec<String> = Vec::new();
+    match crate::query::parser::Parser::parse(query_str.as_str()) {
+        Ok(ast) => {
+            for clause in ast.clauses {
+                if let crate::query::ast::Clause::Return(r) = clause {
+                    projection_names = r
+                        .items
+                        .into_iter()
+                        .map(|item| {
+                            item.alias
+                                .unwrap_or_else(|| infer_projection_alias(&item.expression))
+                        })
+                        .collect();
+                }
+            }
+        }
+        Err(err) => {
+            set_error(out_error, NERVUSDB_ERR_INVALID_ARGUMENT, &err);
+            return NERVUSDB_ERR_INVALID_ARGUMENT;
+        }
+    }
+
+    if !projection_names.is_empty() {
+        let mut seen = std::collections::HashSet::new();
+        for name in &projection_names {
+            if !seen.insert(name) {
+                set_error(
+                    out_error,
+                    NERVUSDB_ERR_INVALID_ARGUMENT,
+                    &format!("duplicate column name: {name}; use explicit aliases"),
+                );
+                return NERVUSDB_ERR_INVALID_ARGUMENT;
+            }
+        }
+    }
+
+    let results = match db.execute_query_with_params(query_str.as_str(), params) {
+        Ok(r) => r,
+        Err(err) => {
+            let message = err.to_string();
+            let code = status_from_error(&err);
+            set_error(out_error, code, &message);
+            return code;
+        }
+    };
+
+    // If there is no RETURN clause, define a deterministic column order from result keys.
+    let columns: Vec<String> = if !projection_names.is_empty() {
+        projection_names
+    } else if results.is_empty() {
+        Vec::new()
+    } else {
+        let mut keys: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for row in &results {
+            keys.extend(row.keys().cloned());
+        }
+        keys.into_iter().collect()
+    };
+
+    let mut c_columns = Vec::with_capacity(columns.len());
+    for name in &columns {
+        match CString::new(name.as_str()) {
+            Ok(c) => c_columns.push(c),
+            Err(_) => {
+                set_error(
+                    out_error,
+                    NERVUSDB_ERR_INTERNAL,
+                    "column name contained NUL byte",
+                );
+                return NERVUSDB_ERR_INTERNAL;
+            }
+        }
+    }
+
+    let mut rows = Vec::with_capacity(results.len());
+    for row in results {
+        let mut out_row = Vec::with_capacity(columns.len());
+        for col in &columns {
+            let value = row
+                .get(col)
+                .cloned()
+                .unwrap_or(crate::query::executor::Value::Null);
+            out_row.push(convert_stmt_value(value));
+        }
+        rows.push(out_row);
+    }
+
+    let stmt = Box::new(CypherStatement {
+        columns: c_columns,
+        rows,
+        next_row: 0,
+        current_row: None,
+    });
+
+    unsafe {
+        *out_stmt = Box::into_raw(stmt) as *mut nervusdb_stmt;
+    }
+
+    NERVUSDB_OK
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nervusdb_step(
+    stmt: *mut nervusdb_stmt,
+    out_error: *mut *mut nervusdb_error,
+) -> nervusdb_status {
+    clear_error(out_error);
+    let stmt = match stmt_from_ptr(stmt, out_error) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+
+    stmt.current_row = None;
+    if stmt.next_row >= stmt.rows.len() {
+        return NERVUSDB_DONE;
+    }
+
+    stmt.current_row = Some(stmt.next_row);
+    stmt.next_row += 1;
+    NERVUSDB_ROW
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nervusdb_column_count(stmt: *mut nervusdb_stmt) -> i32 {
+    if stmt.is_null() {
+        return 0;
+    }
+    let stmt = unsafe { &*(stmt as *mut CypherStatement) };
+    i32::try_from(stmt.columns.len()).unwrap_or(i32::MAX)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nervusdb_column_name(
+    stmt: *mut nervusdb_stmt,
+    column: i32,
+) -> *const c_char {
+    if stmt.is_null() {
+        return ptr::null();
+    }
+    let stmt = unsafe { &*(stmt as *mut CypherStatement) };
+    let idx = match usize::try_from(column) {
+        Ok(v) => v,
+        Err(_) => return ptr::null(),
+    };
+    stmt.columns
+        .get(idx)
+        .map(|s| s.as_ptr())
+        .unwrap_or(ptr::null())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nervusdb_column_type(
+    stmt: *mut nervusdb_stmt,
+    column: i32,
+) -> nervusdb_value_type {
+    if stmt.is_null() {
+        return NERVUSDB_VALUE_NULL;
+    }
+    let stmt = unsafe { &*(stmt as *mut CypherStatement) };
+    match stmt_cell(stmt, column) {
+        Some(StmtValue::Null) => NERVUSDB_VALUE_NULL,
+        Some(StmtValue::Text(_)) => NERVUSDB_VALUE_TEXT,
+        Some(StmtValue::Float(_)) => NERVUSDB_VALUE_FLOAT,
+        Some(StmtValue::Boolean(_)) => NERVUSDB_VALUE_BOOL,
+        Some(StmtValue::Node(_)) => NERVUSDB_VALUE_NODE,
+        Some(StmtValue::Relationship(_)) => NERVUSDB_VALUE_RELATIONSHIP,
+        None => NERVUSDB_VALUE_NULL,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nervusdb_column_text(
+    stmt: *mut nervusdb_stmt,
+    column: i32,
+) -> *const c_char {
+    if stmt.is_null() {
+        return ptr::null();
+    }
+    let stmt = unsafe { &*(stmt as *mut CypherStatement) };
+    match stmt_cell(stmt, column) {
+        Some(StmtValue::Text(bytes)) => bytes.as_ptr() as *const c_char,
+        _ => ptr::null(),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nervusdb_column_bytes(stmt: *mut nervusdb_stmt, column: i32) -> i32 {
+    if stmt.is_null() {
+        return 0;
+    }
+    let stmt = unsafe { &*(stmt as *mut CypherStatement) };
+    match stmt_cell(stmt, column) {
+        Some(StmtValue::Text(bytes)) => {
+            i32::try_from(bytes.len().saturating_sub(1)).unwrap_or(i32::MAX)
+        }
+        _ => 0,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nervusdb_column_double(stmt: *mut nervusdb_stmt, column: i32) -> f64 {
+    if stmt.is_null() {
+        return 0.0;
+    }
+    let stmt = unsafe { &*(stmt as *mut CypherStatement) };
+    match stmt_cell(stmt, column) {
+        Some(StmtValue::Float(v)) => *v,
+        _ => 0.0,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nervusdb_column_bool(stmt: *mut nervusdb_stmt, column: i32) -> i32 {
+    if stmt.is_null() {
+        return 0;
+    }
+    let stmt = unsafe { &*(stmt as *mut CypherStatement) };
+    match stmt_cell(stmt, column) {
+        Some(StmtValue::Boolean(v)) => i32::from(*v),
+        _ => 0,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nervusdb_column_node_id(stmt: *mut nervusdb_stmt, column: i32) -> u64 {
+    if stmt.is_null() {
+        return 0;
+    }
+    let stmt = unsafe { &*(stmt as *mut CypherStatement) };
+    match stmt_cell(stmt, column) {
+        Some(StmtValue::Node(id)) => *id,
+        _ => 0,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nervusdb_column_relationship(
+    stmt: *mut nervusdb_stmt,
+    column: i32,
+) -> nervusdb_relationship {
+    if stmt.is_null() {
+        return nervusdb_relationship::default();
+    }
+    let stmt = unsafe { &*(stmt as *mut CypherStatement) };
+    match stmt_cell(stmt, column) {
+        Some(StmtValue::Relationship(triple)) => nervusdb_relationship {
+            subject_id: triple.subject_id,
+            predicate_id: triple.predicate_id,
+            object_id: triple.object_id,
+        },
+        _ => nervusdb_relationship::default(),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nervusdb_finalize(stmt: *mut nervusdb_stmt) {
+    if stmt.is_null() {
+        return;
+    }
+    unsafe {
+        drop(Box::from_raw(stmt as *mut CypherStatement));
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nervusdb_free_error(err: *mut nervusdb_error) {
     if err.is_null() {
@@ -726,6 +1148,53 @@ mod tests {
             let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
             assert!(parsed.is_array());
             nervusdb_free_string(out_json);
+
+            // Statement API smoke
+            let query = CString::new("MATCH (a)-[r:knows]->(b) RETURN a, r, b").unwrap();
+            let mut stmt: *mut nervusdb_stmt = ptr::null_mut();
+            let status =
+                nervusdb_prepare_v2(db_ptr, query.as_ptr(), ptr::null(), &mut stmt, &mut err_ptr);
+            assert_eq!(status, NERVUSDB_OK);
+            assert!(err_ptr.is_null());
+            assert!(!stmt.is_null());
+
+            assert_eq!(nervusdb_column_count(stmt), 3);
+            assert_eq!(
+                CStr::from_ptr(nervusdb_column_name(stmt, 0)).to_string_lossy(),
+                "a"
+            );
+            assert_eq!(
+                CStr::from_ptr(nervusdb_column_name(stmt, 1)).to_string_lossy(),
+                "r"
+            );
+            assert_eq!(
+                CStr::from_ptr(nervusdb_column_name(stmt, 2)).to_string_lossy(),
+                "b"
+            );
+
+            let step = nervusdb_step(stmt, &mut err_ptr);
+            assert_eq!(step, NERVUSDB_ROW);
+            assert!(err_ptr.is_null());
+
+            assert_eq!(nervusdb_column_type(stmt, 0), NERVUSDB_VALUE_NODE);
+            assert_eq!(nervusdb_column_type(stmt, 1), NERVUSDB_VALUE_RELATIONSHIP);
+            assert_eq!(nervusdb_column_type(stmt, 2), NERVUSDB_VALUE_NODE);
+
+            let a_id = nervusdb_column_node_id(stmt, 0);
+            let b_id = nervusdb_column_node_id(stmt, 2);
+            assert_eq!(a_id, alice);
+            assert_eq!(b_id, bob);
+
+            let rel = nervusdb_column_relationship(stmt, 1);
+            assert_eq!(rel.subject_id, alice);
+            assert_eq!(rel.predicate_id, knows_id);
+            assert_eq!(rel.object_id, bob);
+
+            let step = nervusdb_step(stmt, &mut err_ptr);
+            assert_eq!(step, NERVUSDB_DONE);
+            assert!(err_ptr.is_null());
+
+            nervusdb_finalize(stmt);
 
             nervusdb_close(db_ptr);
             if !err_ptr.is_null() {
