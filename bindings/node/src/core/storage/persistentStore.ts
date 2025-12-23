@@ -99,13 +99,26 @@ export interface NativeDatabaseHandle {
   closeCursor(cursorId: number): void;
   hydrate(dictionary: string[], triples: NativeTriple[]): void;
   setNodeProperty(nodeId: number, json: string): void;
+  setNodePropertyDirect?(nodeId: number, properties: Record<string, unknown>): void;
   getNodeProperty(nodeId: number): string | null | undefined;
+  getNodePropertyDirect?(nodeId: number): Record<string, unknown> | null | undefined;
   setEdgeProperty(subjectId: number, predicateId: number, objectId: number, json: string): void;
+  setEdgePropertyDirect?(
+    subjectId: number,
+    predicateId: number,
+    objectId: number,
+    properties: Record<string, unknown>,
+  ): void;
   getEdgeProperty(
     subjectId: number,
     predicateId: number,
     objectId: number,
   ): string | null | undefined;
+  getEdgePropertyDirect?(
+    subjectId: number,
+    predicateId: number,
+    objectId: number,
+  ): Record<string, unknown> | null | undefined;
   beginTransaction(): void;
   commitTransaction(): void;
   abortTransaction(): void;
@@ -291,11 +304,20 @@ export class PersistentStore {
 
   setNodeProperties(nodeId: number, properties: Record<string, unknown>): void {
     this.ensureOpen();
-    this.native.setNodeProperty(nodeId, JSON.stringify(properties));
+    // v1.1: Use direct method if available (bypasses JSON serialization)
+    if (this.native.setNodePropertyDirect) {
+      this.native.setNodePropertyDirect(nodeId, properties);
+    } else {
+      this.native.setNodeProperty(nodeId, JSON.stringify(properties));
+    }
   }
 
   getNodeProperties(nodeId: number): Record<string, unknown> | undefined {
     this.ensureOpen();
+    // v1.1: Use direct method if available (bypasses JSON parsing)
+    if (this.native.getNodePropertyDirect) {
+      return this.native.getNodePropertyDirect(nodeId) ?? undefined;
+    }
     const json = this.native.getNodeProperty(nodeId);
     return json ? JSON.parse(json) : undefined;
   }
@@ -315,21 +337,26 @@ export class PersistentStore {
     properties?: Record<string, unknown>,
   ): void {
     this.ensureOpen();
+    let s: number, p: number, o: number, props: Record<string, unknown>;
+
     if (typeof keyOrSubjectId === 'object') {
-      // TripleKey overload
       const key = keyOrSubjectId as TripleKey;
-      const props = propertiesOrPredicateId as Record<string, unknown>;
-      this.native.setEdgeProperty(
-        key.subjectId,
-        key.predicateId,
-        key.objectId,
-        JSON.stringify(props),
-      );
+      s = key.subjectId;
+      p = key.predicateId;
+      o = key.objectId;
+      props = propertiesOrPredicateId as Record<string, unknown>;
     } else {
-      // Individual parameters
-      const subjectId = keyOrSubjectId;
-      const predicateId = propertiesOrPredicateId as number;
-      this.native.setEdgeProperty(subjectId, predicateId, objectId!, JSON.stringify(properties!));
+      s = keyOrSubjectId;
+      p = propertiesOrPredicateId as number;
+      o = objectId!;
+      props = properties!;
+    }
+
+    // v1.1: Use direct method if available (bypasses JSON serialization)
+    if (this.native.setEdgePropertyDirect) {
+      this.native.setEdgePropertyDirect(s, p, o, props);
+    } else {
+      this.native.setEdgeProperty(s, p, o, JSON.stringify(props));
     }
   }
 
@@ -348,18 +375,20 @@ export class PersistentStore {
     let s: number, p: number, o: number;
 
     if (typeof keyOrSubjectId === 'object') {
-      // TripleKey overload
       const key = keyOrSubjectId as TripleKey;
       s = key.subjectId;
       p = key.predicateId;
       o = key.objectId;
     } else {
-      // Individual parameters
       s = keyOrSubjectId;
       p = predicateId!;
       o = objectId!;
     }
 
+    // v1.1: Use direct method if available (bypasses JSON parsing)
+    if (this.native.getEdgePropertyDirect) {
+      return this.native.getEdgePropertyDirect(s, p, o) ?? undefined;
+    }
     const json = this.native.getEdgeProperty(s, p, o);
     return json ? JSON.parse(json) : undefined;
   }

@@ -17,3 +17,4 @@
 | T15 | 真流式 Cypher 执行器（替换伪流式 Vec 预加载） | L3 | P0 | Done | - | Phase 1+2 完成：延迟执行 + StreamingQueryIterator；所有 warnings 已清理 |
 | T16 | 代码清理：删除 _archive + 统一命名 | L1 | P1 | Done | - | 删除 `_archive/`；`synapseDb.ts` → `nervusDb.ts`；删除冗余 `lock.ts` |
 | T17 | 真流式执行器（消除 collect） | L3 | P0 | Done | feat/T17-arc-database | Arc<Database> 包装 + execute_streaming 返回 'static 迭代器；FFI 层无 collect() |
+| T18 | Node.js 属性写入优化 - 消除 JSON 序列化 | L2 | P0 | Done | feat/T18-msgpack-properties | 添加 *Direct 方法，直接传 JS Object，跳过 JSON.stringify/parse |

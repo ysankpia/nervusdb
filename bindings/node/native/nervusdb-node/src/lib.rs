@@ -1077,6 +1077,37 @@ impl DatabaseHandle {
         db.set_node_property(id, &json).map_err(map_error)
     }
 
+    /// Set node properties directly from JS object (v1.1 - bypasses JSON string)
+    #[napi(js_name = "setNodePropertyDirect")]
+    pub fn set_node_property_direct(
+        &self,
+        node_id: BigInt,
+        properties: serde_json::Value,
+    ) -> NapiResult<()> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| napi::Error::new(Status::GenericFailure, "database mutex poisoned"))?;
+        let db = guard
+            .as_mut()
+            .ok_or_else(|| napi::Error::new(Status::GenericFailure, "database already closed"))?;
+        let (_, id, _) = node_id.get_u64();
+
+        // Convert serde_json::Value to HashMap and serialize to FlexBuffers
+        let props: std::collections::HashMap<String, serde_json::Value> = match properties {
+            serde_json::Value::Object(map) => map.into_iter().collect(),
+            _ => {
+                return Err(napi::Error::new(
+                    Status::InvalidArg,
+                    "properties must be an object",
+                ))
+            }
+        };
+        let binary =
+            nervusdb_core::storage::property::serialize_properties(&props).map_err(map_error)?;
+        db.set_node_property_binary(id, &binary).map_err(map_error)
+    }
+
     #[napi(js_name = "getNodeProperty")]
     pub fn get_node_property(&self, node_id: BigInt) -> NapiResult<Option<String>> {
         let guard = self
@@ -1088,6 +1119,30 @@ impl DatabaseHandle {
             .ok_or_else(|| napi::Error::new(Status::GenericFailure, "database already closed"))?;
         let (_, id, _) = node_id.get_u64();
         db.get_node_property(id).map_err(map_error)
+    }
+
+    /// Get node properties directly as JS object (v1.1 - bypasses JSON string)
+    #[napi(js_name = "getNodePropertyDirect")]
+    pub fn get_node_property_direct(
+        &self,
+        node_id: BigInt,
+    ) -> NapiResult<Option<serde_json::Value>> {
+        let guard = self
+            .inner
+            .lock()
+            .map_err(|_| napi::Error::new(Status::GenericFailure, "database mutex poisoned"))?;
+        let db = guard
+            .as_ref()
+            .ok_or_else(|| napi::Error::new(Status::GenericFailure, "database already closed"))?;
+        let (_, id, _) = node_id.get_u64();
+
+        if let Some(binary) = db.get_node_property_binary(id).map_err(map_error)? {
+            let props = nervusdb_core::storage::property::deserialize_properties(&binary)
+                .map_err(map_error)?;
+            Ok(Some(serde_json::Value::Object(props.into_iter().collect())))
+        } else {
+            Ok(None)
+        }
     }
 
     #[napi(js_name = "setEdgeProperty")]
@@ -1111,6 +1166,41 @@ impl DatabaseHandle {
         db.set_edge_property(s, p, o, &json).map_err(map_error)
     }
 
+    /// Set edge properties directly from JS object (v1.1 - bypasses JSON string)
+    #[napi(js_name = "setEdgePropertyDirect")]
+    pub fn set_edge_property_direct(
+        &self,
+        subject_id: BigInt,
+        predicate_id: BigInt,
+        object_id: BigInt,
+        properties: serde_json::Value,
+    ) -> NapiResult<()> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| napi::Error::new(Status::GenericFailure, "database mutex poisoned"))?;
+        let db = guard
+            .as_mut()
+            .ok_or_else(|| napi::Error::new(Status::GenericFailure, "database already closed"))?;
+        let (_, s, _) = subject_id.get_u64();
+        let (_, p, _) = predicate_id.get_u64();
+        let (_, o, _) = object_id.get_u64();
+
+        let props: std::collections::HashMap<String, serde_json::Value> = match properties {
+            serde_json::Value::Object(map) => map.into_iter().collect(),
+            _ => {
+                return Err(napi::Error::new(
+                    Status::InvalidArg,
+                    "properties must be an object",
+                ))
+            }
+        };
+        let binary =
+            nervusdb_core::storage::property::serialize_properties(&props).map_err(map_error)?;
+        db.set_edge_property_binary(s, p, o, &binary)
+            .map_err(map_error)
+    }
+
     #[napi(js_name = "getEdgeProperty")]
     pub fn get_edge_property(
         &self,
@@ -1129,6 +1219,34 @@ impl DatabaseHandle {
         let (_, p, _) = predicate_id.get_u64();
         let (_, o, _) = object_id.get_u64();
         db.get_edge_property(s, p, o).map_err(map_error)
+    }
+
+    /// Get edge properties directly as JS object (v1.1 - bypasses JSON string)
+    #[napi(js_name = "getEdgePropertyDirect")]
+    pub fn get_edge_property_direct(
+        &self,
+        subject_id: BigInt,
+        predicate_id: BigInt,
+        object_id: BigInt,
+    ) -> NapiResult<Option<serde_json::Value>> {
+        let guard = self
+            .inner
+            .lock()
+            .map_err(|_| napi::Error::new(Status::GenericFailure, "database mutex poisoned"))?;
+        let db = guard
+            .as_ref()
+            .ok_or_else(|| napi::Error::new(Status::GenericFailure, "database already closed"))?;
+        let (_, s, _) = subject_id.get_u64();
+        let (_, p, _) = predicate_id.get_u64();
+        let (_, o, _) = object_id.get_u64();
+
+        if let Some(binary) = db.get_edge_property_binary(s, p, o).map_err(map_error)? {
+            let props = nervusdb_core::storage::property::deserialize_properties(&binary)
+                .map_err(map_error)?;
+            Ok(Some(serde_json::Value::Object(props.into_iter().collect())))
+        } else {
+            Ok(None)
+        }
     }
 
     #[napi]
