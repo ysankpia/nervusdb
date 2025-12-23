@@ -1146,3 +1146,62 @@ fn test_with_clause() {
         .unwrap();
     assert_eq!(results.len(), 3);
 }
+
+#[test]
+fn test_exists_pattern_predicate_filters_rows() {
+    let dir = tempdir().unwrap();
+    let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
+
+    let _ = db
+        .execute_query("CREATE (a:Person {name: \"Alice\"})-[:knows]->(b:Person {name: \"Bob\"})")
+        .unwrap();
+    let _ = db
+        .execute_query("CREATE (c:Person {name: \"Carol\"})")
+        .unwrap();
+
+    let results = db
+        .execute_query("MATCH (n:Person) WHERE EXISTS((n)-[:knows]->()) RETURN n")
+        .unwrap();
+    assert_eq!(results.len(), 1, "Expected only Alice to match EXISTS");
+    assert!(results[0].contains_key("n"));
+}
+
+#[test]
+fn test_exists_subquery_filters_rows() {
+    let dir = tempdir().unwrap();
+    let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
+
+    let _ = db
+        .execute_query("CREATE (a:Person {name: \"Alice\"})-[:knows]->(b:Person {name: \"Bob\"})")
+        .unwrap();
+    let _ = db
+        .execute_query("CREATE (c:Person {name: \"Carol\"})")
+        .unwrap();
+
+    let results = db
+        .execute_query("MATCH (n:Person) WHERE EXISTS { MATCH (n)-[:knows]->() } RETURN n")
+        .unwrap();
+    assert_eq!(
+        results.len(),
+        1,
+        "Expected only Alice to match EXISTS subquery"
+    );
+    assert!(results[0].contains_key("n"));
+}
+
+#[test]
+fn test_call_subquery_standalone_returns_results() {
+    let dir = tempdir().unwrap();
+    let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
+
+    let _ = db
+        .execute_query("CREATE (a:Person {name: \"Alice\"})-[:knows]->(b:Person {name: \"Bob\"})")
+        .unwrap();
+
+    let results = db
+        .execute_query("CALL { MATCH (n:Person) RETURN n LIMIT 1 }")
+        .unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert!(results[0].contains_key("n"));
+}

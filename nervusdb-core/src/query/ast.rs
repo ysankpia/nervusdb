@@ -10,6 +10,7 @@ pub enum Clause {
     Match(MatchClause),
     Create(CreateClause),
     Merge(MergeClause),
+    Call(CallClause),
     Return(ReturnClause),
     Where(WhereClause),
     With(WithClause),
@@ -33,6 +34,11 @@ pub struct CreateClause {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MergeClause {
     pub pattern: Pattern,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CallClause {
+    pub query: Query,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -165,9 +171,16 @@ pub enum Expression {
     Unary(Box<UnaryExpression>),
     FunctionCall(FunctionCall),
     Case(Box<CaseExpression>),
+    Exists(Box<ExistsExpression>),
     List(Vec<Expression>),
     Map(PropertyMap),
     Parameter(String), // $param
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ExistsExpression {
+    Pattern(Pattern),
+    Subquery(Query),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

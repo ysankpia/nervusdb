@@ -10,7 +10,10 @@
 //! 3. 基础统计信息支持 Join 顺序优化
 
 use crate::error::Error;
-use crate::query::ast::{BinaryOperator, Direction, Expression, Literal, RelationshipDirection};
+use crate::query::ast::{
+    BinaryOperator, Clause, Direction, ExistsExpression, Expression, Literal, PathElement, Pattern,
+    PropertyMap, RelationshipDirection, RelationshipPattern,
+};
 use crate::query::planner::{
     AggregateFunction, AggregateNode, ExpandNode, ExpandVarLengthNode, FilterNode,
     LeftOuterJoinNode, LimitNode, NestedLoopJoinNode, PhysicalPlan, ProjectNode, ScanNode,
@@ -848,6 +851,9 @@ fn evaluate_expression_value_streaming(
                 None => Value::Null,
             }
         }
+        Expression::Exists(exists_expr) => {
+            Value::Boolean(evaluate_exists_streaming(exists_expr.as_ref(), record, ctx))
+        }
         Expression::FunctionCall(func) => match func.name.to_lowercase().as_str() {
             "id" => match func
                 .arguments
@@ -927,6 +933,440 @@ fn evaluate_expression_value_streaming(
         },
         _ => Value::Null,
     }
+}
+
+fn evaluate_exists_streaming(
+    exists_expr: &ExistsExpression,
+    record: &Record,
+    ctx: &ArcExecutionContext,
+) -> bool {
+    match exists_expr {
+        ExistsExpression::Pattern(pattern) => {
+            exists_match_pattern_streaming(pattern, None, record, ctx)
+        }
+        ExistsExpression::Subquery(query) => {
+            let (pattern, where_expr) = match extract_exists_match_query(query) {
+                Some(v) => v,
+                None => return false,
+            };
+            exists_match_pattern_streaming(pattern, where_expr, record, ctx)
+        }
+    }
+}
+
+fn exists_match_pattern_streaming(
+    pattern: &Pattern,
+    where_expr: Option<&Expression>,
+    outer_record: &Record,
+    ctx: &ArcExecutionContext,
+) -> bool {
+    let Some(PathElement::Node(start_node)) = pattern.elements.first() else {
+        return false;
+    };
+
+    if let Some(var) = &start_node.variable
+        && let Some(Value::Node(start_id)) = outer_record.get(var)
+    {
+        if !node_satisfies_streaming(*start_id, start_node, outer_record, ctx) {
+            return false;
+        }
+        return exists_path_from_node_streaming(
+            pattern,
+            0,
+            *start_id,
+            outer_record,
+            where_expr,
+            ctx,
+        );
+    }
+
+    // Fallback: evaluate as an uncorrelated MATCH query and check if any result exists.
+    exists_uncorrelated_match_streaming(pattern, where_expr, ctx)
+}
+
+fn exists_uncorrelated_match_streaming(
+    pattern: &Pattern,
+    where_expr: Option<&Expression>,
+    ctx: &ArcExecutionContext,
+) -> bool {
+    use crate::query::ast::{MatchClause, Query, ReturnClause, ReturnItem, WhereClause};
+    use crate::query::planner::QueryPlanner;
+
+    let mut clauses: Vec<Clause> = Vec::new();
+    clauses.push(Clause::Match(MatchClause {
+        optional: false,
+        pattern: pattern.clone(),
+    }));
+    if let Some(expr) = where_expr.cloned() {
+        clauses.push(Clause::Where(WhereClause { expression: expr }));
+    }
+    clauses.push(Clause::Return(ReturnClause {
+        distinct: false,
+        items: vec![ReturnItem {
+            expression: Expression::Literal(Literal::Integer(1)),
+            alias: Some("_exists".to_string()),
+        }],
+        order_by: None,
+        limit: Some(1),
+        skip: None,
+    }));
+
+    let planner = QueryPlanner::new();
+    let plan = match planner.plan(Query { clauses }) {
+        Ok(plan) => plan,
+        Err(_) => return false,
+    };
+
+    let exec_ctx = ExecutionContext {
+        db: ctx.db.as_ref(),
+        params: ctx.params.as_ref(),
+    };
+    match plan.execute(&exec_ctx) {
+        Ok(mut iter) => iter.next().is_some(),
+        Err(_) => false,
+    }
+}
+
+fn exists_path_from_node_streaming(
+    pattern: &Pattern,
+    node_index: usize,
+    current_node_id: u64,
+    bindings: &Record,
+    where_expr: Option<&Expression>,
+    ctx: &ArcExecutionContext,
+) -> bool {
+    let next_rel_index = node_index + 1;
+    let next_node_index = node_index + 2;
+
+    if next_node_index >= pattern.elements.len() {
+        return where_expr.is_none_or(|expr| evaluate_expression_streaming(expr, bindings, ctx));
+    }
+
+    let PathElement::Relationship(rel) = &pattern.elements[next_rel_index] else {
+        return false;
+    };
+    let PathElement::Node(next_node) = &pattern.elements[next_node_index] else {
+        return false;
+    };
+
+    if rel.variable_length.is_some() {
+        return exists_var_length_step_streaming(
+            pattern,
+            next_node_index,
+            current_node_id,
+            rel,
+            bindings,
+            where_expr,
+            ctx,
+        );
+    }
+
+    for (triple, end_id) in iter_matching_edges(ctx.db.as_ref(), current_node_id, rel) {
+        let mut new_record = bindings.clone();
+
+        if let Some(rel_var) = &rel.variable {
+            match new_record.get(rel_var) {
+                Some(Value::Relationship(existing)) if existing == &triple => {}
+                Some(_) => continue,
+                None => new_record.insert(rel_var.clone(), Value::Relationship(triple)),
+            }
+        }
+
+        if let Some(props) = &rel.properties
+            && !edge_satisfies_streaming(&triple, props, &new_record, ctx)
+        {
+            continue;
+        }
+
+        if !node_satisfies_streaming(end_id, next_node, &new_record, ctx) {
+            continue;
+        }
+
+        if let Some(node_var) = &next_node.variable {
+            match new_record.get(node_var) {
+                Some(Value::Node(existing)) if *existing == end_id => {}
+                Some(_) => continue,
+                None => new_record.insert(node_var.clone(), Value::Node(end_id)),
+            }
+        }
+
+        if exists_path_from_node_streaming(
+            pattern,
+            next_node_index,
+            end_id,
+            &new_record,
+            where_expr,
+            ctx,
+        ) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn exists_var_length_step_streaming(
+    pattern: &Pattern,
+    next_node_index: usize,
+    current_node_id: u64,
+    rel: &RelationshipPattern,
+    bindings: &Record,
+    where_expr: Option<&Expression>,
+    ctx: &ArcExecutionContext,
+) -> bool {
+    let PathElement::Node(next_node) = &pattern.elements[next_node_index] else {
+        return false;
+    };
+    if rel.variable.is_some() || rel.properties.is_some() {
+        return false;
+    }
+    let Some(var_len) = &rel.variable_length else {
+        return false;
+    };
+    let min_hops = var_len.min.unwrap_or(1);
+    let Some(max_hops) = var_len.max else {
+        return false;
+    };
+
+    if rel.types.len() > 1 {
+        return false;
+    }
+
+    let rel_predicate_id = rel
+        .types
+        .first()
+        .and_then(|t| ctx.db.resolve_id(t).ok().flatten());
+
+    let reachable = find_reachable_nodes(
+        ctx.db.as_ref(),
+        current_node_id,
+        rel.direction.clone(),
+        rel_predicate_id,
+        min_hops,
+        max_hops,
+    );
+
+    for end_id in reachable {
+        let mut new_record = bindings.clone();
+
+        if !node_satisfies_streaming(end_id, next_node, &new_record, ctx) {
+            continue;
+        }
+
+        if let Some(node_var) = &next_node.variable {
+            match new_record.get(node_var) {
+                Some(Value::Node(existing)) if *existing == end_id => {}
+                Some(_) => continue,
+                None => new_record.insert(node_var.clone(), Value::Node(end_id)),
+            }
+        }
+
+        if exists_path_from_node_streaming(
+            pattern,
+            next_node_index,
+            end_id,
+            &new_record,
+            where_expr,
+            ctx,
+        ) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn node_satisfies_streaming(
+    node_id: u64,
+    node: &crate::query::ast::NodePattern,
+    bindings: &Record,
+    ctx: &ArcExecutionContext,
+) -> bool {
+    if let Some(var) = &node.variable
+        && let Some(Value::Node(bound)) = bindings.get(var)
+        && *bound != node_id
+    {
+        return false;
+    }
+
+    if !node.labels.is_empty() {
+        let Some(type_id) = ctx.db.resolve_id("type").ok().flatten() else {
+            return false;
+        };
+        for label in &node.labels {
+            let Some(label_id) = ctx.db.resolve_id(label).ok().flatten() else {
+                return false;
+            };
+            let criteria = QueryCriteria {
+                subject_id: Some(node_id),
+                predicate_id: Some(type_id),
+                object_id: Some(label_id),
+            };
+            if ctx.db.query(criteria).next().is_none() {
+                return false;
+            }
+        }
+    }
+
+    if let Some(props) = &node.properties
+        && !node_properties_match_streaming(node_id, props, bindings, ctx)
+    {
+        return false;
+    }
+
+    true
+}
+
+fn node_properties_match_streaming(
+    node_id: u64,
+    props: &PropertyMap,
+    bindings: &Record,
+    ctx: &ArcExecutionContext,
+) -> bool {
+    if props.properties.is_empty() {
+        return true;
+    }
+    let Ok(Some(binary)) = ctx.db.get_node_property_binary(node_id) else {
+        return false;
+    };
+    let Ok(stored) = crate::storage::property::deserialize_properties(&binary) else {
+        return false;
+    };
+
+    for pair in &props.properties {
+        let expected = evaluate_expression_value_streaming(&pair.value, bindings, ctx);
+        let Some(actual) = stored.get(&pair.key) else {
+            return false;
+        };
+        if !json_value_matches_executor_value(actual, &expected) {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn edge_satisfies_streaming(
+    triple: &Triple,
+    props: &PropertyMap,
+    bindings: &Record,
+    ctx: &ArcExecutionContext,
+) -> bool {
+    if props.properties.is_empty() {
+        return true;
+    }
+    let Ok(Some(binary)) =
+        ctx.db
+            .get_edge_property_binary(triple.subject_id, triple.predicate_id, triple.object_id)
+    else {
+        return false;
+    };
+    let Ok(stored) = crate::storage::property::deserialize_properties(&binary) else {
+        return false;
+    };
+
+    for pair in &props.properties {
+        let expected = evaluate_expression_value_streaming(&pair.value, bindings, ctx);
+        let Some(actual) = stored.get(&pair.key) else {
+            return false;
+        };
+        if !json_value_matches_executor_value(actual, &expected) {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn json_value_matches_executor_value(actual: &serde_json::Value, expected: &Value) -> bool {
+    match expected {
+        Value::Null => actual.is_null(),
+        Value::String(s) => actual.as_str() == Some(s.as_str()),
+        Value::Boolean(b) => actual.as_bool() == Some(*b),
+        Value::Float(f) => actual.as_f64().map(|v| v == *f).unwrap_or(false),
+        _ => false,
+    }
+}
+
+fn iter_matching_edges(
+    db: &Database,
+    node_id: u64,
+    rel: &RelationshipPattern,
+) -> Vec<(Triple, u64)> {
+    let predicate_ids: Vec<u64> = rel
+        .types
+        .iter()
+        .filter_map(|t| db.resolve_id(t).ok().flatten())
+        .collect();
+
+    let predicate_ids: Vec<Option<u64>> = if predicate_ids.is_empty() && !rel.types.is_empty() {
+        // Types were specified but none resolved -> no matches.
+        return Vec::new();
+    } else if predicate_ids.is_empty() {
+        vec![None]
+    } else {
+        predicate_ids.into_iter().map(Some).collect()
+    };
+
+    let mut out = Vec::new();
+
+    for pred in predicate_ids {
+        match rel.direction {
+            RelationshipDirection::LeftToRight => {
+                let criteria = QueryCriteria {
+                    subject_id: Some(node_id),
+                    predicate_id: pred,
+                    object_id: None,
+                };
+                out.extend(db.query(criteria).map(|t| (t, t.object_id)));
+            }
+            RelationshipDirection::RightToLeft => {
+                let criteria = QueryCriteria {
+                    subject_id: None,
+                    predicate_id: pred,
+                    object_id: Some(node_id),
+                };
+                out.extend(db.query(criteria).map(|t| (t, t.subject_id)));
+            }
+            RelationshipDirection::Undirected => {
+                let out_criteria = QueryCriteria {
+                    subject_id: Some(node_id),
+                    predicate_id: pred,
+                    object_id: None,
+                };
+                out.extend(db.query(out_criteria).map(|t| (t, t.object_id)));
+
+                let in_criteria = QueryCriteria {
+                    subject_id: None,
+                    predicate_id: pred,
+                    object_id: Some(node_id),
+                };
+                out.extend(db.query(in_criteria).map(|t| (t, t.subject_id)));
+            }
+        }
+    }
+
+    out
+}
+
+fn extract_exists_match_query(
+    query: &crate::query::ast::Query,
+) -> Option<(&Pattern, Option<&Expression>)> {
+    use crate::query::ast::{Clause, WhereClause};
+
+    let mut match_pattern: Option<&Pattern> = None;
+    let mut where_expr: Option<&Expression> = None;
+
+    for clause in &query.clauses {
+        match clause {
+            Clause::Match(m) => match_pattern = Some(&m.pattern),
+            Clause::Where(WhereClause { expression }) => where_expr = Some(expression),
+            Clause::Return(_) => {}
+            _ => return None,
+        }
+    }
+
+    match_pattern.map(|p| (p, where_expr))
 }
 
 fn json_array_string(mut values: Vec<String>) -> Value {
@@ -2038,6 +2478,9 @@ pub fn evaluate_expression_value(
                 None => Value::Null,
             }
         }
+        Expression::Exists(exists_expr) => {
+            Value::Boolean(evaluate_exists(exists_expr.as_ref(), record, ctx))
+        }
         Expression::FunctionCall(func) => match func.name.to_lowercase().as_str() {
             "id" => match func
                 .arguments
@@ -2117,6 +2560,335 @@ pub fn evaluate_expression_value(
         },
         _ => Value::Null,
     }
+}
+
+fn evaluate_exists(
+    exists_expr: &ExistsExpression,
+    record: &Record,
+    ctx: &ExecutionContext,
+) -> bool {
+    match exists_expr {
+        ExistsExpression::Pattern(pattern) => exists_match_pattern(pattern, None, record, ctx),
+        ExistsExpression::Subquery(query) => {
+            let (pattern, where_expr) = match extract_exists_match_query(query) {
+                Some(v) => v,
+                None => return false,
+            };
+            exists_match_pattern(pattern, where_expr, record, ctx)
+        }
+    }
+}
+
+fn exists_match_pattern(
+    pattern: &Pattern,
+    where_expr: Option<&Expression>,
+    outer_record: &Record,
+    ctx: &ExecutionContext,
+) -> bool {
+    let Some(PathElement::Node(start_node)) = pattern.elements.first() else {
+        return false;
+    };
+
+    if let Some(var) = &start_node.variable
+        && let Some(Value::Node(start_id)) = outer_record.get(var)
+    {
+        if !node_satisfies(*start_id, start_node, outer_record, ctx) {
+            return false;
+        }
+        return exists_path_from_node(pattern, 0, *start_id, outer_record, where_expr, ctx);
+    }
+
+    exists_uncorrelated_match(pattern, where_expr, ctx)
+}
+
+fn exists_uncorrelated_match(
+    pattern: &Pattern,
+    where_expr: Option<&Expression>,
+    ctx: &ExecutionContext,
+) -> bool {
+    use crate::query::ast::{MatchClause, Query, ReturnClause, ReturnItem, WhereClause};
+    use crate::query::planner::QueryPlanner;
+
+    let mut clauses: Vec<Clause> = Vec::new();
+    clauses.push(Clause::Match(MatchClause {
+        optional: false,
+        pattern: pattern.clone(),
+    }));
+    if let Some(expr) = where_expr.cloned() {
+        clauses.push(Clause::Where(WhereClause { expression: expr }));
+    }
+    clauses.push(Clause::Return(ReturnClause {
+        distinct: false,
+        items: vec![ReturnItem {
+            expression: Expression::Literal(Literal::Integer(1)),
+            alias: Some("_exists".to_string()),
+        }],
+        order_by: None,
+        limit: Some(1),
+        skip: None,
+    }));
+
+    let planner = QueryPlanner::new();
+    let plan = match planner.plan(Query { clauses }) {
+        Ok(plan) => plan,
+        Err(_) => return false,
+    };
+
+    match plan.execute(ctx) {
+        Ok(mut iter) => iter.next().is_some(),
+        Err(_) => false,
+    }
+}
+
+fn exists_path_from_node(
+    pattern: &Pattern,
+    node_index: usize,
+    current_node_id: u64,
+    bindings: &Record,
+    where_expr: Option<&Expression>,
+    ctx: &ExecutionContext,
+) -> bool {
+    let next_rel_index = node_index + 1;
+    let next_node_index = node_index + 2;
+
+    if next_node_index >= pattern.elements.len() {
+        return where_expr.is_none_or(|expr| evaluate_expression(expr, bindings, ctx));
+    }
+
+    let PathElement::Relationship(rel) = &pattern.elements[next_rel_index] else {
+        return false;
+    };
+    let PathElement::Node(next_node) = &pattern.elements[next_node_index] else {
+        return false;
+    };
+
+    if rel.variable_length.is_some() {
+        return exists_var_length_step(
+            pattern,
+            next_node_index,
+            current_node_id,
+            rel,
+            bindings,
+            where_expr,
+            ctx,
+        );
+    }
+
+    for (triple, end_id) in iter_matching_edges(ctx.db, current_node_id, rel) {
+        let mut new_record = bindings.clone();
+
+        if let Some(rel_var) = &rel.variable {
+            match new_record.get(rel_var) {
+                Some(Value::Relationship(existing)) if existing == &triple => {}
+                Some(_) => continue,
+                None => new_record.insert(rel_var.clone(), Value::Relationship(triple)),
+            }
+        }
+
+        if let Some(props) = &rel.properties
+            && !edge_satisfies(&triple, props, &new_record, ctx)
+        {
+            continue;
+        }
+
+        if !node_satisfies(end_id, next_node, &new_record, ctx) {
+            continue;
+        }
+
+        if let Some(node_var) = &next_node.variable {
+            match new_record.get(node_var) {
+                Some(Value::Node(existing)) if *existing == end_id => {}
+                Some(_) => continue,
+                None => new_record.insert(node_var.clone(), Value::Node(end_id)),
+            }
+        }
+
+        if exists_path_from_node(
+            pattern,
+            next_node_index,
+            end_id,
+            &new_record,
+            where_expr,
+            ctx,
+        ) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn exists_var_length_step(
+    pattern: &Pattern,
+    next_node_index: usize,
+    current_node_id: u64,
+    rel: &RelationshipPattern,
+    bindings: &Record,
+    where_expr: Option<&Expression>,
+    ctx: &ExecutionContext,
+) -> bool {
+    let PathElement::Node(next_node) = &pattern.elements[next_node_index] else {
+        return false;
+    };
+    if rel.variable.is_some() || rel.properties.is_some() {
+        return false;
+    }
+    let Some(var_len) = &rel.variable_length else {
+        return false;
+    };
+    let min_hops = var_len.min.unwrap_or(1);
+    let Some(max_hops) = var_len.max else {
+        return false;
+    };
+
+    if rel.types.len() > 1 {
+        return false;
+    }
+
+    let rel_predicate_id = rel
+        .types
+        .first()
+        .and_then(|t| ctx.db.resolve_id(t).ok().flatten());
+
+    let reachable = find_reachable_nodes(
+        ctx.db,
+        current_node_id,
+        rel.direction.clone(),
+        rel_predicate_id,
+        min_hops,
+        max_hops,
+    );
+
+    for end_id in reachable {
+        let mut new_record = bindings.clone();
+
+        if !node_satisfies(end_id, next_node, &new_record, ctx) {
+            continue;
+        }
+
+        if let Some(node_var) = &next_node.variable {
+            match new_record.get(node_var) {
+                Some(Value::Node(existing)) if *existing == end_id => {}
+                Some(_) => continue,
+                None => new_record.insert(node_var.clone(), Value::Node(end_id)),
+            }
+        }
+
+        if exists_path_from_node(
+            pattern,
+            next_node_index,
+            end_id,
+            &new_record,
+            where_expr,
+            ctx,
+        ) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn node_satisfies(
+    node_id: u64,
+    node: &crate::query::ast::NodePattern,
+    bindings: &Record,
+    ctx: &ExecutionContext,
+) -> bool {
+    if let Some(var) = &node.variable
+        && let Some(Value::Node(bound)) = bindings.get(var)
+        && *bound != node_id
+    {
+        return false;
+    }
+
+    if !node.labels.is_empty() {
+        let Some(type_id) = ctx.db.resolve_id("type").ok().flatten() else {
+            return false;
+        };
+        for label in &node.labels {
+            let Some(label_id) = ctx.db.resolve_id(label).ok().flatten() else {
+                return false;
+            };
+            let criteria = QueryCriteria {
+                subject_id: Some(node_id),
+                predicate_id: Some(type_id),
+                object_id: Some(label_id),
+            };
+            if ctx.db.query(criteria).next().is_none() {
+                return false;
+            }
+        }
+    }
+
+    if let Some(props) = &node.properties
+        && !node_properties_match(node_id, props, bindings, ctx)
+    {
+        return false;
+    }
+
+    true
+}
+
+fn node_properties_match(
+    node_id: u64,
+    props: &PropertyMap,
+    bindings: &Record,
+    ctx: &ExecutionContext,
+) -> bool {
+    if props.properties.is_empty() {
+        return true;
+    }
+    let Ok(Some(binary)) = ctx.db.get_node_property_binary(node_id) else {
+        return false;
+    };
+    let Ok(stored) = crate::storage::property::deserialize_properties(&binary) else {
+        return false;
+    };
+
+    for pair in &props.properties {
+        let expected = evaluate_expression_value(&pair.value, bindings, ctx);
+        let Some(actual) = stored.get(&pair.key) else {
+            return false;
+        };
+        if !json_value_matches_executor_value(actual, &expected) {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn edge_satisfies(
+    triple: &Triple,
+    props: &PropertyMap,
+    bindings: &Record,
+    ctx: &ExecutionContext,
+) -> bool {
+    if props.properties.is_empty() {
+        return true;
+    }
+    let Ok(Some(binary)) =
+        ctx.db
+            .get_edge_property_binary(triple.subject_id, triple.predicate_id, triple.object_id)
+    else {
+        return false;
+    };
+    let Ok(stored) = crate::storage::property::deserialize_properties(&binary) else {
+        return false;
+    };
+
+    for pair in &props.properties {
+        let expected = evaluate_expression_value(&pair.value, bindings, ctx);
+        let Some(actual) = stored.get(&pair.key) else {
+            return false;
+        };
+        if !json_value_matches_executor_value(actual, &expected) {
+            return false;
+        }
+    }
+
+    true
 }
 
 #[cfg(test)]

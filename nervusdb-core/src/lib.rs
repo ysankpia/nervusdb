@@ -361,6 +361,20 @@ impl Database {
         use query::executor::{ExecutionContext, ExecutionPlan};
         use query::planner::QueryPlanner;
 
+        // Handle CALL { ... } queries directly (simplified: only standalone CALL for MVP).
+        if query.clauses.len() == 1
+            && let Clause::Call(call_clause) = &query.clauses[0]
+        {
+            return self.execute_parsed_query_with_params(call_clause.query.clone(), param_values);
+        }
+        if query
+            .clauses
+            .iter()
+            .any(|clause| matches!(clause, Clause::Call(_)))
+        {
+            return Err(Error::NotImplemented("CALL with other clauses"));
+        }
+
         if query
             .clauses
             .iter()

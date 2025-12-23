@@ -68,7 +68,6 @@ impl TokenParser {
         match &self.peek().token_type {
             TokenType::Remove => return Err(Error::NotImplemented("REMOVE")),
             TokenType::Unwind => return Err(Error::NotImplemented("UNWIND")),
-            TokenType::Call => return Err(Error::NotImplemented("CALL")),
             TokenType::Foreach => return Err(Error::NotImplemented("FOREACH")),
             _ => {}
         }
@@ -85,6 +84,9 @@ impl TokenParser {
         }
         if self.match_token(&TokenType::Merge) {
             return Ok(Some(Clause::Merge(self.parse_merge()?)));
+        }
+        if self.match_token(&TokenType::Call) {
+            return Ok(Some(Clause::Call(self.parse_call()?)));
         }
         if self.match_token(&TokenType::Return) {
             return Ok(Some(Clause::Return(self.parse_return()?)));
@@ -107,6 +109,15 @@ impl TokenParser {
         }
 
         Ok(None)
+    }
+
+    fn parse_call(&mut self) -> Result<CallClause, Error> {
+        if !self.check(&TokenType::LeftBrace) {
+            return Err(Error::NotImplemented("CALL (procedure)"));
+        }
+
+        let query = self.parse_braced_subquery()?;
+        Ok(CallClause { query })
     }
 
     fn parse_match(&mut self) -> Result<MatchClause, Error> {
@@ -745,8 +756,93 @@ impl TokenParser {
                 self.advance(); // consume CASE
                 Ok(Expression::Case(Box::new(self.parse_case_expression()?)))
             }
+            TokenType::Exists => {
+                self.advance(); // consume EXISTS
+
+                if self.match_token(&TokenType::LeftParen) {
+                    let pattern = self.parse_pattern()?;
+                    self.consume(&TokenType::RightParen, "Expected ')' after EXISTS(pattern)")?;
+                    return Ok(Expression::Exists(Box::new(ExistsExpression::Pattern(
+                        pattern,
+                    ))));
+                }
+
+                if self.check(&TokenType::LeftBrace) {
+                    let query = self.parse_braced_subquery()?;
+                    self.validate_exists_subquery(&query)?;
+                    return Ok(Expression::Exists(Box::new(ExistsExpression::Subquery(
+                        query,
+                    ))));
+                }
+
+                Err(Error::Other("Expected '(' or '{' after EXISTS".to_string()))
+            }
             _ => Err(Error::Other(format!("Unexpected token {:?}", token))),
         }
+    }
+
+    fn parse_braced_subquery(&mut self) -> Result<Query, Error> {
+        self.consume(&TokenType::LeftBrace, "Expected '{'")?;
+
+        let mut depth: usize = 1;
+        let mut inner_tokens: Vec<Token> = Vec::new();
+
+        while depth > 0 {
+            if self.is_at_end() {
+                return Err(Error::Other("Unterminated subquery '{'".to_string()));
+            }
+
+            let token = self.advance().clone();
+            match token.token_type {
+                TokenType::LeftBrace => {
+                    depth += 1;
+                    inner_tokens.push(token);
+                }
+                TokenType::RightBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                    inner_tokens.push(token);
+                }
+                _ => inner_tokens.push(token),
+            }
+        }
+
+        inner_tokens.push(Token {
+            token_type: TokenType::Eof,
+            line: 0,
+            column: 0,
+        });
+
+        let mut sub_parser = TokenParser::new(inner_tokens);
+        sub_parser.parse_query()
+    }
+
+    fn validate_exists_subquery(&self, query: &Query) -> Result<(), Error> {
+        use crate::query::ast::Clause;
+
+        let mut match_count = 0usize;
+        for clause in &query.clauses {
+            match clause {
+                Clause::Match(m) => {
+                    if m.optional {
+                        return Err(Error::NotImplemented("EXISTS with OPTIONAL MATCH"));
+                    }
+                    match_count += 1;
+                }
+                Clause::Where(_) | Clause::Return(_) => {}
+                _ => return Err(Error::NotImplemented("EXISTS subquery clause")),
+            }
+        }
+
+        if match_count != 1 {
+            return Err(Error::NotImplemented(
+                "EXISTS subquery requires exactly one MATCH",
+            ));
+        }
+
+        Ok(())
     }
 
     fn parse_case_expression(&mut self) -> Result<CaseExpression, Error> {
