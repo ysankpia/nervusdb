@@ -758,15 +758,25 @@ mod tests {
         db.add_fact(Fact::new("Alice", "KNOWS", "Bob")).unwrap();
         db.add_fact(Fact::new("Bob", "KNOWS", "Charlie")).unwrap();
         db.add_fact(Fact::new("Charlie", "KNOWS", "Dylan")).unwrap();
+        db.add_fact(Fact::new("Alice", "type", "Person")).unwrap();
 
-        let err = db
-            .execute_query("MATCH (start)-[:KNOWS*1..2]->(end) WHERE start = 'Alice' RETURN end")
-            .unwrap_err();
-        assert!(format!("{err}").contains("Expected ']'"));
+        let res = db
+            .execute_query("MATCH (start:Person)-[:KNOWS*1..2]->(dst) RETURN dst")
+            .unwrap();
+        let mut ends: Vec<String> = res
+            .iter()
+            .filter_map(|row| match row.get("dst") {
+                Some(crate::query::executor::Value::Node(id)) => db.resolve_str(*id).unwrap(),
+                _ => None,
+            })
+            .collect();
+        ends.sort();
+        ends.dedup();
+        assert_eq!(ends, vec!["Bob".to_string(), "Charlie".to_string()]);
 
         let err = db
             .execute_query("MATCH (a)-[p*1..2]->(b) RETURN b")
             .unwrap_err();
-        assert!(format!("{err}").contains("Expected ']'"));
+        assert!(matches!(err, crate::Error::NotImplemented(_)));
     }
 }

@@ -14,6 +14,7 @@ pub enum PhysicalPlan {
     NestedLoopJoin(NestedLoopJoinNode),
     LeftOuterJoin(LeftOuterJoinNode),
     Expand(ExpandNode),
+    ExpandVarLength(ExpandVarLengthNode),
     Create(CreateNode),
     Set(SetNode),
     Delete(DeleteNode),
@@ -94,6 +95,17 @@ pub struct ExpandNode {
     pub end_node_alias: String,
     pub direction: RelationshipDirection,
     pub rel_type: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExpandVarLengthNode {
+    pub input: Box<PhysicalPlan>,
+    pub start_node_alias: String,
+    pub end_node_alias: String,
+    pub direction: RelationshipDirection,
+    pub rel_type: Option<String>,
+    pub min_hops: u32,
+    pub max_hops: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -466,6 +478,14 @@ impl QueryPlanner {
                     last_node_alias = Some(alias);
                 }
                 PathElement::Relationship(rel) => {
+                    let RelationshipPattern {
+                        variable,
+                        types,
+                        direction,
+                        properties,
+                        variable_length,
+                    } = rel;
+
                     // Expect next element to be a Node
                     if let Some(PathElement::Node(next_node)) = elements.next() {
                         let start_alias = last_node_alias.ok_or_else(|| {
@@ -475,20 +495,50 @@ impl QueryPlanner {
                             anon_idx += 1;
                             format!("_anon{}", anon_idx)
                         });
-                        let rel_alias = rel.variable.unwrap_or_else(|| "rel".to_string()); // Default alias if none
 
                         let current_plan = plan.ok_or_else(|| {
                             Error::Other("Relationship without start node plan".to_string())
                         })?;
 
-                        plan = Some(PhysicalPlan::Expand(ExpandNode {
-                            input: Box::new(current_plan),
-                            start_node_alias: start_alias,
-                            rel_alias,
-                            end_node_alias: end_alias.clone(),
-                            direction: rel.direction,
-                            rel_type: rel.types.first().cloned(), // TODO: Handle multiple types
-                        }));
+                        plan = if let Some(var_len) = variable_length {
+                            if variable.is_some() {
+                                return Err(Error::NotImplemented(
+                                    "variable-length relationship variables",
+                                ));
+                            }
+                            if properties.is_some() {
+                                return Err(Error::NotImplemented(
+                                    "variable-length relationship properties",
+                                ));
+                            }
+
+                            let min_hops = var_len.min.unwrap_or(1);
+                            let Some(max_hops) = var_len.max else {
+                                return Err(Error::NotImplemented(
+                                    "variable-length relationships without max",
+                                ));
+                            };
+
+                            Some(PhysicalPlan::ExpandVarLength(ExpandVarLengthNode {
+                                input: Box::new(current_plan),
+                                start_node_alias: start_alias,
+                                end_node_alias: end_alias.clone(),
+                                direction,
+                                rel_type: types.first().cloned(), // TODO: Handle multiple types
+                                min_hops,
+                                max_hops,
+                            }))
+                        } else {
+                            let rel_alias = variable.unwrap_or_else(|| "rel".to_string());
+                            Some(PhysicalPlan::Expand(ExpandNode {
+                                input: Box::new(current_plan),
+                                start_node_alias: start_alias,
+                                rel_alias,
+                                end_node_alias: end_alias.clone(),
+                                direction,
+                                rel_type: types.first().cloned(), // TODO: Handle multiple types
+                            }))
+                        };
 
                         last_node_alias = Some(end_alias);
                     } else {
@@ -573,6 +623,12 @@ impl QueryPlanner {
                 let mut out = Self::extract_plan_output_aliases(&node.input);
                 out.insert(node.start_node_alias.clone());
                 out.insert(node.rel_alias.clone());
+                out.insert(node.end_node_alias.clone());
+                out
+            }
+            PhysicalPlan::ExpandVarLength(node) => {
+                let mut out = Self::extract_plan_output_aliases(&node.input);
+                out.insert(node.start_node_alias.clone());
                 out.insert(node.end_node_alias.clone());
                 out
             }

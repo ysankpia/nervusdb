@@ -347,7 +347,16 @@ impl<'a> Lexer<'a> {
         }
 
         if let Some(&'.') = self.chars.peek() {
-            value.push(self.advance().unwrap());
+            // Disambiguate `1..2` (range) from `1.23` (float).
+            // If the next char is also '.', this is a range operator and we must NOT
+            // consume the '.' as part of the number.
+            let mut lookahead = self.chars.clone();
+            lookahead.next(); // consume the '.'
+            let is_range = matches!(lookahead.peek(), Some('.'));
+
+            if !is_range {
+                value.push(self.advance().unwrap());
+            }
             while let Some(&c) = self.chars.peek() {
                 if c.is_ascii_digit() {
                     value.push(self.advance().unwrap());

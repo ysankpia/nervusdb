@@ -12,11 +12,12 @@
 use crate::error::Error;
 use crate::query::ast::{BinaryOperator, Direction, Expression, Literal, RelationshipDirection};
 use crate::query::planner::{
-    AggregateFunction, AggregateNode, ExpandNode, FilterNode, LeftOuterJoinNode, LimitNode,
-    NestedLoopJoinNode, PhysicalPlan, ProjectNode, ScanNode, SkipNode, SortNode,
+    AggregateFunction, AggregateNode, ExpandNode, ExpandVarLengthNode, FilterNode,
+    LeftOuterJoinNode, LimitNode, NestedLoopJoinNode, PhysicalPlan, ProjectNode, ScanNode,
+    SkipNode, SortNode,
 };
 use crate::{Database, QueryCriteria, Triple};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -223,6 +224,7 @@ impl ExecutionPlan for PhysicalPlan {
             PhysicalPlan::NestedLoopJoin(node) => node.execute(ctx),
             PhysicalPlan::LeftOuterJoin(node) => node.execute(ctx),
             PhysicalPlan::Expand(node) => node.execute(ctx),
+            PhysicalPlan::ExpandVarLength(node) => node.execute(ctx),
             _ => Err(Error::Other("Unsupported physical plan type".to_string())),
         }
     }
@@ -239,6 +241,7 @@ impl ExecutionPlan for PhysicalPlan {
             PhysicalPlan::NestedLoopJoin(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::LeftOuterJoin(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Expand(node) => node.estimate_cardinality(ctx),
+            PhysicalPlan::ExpandVarLength(node) => node.estimate_cardinality(ctx),
             _ => 1,
         }
     }
@@ -338,6 +341,21 @@ impl PhysicalPlan {
                     node.rel_type,
                     ctx,
                 )))
+            }
+            PhysicalPlan::ExpandVarLength(node) => {
+                let input_iter = node.input.execute_streaming(Arc::clone(&ctx))?;
+                Ok(Box::new(StreamingExpandVarLengthIterator {
+                    input_iter,
+                    start_node_alias: node.start_node_alias,
+                    end_node_alias: node.end_node_alias,
+                    direction: node.direction,
+                    rel_type: node.rel_type,
+                    min_hops: node.min_hops,
+                    max_hops: node.max_hops,
+                    ctx,
+                    current_record: None,
+                    current_expansions: None,
+                }))
             }
             PhysicalPlan::NestedLoopJoin(node) => {
                 let left_iter = node.left.execute_streaming(Arc::clone(&ctx))?;
@@ -1218,6 +1236,71 @@ impl ExecutionPlan for ProjectNode {
     }
 }
 
+/// Streaming variable-length expand iterator
+struct StreamingExpandVarLengthIterator {
+    input_iter: Box<dyn Iterator<Item = Result<Record, Error>> + 'static>,
+    start_node_alias: String,
+    end_node_alias: String,
+    direction: RelationshipDirection,
+    rel_type: Option<String>,
+    min_hops: u32,
+    max_hops: u32,
+    ctx: Arc<ArcExecutionContext>,
+    current_record: Option<Record>,
+    current_expansions: Option<std::vec::IntoIter<u64>>,
+}
+
+impl StreamingExpandVarLengthIterator {
+    fn compute_expansions(&self, start_id: u64) -> Vec<u64> {
+        let rel_predicate_id: Option<u64> = if let Some(ref rel_type) = self.rel_type {
+            self.ctx.db.resolve_id(rel_type).ok().flatten()
+        } else {
+            None
+        };
+
+        find_reachable_nodes(
+            &self.ctx.db,
+            start_id,
+            self.direction.clone(),
+            rel_predicate_id,
+            self.min_hops,
+            self.max_hops,
+        )
+    }
+}
+
+impl Iterator for StreamingExpandVarLengthIterator {
+    type Item = Result<Record, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(ref mut expansions) = self.current_expansions
+                && let Some(end_id) = expansions.next()
+            {
+                let mut record = self.current_record.as_ref().unwrap().clone();
+                record.insert(self.end_node_alias.clone(), Value::Node(end_id));
+                return Some(Ok(record));
+            }
+
+            self.current_record = None;
+            self.current_expansions = None;
+
+            match self.input_iter.next()? {
+                Ok(record) => {
+                    let Some(Value::Node(start_id)) = record.values.get(&self.start_node_alias)
+                    else {
+                        continue;
+                    };
+                    let expansions = self.compute_expansions(*start_id);
+                    self.current_record = Some(record);
+                    self.current_expansions = Some(expansions.into_iter());
+                }
+                Err(e) => return Some(Err(e)),
+            }
+        }
+    }
+}
+
 impl ExecutionPlan for ExpandNode {
     fn execute<'a>(
         &'a self,
@@ -1296,6 +1379,140 @@ impl ExecutionPlan for ExpandNode {
         // 假设平均出度为 3
         self.input.estimate_cardinality(ctx) * 3
     }
+}
+
+impl ExecutionPlan for ExpandVarLengthNode {
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a ExecutionContext<'a>,
+    ) -> Result<Box<dyn Iterator<Item = Result<Record, Error>> + 'a>, Error> {
+        let input_iter = self.input.execute(ctx)?;
+        let start_node_alias = self.start_node_alias.clone();
+        let end_node_alias = self.end_node_alias.clone();
+        let direction = self.direction.clone();
+        let db = ctx.db;
+
+        let rel_predicate_id: Option<u64> = if let Some(ref rel_type) = self.rel_type {
+            db.resolve_id(rel_type).ok().flatten()
+        } else {
+            None
+        };
+
+        let min_hops = self.min_hops;
+        let max_hops = self.max_hops;
+
+        Ok(Box::new(input_iter.flat_map(
+            move |res| -> Box<dyn Iterator<Item = Result<Record, Error>> + 'a> {
+                let record = match res {
+                    Ok(record) => record,
+                    Err(e) => return Box::new(std::iter::once(Err(e))),
+                };
+
+                let Some(Value::Node(start_id)) = record.get(&start_node_alias) else {
+                    return Box::new(std::iter::empty());
+                };
+
+                let expansions = find_reachable_nodes(
+                    db,
+                    *start_id,
+                    direction.clone(),
+                    rel_predicate_id,
+                    min_hops,
+                    max_hops,
+                );
+
+                let end_node_alias = end_node_alias.clone();
+                Box::new(expansions.into_iter().map(move |end_id| {
+                    let mut new_record = record.clone();
+                    new_record.insert(end_node_alias.clone(), Value::Node(end_id));
+                    Ok(new_record)
+                }))
+            },
+        )))
+    }
+
+    fn estimate_cardinality(&self, ctx: &ExecutionContext) -> usize {
+        // Rough estimate: average branching factor 3 per hop.
+        let hops = usize::try_from(self.max_hops).unwrap_or(1).max(1);
+        self.input
+            .estimate_cardinality(ctx)
+            .saturating_mul(3usize.saturating_pow(hops as u32))
+            .max(1)
+    }
+}
+
+fn find_reachable_nodes(
+    db: &Database,
+    start_id: u64,
+    direction: RelationshipDirection,
+    rel_predicate_id: Option<u64>,
+    min_hops: u32,
+    max_hops: u32,
+) -> Vec<u64> {
+    let mut results = Vec::new();
+
+    if min_hops == 0 {
+        results.push(start_id);
+    }
+
+    let mut queue: VecDeque<(u64, u32)> = VecDeque::new();
+    let mut visited: HashSet<(u64, u32)> = HashSet::new();
+    queue.push_back((start_id, 0));
+    visited.insert((start_id, 0));
+
+    while let Some((node_id, depth)) = queue.pop_front() {
+        if depth >= max_hops {
+            continue;
+        }
+
+        let next_depth = depth + 1;
+
+        let mut neighbors = Vec::new();
+        match direction {
+            RelationshipDirection::LeftToRight => {
+                let criteria = QueryCriteria {
+                    subject_id: Some(node_id),
+                    predicate_id: rel_predicate_id,
+                    object_id: None,
+                };
+                neighbors.extend(db.query(criteria).map(|t| t.object_id));
+            }
+            RelationshipDirection::RightToLeft => {
+                let criteria = QueryCriteria {
+                    subject_id: None,
+                    predicate_id: rel_predicate_id,
+                    object_id: Some(node_id),
+                };
+                neighbors.extend(db.query(criteria).map(|t| t.subject_id));
+            }
+            RelationshipDirection::Undirected => {
+                let out = QueryCriteria {
+                    subject_id: Some(node_id),
+                    predicate_id: rel_predicate_id,
+                    object_id: None,
+                };
+                neighbors.extend(db.query(out).map(|t| t.object_id));
+
+                let inc = QueryCriteria {
+                    subject_id: None,
+                    predicate_id: rel_predicate_id,
+                    object_id: Some(node_id),
+                };
+                neighbors.extend(db.query(inc).map(|t| t.subject_id));
+            }
+        }
+
+        for neighbor in neighbors {
+            if visited.insert((neighbor, next_depth)) {
+                if next_depth >= min_hops {
+                    results.push(neighbor);
+                }
+                queue.push_back((neighbor, next_depth));
+            }
+        }
+    }
+
+    results
 }
 
 // ============================================================================

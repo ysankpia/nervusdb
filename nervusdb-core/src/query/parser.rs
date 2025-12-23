@@ -420,7 +420,7 @@ impl TokenParser {
         let mut variable = None;
         let mut types = Vec::new();
         let mut properties = None;
-        let variable_length = None;
+        let mut variable_length = None;
 
         if self.match_token(&TokenType::LeftBracket) {
             if let TokenType::Identifier(name) = &self.peek().token_type {
@@ -436,6 +436,10 @@ impl TokenParser {
                         "Expected relationship type identifier".to_string(),
                     ));
                 }
+            }
+
+            if self.match_token(&TokenType::Asterisk) {
+                variable_length = Some(self.parse_variable_length()?);
             }
 
             if self.check(&TokenType::LeftBrace) {
@@ -468,6 +472,33 @@ impl TokenParser {
             properties,
             variable_length,
         })
+    }
+
+    fn parse_variable_length(&mut self) -> Result<VariableLength, Error> {
+        let mut min = None;
+        let mut max = None;
+
+        if matches!(self.peek().token_type, TokenType::Number(_)) {
+            let n = self.parse_integer("path length")?;
+            min = Some(n);
+            if self.match_token(&TokenType::RangeDots) {
+                if matches!(self.peek().token_type, TokenType::Number(_)) {
+                    max = Some(self.parse_integer("path length")?);
+                }
+            } else {
+                max = Some(n);
+            }
+            return Ok(VariableLength { min, max });
+        }
+
+        if self.match_token(&TokenType::RangeDots) {
+            if matches!(self.peek().token_type, TokenType::Number(_)) {
+                max = Some(self.parse_integer("path length")?);
+            }
+            return Ok(VariableLength { min, max });
+        }
+
+        Ok(VariableLength { min, max })
     }
 
     fn parse_property_map(&mut self) -> Result<PropertyMap, Error> {
@@ -835,5 +866,22 @@ mod tests {
         let parsed = Parser::parse(query).unwrap();
         assert_eq!(parsed.clauses.len(), 2);
         assert!(matches!(&parsed.clauses[0], Clause::Merge(_)));
+    }
+
+    #[test]
+    fn test_parse_variable_length_relationship() {
+        let query = "MATCH (a)-[:KNOWS*1..2]->(b) RETURN b";
+        let parsed = Parser::parse(query).unwrap();
+        match &parsed.clauses[0] {
+            Clause::Match(m) => match &m.pattern.elements[1] {
+                PathElement::Relationship(r) => {
+                    let len = r.variable_length.as_ref().expect("missing variable length");
+                    assert_eq!(len.min, Some(1));
+                    assert_eq!(len.max, Some(2));
+                }
+                _ => panic!("Expected relationship"),
+            },
+            _ => panic!("Expected MATCH"),
+        }
     }
 }
