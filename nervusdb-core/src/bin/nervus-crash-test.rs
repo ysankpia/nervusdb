@@ -255,6 +255,11 @@ fn driver(args: DriverArgs) -> Result<()> {
     let exe = std::env::current_exe().map_err(|e| nervusdb_core::Error::Other(e.to_string()))?;
     let mut rng = XorShift64::new(default_seed());
 
+    // Bootstrap: ensure the database file has at least one committed snapshot before we start
+    // randomly SIGKILL-ing writers. Otherwise a crash during initial file creation can leave an
+    // invalid/partial file with no previous committed state to recover to.
+    bootstrap_committed_snapshot(&args.path)?;
+
     for i in 0..args.iterations {
         let mut child = Command::new(&exe)
             .arg("writer")
@@ -286,6 +291,16 @@ fn driver(args: DriverArgs) -> Result<()> {
         )?;
     }
 
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn bootstrap_committed_snapshot(path: &PathBuf) -> Result<()> {
+    let mut db = Database::open(Options::new(path))?;
+    db.begin_transaction()?;
+    // Use pool-compatible keys to avoid inflating dictionary beyond test params.
+    db.add_fact(Fact::new("s0", "p0", "o0"))?;
+    db.commit_transaction()?;
     Ok(())
 }
 
