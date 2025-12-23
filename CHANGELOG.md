@@ -6,6 +6,13 @@
 
 - （占位）下一次改动从这里开始写。
 
+## [1.0.1] - 2025-12-23
+
+### 修复
+
+- **License 一致性**：统一 Rust/Node/Python 的 license 元信息，并补齐 `COMMERCIAL_LICENSE.md`
+- **开源清理**：移除公开仓库里指向本地私有文件的 `AGENTS.md/CLAUDE.md/GEMINI.md`
+
 ## [1.0.0] - 2025-12-23
 
 ### 新增

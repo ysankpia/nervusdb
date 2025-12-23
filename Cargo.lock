@@ -565,7 +565,7 @@ dependencies = [
 
 [[package]]
 name = "nervusdb-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "clap",
  "flexbuffers",
@@ -585,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "nervusdb-node"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "napi",
  "napi-build",
@@ -596,7 +596,7 @@ dependencies = [
 
 [[package]]
 name = "nervusdb-py"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "nervusdb-core",
  "pyo3",
