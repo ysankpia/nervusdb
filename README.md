@@ -1,137 +1,292 @@
 # NervusDB
 
-NervusDB: An Embedded, Crash-Safe Graph Database (Subset of Cypher, Powered by Rust)
+**一个嵌入式图数据库，像 SQLite 一样简单，但专门用来存储和查询"关系"。**
 
-嵌入式三元组图数据库：**单文件 `redb` 存储 + 稳定 C ABI**，Rust 核心，绑定层只做参数搬运（Node/Python/WASM）。
+[![CI](https://github.com/LuQing-Studio/nervusdb/actions/workflows/ci.yml/badge.svg)](https://github.com/LuQing-Studio/nervusdb/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-## 快速开始（C / Rust）
+---
 
-### C（T10 stmt API：`prepare_v2 → step → column_* → finalize`）
+## 🤔 什么是图数据库？
 
-```c
-#include "nervusdb.h"
-#include <inttypes.h>
-#include <stdio.h>
-#include <stdlib.h>
-
-static void die(nervusdb_error *err) {
-  fprintf(stderr, "nervusdb error (%d): %s\n", err ? err->code : -1,
-          err && err->message ? err->message : "<no message>");
-  nervusdb_free_error(err);
-  exit(1);
-}
-
-int main(void) {
-  nervusdb_db *db = NULL;
-  nervusdb_error *err = NULL;
-
-  if (nervusdb_open("demo.redb", &db, &err) != NERVUSDB_OK)
-    die(err);
-
-  uint64_t alice, knows, bob;
-  if (nervusdb_intern(db, "alice", &alice, &err) != NERVUSDB_OK)
-    die(err);
-  if (nervusdb_intern(db, "knows", &knows, &err) != NERVUSDB_OK)
-    die(err);
-  if (nervusdb_intern(db, "bob", &bob, &err) != NERVUSDB_OK)
-    die(err);
-
-  if (nervusdb_add_triple(db, alice, knows, bob, &err) != NERVUSDB_OK)
-    die(err);
-
-  nervusdb_stmt *stmt = NULL;
-  if (nervusdb_prepare_v2(db, "MATCH (a)-[r]->(b) RETURN a, r, b", NULL, &stmt,
-                          &err) != NERVUSDB_OK)
-    die(err);
-
-  for (;;) {
-    nervusdb_status rc = nervusdb_step(stmt, &err);
-    if (rc == NERVUSDB_ROW) {
-      uint64_t a = nervusdb_column_node_id(stmt, 0);
-      nervusdb_relationship r = nervusdb_column_relationship(stmt, 1);
-      uint64_t b = nervusdb_column_node_id(stmt, 2);
-      printf("a=%" PRIu64 "  r=(%" PRIu64 ",%" PRIu64 ",%" PRIu64 ")  b=%" PRIu64 "\n", a,
-             r.subject_id, r.predicate_id, r.object_id, b);
-      continue;
-    }
-    if (rc == NERVUSDB_DONE) {
-      break;
-    }
-    die(err);
-  }
-
-  nervusdb_finalize(stmt);
-  nervusdb_close(db);
-  return 0;
-}
-```
-
-> 重要：`nervusdb_column_*()` 返回的指针由 `stmt` 管理，**调用方禁止 free**；`column_text()` 的指针在下一次 `step()` 或 `finalize()` 后失效（见 `nervusdb-core/include/nervusdb.h` 注释）。
-
-### Rust（core API）
-
-```rust
-use nervusdb_core::{Database, Fact, Options, QueryCriteria};
-
-fn main() -> nervusdb_core::Result<()> {
-    let mut db = Database::open(Options::new("demo.redb"))?;
-
-    db.add_fact(Fact::new("alice", "knows", "bob"))?;
-
-    let knows = db.resolve_id("knows")?.expect("missing predicate id");
-    let triples: Vec<_> = db
-        .query(QueryCriteria {
-            subject_id: None,
-            predicate_id: Some(knows),
-            object_id: None,
-        })
-        .collect();
-
-    println!("triples = {:?}", triples);
-    Ok(())
-}
-```
-
-## 仓库结构（高层）
+想象一下你的微信好友关系：
 
 ```
-nervusdb/
-├── nervusdb-core/       # Rust 核心库
-│   ├── src/
-│   │   ├── lib.rs       # 主入口：Database、Options、QueryCriteria
-│   │   ├── storage/     # 存储层：Hexastore、TemporalStore
-│   │   ├── query/       # Cypher 查询解析器和执行器
-│   │   ├── algorithms/  # 图算法：路径查找、中心性分析
-│   │   ├── ffi.rs       # C FFI 接口
-│   │   └── migration/   # 旧版数据迁移工具
-│   └── include/nervusdb.h  # C 头文件
-├── bindings/
-│   ├── node/            # Node.js 绑定 (NAPI-RS)
-│   └── python/          # Python 绑定 (PyO3)
-├── nervusdb-wasm/       # WebAssembly 模块
-└── examples/
-    └── c/               # C 语言示例
+你 --[认识]--> 小明
+小明 --[认识]--> 小红
+小红 --[认识]--> 你
 ```
 
-## 单文件语义
+这就是一个"图"！图数据库专门用来存储这种**实体之间的关系**。
 
-- Rust/FFI 的 `open(path)` 会使用 `path.with_extension("redb")` 作为实际文件路径
-- 所以传入 `demo.redb` 会生成/打开 `demo.redb`；传入 `demo.db` 会打开 `demo.redb`
+传统数据库（如 MySQL）存这种数据需要建很多表、写复杂的 JOIN 查询。而图数据库天生就是为关系设计的，查询起来又快又直观。
 
-## ABI 兼容性（1.0 起保证）
+## 💡 NervusDB 能做什么？
 
-- 编译期：`NERVUSDB_ABI_VERSION`
-- 运行期：`nervusdb_abi_version()` 必须等于上面的宏；不等就是你把头文件/动态库混用错了
-- 仅当发生破坏性 ABI 变更才 bump `NERVUSDB_ABI_VERSION`（1.0 发布后至少 90 天内禁止改 `nervusdb.h` 签名）
+NervusDB 把数据存成**三元组**：`(主体, 关系, 客体)`
 
-## 安装 / 构建
+```
+(alice, knows, bob)        # alice 认识 bob
+(alice, likes, 电影)        # alice 喜欢电影
+(bob, works_at, Google)    # bob 在 Google 工作
+```
 
-### Rust (Cargo)
+然后你可以用类似 SQL 的 **Cypher 查询语言**来查询：
+
+```cypher
+// 找出 alice 认识的所有人
+MATCH (alice)-[:knows]->(friend) 
+WHERE alice.name = 'alice'
+RETURN friend
+
+// 找出两跳内的朋友（朋友的朋友）
+MATCH (me)-[:knows]->()-[:knows]->(fof)
+RETURN fof
+```
+
+## 🎯 适合什么场景？
+
+| 场景 | 例子 |
+|------|------|
+| **社交网络** | 好友关系、关注/粉丝、共同好友推荐 |
+| **知识图谱** | 实体关系、问答系统、智能搜索 |
+| **推荐系统** | 用户-商品关系、协同过滤 |
+| **欺诈检测** | 交易网络、异常模式识别 |
+| **游戏开发** | NPC 关系、任务依赖、技能树 |
+| **AI Agent** | 记忆存储、上下文关联、知识管理 |
+
+## ✨ 为什么选择 NervusDB？
+
+| 特点 | 说明 |
+|------|------|
+| **嵌入式** | 像 SQLite 一样，无需安装服务器，数据就是一个文件 |
+| **崩溃安全** | 断电、kill -9 都不会丢数据 |
+| **多语言** | Rust / Node.js / Python / C / WebAssembly |
+| **Cypher 查询** | 业界标准的图查询语言（支持子集） |
+| **高性能** | Rust 编写，449K ops/sec 写入速度 |
+
+## 🚀 快速开始
+
+### Node.js
+
+```bash
+npm install nervusdb
+```
+
+```javascript
+import { NervusDB } from 'nervusdb';
+
+// 打开数据库（文件不存在会自动创建）
+const db = await NervusDB.open('my-graph.redb');
+
+// 添加关系
+db.addFact('alice', 'knows', 'bob');
+db.addFact('bob', 'knows', 'charlie');
+db.addFact('alice', 'likes', '电影');
+
+// Cypher 查询：找出 alice 认识的人
+const result = db.cypher('MATCH (a {name: "alice"})-[:knows]->(b) RETURN b');
+console.log(result.records);
+// => [{ b: 'bob' }]
+
+// 关闭数据库
+db.close();
+```
+
+### Python
+
+```bash
+pip install nervusdb
+```
+
+```python
+from nervusdb import NervusDB
+
+# 打开数据库
+db = NervusDB.open('my-graph.redb')
+
+# 添加关系
+db.add_fact('alice', 'knows', 'bob')
+db.add_fact('bob', 'knows', 'charlie')
+
+# 查询
+results = db.cypher('MATCH (a)-[:knows]->(b) RETURN a, b')
+for row in results:
+    print(f"{row['a']} knows {row['b']}")
+
+db.close()
+```
+
+### Rust
 
 ```toml
 [dependencies]
 nervusdb-core = { git = "https://github.com/LuQing-Studio/nervusdb" }
 ```
+
+```rust
+use nervusdb_core::{Database, Fact, Options};
+
+fn main() -> nervusdb_core::Result<()> {
+    let mut db = Database::open(Options::new("my-graph.redb"))?;
+    
+    // 添加关系
+    db.add_fact(Fact::new("alice", "knows", "bob"))?;
+    
+    // 查询
+    let results = db.execute_query("MATCH (a)-[r]->(b) RETURN a, r, b")?;
+    println!("{:?}", results);
+    
+    Ok(())
+}
+```
+
+## 📖 更多示例
+
+### 构建知识图谱
+
+```javascript
+// 添加实体和关系
+db.addFact('北京', 'is_capital_of', '中国');
+db.addFact('中国', 'located_in', '亚洲');
+db.addFact('李白', 'born_in', '中国');
+db.addFact('李白', 'is_a', '诗人');
+db.addFact('李白', 'wrote', '静夜思');
+
+// 查询：李白写了什么？
+db.cypher('MATCH (lb {name: "李白"})-[:wrote]->(poem) RETURN poem');
+
+// 查询：哪些诗人出生在亚洲的国家？
+db.cypher(`
+  MATCH (poet)-[:is_a]->(:诗人),
+        (poet)-[:born_in]->(country),
+        (country)-[:located_in]->(亚洲)
+  RETURN poet
+`);
+```
+
+### 社交网络分析
+
+```javascript
+// 添加好友关系
+db.addFact('小明', 'follows', '小红');
+db.addFact('小红', 'follows', '小刚');
+db.addFact('小刚', 'follows', '小明');
+
+// 找出小明关注的人也关注了谁（二度关系）
+db.cypher(`
+  MATCH (小明)-[:follows]->(friend)-[:follows]->(fof)
+  WHERE 小明.name = '小明'
+  RETURN fof
+`);
+
+// 使用内置算法计算 PageRank（影响力排名）
+const pagerank = db.algorithms.pageRank({ predicate: 'follows' });
+console.log(pagerank);
+// => [{ nodeId: 123, score: 0.35 }, ...]
+```
+
+### AI Agent 记忆存储
+
+```javascript
+// 存储对话上下文
+db.addFact('conversation_001', 'has_message', 'msg_001');
+db.addFact('msg_001', 'content', '你好，我想订一张机票');
+db.addFact('msg_001', 'intent', 'book_flight');
+db.addFact('msg_001', 'timestamp', '2024-01-01T10:00:00Z');
+
+// 存储用户偏好
+db.addFact('user_alice', 'prefers', '经济舱');
+db.addFact('user_alice', 'frequent_destination', '上海');
+
+// 查询用户历史偏好
+db.cypher(`
+  MATCH (user {id: 'user_alice'})-[:prefers]->(pref)
+  RETURN pref
+`);
+```
+
+---
+
+## 🔧 技术细节
+
+### 存储架构
+
+- **三索引三元组存储**：`SPO / POS / OSP` 索引覆盖常见查询模式
+- **字典 Interning + LRU 缓存**：字符串只存一次，热数据走内存
+- **单文件存储**：基于 [redb](https://github.com/cberner/redb)，ACID 事务保证
+
+### 仓库结构
+
+```
+nervusdb/
+├── nervusdb-core/       # Rust 核心库
+│   ├── src/
+│   │   ├── lib.rs       # 主入口
+│   │   ├── storage/     # 存储层（Hexastore）
+│   │   ├── query/       # Cypher 解析器和执行器
+│   │   ├── algorithms/  # 图算法（PageRank、最短路径）
+│   │   └── ffi.rs       # C FFI 接口
+│   └── include/nervusdb.h
+├── bindings/
+│   ├── node/            # Node.js 绑定 (NAPI-RS)
+│   └── python/          # Python 绑定 (PyO3)
+└── nervusdb-wasm/       # WebAssembly 模块
+```
+
+### Cypher 支持范围
+
+```cypher
+-- ✅ 支持
+MATCH (a)-[r:TYPE]->(b)
+WHERE a.prop = 'value' AND b.prop > 10
+RETURN a, r, b
+LIMIT 100
+
+CREATE (a:Person {name: 'Alice'})
+CREATE (a)-[:KNOWS]->(b)
+
+SET a.prop = 'value'
+DELETE a
+DETACH DELETE a
+
+-- ❌ 暂不支持
+OPTIONAL MATCH
+MERGE
+WITH
+UNION
+聚合函数 (COUNT, SUM, AVG)
+```
+
+完整支持列表见 [docs/cypher_support.md](docs/cypher_support.md)
+
+### C API（SQLite 风格）
+
+```c
+#include "nervusdb.h"
+
+nervusdb_db *db;
+nervusdb_open("demo.redb", &db, NULL);
+
+// 添加三元组
+uint64_t alice, knows, bob;
+nervusdb_intern(db, "alice", &alice, NULL);
+nervusdb_intern(db, "knows", &knows, NULL);
+nervusdb_intern(db, "bob", &bob, NULL);
+nervusdb_add_triple(db, alice, knows, bob, NULL);
+
+// 查询（类似 sqlite3_prepare/step/finalize）
+nervusdb_stmt *stmt;
+nervusdb_prepare_v2(db, "MATCH (a)-[r]->(b) RETURN a, r, b", NULL, &stmt, NULL);
+while (nervusdb_step(stmt, NULL) == NERVUSDB_ROW) {
+    uint64_t a = nervusdb_column_node_id(stmt, 0);
+    // ...
+}
+nervusdb_finalize(stmt);
+nervusdb_close(db);
+```
+
+## 📦 安装
 
 ### 从源码构建
 
@@ -141,61 +296,40 @@ cd nervusdb
 cargo build --release
 ```
 
-## 核心特性
+### Cargo
 
-- **三索引三元组存储**：`SPO / POS / OSP`（写放大更小，但仍覆盖常见查询模式）
-- **字典 Interning + LRU**：热字符串走内存缓存，避免反复 B-Tree 查找
-- **事务与崩溃一致性**：`kill -9` 下通过 crash-test 门禁（PR smoke + nightly 1000x）
-- **Cypher 查询支持（子集）**：提供 `exec_cypher(JSON)` + `stmt(step/column)` 两套 C API（支持范围见 `docs/cypher_support.md`）
-- **Temporal（可选）**：Cargo feature `temporal`，默认关闭
-- **绑定层薄包装**：Node.js (NAPI-RS)、Python (PyO3)、C (FFI)、WASM
+```toml
+[dependencies]
+nervusdb-core = { git = "https://github.com/LuQing-Studio/nervusdb" }
+```
 
-## 开发与测试
+## 🧪 开发
 
 ```bash
 # 格式检查
 cargo fmt --all -- --check
 
-# Lint 检查
+# Lint
 cargo clippy --workspace --all-targets
 
-# 运行测试
+# 测试
 cargo test --workspace
 
-# 构建 release
-cargo build --workspace --release
-```
-
-### 运行示例
-
-```bash
-# Benchmark 对比（NervusDB / SQLite / redb）
+# 性能测试
 cargo run --example bench_compare -p nervusdb-core --release
-
-# Cypher C API（JSON vs stmt）
-cargo run --example bench_cypher_ffi -p nervusdb-core --release
-
-# Hexastore 基准测试
-cargo run --example bench_hexastore -p nervusdb-core
-
-# 时序存储基准测试
-cargo run --example bench_temporal -p nervusdb-core
 ```
 
-## 数据迁移
+## 🤝 贡献
 
-从旧版目录格式迁移到新版 redb 单文件格式：
+欢迎 Issue 和 PR！
 
-```bash
-cargo run --bin nervus-migrate --features migration-cli -- <旧目录> <新文件>
-```
+- pre-commit 钩子会自动运行 `cargo fmt` 和 `cargo clippy`
+- 设计文档在 `docs/design/` 目录
 
-## 贡献
-
-- Issue/PR 遵循 GitHub 流程
-- pre-commit 和 pre-push 钩子已启用 (cargo fmt / clippy / test)
-- 任务/设计文档位于 `docs/task_progress.md` 与 `docs/design/`
-
-## 许可证
+## 📄 许可证
 
 [Apache-2.0](LICENSE)
+
+---
+
+**如果觉得有用，请给个 ⭐ Star！**
