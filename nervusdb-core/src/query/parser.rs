@@ -578,24 +578,51 @@ impl TokenParser {
                 Ok(Expression::Literal(Literal::Null))
             }
             TokenType::Identifier(name) => {
+                let name = name.clone();
                 self.advance();
-                // Check for property access
-                if self.match_token(&TokenType::Dot) {
+                // Check for function call: name(...)
+                if self.match_token(&TokenType::LeftParen) {
+                    let mut arguments = Vec::new();
+                    // Handle count(*) special case
+                    if self.match_token(&TokenType::Asterisk) {
+                        // count(*) - no arguments, just consume the star
+                    } else if !self.check(&TokenType::RightParen) {
+                        loop {
+                            arguments.push(self.parse_expression()?);
+                            if !self.match_token(&TokenType::Comma) {
+                                break;
+                            }
+                        }
+                    }
+                    self.consume(
+                        &TokenType::RightParen,
+                        "Expected ')' after function arguments",
+                    )?;
+                    Ok(Expression::FunctionCall(FunctionCall { name, arguments }))
+                }
+                // Check for property access: name.prop
+                else if self.match_token(&TokenType::Dot) {
                     if let TokenType::Identifier(prop) = &self.advance().token_type {
                         Ok(Expression::PropertyAccess(PropertyAccess {
-                            variable: name.clone(),
+                            variable: name,
                             property: prop.clone(),
                         }))
                     } else {
                         Err(Error::Other("Expected property name".to_string()))
                     }
                 } else {
-                    Ok(Expression::Variable(name.clone()))
+                    Ok(Expression::Variable(name))
                 }
             }
             TokenType::Variable(name) => {
                 self.advance();
                 Ok(Expression::Parameter(name.clone()))
+            }
+            TokenType::LeftParen => {
+                self.advance();
+                let expr = self.parse_expression()?;
+                self.consume(&TokenType::RightParen, "Expected ')'")?;
+                Ok(expr)
             }
             _ => Err(Error::Other(format!("Unexpected token {:?}", token))),
         }

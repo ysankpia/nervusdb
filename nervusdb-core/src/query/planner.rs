@@ -9,6 +9,7 @@ pub enum PhysicalPlan {
     Limit(LimitNode),
     Skip(SkipNode),
     Sort(SortNode),
+    Aggregate(AggregateNode),
     NestedLoopJoin(NestedLoopJoinNode),
     Expand(ExpandNode),
     Create(CreateNode),
@@ -50,6 +51,23 @@ pub struct SkipNode {
 pub struct SortNode {
     pub input: Box<PhysicalPlan>,
     pub order_by: Vec<(Expression, Direction)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AggregateNode {
+    pub input: Box<PhysicalPlan>,
+    pub aggregations: Vec<(AggregateFunction, String)>, // (function, alias)
+    pub group_by: Vec<Expression>,
+}
+
+#[derive(Debug, Clone)]
+pub enum AggregateFunction {
+    Count(Option<Expression>), // None for count(*)
+    Sum(Expression),
+    Avg(Expression),
+    Min(Expression),
+    Max(Expression),
+    Collect(Expression),
 }
 
 #[derive(Debug, Clone)]
@@ -179,21 +197,61 @@ impl QueryPlanner {
         }
 
         if let Some(r) = return_clause {
-            let projections = r
+            // Check if any return item contains aggregate functions
+            let has_aggregates = r
                 .items
-                .into_iter()
-                .map(|item| {
+                .iter()
+                .any(|item| Self::contains_aggregate(&item.expression));
+
+            if has_aggregates {
+                // Extract aggregations and non-aggregate expressions
+                let mut aggregations = Vec::new();
+                let mut projections = Vec::new();
+
+                for item in r.items {
                     let alias = item
                         .alias
+                        .clone()
                         .unwrap_or_else(|| Self::infer_alias(&item.expression));
-                    (item.expression, alias)
-                })
-                .collect();
 
-            final_plan = PhysicalPlan::Project(ProjectNode {
-                input: Box::new(final_plan),
-                projections,
-            });
+                    if let Some(agg_func) = Self::extract_aggregate(&item.expression) {
+                        aggregations.push((agg_func, alias));
+                    } else {
+                        projections.push((item.expression, alias));
+                    }
+                }
+
+                // Add aggregate node
+                final_plan = PhysicalPlan::Aggregate(AggregateNode {
+                    input: Box::new(final_plan),
+                    aggregations,
+                    group_by: projections.iter().map(|(e, _)| e.clone()).collect(),
+                });
+
+                // Project the results
+                if !projections.is_empty() {
+                    final_plan = PhysicalPlan::Project(ProjectNode {
+                        input: Box::new(final_plan),
+                        projections,
+                    });
+                }
+            } else {
+                let projections = r
+                    .items
+                    .into_iter()
+                    .map(|item| {
+                        let alias = item
+                            .alias
+                            .unwrap_or_else(|| Self::infer_alias(&item.expression));
+                        (item.expression, alias)
+                    })
+                    .collect();
+
+                final_plan = PhysicalPlan::Project(ProjectNode {
+                    input: Box::new(final_plan),
+                    projections,
+                });
+            }
 
             // ORDER BY must come before SKIP and LIMIT
             if let Some(order_by) = r.order_by {
@@ -226,6 +284,40 @@ impl QueryPlanner {
         }
 
         Ok(final_plan)
+    }
+
+    /// Check if expression contains aggregate function
+    fn contains_aggregate(expr: &Expression) -> bool {
+        match expr {
+            Expression::FunctionCall(fc) => {
+                matches!(
+                    fc.name.to_uppercase().as_str(),
+                    "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "COLLECT"
+                )
+            }
+            _ => false,
+        }
+    }
+
+    /// Extract aggregate function from expression
+    fn extract_aggregate(expr: &Expression) -> Option<AggregateFunction> {
+        if let Expression::FunctionCall(fc) = expr {
+            match fc.name.to_uppercase().as_str() {
+                "COUNT" => Some(AggregateFunction::Count(fc.arguments.first().cloned())),
+                "SUM" => fc.arguments.first().cloned().map(AggregateFunction::Sum),
+                "AVG" => fc.arguments.first().cloned().map(AggregateFunction::Avg),
+                "MIN" => fc.arguments.first().cloned().map(AggregateFunction::Min),
+                "MAX" => fc.arguments.first().cloned().map(AggregateFunction::Max),
+                "COLLECT" => fc
+                    .arguments
+                    .first()
+                    .cloned()
+                    .map(AggregateFunction::Collect),
+                _ => None,
+            }
+        } else {
+            None
+        }
     }
 
     fn plan_match(&self, match_clause: MatchClause) -> Result<PhysicalPlan, Error> {
