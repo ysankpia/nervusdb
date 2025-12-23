@@ -82,4 +82,15 @@ impl redb::Key for VarintTripleKey {
 
 ## 5. Status
 
-**Plan** - 需要更多性能测试数据来验证收益
+**WIP** - 核心实现完成，待完整集成
+
+### 已完成
+- [x] `VarintTripleKey` 结构体 + LEB128 编码/解码
+- [x] redb `Key` + `Value` trait 实现
+- [x] 压缩表定义 (`TABLE_SPO_V2`, `TABLE_POS_V2`, `TABLE_OSP_V2`)
+- [x] 基准测试验证 ~2.7x 压缩比
+- [x] `varint-keys` feature flag
+
+### 待完成
+- [ ] 完整集成到 `disk.rs`（需要修改 `WriteTableHandles`, `ReadHandles`, `CachedCursor`）
+- [ ] 数据迁移工具（可选）
