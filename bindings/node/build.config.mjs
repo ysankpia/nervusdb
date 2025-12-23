@@ -7,6 +7,7 @@ import { build } from 'esbuild';
 import fs from 'fs';
 
 const outdir = 'dist';
+const pkg = JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
 
 async function buildBundle() {
   console.log('🔨 Building NervusDB...');
@@ -32,7 +33,7 @@ async function buildBundle() {
     legalComments: 'none',
     external: [],
     banner: {
-      js: '// NervusDB - Neural Knowledge Graph Database\n// (c) 2025. All rights reserved.\n// Version: 1.1.1\n\n',
+      js: `// NervusDB - Embedded, Crash-Safe Graph Database\n// License: AGPL-3.0-only\n// Version: ${pkg.version}\n\n`,
     },
   });
 
@@ -41,7 +42,6 @@ async function buildBundle() {
     'nervusdb.ts', // 主入口
     'cypher.ts', // Cypher 查询工具
     'bench.ts', // 快速性能测试
-    'benchmark.ts', // 完整基准测试
   ];
 
   console.log('📝 Building CLI commands...');
@@ -65,7 +65,7 @@ async function buildBundle() {
       external: [],
       banner: {
         js: isEntry
-          ? '#!/usr/bin/env node\n// NervusDB CLI\n// (c) 2025. All rights reserved.\n'
+          ? `#!/usr/bin/env node\n// NervusDB CLI\n// Version: ${pkg.version}\n`
           : '// NervusDB CLI sub-command\n',
       },
     });
@@ -82,22 +82,9 @@ async function buildBundle() {
   console.log('📝 Generating type definitions...');
   const { execSync } = await import('child_process');
 
-  execSync('tsc --project tsconfig.build.json --emitDeclarationOnly --outDir dist-types', {
+  execSync('tsc --project tsconfig.build.json', {
     stdio: 'inherit',
   });
-
-  const typesToCopy = ['index.d.ts', 'synapseDb.d.ts', 'typedNervusDb.d.ts'];
-
-  for (const file of typesToCopy) {
-    const src = `dist-types/${file}`;
-    const dest = `${outdir}/${file}`;
-    if (fs.existsSync(src)) {
-      fs.copyFileSync(src, dest);
-      console.log(`  ✓ Copied ${file}`);
-    }
-  }
-
-  fs.rmSync('dist-types', { recursive: true });
 
   // 4. 显示构建结果
   const distFiles = fs.readdirSync(outdir);
@@ -115,7 +102,7 @@ async function buildBundle() {
   console.log('\n📋 Published files:');
   console.log(`  - index.mjs (main library)`);
   console.log(`  - nervusdb.js + ${jsFiles.length - 1} CLI sub-commands`);
-  console.log(`  - 3 TypeScript definition files`);
+  console.log(`  - TypeScript declarations (dist/**/*.d.ts)`);
 }
 
 buildBundle().catch((err) => {
