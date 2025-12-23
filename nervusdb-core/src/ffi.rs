@@ -640,71 +640,63 @@ enum StmtValue {
     Relationship(Triple),
 }
 
-/// Streaming query iterator that owns all its data
-/// SAFETY: db_ptr must remain valid for the lifetime of this iterator
-struct StreamingQueryIterator {
+/// True streaming statement
+///
+/// # Safety
+/// The database pointer must remain valid for the lifetime of this statement.
+/// Callers must ensure `finalize` is called before `close` on the database.
+struct CypherStatement {
+    columns: Vec<CString>,
+    column_names: Vec<String>,
+    // Database reference (raw pointer - caller must ensure validity)
     db_ptr: *const Database,
+    // Query plan (consumed on first step)
+    plan: Option<crate::query::planner::PhysicalPlan>,
+    // Parameters (owned)
     params: std::collections::HashMap<String, crate::query::executor::Value>,
-    plan: crate::query::planner::PhysicalPlan,
-    // Materialized results (collected on first iteration due to lifetime constraints)
-    results: Option<std::vec::IntoIter<Result<crate::query::executor::Record, Error>>>,
+    // Results iterator
+    results_iter: Option<std::vec::IntoIter<Result<crate::query::executor::Record, Error>>>,
+    current_row: Option<Vec<StmtValue>>,
 }
 
-// SAFETY: The iterator only accesses db through immutable references
-// and the caller ensures db_ptr validity
-unsafe impl Send for StreamingQueryIterator {}
+// SAFETY: CypherStatement only accesses db through immutable references during iteration.
+// The caller must ensure db_ptr remains valid until finalize() is called.
+unsafe impl Send for CypherStatement {}
 
-impl StreamingQueryIterator {
-    fn new(
-        db_ptr: *const Database,
-        params: std::collections::HashMap<String, crate::query::executor::Value>,
-        plan: crate::query::planner::PhysicalPlan,
-    ) -> Self {
-        Self {
-            db_ptr,
-            params,
-            plan,
-            results: None,
+impl CypherStatement {
+    /// Execute the query lazily on first step
+    fn execute_if_needed(&mut self) -> Result<(), Error> {
+        if self.results_iter.is_some() {
+            return Ok(());
         }
-    }
 
-    fn ensure_executed(&mut self) {
-        if self.results.is_some() {
-            return;
-        }
+        let plan = match self.plan.take() {
+            Some(p) => p,
+            None => return Ok(()), // Already executed or no plan
+        };
+
         // SAFETY: Caller guarantees db_ptr is valid
         let db = unsafe { &*self.db_ptr };
         let ctx = crate::query::executor::ExecutionContext {
             db,
             params: &self.params,
         };
-        match crate::query::executor::ExecutionPlan::execute(&self.plan, &ctx) {
-            Ok(iter) => {
-                let collected: Vec<_> = iter.collect();
-                self.results = Some(collected.into_iter());
-            }
-            Err(e) => {
-                self.results = Some(vec![Err(e)].into_iter());
-            }
-        }
+
+        // Execute and collect results
+        // TODO(T15-phase3): True streaming requires making ExecutionPlan::execute
+        // return an iterator with 'static lifetime. Current limitation is that
+        // the iterator borrows from ExecutionContext which has a shorter lifetime.
+        let iter = crate::query::executor::ExecutionPlan::execute(&plan, &ctx)?;
+        let results: Vec<_> = iter.collect();
+        self.results_iter = Some(results.into_iter());
+
+        Ok(())
     }
-}
 
-impl Iterator for StreamingQueryIterator {
-    type Item = Result<crate::query::executor::Record, Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.ensure_executed();
-        self.results.as_mut()?.next()
+    /// Get the next row from the results
+    fn next_row(&mut self) -> Option<Result<crate::query::executor::Record, Error>> {
+        self.results_iter.as_mut()?.next()
     }
-}
-
-/// True streaming statement - iterator is lazily evaluated
-struct CypherStatement {
-    columns: Vec<CString>,
-    column_names: Vec<String>,
-    iterator: Option<StreamingQueryIterator>,
-    current_row: Option<Vec<StmtValue>>,
 }
 
 fn stmt_from_ptr<'a>(
@@ -885,12 +877,13 @@ pub unsafe extern "C" fn nervusdb_prepare_v2(
     }
 
     // Create statement with deferred execution
-    let iterator = StreamingQueryIterator::new(db_ref as *const Database, param_values, plan);
-
     let stmt = Box::new(CypherStatement {
         columns: c_columns,
         column_names: projection_names,
-        iterator: Some(iterator),
+        db_ptr: db_ref as *const Database,
+        plan: Some(plan),
+        params: param_values,
+        results_iter: None,
         current_row: None,
     });
 
@@ -914,36 +907,38 @@ pub unsafe extern "C" fn nervusdb_step(
 
     stmt.current_row = None;
 
-    // Get next row from iterator (lazy execution happens inside)
-    if let Some(ref mut iter) = stmt.iterator {
-        match iter.next() {
-            Some(Ok(record)) => {
-                // Convert record to StmtValue row
-                let mut row = Vec::with_capacity(stmt.column_names.len());
-                for col in &stmt.column_names {
-                    let value = record
-                        .values
-                        .get(col)
-                        .cloned()
-                        .unwrap_or(crate::query::executor::Value::Null);
-                    row.push(convert_stmt_value(value));
-                }
-                stmt.current_row = Some(row);
-                return NERVUSDB_ROW;
-            }
-            Some(Err(err)) => {
-                let message = err.to_string();
-                let code = status_from_error(&err);
-                set_error(out_error, code, &message);
-                return code;
-            }
-            None => {
-                return NERVUSDB_DONE;
-            }
-        }
+    // Execute query on first step (lazy execution)
+    if let Err(err) = stmt.execute_if_needed() {
+        let message = err.to_string();
+        let code = status_from_error(&err);
+        set_error(out_error, code, &message);
+        return code;
     }
 
-    NERVUSDB_DONE
+    // Get next row from iterator
+    match stmt.next_row() {
+        Some(Ok(record)) => {
+            // Convert record to StmtValue row
+            let mut row = Vec::with_capacity(stmt.column_names.len());
+            for col in &stmt.column_names {
+                let value = record
+                    .values
+                    .get(col)
+                    .cloned()
+                    .unwrap_or(crate::query::executor::Value::Null);
+                row.push(convert_stmt_value(value));
+            }
+            stmt.current_row = Some(row);
+            NERVUSDB_ROW
+        }
+        Some(Err(err)) => {
+            let message = err.to_string();
+            let code = status_from_error(&err);
+            set_error(out_error, code, &message);
+            code
+        }
+        None => NERVUSDB_DONE,
+    }
 }
 
 #[unsafe(no_mangle)]

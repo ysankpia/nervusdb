@@ -16,3 +16,5 @@
 | T14 | v1.0.0 封版（ABI 法律化 + Cypher 白名单 + Crash Gate） | L3 | P0 | Done | release/T14-v1.0.0 | 冻结 `nervusdb.h`；明确 Cypher 子集与 NotImplemented 行为；发布前必须通过 crash-gate 1000x |
 | T15 | 真流式 Cypher 执行器（替换伪流式 Vec 预加载） | L3 | P0 | Done | - | Phase 1+2 完成：延迟执行 + StreamingQueryIterator；所有 warnings 已清理 |
 | T16 | 代码清理：删除 _archive + 统一命名 | L1 | P1 | Done | - | 删除 `_archive/`；`synapseDb.ts` → `nervusDb.ts`；删除冗余 `lock.ts` |
+
+| T17 | 真流式执行器（消除 collect） | High | P1 | Plan | `docs/design/T17-true-streaming.md` | 需要 Arc<Database> + 'static 迭代器 |
