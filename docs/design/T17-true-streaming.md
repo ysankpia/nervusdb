@@ -12,36 +12,44 @@
 - 支持百万级结果集而不 OOM
 - 保持 API 兼容性
 
-## 3. Solution
+## 3. Solution (已实现)
 
-### 方案 A：Arc<Database> 包装
+### 方案 A：Arc<Database> 包装 ✅
 
 ```rust
-// 修改 Database 为 Arc 包装
-pub struct DatabaseHandle(Arc<DatabaseInner>);
+// DatabaseHandle 包装 Arc<Database>
+struct DatabaseHandle {
+    db: Arc<Database>,
+}
 
-// 执行器返回 'static 迭代器
-fn execute(plan: PhysicalPlan, db: Arc<DatabaseInner>, params: HashMap<...>) 
-    -> Box<dyn Iterator<Item = Result<Record>> + Send + 'static>
+// ArcExecutionContext 持有 Arc<Database>
+pub struct ArcExecutionContext {
+    pub db: Arc<Database>,
+    pub params: Arc<HashMap<String, Value>>,
+}
+
+// execute_streaming 返回 'static 迭代器
+impl PhysicalPlan {
+    pub fn execute_streaming(
+        self,
+        ctx: Arc<ArcExecutionContext>,
+    ) -> Result<Box<dyn Iterator<Item = Result<Record, Error>> + 'static>, Error>
+}
 ```
 
-影响范围：
-- `Database` 结构体重构
-- 所有 FFI 函数签名
-- Node/Python 绑定层
+### 实现细节
 
-### 方案 B：Generator/Coroutine（nightly）
-
-使用 Rust nightly 的 generator 特性，但会锁定 nightly 版本。
-
-### 推荐：方案 A
+1. `nervusdb_open` 创建 `DatabaseHandle { db: Arc::new(db) }`
+2. `nervusdb_prepare_v2` 获取 `Arc<Database>` 并创建 `ArcExecutionContext`
+3. `execute_streaming` 返回真正的惰性迭代器，无 `collect()`
+4. `nervusdb_step` 每次调用 `iter.next()` 拉取一行
 
 ## 4. Testing Strategy
 
-- 单元测试：100 万行结果集，内存峰值 < 10MB
-- 集成测试：并发 step() 调用
+- 单元测试：所有现有测试通过
+- 集成测试：FFI roundtrip 测试通过
 
 ## 5. Risks
 
-- 破坏性 API 变更，需要 bump ABI 版本
-- 需要审计所有 `&Database` 使用点
+- `Arc<Database>` 不是 `Send + Sync`，但 FFI 调用是单线程的，所以没问题
+- 使用 `#[allow(clippy::arc_with_non_send_sync)]` 抑制警告

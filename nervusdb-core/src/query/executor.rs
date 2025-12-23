@@ -79,6 +79,22 @@ pub struct ExecutionContext<'a> {
     pub params: &'a HashMap<String, Value>,
 }
 
+/// Arc-based execution context for true streaming across FFI boundary
+/// This allows iterators to hold a reference to the database without lifetime issues
+pub struct ArcExecutionContext {
+    pub db: std::sync::Arc<Database>,
+    pub params: std::sync::Arc<HashMap<String, Value>>,
+}
+
+impl ArcExecutionContext {
+    pub fn new(db: std::sync::Arc<Database>, params: HashMap<String, Value>) -> Self {
+        Self {
+            db,
+            params: std::sync::Arc::new(params),
+        }
+    }
+}
+
 /// Owned execution context for FFI - uses raw pointer to avoid lifetime issues
 /// SAFETY: The caller must ensure db_ptr remains valid for the lifetime of this context
 pub struct OwnedExecutionContext {
@@ -203,6 +219,463 @@ impl ExecutionPlan for PhysicalPlan {
             PhysicalPlan::Expand(node) => node.estimate_cardinality(ctx),
             _ => 1,
         }
+    }
+}
+
+use std::sync::Arc;
+
+impl PhysicalPlan {
+    /// Execute the plan with Arc-based context for true streaming across FFI boundary.
+    /// Returns a 'static iterator that owns its database reference.
+    ///
+    /// Note: The iterator is NOT Send because Database contains non-Send fields.
+    /// This is fine for FFI use where calls are typically single-threaded.
+    pub fn execute_streaming(
+        self,
+        ctx: Arc<ArcExecutionContext>,
+    ) -> Result<Box<dyn Iterator<Item = Result<Record, Error>> + 'static>, Error> {
+        match self {
+            PhysicalPlan::Scan(node) => {
+                let alias = node.alias;
+                let labels = node.labels;
+                let db = Arc::clone(&ctx.db);
+
+                if labels.is_empty() {
+                    Ok(Box::new(scan_all_nodes_streaming(db, alias)))
+                } else {
+                    Ok(Box::new(scan_labeled_nodes_streaming(db, labels, alias)))
+                }
+            }
+            PhysicalPlan::Filter(node) => {
+                let input_iter = node.input.execute_streaming(Arc::clone(&ctx))?;
+                let predicate = node.predicate;
+                let ctx_clone = Arc::clone(&ctx);
+                Ok(Box::new(input_iter.filter(move |result| {
+                    match result {
+                        Ok(record) => evaluate_expression_streaming(&predicate, record, &ctx_clone),
+                        Err(_) => true, // Pass through errors
+                    }
+                })))
+            }
+            PhysicalPlan::Project(node) => {
+                let input_iter = node.input.execute_streaming(Arc::clone(&ctx))?;
+                let projections = node.projections;
+                let ctx_clone = Arc::clone(&ctx);
+                Ok(Box::new(input_iter.map(move |result| {
+                    result.map(|record| {
+                        let mut new_record = Record::new();
+                        for (expr, alias) in &projections {
+                            let value =
+                                evaluate_expression_value_streaming(expr, &record, &ctx_clone);
+                            new_record.insert(alias.clone(), value);
+                        }
+                        new_record
+                    })
+                })))
+            }
+            PhysicalPlan::Limit(node) => {
+                let limit = usize::try_from(node.limit).unwrap_or(usize::MAX);
+                let input_iter = node.input.execute_streaming(ctx)?;
+                Ok(Box::new(input_iter.take(limit)))
+            }
+            PhysicalPlan::Expand(node) => {
+                let input_iter = node.input.execute_streaming(Arc::clone(&ctx))?;
+                Ok(Box::new(StreamingExpandIterator::new(
+                    input_iter,
+                    node.start_node_alias,
+                    node.rel_alias,
+                    node.end_node_alias,
+                    node.direction,
+                    node.rel_type,
+                    ctx,
+                )))
+            }
+            PhysicalPlan::NestedLoopJoin(node) => {
+                let left_iter = node.left.execute_streaming(Arc::clone(&ctx))?;
+                let right_plan = *node.right;
+                let predicate = node.predicate;
+                Ok(Box::new(StreamingNestedLoopJoin::new(
+                    left_iter, right_plan, predicate, ctx,
+                )))
+            }
+            _ => Err(Error::Other(
+                "Unsupported physical plan type for streaming".to_string(),
+            )),
+        }
+    }
+}
+
+// ============================================================================
+// Streaming Iterator Implementations
+// ============================================================================
+
+/// Streaming version of scan_all_nodes_optimized
+fn scan_all_nodes_streaming(
+    db: Arc<Database>,
+    alias: String,
+) -> impl Iterator<Item = Result<Record, Error>> + Send + 'static {
+    let mut unique_nodes = HashSet::new();
+    let subject_criteria = crate::QueryCriteria::default();
+
+    for triple in db.query(subject_criteria).take(10000) {
+        unique_nodes.insert(triple.subject_id);
+        unique_nodes.insert(triple.object_id);
+    }
+
+    unique_nodes.into_iter().map(move |node_id| {
+        let mut record = Record::new();
+        record.insert(alias.clone(), Value::Node(node_id));
+        Ok(record)
+    })
+}
+
+/// Streaming version of scan_labeled_nodes_optimized
+fn scan_labeled_nodes_streaming(
+    db: Arc<Database>,
+    labels: Vec<String>,
+    alias: String,
+) -> impl Iterator<Item = Result<Record, Error>> + Send + 'static {
+    let type_id = match db.resolve_id("type") {
+        Ok(Some(id)) => Some(id),
+        _ => None,
+    };
+
+    let node_ids: Vec<u64> = if let Some(type_id) = type_id {
+        let mut nodes = HashSet::new();
+        for label in &labels {
+            if let Ok(Some(label_id)) = db.resolve_id(label) {
+                let criteria = crate::QueryCriteria {
+                    subject_id: None,
+                    predicate_id: Some(type_id),
+                    object_id: Some(label_id),
+                };
+                for triple in db.query(criteria) {
+                    nodes.insert(triple.subject_id);
+                }
+            }
+        }
+        nodes.into_iter().collect()
+    } else {
+        Vec::new()
+    };
+
+    node_ids.into_iter().map(move |node_id| {
+        let mut record = Record::new();
+        record.insert(alias.clone(), Value::Node(node_id));
+        Ok(record)
+    })
+}
+
+/// Streaming nested loop join iterator
+struct StreamingNestedLoopJoin {
+    left_iter: Box<dyn Iterator<Item = Result<Record, Error>> + 'static>,
+    right_plan: PhysicalPlan,
+    predicate: Option<Expression>,
+    ctx: Arc<ArcExecutionContext>,
+    current_left: Option<Record>,
+    current_right: Option<Box<dyn Iterator<Item = Result<Record, Error>> + 'static>>,
+}
+
+impl StreamingNestedLoopJoin {
+    fn new(
+        left_iter: Box<dyn Iterator<Item = Result<Record, Error>> + 'static>,
+        right_plan: PhysicalPlan,
+        predicate: Option<Expression>,
+        ctx: Arc<ArcExecutionContext>,
+    ) -> Self {
+        Self {
+            left_iter,
+            right_plan,
+            predicate,
+            ctx,
+            current_left: None,
+            current_right: None,
+        }
+    }
+}
+
+impl Iterator for StreamingNestedLoopJoin {
+    type Item = Result<Record, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            // Try to get next from current right iterator
+            if let Some(ref mut right_iter) = self.current_right
+                && let Some(right_result) = right_iter.next()
+            {
+                match right_result {
+                    Ok(right_record) => {
+                        let left_record = self.current_left.as_ref().unwrap();
+                        let mut merged = left_record.clone();
+                        for (k, v) in right_record.values {
+                            merged.insert(k, v);
+                        }
+
+                        // Apply predicate if any
+                        if let Some(ref pred) = self.predicate
+                            && !evaluate_expression_streaming(pred, &merged, &self.ctx)
+                        {
+                            continue;
+                        }
+                        return Some(Ok(merged));
+                    }
+                    Err(e) => return Some(Err(e)),
+                }
+            }
+
+            // Get next left record
+            match self.left_iter.next()? {
+                Ok(left_record) => {
+                    self.current_left = Some(left_record);
+                    // Clone the right plan and execute it
+                    match self
+                        .right_plan
+                        .clone()
+                        .execute_streaming(Arc::clone(&self.ctx))
+                    {
+                        Ok(right_iter) => {
+                            self.current_right = Some(right_iter);
+                        }
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+                Err(e) => return Some(Err(e)),
+            }
+        }
+    }
+}
+
+// SAFETY: StreamingNestedLoopJoin is not Send - FFI calls are single-threaded
+
+/// Streaming expand iterator
+struct StreamingExpandIterator {
+    input_iter: Box<dyn Iterator<Item = Result<Record, Error>> + 'static>,
+    start_node_alias: String,
+    rel_alias: String,
+    end_node_alias: String,
+    direction: RelationshipDirection,
+    rel_type: Option<String>,
+    ctx: Arc<ArcExecutionContext>,
+    current_record: Option<Record>,
+    current_expansions: Option<std::vec::IntoIter<(crate::Triple, u64)>>,
+}
+
+impl StreamingExpandIterator {
+    fn new(
+        input_iter: Box<dyn Iterator<Item = Result<Record, Error>> + 'static>,
+        start_node_alias: String,
+        rel_alias: String,
+        end_node_alias: String,
+        direction: RelationshipDirection,
+        rel_type: Option<String>,
+        ctx: Arc<ArcExecutionContext>,
+    ) -> Self {
+        Self {
+            input_iter,
+            start_node_alias,
+            rel_alias,
+            end_node_alias,
+            direction,
+            rel_type,
+            ctx,
+            current_record: None,
+            current_expansions: None,
+        }
+    }
+
+    fn get_expansions(&self, node_id: u64) -> Vec<(crate::Triple, u64)> {
+        let db = &self.ctx.db;
+        let mut results = Vec::new();
+
+        let rel_type_id = self
+            .rel_type
+            .as_ref()
+            .and_then(|t| db.resolve_id(t).ok().flatten());
+
+        match self.direction {
+            RelationshipDirection::LeftToRight | RelationshipDirection::Undirected => {
+                let criteria = crate::QueryCriteria {
+                    subject_id: Some(node_id),
+                    predicate_id: rel_type_id,
+                    object_id: None,
+                };
+                for triple in db.query(criteria) {
+                    results.push((triple, triple.object_id));
+                }
+            }
+            _ => {}
+        }
+
+        if self.direction == RelationshipDirection::RightToLeft {
+            let criteria = crate::QueryCriteria {
+                subject_id: None,
+                predicate_id: rel_type_id,
+                object_id: Some(node_id),
+            };
+            for triple in db.query(criteria) {
+                results.push((triple, triple.subject_id));
+            }
+        }
+
+        results
+    }
+}
+
+impl Iterator for StreamingExpandIterator {
+    type Item = Result<Record, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            // Try to get next expansion from current record
+            if let Some(ref mut expansions) = self.current_expansions
+                && let Some((triple, end_node_id)) = expansions.next()
+            {
+                let record = self.current_record.as_ref().unwrap();
+                let mut new_record = record.clone();
+                new_record.insert(self.rel_alias.clone(), Value::Relationship(triple));
+                new_record.insert(self.end_node_alias.clone(), Value::Node(end_node_id));
+                return Some(Ok(new_record));
+            }
+
+            // Get next input record
+            match self.input_iter.next()? {
+                Ok(record) => {
+                    if let Some(Value::Node(node_id)) = record.values.get(&self.start_node_alias) {
+                        let expansions = self.get_expansions(*node_id);
+                        self.current_record = Some(record);
+                        self.current_expansions = Some(expansions.into_iter());
+                    }
+                }
+                Err(e) => return Some(Err(e)),
+            }
+        }
+    }
+}
+
+/// Streaming version of evaluate_expression
+fn evaluate_expression_streaming(
+    expr: &Expression,
+    record: &Record,
+    ctx: &ArcExecutionContext,
+) -> bool {
+    match evaluate_expression_value_streaming(expr, record, ctx) {
+        Value::Boolean(b) => b,
+        _ => false,
+    }
+}
+
+/// Streaming version of evaluate_expression_value
+fn evaluate_expression_value_streaming(
+    expr: &Expression,
+    record: &Record,
+    ctx: &ArcExecutionContext,
+) -> Value {
+    match expr {
+        Expression::Literal(l) => match l {
+            Literal::String(s) => Value::String(s.clone()),
+            Literal::Float(f) => Value::Float(*f),
+            Literal::Integer(i) => Value::Float(*i as f64),
+            Literal::Boolean(b) => Value::Boolean(*b),
+            Literal::Null => Value::Null,
+        },
+        Expression::Variable(name) => record.get(name).cloned().unwrap_or(Value::Null),
+        Expression::Parameter(name) => ctx.params.get(name).cloned().unwrap_or(Value::Null),
+        Expression::PropertyAccess(pa) => {
+            if let Some(Value::Node(node_id)) = record.get(&pa.variable)
+                && let Ok(Some(binary)) = ctx.db.get_node_property_binary(*node_id)
+                && let Ok(props) = crate::storage::property::deserialize_properties(&binary)
+                && let Some(value) = props.get(&pa.property)
+            {
+                return match value {
+                    serde_json::Value::String(s) => Value::String(s.clone()),
+                    serde_json::Value::Number(n) => Value::Float(n.as_f64().unwrap_or(0.0)),
+                    serde_json::Value::Bool(b) => Value::Boolean(*b),
+                    serde_json::Value::Null => Value::Null,
+                    _ => Value::Null,
+                };
+            }
+            Value::Null
+        }
+        Expression::Binary(b) => {
+            let left = evaluate_expression_value_streaming(&b.left, record, ctx);
+            let right = evaluate_expression_value_streaming(&b.right, record, ctx);
+
+            match b.operator {
+                BinaryOperator::Equal => Value::Boolean(left == right),
+                BinaryOperator::NotEqual => Value::Boolean(left != right),
+                BinaryOperator::And => match (left, right) {
+                    (Value::Boolean(l), Value::Boolean(r)) => Value::Boolean(l && r),
+                    _ => Value::Null,
+                },
+                BinaryOperator::Or => match (left, right) {
+                    (Value::Boolean(l), Value::Boolean(r)) => Value::Boolean(l || r),
+                    _ => Value::Null,
+                },
+                BinaryOperator::LessThan => match (left, right) {
+                    (Value::Float(l), Value::Float(r)) => Value::Boolean(l < r),
+                    _ => Value::Null,
+                },
+                BinaryOperator::LessThanOrEqual => match (left, right) {
+                    (Value::Float(l), Value::Float(r)) => Value::Boolean(l <= r),
+                    _ => Value::Null,
+                },
+                BinaryOperator::GreaterThan => match (left, right) {
+                    (Value::Float(l), Value::Float(r)) => Value::Boolean(l > r),
+                    _ => Value::Null,
+                },
+                BinaryOperator::GreaterThanOrEqual => match (left, right) {
+                    (Value::Float(l), Value::Float(r)) => Value::Boolean(l >= r),
+                    _ => Value::Null,
+                },
+                BinaryOperator::Add => match (left, right) {
+                    (Value::Float(l), Value::Float(r)) => Value::Float(l + r),
+                    (Value::String(l), Value::String(r)) => Value::String(format!("{}{}", l, r)),
+                    _ => Value::Null,
+                },
+                BinaryOperator::Subtract => match (left, right) {
+                    (Value::Float(l), Value::Float(r)) => Value::Float(l - r),
+                    _ => Value::Null,
+                },
+                BinaryOperator::Multiply => match (left, right) {
+                    (Value::Float(l), Value::Float(r)) => Value::Float(l * r),
+                    _ => Value::Null,
+                },
+                BinaryOperator::Divide => match (left, right) {
+                    (Value::Float(l), Value::Float(r)) if r != 0.0 => Value::Float(l / r),
+                    _ => Value::Null,
+                },
+                BinaryOperator::Modulo => match (left, right) {
+                    (Value::Float(l), Value::Float(r)) if r != 0.0 => Value::Float(l % r),
+                    _ => Value::Null,
+                },
+                _ => Value::Null,
+            }
+        }
+        Expression::Unary(u) => {
+            let arg = evaluate_expression_value_streaming(&u.argument, record, ctx);
+            match u.operator {
+                crate::query::ast::UnaryOperator::Not => match arg {
+                    Value::Boolean(b) => Value::Boolean(!b),
+                    _ => Value::Null,
+                },
+                crate::query::ast::UnaryOperator::Negate => match arg {
+                    Value::Float(f) => Value::Float(-f),
+                    _ => Value::Null,
+                },
+            }
+        }
+        Expression::FunctionCall(func) => match func.name.to_lowercase().as_str() {
+            "id" => {
+                if let Some(arg) = func.arguments.first()
+                    && let Value::Node(id) = evaluate_expression_value_streaming(arg, record, ctx)
+                {
+                    return Value::Float(id as f64);
+                }
+                Value::Null
+            }
+            _ => Value::Null,
+        },
+        _ => Value::Null,
     }
 }
 

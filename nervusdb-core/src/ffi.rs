@@ -118,7 +118,31 @@ fn db_from_ptr<'a>(
         );
         return Err(NERVUSDB_ERR_INVALID_ARGUMENT);
     }
-    unsafe { Ok(&mut *(db as *mut Database)) }
+    unsafe {
+        let handle = &mut *(db as *mut DatabaseHandle);
+        // SAFETY: We need mutable access to Database for write operations.
+        // Arc::get_mut would fail if there are active statements, so we use
+        // Arc::as_ptr and cast to mut. Caller must ensure no concurrent access.
+        Ok(&mut *(Arc::as_ptr(&handle.db) as *mut Database))
+    }
+}
+
+fn db_arc_from_ptr(
+    db: *mut nervusdb_db,
+    out_error: *mut *mut nervusdb_error,
+) -> Result<Arc<Database>, nervusdb_status> {
+    if db.is_null() {
+        set_error(
+            out_error,
+            NERVUSDB_ERR_INVALID_ARGUMENT,
+            "database pointer is null",
+        );
+        return Err(NERVUSDB_ERR_INVALID_ARGUMENT);
+    }
+    unsafe {
+        let handle = &*(db as *mut DatabaseHandle);
+        Ok(Arc::clone(&handle.db))
+    }
 }
 
 fn cstr_to_owned(
@@ -187,6 +211,13 @@ pub unsafe extern "C" fn nervusdb_free_string(value: *mut c_char) {
     }
 }
 
+use std::sync::Arc;
+
+/// Internal wrapper for Arc<Database> used by FFI
+struct DatabaseHandle {
+    db: Arc<Database>,
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nervusdb_open(
     path: *const c_char,
@@ -210,9 +241,12 @@ pub unsafe extern "C" fn nervusdb_open(
 
     match Database::open(Options::new(path_str.as_str())) {
         Ok(db) => {
-            let boxed: Box<Database> = Box::new(db);
+            // Note: Arc is used for shared ownership with statements, not thread safety.
+            // FFI calls are single-threaded.
+            #[allow(clippy::arc_with_non_send_sync)]
+            let handle = Box::new(DatabaseHandle { db: Arc::new(db) });
             unsafe {
-                *out_db = Box::into_raw(boxed) as *mut nervusdb_db;
+                *out_db = Box::into_raw(handle) as *mut nervusdb_db;
             }
             NERVUSDB_OK
         }
@@ -228,9 +262,9 @@ pub unsafe extern "C" fn nervusdb_close(db: *mut nervusdb_db) {
     if db.is_null() {
         return;
     }
-    let db_ptr = db as *mut Database;
+    let handle = db as *mut DatabaseHandle;
     unsafe {
-        drop(Box::from_raw(db_ptr));
+        drop(Box::from_raw(handle));
     }
 }
 
@@ -640,63 +674,14 @@ enum StmtValue {
     Relationship(Triple),
 }
 
-/// True streaming statement
-///
-/// # Safety
-/// The database pointer must remain valid for the lifetime of this statement.
-/// Callers must ensure `finalize` is called before `close` on the database.
+/// True streaming statement - uses Arc<Database> for 'static iterator
 struct CypherStatement {
     columns: Vec<CString>,
     column_names: Vec<String>,
-    // Database reference (raw pointer - caller must ensure validity)
-    db_ptr: *const Database,
-    // Query plan (consumed on first step)
-    plan: Option<crate::query::planner::PhysicalPlan>,
-    // Parameters (owned)
-    params: std::collections::HashMap<String, crate::query::executor::Value>,
-    // Results iterator
-    results_iter: Option<std::vec::IntoIter<Result<crate::query::executor::Record, Error>>>,
+    /// The streaming iterator - truly lazy, no collect()
+    iterator:
+        Option<Box<dyn Iterator<Item = Result<crate::query::executor::Record, Error>> + 'static>>,
     current_row: Option<Vec<StmtValue>>,
-}
-
-// SAFETY: CypherStatement only accesses db through immutable references during iteration.
-// The caller must ensure db_ptr remains valid until finalize() is called.
-unsafe impl Send for CypherStatement {}
-
-impl CypherStatement {
-    /// Execute the query lazily on first step
-    fn execute_if_needed(&mut self) -> Result<(), Error> {
-        if self.results_iter.is_some() {
-            return Ok(());
-        }
-
-        let plan = match self.plan.take() {
-            Some(p) => p,
-            None => return Ok(()), // Already executed or no plan
-        };
-
-        // SAFETY: Caller guarantees db_ptr is valid
-        let db = unsafe { &*self.db_ptr };
-        let ctx = crate::query::executor::ExecutionContext {
-            db,
-            params: &self.params,
-        };
-
-        // Execute and collect results
-        // TODO(T15-phase3): True streaming requires making ExecutionPlan::execute
-        // return an iterator with 'static lifetime. Current limitation is that
-        // the iterator borrows from ExecutionContext which has a shorter lifetime.
-        let iter = crate::query::executor::ExecutionPlan::execute(&plan, &ctx)?;
-        let results: Vec<_> = iter.collect();
-        self.results_iter = Some(results.into_iter());
-
-        Ok(())
-    }
-
-    /// Get the next row from the results
-    fn next_row(&mut self) -> Option<Result<crate::query::executor::Record, Error>> {
-        self.results_iter.as_mut()?.next()
-    }
 }
 
 fn stmt_from_ptr<'a>(
@@ -787,7 +772,8 @@ pub unsafe extern "C" fn nervusdb_prepare_v2(
         *out_stmt = ptr::null_mut();
     }
 
-    let db_ref = match db_from_ptr(db, out_error) {
+    // Get Arc<Database> for streaming execution
+    let db_arc = match db_arc_from_ptr(db, out_error) {
         Ok(db) => db,
         Err(code) => return code,
     };
@@ -841,7 +827,7 @@ pub unsafe extern "C" fn nervusdb_prepare_v2(
         }
     }
 
-    // Generate execution plan (but don't execute yet!)
+    // Generate execution plan
     let planner = crate::query::planner::QueryPlanner::new();
     let plan = match planner.plan(ast) {
         Ok(p) => p,
@@ -876,14 +862,29 @@ pub unsafe extern "C" fn nervusdb_prepare_v2(
         }
     }
 
-    // Create statement with deferred execution
+    // Create Arc-based execution context for true streaming
+    // Note: Arc is used for shared ownership, not thread safety. FFI calls are single-threaded.
+    #[allow(clippy::arc_with_non_send_sync)]
+    let ctx = Arc::new(crate::query::executor::ArcExecutionContext::new(
+        db_arc,
+        param_values,
+    ));
+
+    // Execute with streaming - NO collect()!
+    let iterator = match plan.execute_streaming(ctx) {
+        Ok(iter) => iter,
+        Err(err) => {
+            let message = err.to_string();
+            let code = status_from_error(&err);
+            set_error(out_error, code, &message);
+            return code;
+        }
+    };
+
     let stmt = Box::new(CypherStatement {
         columns: c_columns,
         column_names: projection_names,
-        db_ptr: db_ref as *const Database,
-        plan: Some(plan),
-        params: param_values,
-        results_iter: None,
+        iterator: Some(iterator),
         current_row: None,
     });
 
@@ -907,38 +908,36 @@ pub unsafe extern "C" fn nervusdb_step(
 
     stmt.current_row = None;
 
-    // Execute query on first step (lazy execution)
-    if let Err(err) = stmt.execute_if_needed() {
-        let message = err.to_string();
-        let code = status_from_error(&err);
-        set_error(out_error, code, &message);
-        return code;
+    // Get next row from iterator (lazy execution happens inside)
+    if let Some(ref mut iter) = stmt.iterator {
+        match iter.next() {
+            Some(Ok(record)) => {
+                // Convert record to StmtValue row
+                let mut row = Vec::with_capacity(stmt.column_names.len());
+                for col in &stmt.column_names {
+                    let value = record
+                        .values
+                        .get(col)
+                        .cloned()
+                        .unwrap_or(crate::query::executor::Value::Null);
+                    row.push(convert_stmt_value(value));
+                }
+                stmt.current_row = Some(row);
+                return NERVUSDB_ROW;
+            }
+            Some(Err(err)) => {
+                let message = err.to_string();
+                let code = status_from_error(&err);
+                set_error(out_error, code, &message);
+                return code;
+            }
+            None => {
+                return NERVUSDB_DONE;
+            }
+        }
     }
 
-    // Get next row from iterator
-    match stmt.next_row() {
-        Some(Ok(record)) => {
-            // Convert record to StmtValue row
-            let mut row = Vec::with_capacity(stmt.column_names.len());
-            for col in &stmt.column_names {
-                let value = record
-                    .values
-                    .get(col)
-                    .cloned()
-                    .unwrap_or(crate::query::executor::Value::Null);
-                row.push(convert_stmt_value(value));
-            }
-            stmt.current_row = Some(row);
-            NERVUSDB_ROW
-        }
-        Some(Err(err)) => {
-            let message = err.to_string();
-            let code = status_from_error(&err);
-            set_error(out_error, code, &message);
-            code
-        }
-        None => NERVUSDB_DONE,
-    }
+    NERVUSDB_DONE
 }
 
 #[unsafe(no_mangle)]
