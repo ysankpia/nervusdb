@@ -52,7 +52,7 @@
     "bench:baseline": "pnpm build && node benchmarks/quick.mjs",
     "bench:temporal": "pnpm build && node benchmarks/temporal-memory.mjs",
     "perf:smoke": "node benchmarks/insert_scan.mjs 2000 && node benchmarks/path_agg.mjs",
-    "build:native": "pnpm exec napi build --release --platform --cargo-cwd native/nervusdb-node native/nervusdb-node/npm",
+    "build:native": "CARGO_TARGET_DIR=native/nervusdb-node/target pnpm exec napi build --release --platform --cargo-cwd native/nervusdb-node native/nervusdb-node/npm",
     "benchmark": "echo \"Removed in v2: use benchmarks/run-all.mjs\" && exit 1"
   },
   "bin": {

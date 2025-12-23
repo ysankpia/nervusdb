@@ -60,8 +60,11 @@ export class CypherStatement {
   private readonly columnNames: string[];
 
   constructor(private readonly stmt: NativeCypherStatement) {
-    const count = stmt.columnCount();
-    this.columnNames = Array.from({ length: count }, (_, i) => stmt.columnName(i) ?? `col${i}`);
+    const count = this.unwrap<number>(stmt.columnCount() as unknown);
+    this.columnNames = Array.from(
+      { length: count },
+      (_, i) => this.unwrap<string | null>(stmt.columnName(i) as unknown) ?? `col${i}`,
+    );
   }
 
   get columns(): readonly string[] {
@@ -69,25 +72,31 @@ export class CypherStatement {
   }
 
   step(): boolean {
-    return this.stmt.step();
+    this.ensureNotFinalized();
+    return this.unwrap<boolean>(this.stmt.step() as unknown);
   }
 
   columnType(column: number): CypherValueType {
-    return this.stmt.columnType(column) as CypherValueType;
+    this.ensureNotFinalized();
+    return this.unwrap<number>(this.stmt.columnType(column) as unknown) as CypherValueType;
   }
 
   columnValue(column: number): CypherValue {
+    this.ensureNotFinalized();
     switch (this.columnType(column)) {
       case CypherValueType.Text:
-        return this.stmt.columnText(column) ?? null;
+        return this.unwrap<string | null>(this.stmt.columnText(column) as unknown) ?? null;
       case CypherValueType.Float:
-        return this.stmt.columnFloat(column) ?? null;
+        return this.unwrap<number | null>(this.stmt.columnFloat(column) as unknown) ?? null;
       case CypherValueType.Bool:
-        return this.stmt.columnBool(column) ?? null;
+        return this.unwrap<boolean | null>(this.stmt.columnBool(column) as unknown) ?? null;
       case CypherValueType.Node:
-        return this.stmt.columnNodeId(column) ?? null;
+        return this.unwrap<bigint | null>(this.stmt.columnNodeId(column) as unknown) ?? null;
       case CypherValueType.Relationship:
-        return this.stmt.columnRelationship(column) ?? null;
+        return (
+          this.unwrap<CypherRelationship | null>(this.stmt.columnRelationship(column) as unknown) ??
+          null
+        );
       case CypherValueType.Null:
       default:
         return null;
@@ -95,6 +104,7 @@ export class CypherStatement {
   }
 
   currentRow(): CypherRecord {
+    this.ensureNotFinalized();
     const row: CypherRecord = {};
     for (let i = 0; i < this.columnNames.length; i++) {
       row[this.columnNames[i]] = this.columnValue(i);
@@ -105,7 +115,19 @@ export class CypherStatement {
   finalize(): void {
     if (this.finalized) return;
     this.finalized = true;
-    this.stmt.finalize();
+    this.unwrap<void>(this.stmt.finalize() as unknown);
+  }
+
+  private ensureNotFinalized(): void {
+    if (!this.finalized) return;
+    throw new Error('statement already finalized');
+  }
+
+  private unwrap<T>(value: unknown): T {
+    if (value instanceof Error) {
+      throw value;
+    }
+    return value as T;
   }
 }
 

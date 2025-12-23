@@ -37,7 +37,7 @@ describe('NervusDB cypherQuery', () => {
     expect(calls.some((c) => c.type === 'query')).toBe(false);
   });
 
-  it('fails fast when experimental cypher is disabled', async () => {
+  it('fails fast when cypher is disabled', async () => {
     __setNativeCoreForTesting({
       open: () =>
         ({
@@ -48,9 +48,8 @@ describe('NervusDB cypherQuery', () => {
         }) as any,
     });
 
-    const db = await NervusDB.open('tmp-cypher-disabled.redb');
+    const db = await NervusDB.open('tmp-cypher-disabled.redb', { experimental: { cypher: false } });
     await expect(db.cypherQuery('MATCH (n) RETURN n')).rejects.toThrow(/Cypher/);
     await db.close();
   });
 });
-

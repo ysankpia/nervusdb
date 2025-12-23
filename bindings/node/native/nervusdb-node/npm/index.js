@@ -310,7 +310,8 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { DatabaseHandle, open } = nativeBinding
+const { DatabaseHandle, StatementHandle, open } = nativeBinding
 
 module.exports.DatabaseHandle = DatabaseHandle
+module.exports.StatementHandle = StatementHandle
 module.exports.open = open

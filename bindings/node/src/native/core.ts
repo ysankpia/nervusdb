@@ -297,13 +297,7 @@ function resolveNativeAddonPath(): string | null {
     );
     lastAvailableFiles = fileEntries.map((entry) => entry.name);
 
-    // 1. Check for index.node directly in npm directory (standard output)
-    const npmIndex = fileEntries.find((entry) => entry.name === 'index.node');
-    if (npmIndex) {
-      return join(npmDir, npmIndex.name);
-    }
-
-    // 2. Common N-API output: index.<platform>-<arch>(-libc).node
+    // 1. Prefer platform-specific outputs when present (napi --platform).
     const indexExactMatch = fileEntries.find(
       (entry) =>
         entry.name.startsWith('index.') &&
@@ -320,6 +314,12 @@ function resolveNativeAddonPath(): string | null {
     );
     if (indexLibcAwareMatch) {
       return join(npmDir, indexLibcAwareMatch.name);
+    }
+
+    // 2. Fallback: index.node directly in npm directory (non --platform build output).
+    const npmIndex = fileEntries.find((entry) => entry.name === 'index.node');
+    if (npmIndex) {
+      return join(npmDir, npmIndex.name);
     }
 
     const exactMatch = fileEntries.find(
@@ -414,14 +414,11 @@ function resolveNativeAddonPath(): string | null {
  * return `null` and let the TypeScript implementation take over.
  */
 export function loadNativeCore(): NativeCoreBinding | null {
-  console.log('[Native Loader] Loading native core...');
   if (cachedBinding !== undefined) {
-    console.log('[Native Loader] Returning cached binding');
     return cachedBinding;
   }
 
   if (process.env.NERVUSDB_DISABLE_NATIVE === '1') {
-    console.log('[Native Loader] Native disabled via env');
     cachedBinding = null;
     return cachedBinding;
   }
@@ -429,23 +426,22 @@ export function loadNativeCore(): NativeCoreBinding | null {
   try {
     const requireNative = createRequire(import.meta.url);
     const addonPath = resolveNativeAddonPath();
-    console.log('[Native Loader] Resolved addon path:', addonPath);
 
     if (addonPath) {
       const binding = requireNative(addonPath) as NativeCoreBinding;
-      console.log('[Native Loader] Native module required successfully');
       cachedBinding = binding;
     } else {
-      console.log('[Native Loader] Addon path is null');
       if (process.env.NERVUSDB_EXPECT_NATIVE === '1') {
         throw new Error(`Native addon expected but not found in ${addonPath ?? 'resolved paths'}`);
       }
       cachedBinding = null;
     }
   } catch (error) {
-    console.error('[Native Loader] Error loading native module:', error);
     if (process.env.NERVUSDB_EXPECT_NATIVE === '1') {
       throw error instanceof Error ? error : new Error(String(error));
+    }
+    if (process.env.NERVUSDB_DEBUG_NATIVE === '1') {
+      console.error('[Native Loader] Error loading native module:', error);
     }
     cachedBinding = null;
   }

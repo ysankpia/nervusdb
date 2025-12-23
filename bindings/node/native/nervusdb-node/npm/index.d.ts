@@ -54,88 +54,8 @@ export interface PageRankResultOutput {
   iterations: number
   converged: boolean
 }
-export interface TimelineQueryInput {
-  entityId: string
-  predicateKey?: string
-  role?: string
-  asOf?: string
-  betweenStart?: string
-  betweenEnd?: string
-}
-export interface TimelineFactOutput {
-  factId: string
-  subjectEntityId: string
-  predicateKey: string
-  objectEntityId?: string
-  objectValue?: string
-  validFrom: string
-  validTo?: string
-  confidence: number
-  sourceEpisodeId: string
-}
-export interface TimelineEpisodeOutput {
-  episodeId: string
-  sourceType: string
-  payload: string
-  occurredAt: string
-  ingestedAt: string
-  traceHash: string
-}
-export interface TemporalEpisodeInput {
-  sourceType: string
-  payloadJson: string
-  occurredAt: string
-  traceHash?: string
-}
-export interface TemporalEnsureEntityInput {
-  kind: string
-  canonicalName: string
-  alias?: string
-  confidence?: number
-  occurredAt?: string
-  versionIncrement?: boolean
-}
-export interface TemporalEntityOutput {
-  entityId: string
-  kind: string
-  canonicalName: string
-  fingerprint: string
-  firstSeen: string
-  lastSeen: string
-  version: string
-}
-export interface TemporalFactWriteInput {
-  subjectEntityId: string
-  predicateKey: string
-  objectEntityId?: string
-  objectValueJson?: string
-  validFrom?: string
-  validTo?: string
-  confidence?: number
-  sourceEpisodeId: string
-}
-export interface TemporalLinkInput {
-  episodeId: string
-  entityId?: string
-  factId?: string
-  role: string
-}
-export interface TemporalLinkOutput {
-  linkId: string
-  episodeId: string
-  entityId?: string
-  factId?: string
-  role: string
-}
 export declare function open(options: OpenOptions): NapiResult
 export declare class DatabaseHandle {
-  temporalAddEpisode(input: TemporalEpisodeInput): NapiResult
-  temporalEnsureEntity(input: TemporalEnsureEntityInput): NapiResult
-  temporalUpsertFact(input: TemporalFactWriteInput): NapiResult
-  temporalLinkEpisode(input: TemporalLinkInput): NapiResult
-  temporalListEntities(): NapiResult
-  temporalListEpisodes(): NapiResult
-  temporalListFacts(): NapiResult
   addFact(subject: string, predicate: string, object: string): NapiResult
   deleteFact(subject: string, predicate: string, object: string): NapiResult
   batchAddFacts(triples: Array<TripleInput>): NapiResult
@@ -145,14 +65,13 @@ export declare class DatabaseHandle {
   resolveStr(id: bigint): NapiResult
   getDictionarySize(): NapiResult
   executeQuery(query: string, params?: object | undefined | null): NapiResult
+  prepareV2(query: string, params?: object | undefined | null): NapiResult
   setNodeProperty(nodeId: bigint, json: string): NapiResult
   getNodeProperty(nodeId: bigint): NapiResult
   setEdgeProperty(subjectId: bigint, predicateId: bigint, objectId: bigint, json: string): NapiResult
   getEdgeProperty(subjectId: bigint, predicateId: bigint, objectId: bigint): NapiResult
   query(criteria?: QueryCriteriaInput | undefined | null): NapiResult
   queryFacts(criteria?: QueryCriteriaInput | undefined | null): NapiResult
-  timelineQuery(input: TimelineQueryInput): NapiResult
-  timelineTrace(factId: string): NapiResult
   hydrate(dictionary: Array<string>, triples: Array<TripleInput>): NapiResult
   openCursor(criteria?: QueryCriteriaInput | undefined | null): NapiResult
   readCursor(cursorId: bigint, batchSize: number): NapiResult
@@ -168,4 +87,16 @@ export declare class DatabaseHandle {
   dijkstraShortestPath(startId: bigint, endId: bigint, predicateId?: bigint | undefined | null, maxHops?: number | undefined | null): NapiResult
   /** PageRank algorithm */
   pagerank(predicateId?: bigint | undefined | null, damping?: number | undefined | null, maxIterations?: number | undefined | null, tolerance?: number | undefined | null): NapiResult
+}
+export declare class StatementHandle {
+  step(): NapiResult
+  columnCount(): NapiResult
+  columnName(column: number): NapiResult
+  columnType(column: number): NapiResult
+  columnText(column: number): NapiResult
+  columnFloat(column: number): NapiResult
+  columnBool(column: number): NapiResult
+  columnNodeId(column: number): NapiResult
+  columnRelationship(column: number): NapiResult
+  finalize(): NapiResult
 }
