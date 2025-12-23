@@ -338,7 +338,7 @@ fn test_unsupported_features_fail_fast() {
 
     db.add_fact(Fact::new("alice", "knows", "bob")).unwrap();
 
-    let err = db.execute_query("OPTIONAL MATCH (n) RETURN n").unwrap_err();
+    let err = db.execute_query("MERGE (n) RETURN n").unwrap_err();
     assert!(matches!(err, nervusdb_core::Error::NotImplemented(_)));
 
     let err = db.execute_query("MATCH (n) RETURN DISTINCT n").unwrap_err();

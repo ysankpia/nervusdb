@@ -1,5 +1,6 @@
 use crate::error::Error;
 use crate::query::ast::*;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub enum PhysicalPlan {
@@ -11,6 +12,7 @@ pub enum PhysicalPlan {
     Sort(SortNode),
     Aggregate(AggregateNode),
     NestedLoopJoin(NestedLoopJoinNode),
+    LeftOuterJoin(LeftOuterJoinNode),
     Expand(ExpandNode),
     Create(CreateNode),
     Set(SetNode),
@@ -78,6 +80,13 @@ pub struct NestedLoopJoinNode {
 }
 
 #[derive(Debug, Clone)]
+pub struct LeftOuterJoinNode {
+    pub left: Box<PhysicalPlan>,
+    pub right: Box<PhysicalPlan>,
+    pub right_aliases: Vec<String>, // Variables to set to NULL if no match
+}
+
+#[derive(Debug, Clone)]
 pub struct ExpandNode {
     pub input: Box<PhysicalPlan>,
     pub start_node_alias: String,
@@ -126,14 +135,38 @@ impl QueryPlanner {
         for clause in query.clauses {
             match clause {
                 Clause::Match(match_clause) => {
+                    let is_optional = match_clause.optional;
+                    let right_aliases: Vec<String> = if is_optional {
+                        match plan.as_ref() {
+                            Some(current_plan) => {
+                                let left_aliases = Self::extract_plan_output_aliases(current_plan);
+                                let pattern_aliases =
+                                    Self::extract_pattern_aliases(&match_clause.pattern);
+                                pattern_aliases.difference(&left_aliases).cloned().collect()
+                            }
+                            None => Vec::new(),
+                        }
+                    } else {
+                        Vec::new()
+                    };
                     let match_plan = self.plan_match(match_clause)?;
+
                     if let Some(current_plan) = plan {
-                        // Implicit join with previous match
-                        plan = Some(PhysicalPlan::NestedLoopJoin(NestedLoopJoinNode {
-                            left: Box::new(current_plan),
-                            right: Box::new(match_plan),
-                            predicate: None,
-                        }));
+                        if is_optional {
+                            // OPTIONAL MATCH: Left outer join
+                            plan = Some(PhysicalPlan::LeftOuterJoin(LeftOuterJoinNode {
+                                left: Box::new(current_plan),
+                                right: Box::new(match_plan),
+                                right_aliases,
+                            }));
+                        } else {
+                            // Regular MATCH: Inner join
+                            plan = Some(PhysicalPlan::NestedLoopJoin(NestedLoopJoinNode {
+                                left: Box::new(current_plan),
+                                right: Box::new(match_plan),
+                                predicate: None,
+                            }));
+                        }
                     } else {
                         plan = Some(match_plan);
                     }
@@ -254,7 +287,6 @@ impl QueryPlanner {
 
                     plan = Some(with_plan);
                 }
-                _ => return Err(Error::Other("Unsupported clause".to_string())),
             }
         }
 
@@ -475,6 +507,77 @@ impl QueryPlanner {
             Expression::Variable(name) => name.clone(),
             Expression::PropertyAccess(pa) => format!("{}.{}", pa.variable, pa.property),
             _ => "col".to_string(),
+        }
+    }
+
+    fn extract_pattern_aliases(pattern: &Pattern) -> HashSet<String> {
+        let mut aliases = HashSet::new();
+        let mut anon_idx = 0;
+
+        for element in &pattern.elements {
+            match element {
+                PathElement::Node(node) => {
+                    let alias = node.variable.clone().unwrap_or_else(|| {
+                        anon_idx += 1;
+                        format!("_anon{}", anon_idx)
+                    });
+                    aliases.insert(alias);
+                }
+                PathElement::Relationship(rel) => {
+                    let alias = rel.variable.clone().unwrap_or_else(|| "rel".to_string());
+                    aliases.insert(alias);
+                }
+            }
+        }
+
+        aliases
+    }
+
+    fn extract_plan_output_aliases(plan: &PhysicalPlan) -> HashSet<String> {
+        match plan {
+            PhysicalPlan::Scan(node) => HashSet::from([node.alias.clone()]),
+            PhysicalPlan::Filter(node) => Self::extract_plan_output_aliases(&node.input),
+            PhysicalPlan::Project(node) => node
+                .projections
+                .iter()
+                .map(|(_, alias)| alias.clone())
+                .collect(),
+            PhysicalPlan::Limit(node) => Self::extract_plan_output_aliases(&node.input),
+            PhysicalPlan::Skip(node) => Self::extract_plan_output_aliases(&node.input),
+            PhysicalPlan::Sort(node) => Self::extract_plan_output_aliases(&node.input),
+            PhysicalPlan::Aggregate(node) => {
+                let mut out: HashSet<String> = node
+                    .aggregations
+                    .iter()
+                    .map(|(_, alias)| alias.clone())
+                    .collect();
+                for expr in &node.group_by {
+                    if let Expression::Variable(name) = expr {
+                        out.insert(name.clone());
+                    }
+                }
+                out
+            }
+            PhysicalPlan::NestedLoopJoin(node) => {
+                let mut out = Self::extract_plan_output_aliases(&node.left);
+                out.extend(Self::extract_plan_output_aliases(&node.right));
+                out
+            }
+            PhysicalPlan::LeftOuterJoin(node) => {
+                let mut out = Self::extract_plan_output_aliases(&node.left);
+                out.extend(Self::extract_plan_output_aliases(&node.right));
+                out
+            }
+            PhysicalPlan::Expand(node) => {
+                let mut out = Self::extract_plan_output_aliases(&node.input);
+                out.insert(node.start_node_alias.clone());
+                out.insert(node.rel_alias.clone());
+                out.insert(node.end_node_alias.clone());
+                out
+            }
+            PhysicalPlan::Create(_) | PhysicalPlan::Set(_) | PhysicalPlan::Delete(_) => {
+                HashSet::new()
+            }
         }
     }
 }

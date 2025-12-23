@@ -12,8 +12,8 @@
 use crate::error::Error;
 use crate::query::ast::{BinaryOperator, Direction, Expression, Literal, RelationshipDirection};
 use crate::query::planner::{
-    AggregateFunction, AggregateNode, ExpandNode, FilterNode, LimitNode, NestedLoopJoinNode,
-    PhysicalPlan, ProjectNode, ScanNode, SkipNode, SortNode,
+    AggregateFunction, AggregateNode, ExpandNode, FilterNode, LeftOuterJoinNode, LimitNode,
+    NestedLoopJoinNode, PhysicalPlan, ProjectNode, ScanNode, SkipNode, SortNode,
 };
 use crate::{Database, QueryCriteria, Triple};
 use std::collections::{HashMap, HashSet};
@@ -73,6 +73,19 @@ impl Default for Record {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn try_merge_records(mut left: Record, right: Record) -> Option<Record> {
+    for (k, v) in right.values {
+        if let Some(existing) = left.values.get(&k) {
+            if existing != &v {
+                return None;
+            }
+        } else {
+            left.values.insert(k, v);
+        }
+    }
+    Some(left)
 }
 
 pub struct ExecutionContext<'a> {
@@ -208,6 +221,7 @@ impl ExecutionPlan for PhysicalPlan {
             PhysicalPlan::Sort(node) => node.execute(ctx),
             PhysicalPlan::Aggregate(node) => node.execute(ctx),
             PhysicalPlan::NestedLoopJoin(node) => node.execute(ctx),
+            PhysicalPlan::LeftOuterJoin(node) => node.execute(ctx),
             PhysicalPlan::Expand(node) => node.execute(ctx),
             _ => Err(Error::Other("Unsupported physical plan type".to_string())),
         }
@@ -223,6 +237,7 @@ impl ExecutionPlan for PhysicalPlan {
             PhysicalPlan::Sort(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Aggregate(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::NestedLoopJoin(node) => node.estimate_cardinality(ctx),
+            PhysicalPlan::LeftOuterJoin(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Expand(node) => node.estimate_cardinality(ctx),
             _ => 1,
         }
@@ -330,6 +345,16 @@ impl PhysicalPlan {
                 let predicate = node.predicate;
                 Ok(Box::new(StreamingNestedLoopJoin::new(
                     left_iter, right_plan, predicate, ctx,
+                )))
+            }
+            PhysicalPlan::LeftOuterJoin(node) => {
+                let left_iter = node.left.execute_streaming(Arc::clone(&ctx))?;
+                let right_plan = *node.right;
+                Ok(Box::new(StreamingLeftOuterJoin::new(
+                    left_iter,
+                    right_plan,
+                    node.right_aliases,
+                    ctx,
                 )))
             }
             _ => Err(Error::Other(
@@ -480,6 +505,102 @@ impl Iterator for StreamingNestedLoopJoin {
 }
 
 // SAFETY: StreamingNestedLoopJoin is not Send - FFI calls are single-threaded
+
+/// Streaming left outer join iterator (for OPTIONAL MATCH)
+struct StreamingLeftOuterJoin {
+    left_iter: Box<dyn Iterator<Item = Result<Record, Error>> + 'static>,
+    right_plan: PhysicalPlan,
+    right_aliases: Vec<String>,
+    ctx: Arc<ArcExecutionContext>,
+    current_left: Option<Record>,
+    current_right: Option<Box<dyn Iterator<Item = Result<Record, Error>> + 'static>>,
+    matched_current_left: bool,
+    emitted_null_current_left: bool,
+}
+
+impl StreamingLeftOuterJoin {
+    fn new(
+        left_iter: Box<dyn Iterator<Item = Result<Record, Error>> + 'static>,
+        right_plan: PhysicalPlan,
+        right_aliases: Vec<String>,
+        ctx: Arc<ArcExecutionContext>,
+    ) -> Self {
+        Self {
+            left_iter,
+            right_plan,
+            right_aliases,
+            ctx,
+            current_left: None,
+            current_right: None,
+            matched_current_left: false,
+            emitted_null_current_left: false,
+        }
+    }
+
+    fn emit_null_row(&mut self, mut left_record: Record) -> Record {
+        for alias in &self.right_aliases {
+            left_record
+                .values
+                .entry(alias.clone())
+                .or_insert(Value::Null);
+        }
+        left_record
+    }
+}
+
+impl Iterator for StreamingLeftOuterJoin {
+    type Item = Result<Record, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(ref mut right_iter) = self.current_right {
+                if let Some(right_result) = right_iter.next() {
+                    match right_result {
+                        Ok(right_record) => {
+                            let left_record = self.current_left.as_ref().unwrap().clone();
+                            if let Some(merged) = try_merge_records(left_record, right_record) {
+                                self.matched_current_left = true;
+                                return Some(Ok(merged));
+                            }
+                            continue;
+                        }
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+
+                // Right exhausted; maybe emit NULL row, then advance.
+                self.current_right = None;
+                if !self.matched_current_left && !self.emitted_null_current_left {
+                    self.emitted_null_current_left = true;
+                    let left_record = self.current_left.take().unwrap();
+                    return Some(Ok(self.emit_null_row(left_record)));
+                }
+                self.current_left = None;
+                self.matched_current_left = false;
+                self.emitted_null_current_left = false;
+                continue;
+            }
+
+            // Load next left record.
+            match self.left_iter.next()? {
+                Ok(left_record) => {
+                    self.current_left = Some(left_record);
+                    self.matched_current_left = false;
+                    self.emitted_null_current_left = false;
+                    match self
+                        .right_plan
+                        .clone()
+                        .execute_streaming(Arc::clone(&self.ctx))
+                    {
+                        Ok(right_iter) => self.current_right = Some(right_iter),
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+                Err(e) => return Some(Err(e)),
+            }
+        }
+    }
+}
 
 /// Streaming expand iterator
 struct StreamingExpandIterator {
@@ -928,6 +1049,113 @@ impl<'a> Iterator for IndexNestedLoopJoinIter<'a> {
                 }
                 Some(Err(e)) => return Some(Err(e)),
                 None => return None, // 外层迭代器耗尽
+            }
+        }
+    }
+}
+
+impl ExecutionPlan for LeftOuterJoinNode {
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a ExecutionContext<'a>,
+    ) -> Result<Box<dyn Iterator<Item = Result<Record, Error>> + 'a>, Error> {
+        Ok(Box::new(LeftOuterJoinIter::new(
+            self.left.execute(ctx)?,
+            &self.right,
+            &self.right_aliases,
+            ctx,
+        )))
+    }
+
+    fn estimate_cardinality(&self, ctx: &ExecutionContext) -> usize {
+        let left_card = self.left.estimate_cardinality(ctx);
+        let right_card = self.right.estimate_cardinality(ctx);
+        (left_card * right_card / 10).max(left_card).max(1)
+    }
+}
+
+struct LeftOuterJoinIter<'a> {
+    outer_iter: Box<dyn Iterator<Item = Result<Record, Error>> + 'a>,
+    inner_plan: &'a PhysicalPlan,
+    right_aliases: &'a [String],
+    ctx: &'a ExecutionContext<'a>,
+    current_outer: Option<Record>,
+    current_inner: Option<Box<dyn Iterator<Item = Result<Record, Error>> + 'a>>,
+    matched_current_outer: bool,
+    emitted_null_current_outer: bool,
+}
+
+impl<'a> LeftOuterJoinIter<'a> {
+    fn new(
+        outer_iter: Box<dyn Iterator<Item = Result<Record, Error>> + 'a>,
+        inner_plan: &'a PhysicalPlan,
+        right_aliases: &'a [String],
+        ctx: &'a ExecutionContext<'a>,
+    ) -> Self {
+        Self {
+            outer_iter,
+            inner_plan,
+            right_aliases,
+            ctx,
+            current_outer: None,
+            current_inner: None,
+            matched_current_outer: false,
+            emitted_null_current_outer: false,
+        }
+    }
+
+    fn emit_null_row(&self, mut outer: Record) -> Record {
+        for alias in self.right_aliases {
+            outer.values.entry(alias.clone()).or_insert(Value::Null);
+        }
+        outer
+    }
+}
+
+impl<'a> Iterator for LeftOuterJoinIter<'a> {
+    type Item = Result<Record, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(ref mut inner_iter) = self.current_inner {
+                if let Some(inner_result) = inner_iter.next() {
+                    match inner_result {
+                        Ok(inner_record) => {
+                            let outer_record = self.current_outer.as_ref().unwrap().clone();
+                            if let Some(joined) = try_merge_records(outer_record, inner_record) {
+                                self.matched_current_outer = true;
+                                return Some(Ok(joined));
+                            }
+                            continue;
+                        }
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+
+                // Inner exhausted; maybe emit NULL row, then advance.
+                self.current_inner = None;
+                if !self.matched_current_outer && !self.emitted_null_current_outer {
+                    self.emitted_null_current_outer = true;
+                    let outer_record = self.current_outer.take().unwrap();
+                    return Some(Ok(self.emit_null_row(outer_record)));
+                }
+                self.current_outer = None;
+                self.matched_current_outer = false;
+                self.emitted_null_current_outer = false;
+                continue;
+            }
+
+            match self.outer_iter.next()? {
+                Ok(outer_record) => match self.inner_plan.execute(self.ctx) {
+                    Ok(inner_iter) => {
+                        self.current_outer = Some(outer_record);
+                        self.current_inner = Some(inner_iter);
+                        self.matched_current_outer = false;
+                        self.emitted_null_current_outer = false;
+                    }
+                    Err(e) => return Some(Err(e)),
+                },
+                Err(e) => return Some(Err(e)),
             }
         }
     }
