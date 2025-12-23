@@ -126,23 +126,12 @@ pub struct StoredAlias {
     pub confidence: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EnsureEntityOptions {
     pub alias: Option<String>,
     pub confidence: Option<f64>,
     pub occurred_at: Option<String>,
     pub version_increment: bool,
-}
-
-impl Default for EnsureEntityOptions {
-    fn default() -> Self {
-        Self {
-            alias: None,
-            confidence: None,
-            occurred_at: None,
-            version_increment: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1064,10 +1053,10 @@ impl TemporalStoreV2 {
                     .map_err(|e| Error::Other(format!("msgpack error: {e}")))?;
 
                 // 过滤 predicate_key
-                if let Some(key) = &query.predicate_key {
-                    if &fact.predicate_key != key {
-                        continue;
-                    }
+                if let Some(key) = &query.predicate_key
+                    && &fact.predicate_key != key
+                {
+                    continue;
                 }
 
                 // 过滤时间范围
