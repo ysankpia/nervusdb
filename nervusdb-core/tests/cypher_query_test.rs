@@ -869,3 +869,74 @@ fn test_order_by_and_skip() {
     assert_eq!(results.len(), 1);
     // Should return only Bob
 }
+
+#[test]
+fn test_aggregate_functions() {
+    let dir = tempdir().unwrap();
+    let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
+
+    // Create test data
+    db.add_fact(Fact::new("alice", "type", "Person")).unwrap();
+    db.add_fact(Fact::new("bob", "type", "Person")).unwrap();
+    db.add_fact(Fact::new("charlie", "type", "Person")).unwrap();
+
+    let alice_id = db.resolve_id("alice").unwrap().unwrap();
+    let bob_id = db.resolve_id("bob").unwrap().unwrap();
+    let charlie_id = db.resolve_id("charlie").unwrap().unwrap();
+
+    // Set ages
+    db.set_node_property_binary(
+        alice_id,
+        &nervusdb_core::storage::property::serialize_properties(
+            &serde_json::from_value(serde_json::json!({"age": 25.0})).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    db.set_node_property_binary(
+        bob_id,
+        &nervusdb_core::storage::property::serialize_properties(
+            &serde_json::from_value(serde_json::json!({"age": 30.0})).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    db.set_node_property_binary(
+        charlie_id,
+        &nervusdb_core::storage::property::serialize_properties(
+            &serde_json::from_value(serde_json::json!({"age": 35.0})).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    // Test COUNT(*)
+    let results = db
+        .execute_query("MATCH (p:Person) RETURN count(*)")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+
+    // Test SUM
+    let results = db
+        .execute_query("MATCH (p:Person) RETURN sum(p.age)")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+
+    // Test AVG
+    let results = db
+        .execute_query("MATCH (p:Person) RETURN avg(p.age)")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+
+    // Test MIN
+    let results = db
+        .execute_query("MATCH (p:Person) RETURN min(p.age)")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+
+    // Test MAX
+    let results = db
+        .execute_query("MATCH (p:Person) RETURN max(p.age)")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+}

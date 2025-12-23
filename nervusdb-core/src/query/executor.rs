@@ -12,8 +12,8 @@
 use crate::error::Error;
 use crate::query::ast::{BinaryOperator, Direction, Expression, Literal, RelationshipDirection};
 use crate::query::planner::{
-    ExpandNode, FilterNode, LimitNode, NestedLoopJoinNode, PhysicalPlan, ProjectNode, ScanNode,
-    SkipNode, SortNode,
+    AggregateFunction, AggregateNode, ExpandNode, FilterNode, LimitNode, NestedLoopJoinNode,
+    PhysicalPlan, ProjectNode, ScanNode, SkipNode, SortNode,
 };
 use crate::{Database, QueryCriteria, Triple};
 use std::collections::{HashMap, HashSet};
@@ -206,6 +206,7 @@ impl ExecutionPlan for PhysicalPlan {
             PhysicalPlan::Limit(node) => node.execute(ctx),
             PhysicalPlan::Skip(node) => node.execute(ctx),
             PhysicalPlan::Sort(node) => node.execute(ctx),
+            PhysicalPlan::Aggregate(node) => node.execute(ctx),
             PhysicalPlan::NestedLoopJoin(node) => node.execute(ctx),
             PhysicalPlan::Expand(node) => node.execute(ctx),
             _ => Err(Error::Other("Unsupported physical plan type".to_string())),
@@ -220,6 +221,7 @@ impl ExecutionPlan for PhysicalPlan {
             PhysicalPlan::Limit(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Skip(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Sort(node) => node.estimate_cardinality(ctx),
+            PhysicalPlan::Aggregate(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::NestedLoopJoin(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Expand(node) => node.estimate_cardinality(ctx),
             _ => 1,
@@ -1170,6 +1172,155 @@ impl ExecutionPlan for SortNode {
 
     fn estimate_cardinality(&self, ctx: &ExecutionContext) -> usize {
         self.input.estimate_cardinality(ctx)
+    }
+}
+
+// ============================================================================
+// Aggregate
+// ============================================================================
+
+impl ExecutionPlan for AggregateNode {
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a ExecutionContext<'a>,
+    ) -> Result<Box<dyn Iterator<Item = Result<Record, Error>> + 'a>, Error> {
+        // Collect all input records
+        let records: Vec<Record> = self.input.execute(ctx)?.filter_map(|r| r.ok()).collect();
+
+        // Simple case: no GROUP BY, aggregate all records into one result
+        if self.group_by.is_empty() {
+            let mut result = Record::new();
+
+            for (agg_func, alias) in &self.aggregations {
+                let value = compute_aggregate(agg_func, &records, ctx);
+                result.insert(alias.clone(), value);
+            }
+
+            return Ok(Box::new(std::iter::once(Ok(result))));
+        }
+
+        // GROUP BY case: group records and aggregate each group
+        // For simplicity, we'll implement basic grouping
+        let mut groups: HashMap<String, Vec<Record>> = HashMap::new();
+
+        for record in records {
+            // Create group key from group_by expressions
+            let key = self
+                .group_by
+                .iter()
+                .map(|expr| format!("{:?}", evaluate_expression_value(expr, &record, ctx)))
+                .collect::<Vec<_>>()
+                .join("|");
+            groups.entry(key).or_default().push(record);
+        }
+
+        let results: Vec<Record> = groups
+            .into_values()
+            .map(|group_records| {
+                let mut result = Record::new();
+
+                // Add group by values from first record
+                if let Some(first) = group_records.first() {
+                    for expr in &self.group_by {
+                        if let Expression::Variable(name) = expr
+                            && let Some(val) = first.get(name)
+                        {
+                            result.insert(name.clone(), val.clone());
+                        }
+                    }
+                }
+
+                // Compute aggregates
+                for (agg_func, alias) in &self.aggregations {
+                    let value = compute_aggregate(agg_func, &group_records, ctx);
+                    result.insert(alias.clone(), value);
+                }
+
+                result
+            })
+            .collect();
+
+        Ok(Box::new(results.into_iter().map(Ok)))
+    }
+
+    fn estimate_cardinality(&self, ctx: &ExecutionContext) -> usize {
+        if self.group_by.is_empty() {
+            1 // Single aggregate result
+        } else {
+            // Estimate: assume 10% of input are unique groups
+            (self.input.estimate_cardinality(ctx) / 10).max(1)
+        }
+    }
+}
+
+/// Compute aggregate function over a set of records
+fn compute_aggregate(
+    func: &AggregateFunction,
+    records: &[Record],
+    ctx: &ExecutionContext,
+) -> Value {
+    match func {
+        AggregateFunction::Count(expr) => {
+            let count = if let Some(e) = expr {
+                records
+                    .iter()
+                    .filter(|r| !matches!(evaluate_expression_value(e, r, ctx), Value::Null))
+                    .count()
+            } else {
+                records.len() // count(*)
+            };
+            Value::Float(count as f64)
+        }
+        AggregateFunction::Sum(expr) => {
+            let sum: f64 = records
+                .iter()
+                .filter_map(|r| {
+                    if let Value::Float(f) = evaluate_expression_value(expr, r, ctx) {
+                        Some(f)
+                    } else {
+                        None
+                    }
+                })
+                .sum();
+            Value::Float(sum)
+        }
+        AggregateFunction::Avg(expr) => {
+            let values: Vec<f64> = records
+                .iter()
+                .filter_map(|r| {
+                    if let Value::Float(f) = evaluate_expression_value(expr, r, ctx) {
+                        Some(f)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if values.is_empty() {
+                Value::Null
+            } else {
+                Value::Float(values.iter().sum::<f64>() / values.len() as f64)
+            }
+        }
+        AggregateFunction::Min(expr) => records
+            .iter()
+            .map(|r| evaluate_expression_value(expr, r, ctx))
+            .filter(|v| !matches!(v, Value::Null))
+            .min_by(compare_values)
+            .unwrap_or(Value::Null),
+        AggregateFunction::Max(expr) => records
+            .iter()
+            .map(|r| evaluate_expression_value(expr, r, ctx))
+            .filter(|v| !matches!(v, Value::Null))
+            .max_by(compare_values)
+            .unwrap_or(Value::Null),
+        AggregateFunction::Collect(expr) => {
+            // Collect returns a list - for now we'll represent as a string
+            let values: Vec<String> = records
+                .iter()
+                .map(|r| format!("{:?}", evaluate_expression_value(expr, r, ctx)))
+                .collect();
+            Value::String(format!("[{}]", values.join(", ")))
+        }
     }
 }
 
