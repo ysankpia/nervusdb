@@ -60,6 +60,25 @@ interface NativePageRankResult {
   converged: boolean;
 }
 
+interface NativeCypherRelationship {
+  subjectId: bigint;
+  predicateId: bigint;
+  objectId: bigint;
+}
+
+export interface NativeCypherStatement {
+  step(): boolean;
+  columnCount(): number;
+  columnName(column: number): string | null;
+  columnType(column: number): number;
+  columnText(column: number): string | null;
+  columnFloat(column: number): number | null;
+  columnBool(column: number): boolean | null;
+  columnNodeId(column: number): bigint | null;
+  columnRelationship(column: number): NativeCypherRelationship | null;
+  finalize(): void;
+}
+
 export interface NativeDatabaseHandle {
   addFact(subject: string, predicate: string, object: string): NativeTriple;
   deleteFact(subject: string, predicate: string, object: string): boolean;
@@ -68,6 +87,7 @@ export interface NativeDatabaseHandle {
   resolveId(value: string): number | null | undefined;
   resolveStr(id: number): string | null | undefined;
   executeQuery(query: string, params?: Record<string, unknown> | null): Record<string, any>[];
+  prepareV2(query: string, params?: Record<string, unknown> | null): NativeCypherStatement;
   query(criteria?: NativeQueryCriteria): NativeTriple[];
   queryFacts?(criteria?: NativeQueryCriteria): NativeFact[];
   openCursor(criteria?: NativeQueryCriteria): { id: number };
@@ -258,6 +278,11 @@ export class PersistentStore {
   executeQuery(cypher: string, params?: Record<string, unknown>): any[] {
     this.ensureOpen();
     return this.native.executeQuery(cypher, params ?? null);
+  }
+
+  prepareV2(cypher: string, params?: Record<string, unknown>): NativeCypherStatement {
+    this.ensureOpen();
+    return this.native.prepareV2(cypher, params ?? null);
   }
 
   // ========================================================================

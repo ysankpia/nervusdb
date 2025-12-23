@@ -88,6 +88,148 @@ pub struct FactCursorBatch {
     pub done: bool,
 }
 
+// ---------------------------------------------------------------------------
+// Statement API (SQLite-style row iterator) for Node
+// ---------------------------------------------------------------------------
+
+type CoreValue = nervusdb_core::query::executor::Value;
+
+const VALUE_NULL: i32 = 0;
+const VALUE_TEXT: i32 = 1;
+const VALUE_FLOAT: i32 = 2;
+const VALUE_BOOL: i32 = 3;
+const VALUE_NODE: i32 = 4;
+const VALUE_RELATIONSHIP: i32 = 5;
+
+struct StatementInner {
+    columns: Vec<String>,
+    rows: Vec<Vec<CoreValue>>,
+    next_row: usize,
+    current_row: Option<usize>,
+}
+
+#[napi]
+pub struct StatementHandle {
+    inner: Option<StatementInner>,
+}
+
+impl StatementHandle {
+    fn inner(&self) -> NapiResult<&StatementInner> {
+        self.inner
+            .as_ref()
+            .ok_or_else(|| napi::Error::new(Status::GenericFailure, "statement already finalized"))
+    }
+
+    fn inner_mut(&mut self) -> NapiResult<&mut StatementInner> {
+        self.inner
+            .as_mut()
+            .ok_or_else(|| napi::Error::new(Status::GenericFailure, "statement already finalized"))
+    }
+
+    fn cell(&self, column: i32) -> NapiResult<Option<&CoreValue>> {
+        let stmt = self.inner()?;
+        let idx = match usize::try_from(column) {
+            Ok(v) => v,
+            Err(_) => return Ok(None),
+        };
+        let row_idx = match stmt.current_row {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        Ok(stmt.rows.get(row_idx).and_then(|row| row.get(idx)))
+    }
+}
+
+#[napi]
+impl StatementHandle {
+    #[napi]
+    pub fn step(&mut self) -> NapiResult<bool> {
+        let stmt = self.inner_mut()?;
+        stmt.current_row = None;
+        if stmt.next_row >= stmt.rows.len() {
+            return Ok(false);
+        }
+        stmt.current_row = Some(stmt.next_row);
+        stmt.next_row += 1;
+        Ok(true)
+    }
+
+    #[napi(js_name = "columnCount")]
+    pub fn column_count(&self) -> NapiResult<u32> {
+        let stmt = self.inner()?;
+        Ok(u32::try_from(stmt.columns.len()).unwrap_or(u32::MAX))
+    }
+
+    #[napi(js_name = "columnName")]
+    pub fn column_name(&self, column: i32) -> NapiResult<Option<String>> {
+        let stmt = self.inner()?;
+        let idx = match usize::try_from(column) {
+            Ok(v) => v,
+            Err(_) => return Ok(None),
+        };
+        Ok(stmt.columns.get(idx).cloned())
+    }
+
+    #[napi(js_name = "columnType")]
+    pub fn column_type(&self, column: i32) -> NapiResult<i32> {
+        match self.cell(column)? {
+            Some(CoreValue::String(_)) => Ok(VALUE_TEXT),
+            Some(CoreValue::Float(_)) => Ok(VALUE_FLOAT),
+            Some(CoreValue::Boolean(_)) => Ok(VALUE_BOOL),
+            Some(CoreValue::Null) => Ok(VALUE_NULL),
+            Some(CoreValue::Node(_)) => Ok(VALUE_NODE),
+            Some(CoreValue::Relationship(_)) => Ok(VALUE_RELATIONSHIP),
+            None => Ok(VALUE_NULL),
+        }
+    }
+
+    #[napi(js_name = "columnText")]
+    pub fn column_text(&self, column: i32) -> NapiResult<Option<String>> {
+        match self.cell(column)? {
+            Some(CoreValue::String(value)) => Ok(Some(value.clone())),
+            _ => Ok(None),
+        }
+    }
+
+    #[napi(js_name = "columnFloat")]
+    pub fn column_float(&self, column: i32) -> NapiResult<Option<f64>> {
+        match self.cell(column)? {
+            Some(CoreValue::Float(value)) => Ok(Some(*value)),
+            _ => Ok(None),
+        }
+    }
+
+    #[napi(js_name = "columnBool")]
+    pub fn column_bool(&self, column: i32) -> NapiResult<Option<bool>> {
+        match self.cell(column)? {
+            Some(CoreValue::Boolean(value)) => Ok(Some(*value)),
+            _ => Ok(None),
+        }
+    }
+
+    #[napi(js_name = "columnNodeId")]
+    pub fn column_node_id(&self, column: i32) -> NapiResult<Option<BigInt>> {
+        match self.cell(column)? {
+            Some(CoreValue::Node(value)) => Ok(Some(BigInt::from(*value))),
+            _ => Ok(None),
+        }
+    }
+
+    #[napi(js_name = "columnRelationship")]
+    pub fn column_relationship(&self, column: i32) -> NapiResult<Option<TripleOutput>> {
+        match self.cell(column)? {
+            Some(CoreValue::Relationship(value)) => Ok(Some(triple_to_output(*value))),
+            _ => Ok(None),
+        }
+    }
+
+    #[napi(js_name = "finalize")]
+    pub fn finalize(&mut self) -> NapiResult<()> {
+        self.inner = None;
+        Ok(())
+    }
+}
+
 // Graph Algorithm Output Types
 
 #[napi(object)]
@@ -802,6 +944,124 @@ impl DatabaseHandle {
             .collect();
 
         Ok(json_results)
+    }
+
+    #[napi(js_name = "prepareV2")]
+    pub fn prepare_v2(&self, query: String, params: Option<Object>) -> NapiResult<StatementHandle> {
+        use nervusdb_core::query::ast::Clause;
+        use nervusdb_core::query::ast::Expression;
+        use nervusdb_core::query::parser::Parser;
+
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| napi::Error::new(Status::GenericFailure, "database mutex poisoned"))?;
+        let db = guard
+            .as_mut()
+            .ok_or_else(|| napi::Error::new(Status::GenericFailure, "database already closed"))?;
+
+        let params_map: Option<HashMap<String, serde_json::Value>> = match params {
+            Some(obj) => {
+                let mut map: HashMap<String, serde_json::Value> = HashMap::new();
+                for key in Object::keys(&obj)? {
+                    let maybe_value = obj.get::<_, JsUnknown>(&key)?;
+                    let js_value = maybe_value.ok_or_else(|| {
+                        napi::Error::new(
+                            Status::GenericFailure,
+                            format!(
+                                "prepareV2 parameter `{}` was undefined; parameters must be JSON-serializable",
+                                key
+                            ),
+                        )
+                    })?;
+                    let value = js_value_to_serde(js_value)?;
+                    map.insert(key, value);
+                }
+                Some(map)
+            }
+            None => None,
+        };
+
+        if query.contains('$') && params_map.as_ref().map(|m| m.is_empty()).unwrap_or(true) {
+            return Err(napi::Error::new(
+                Status::GenericFailure,
+                "prepareV2 was called with parameterized query but no params were provided",
+            ));
+        }
+
+        let results = db
+            .execute_query_with_params(&query, params_map)
+            .map_err(map_error)?;
+
+        fn infer_projection_alias(expr: &Expression) -> String {
+            match expr {
+                Expression::Variable(name) => name.clone(),
+                Expression::PropertyAccess(pa) => format!("{}.{}", pa.variable, pa.property),
+                _ => "col".to_string(),
+            }
+        }
+
+        let mut projection_names: Vec<String> = Vec::new();
+        match Parser::parse(query.as_str()) {
+            Ok(ast) => {
+                for clause in ast.clauses {
+                    if let Clause::Return(r) = clause {
+                        projection_names = r
+                            .items
+                            .into_iter()
+                            .map(|item| {
+                                item.alias
+                                    .unwrap_or_else(|| infer_projection_alias(&item.expression))
+                            })
+                            .collect();
+                        break;
+                    }
+                }
+            }
+            Err(err) => return Err(napi::Error::new(Status::InvalidArg, err)),
+        }
+
+        if !projection_names.is_empty() {
+            let mut seen = std::collections::HashSet::new();
+            for name in &projection_names {
+                if !seen.insert(name) {
+                    return Err(napi::Error::new(
+                        Status::InvalidArg,
+                        format!("duplicate column name: {name}; use explicit aliases"),
+                    ));
+                }
+            }
+        }
+
+        let columns: Vec<String> = if !projection_names.is_empty() {
+            projection_names
+        } else if results.is_empty() {
+            Vec::new()
+        } else {
+            let mut keys: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            for row in &results {
+                keys.extend(row.keys().cloned());
+            }
+            keys.into_iter().collect()
+        };
+
+        let mut rows: Vec<Vec<CoreValue>> = Vec::with_capacity(results.len());
+        for row in results {
+            let mut out_row = Vec::with_capacity(columns.len());
+            for col in &columns {
+                out_row.push(row.get(col).cloned().unwrap_or(CoreValue::Null));
+            }
+            rows.push(out_row);
+        }
+
+        Ok(StatementHandle {
+            inner: Some(StatementInner {
+                columns,
+                rows,
+                next_row: 0,
+                current_row: None,
+            }),
+        })
     }
 
     #[napi(js_name = "setNodeProperty")]

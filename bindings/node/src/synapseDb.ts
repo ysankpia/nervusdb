@@ -1,8 +1,8 @@
-import { warnExperimental } from './utils/experimental.js';
 import {
   PersistentStore,
   FactInput,
   FactRecord,
+  NativeCypherStatement,
   NativeDatabaseHandle,
   TripleKey,
   TemporalEpisodeInput,
@@ -40,6 +40,95 @@ export interface CypherResult {
 
 export interface CypherExecutionOptions {
   readonly?: boolean;
+}
+
+export enum CypherValueType {
+  Null = 0,
+  Text = 1,
+  Float = 2,
+  Bool = 3,
+  Node = 4,
+  Relationship = 5,
+}
+
+export type CypherRelationship = NonNullable<ReturnType<NativeCypherStatement['columnRelationship']>>;
+
+export type CypherValue = null | string | number | boolean | bigint | CypherRelationship;
+
+export class CypherStatement {
+  private finalized = false;
+  private readonly columnNames: string[];
+
+  constructor(private readonly stmt: NativeCypherStatement) {
+    const count = this.unwrap<number>(stmt.columnCount() as unknown);
+    this.columnNames = Array.from(
+      { length: count },
+      (_, i) => this.unwrap<string | null>(stmt.columnName(i) as unknown) ?? `col${i}`,
+    );
+  }
+
+  get columns(): readonly string[] {
+    return this.columnNames;
+  }
+
+  step(): boolean {
+    this.ensureNotFinalized();
+    return this.unwrap<boolean>(this.stmt.step() as unknown);
+  }
+
+  columnType(column: number): CypherValueType {
+    this.ensureNotFinalized();
+    return this.unwrap<number>(this.stmt.columnType(column) as unknown) as CypherValueType;
+  }
+
+  columnValue(column: number): CypherValue {
+    this.ensureNotFinalized();
+    switch (this.columnType(column)) {
+      case CypherValueType.Text:
+        return this.unwrap<string | null>(this.stmt.columnText(column) as unknown) ?? null;
+      case CypherValueType.Float:
+        return this.unwrap<number | null>(this.stmt.columnFloat(column) as unknown) ?? null;
+      case CypherValueType.Bool:
+        return this.unwrap<boolean | null>(this.stmt.columnBool(column) as unknown) ?? null;
+      case CypherValueType.Node:
+        return this.unwrap<bigint | null>(this.stmt.columnNodeId(column) as unknown) ?? null;
+      case CypherValueType.Relationship:
+        return (
+          this.unwrap<CypherRelationship | null>(this.stmt.columnRelationship(column) as unknown) ??
+          null
+        );
+      case CypherValueType.Null:
+      default:
+        return null;
+    }
+  }
+
+  currentRow(): CypherRecord {
+    this.ensureNotFinalized();
+    const row: CypherRecord = {};
+    for (let i = 0; i < this.columnNames.length; i++) {
+      row[this.columnNames[i]] = this.columnValue(i);
+    }
+    return row;
+  }
+
+  finalize(): void {
+    if (this.finalized) return;
+    this.finalized = true;
+    this.unwrap<void>(this.stmt.finalize() as unknown);
+  }
+
+  private ensureNotFinalized(): void {
+    if (!this.finalized) return;
+    throw new Error('statement already finalized');
+  }
+
+  private unwrap<T>(value: unknown): T {
+    if (value instanceof Error) {
+      throw value;
+    }
+    return value as T;
+  }
 }
 
 export interface NativePathResult {
@@ -149,12 +238,7 @@ export class NervusDB {
    */
   static async open(path: string, options?: NervusDBOpenOptions): Promise<NervusDB> {
     const experimental = options?.experimental ?? {};
-    const envEnableExperimental = process.env.SYNAPSEDB_ENABLE_EXPERIMENTAL_QUERIES === '1';
-    const enableCypher = experimental.cypher ?? envEnableExperimental;
-
-    if (enableCypher) {
-      warnExperimental('Cypher 查询语言前端');
-    }
+    const enableCypher = experimental.cypher ?? true;
 
     const store = await PersistentStore.open(path, options ?? {});
     return new NervusDB(store, enableCypher);
@@ -331,6 +415,26 @@ export class NervusDB {
     };
   }
 
+  cypherPrepare(statement: string, parameters: Record<string, unknown> = {}): CypherStatement {
+    this.ensureCypherEnabled();
+    return new CypherStatement(this.store.prepareV2(statement, parameters));
+  }
+
+  async *cypherQueryStream(
+    statement: string,
+    parameters: Record<string, unknown> = {},
+    _options?: CypherExecutionOptions,
+  ): AsyncGenerator<CypherRecord> {
+    const stmt = this.cypherPrepare(statement, parameters);
+    try {
+      while (stmt.step()) {
+        yield stmt.currentRow();
+      }
+    } finally {
+      stmt.finalize();
+    }
+  }
+
   async cypherRead(
     statement: string,
     parameters: Record<string, unknown> = {},
@@ -342,7 +446,7 @@ export class NervusDB {
   private ensureCypherEnabled(): void {
     if (this.cypherEnabled) return;
     throw new Error(
-      'Cypher 处于实验阶段且默认关闭。请在 open() 时传入 experimental.cypher = true，或设置 SYNAPSEDB_ENABLE_EXPERIMENTAL_QUERIES=1。',
+      'Cypher 已被配置关闭。请在 open() 时传入 options.experimental.cypher = true。',
     );
   }
 

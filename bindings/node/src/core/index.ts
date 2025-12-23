@@ -6,7 +6,8 @@
  *
  * This module exports:
  * - PersistentStore - Main database interface (wraps Rust core)
- *   - Use store.executeQuery(cypher) for all queries
+ *   - Use store.prepareV2(...) for large result sets (stmt-style iterator)
+ *   - Use store.executeQuery(cypher) only for small results
  * - TemporalMemoryStore - Temporal memory features
  *
  * DEPRECATED (removed in v2.0):

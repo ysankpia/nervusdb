@@ -30,13 +30,14 @@ export interface NervusDBOpenOptions {
   registerReader?: boolean;
 
   /**
-   * 实验性功能开关
+   * Feature gates
    *
-   * 这些能力尚未稳定，默认关闭。建议仅在评估阶段显式开启。
-   * 可通过环境变量 `SYNAPSEDB_ENABLE_EXPERIMENTAL_QUERIES=1` 全局开启查询语言前端。
+   * 为兼容历史 API，这里仍沿用 `experimental` 命名。
+   * - `cypher`: Cypher 查询前端开关（子集实现，默认开启）
+   * - `gremlin`/`graphql`: 预留开关（默认关闭）
    */
   experimental?: {
-    /** 是否启用 Cypher 查询语言插件 */
+    /** 是否启用 Cypher 查询前端（默认开启） */
     cypher?: boolean;
     /** 是否启用 Gremlin 查询语言辅助工厂 */
     gremlin?: boolean;

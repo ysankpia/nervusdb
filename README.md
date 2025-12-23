@@ -144,7 +144,7 @@ cargo build --release
 - **三索引三元组存储**：`SPO / POS / OSP`（写放大更小，但仍覆盖常见查询模式）
 - **字典 Interning + LRU**：热字符串走内存缓存，避免反复 B-Tree 查找
 - **事务与崩溃一致性**：`kill -9` 下通过 crash-test 门禁（PR smoke + nightly 1000x）
-- **Cypher（实验性）**：提供 `exec_cypher(JSON)` + `stmt(step/column)` 两套 C API
+- **Cypher 查询支持（子集）**：提供 `exec_cypher(JSON)` + `stmt(step/column)` 两套 C API（支持范围见 `docs/cypher_support.md`）
 - **Temporal（可选）**：Cargo feature `temporal`，默认关闭
 - **绑定层薄包装**：Node.js (NAPI-RS)、Python (PyO3)、C (FFI)、WASM
 
