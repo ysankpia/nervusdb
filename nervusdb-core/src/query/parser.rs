@@ -49,7 +49,6 @@ impl TokenParser {
 
         // Fail-fast on unsupported top-level clauses/keywords.
         match &self.peek().token_type {
-            TokenType::Optional => return Err(Error::NotImplemented("OPTIONAL MATCH")),
             TokenType::Union => return Err(Error::NotImplemented("UNION")),
             TokenType::Merge => return Err(Error::NotImplemented("MERGE")),
             TokenType::Remove => return Err(Error::NotImplemented("REMOVE")),
@@ -59,6 +58,10 @@ impl TokenParser {
             _ => {}
         }
 
+        if self.match_token(&TokenType::Optional) {
+            self.consume(&TokenType::Match, "Expected MATCH after OPTIONAL")?;
+            return Ok(Some(Clause::Match(self.parse_optional_match()?)));
+        }
         if self.match_token(&TokenType::Match) {
             return Ok(Some(Clause::Match(self.parse_match()?)));
         }
@@ -92,6 +95,14 @@ impl TokenParser {
         let pattern = self.parse_pattern()?;
         Ok(MatchClause {
             optional: false,
+            pattern,
+        })
+    }
+
+    fn parse_optional_match(&mut self) -> Result<MatchClause, Error> {
+        let pattern = self.parse_pattern()?;
+        Ok(MatchClause {
+            optional: true,
             pattern,
         })
     }
@@ -791,6 +802,23 @@ mod tests {
                 }
             }
             _ => panic!("Expected Match Clause"),
+        }
+    }
+
+    #[test]
+    fn test_parse_optional_match() {
+        let query = "MATCH (a) OPTIONAL MATCH (a)-[:KNOWS]->(b) RETURN a, b";
+        let parsed = Parser::parse(query).unwrap();
+        assert_eq!(parsed.clauses.len(), 3);
+
+        match &parsed.clauses[0] {
+            Clause::Match(m) => assert!(!m.optional),
+            _ => panic!("Expected MATCH"),
+        }
+
+        match &parsed.clauses[1] {
+            Clause::Match(m) => assert!(m.optional),
+            _ => panic!("Expected OPTIONAL MATCH"),
         }
     }
 }

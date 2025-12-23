@@ -729,6 +729,28 @@ mod tests {
     }
 
     #[test]
+    fn test_execute_optional_match() {
+        let tmp = tempdir().unwrap();
+        let mut db = Database::open(Options::new(tmp.path())).unwrap();
+
+        db.add_fact(Fact::new("Alice", "KNOWS", "Bob")).unwrap();
+        db.add_fact(Fact::new("Charlie", "LIKES", "IceCream"))
+            .unwrap();
+
+        let res = db
+            .execute_query(
+                "MATCH (a)-[:KNOWS]->(b) OPTIONAL MATCH (b)-[:LIKES]->(c) RETURN a, b, c",
+            )
+            .unwrap();
+
+        assert_eq!(res.len(), 1);
+        assert!(matches!(
+            res[0].get("c"),
+            Some(crate::query::executor::Value::Null)
+        ));
+    }
+
+    #[test]
     fn test_execute_multi_hop() {
         let tmp = tempdir().unwrap();
         let mut db = Database::open(Options::new(tmp.path())).unwrap();
