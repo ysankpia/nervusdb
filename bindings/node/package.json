@@ -36,6 +36,7 @@
     "spell:md": "cspell lint --no-progress --no-summary ../README.md ../docs/**/*.md",
     "test": "NERVUSDB_DISABLE_NATIVE=1 vitest run",
     "test:watch": "NERVUSDB_DISABLE_NATIVE=1 vitest",
+    "test:native": "NERVUSDB_EXPECT_NATIVE=1 NERVUSDB_NATIVE_STRICT=1 vitest run --reporter=dot .native.test.ts",
     "test:coverage": "node -e \"require('fs').mkdirSync('coverage/.tmp', { recursive: true })\" && NERVUSDB_DISABLE_NATIVE=1 VITEST_COVERAGE=1 vitest run --coverage --exclude 'tests/**/*performance*.test.ts'",
     "coverage:check-per-file": "node scripts/check-coverage-per-file.mjs",
     "test:perf": "vitest run --reporter=dot --include 'tests/**/*performance*.test.ts'",
