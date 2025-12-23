@@ -331,10 +331,7 @@ impl Database {
         query_string: &str,
         params: Option<HashMap<String, serde_json::Value>>,
     ) -> Result<Vec<std::collections::HashMap<String, query::executor::Value>>> {
-        use query::ast::Clause;
-        use query::executor::{ExecutionContext, ExecutionPlan};
         use query::parser::Parser;
-        use query::planner::QueryPlanner;
 
         let query = Parser::parse(query_string)?;
 
@@ -350,6 +347,26 @@ impl Database {
                 "[nervusdb-core] execute_query_with_params received: {:?}",
                 keys
             ));
+        }
+
+        self.execute_parsed_query_with_params(query, &param_values)
+    }
+
+    fn execute_parsed_query_with_params(
+        &mut self,
+        query: query::ast::Query,
+        param_values: &HashMap<String, query::executor::Value>,
+    ) -> Result<Vec<std::collections::HashMap<String, query::executor::Value>>> {
+        use query::ast::Clause;
+        use query::executor::{ExecutionContext, ExecutionPlan};
+        use query::planner::QueryPlanner;
+
+        if query
+            .clauses
+            .iter()
+            .any(|clause| matches!(clause, Clause::Union(_)))
+        {
+            return self.execute_union_query_with_params(query, param_values);
         }
 
         // Check if query contains SET clause (needs special handling due to mutation)
@@ -381,12 +398,12 @@ impl Database {
 
         // Handle SET queries specially (needs mutation)
         if has_set {
-            return self.execute_set_query_with_plan(&query, &param_values);
+            return self.execute_set_query_with_plan(&query, param_values);
         }
 
         // Handle DELETE queries specially (needs mutation)
         if has_delete {
-            return self.execute_delete_query_with_plan(&query, &param_values);
+            return self.execute_delete_query_with_plan(&query, param_values);
         }
 
         // Handle read queries through execution plan
@@ -395,7 +412,7 @@ impl Database {
 
         let ctx = ExecutionContext {
             db: self,
-            params: &param_values,
+            params: param_values,
         };
         let iterator = plan.execute(&ctx)?;
 
@@ -405,6 +422,134 @@ impl Database {
         }
 
         Ok(results)
+    }
+
+    fn execute_union_query_with_params(
+        &mut self,
+        query: query::ast::Query,
+        param_values: &HashMap<String, query::executor::Value>,
+    ) -> Result<Vec<std::collections::HashMap<String, query::executor::Value>>> {
+        use query::ast::{Clause, Expression, Query, ReturnClause, UnionClause};
+
+        fn is_write_clause(clause: &Clause) -> bool {
+            matches!(
+                clause,
+                Clause::Create(_) | Clause::Merge(_) | Clause::Set(_) | Clause::Delete(_)
+            )
+        }
+
+        fn infer_alias(expr: &Expression) -> String {
+            match expr {
+                Expression::Variable(name) => name.clone(),
+                Expression::PropertyAccess(pa) => format!("{}.{}", pa.variable, pa.property),
+                _ => "col".to_string(),
+            }
+        }
+
+        fn return_columns(query: &Query) -> Option<Vec<String>> {
+            query.clauses.iter().find_map(|clause| match clause {
+                Clause::Return(ReturnClause { items, .. }) => Some(
+                    items
+                        .iter()
+                        .map(|item| {
+                            item.alias
+                                .clone()
+                                .unwrap_or_else(|| infer_alias(&item.expression))
+                        })
+                        .collect(),
+                ),
+                _ => None,
+            })
+        }
+
+        fn validate_row_columns(
+            expected: &[String],
+            row: &std::collections::HashMap<String, query::executor::Value>,
+        ) -> Result<()> {
+            if row.len() != expected.len() {
+                return Err(Error::Other("UNION schema mismatch".to_string()));
+            }
+            for col in expected {
+                if !row.contains_key(col) {
+                    return Err(Error::Other("UNION schema mismatch".to_string()));
+                }
+            }
+            Ok(())
+        }
+
+        fn row_key(row: &std::collections::HashMap<String, query::executor::Value>) -> String {
+            let mut items: Vec<_> = row.iter().collect();
+            items.sort_by(|(a, _), (b, _)| a.cmp(b));
+            items
+                .into_iter()
+                .map(|(k, v)| format!("{k}={v:?}"))
+                .collect::<Vec<_>>()
+                .join("|")
+        }
+
+        let mut left_clauses = Vec::new();
+        let mut unions: Vec<UnionClause> = Vec::new();
+
+        for clause in query.clauses {
+            match clause {
+                Clause::Union(u) => unions.push(u),
+                other => left_clauses.push(other),
+            }
+        }
+
+        let left_query = Query {
+            clauses: left_clauses,
+        };
+
+        if left_query.clauses.iter().any(is_write_clause)
+            || unions
+                .iter()
+                .any(|u| u.query.clauses.iter().any(is_write_clause))
+        {
+            return Err(Error::NotImplemented("UNION with write clauses"));
+        }
+
+        let Some(expected_cols) = return_columns(&left_query) else {
+            return Err(Error::Other("UNION requires explicit RETURN".to_string()));
+        };
+
+        for u in &unions {
+            let Some(cols) = return_columns(&u.query) else {
+                return Err(Error::Other("UNION requires explicit RETURN".to_string()));
+            };
+            if cols != expected_cols {
+                return Err(Error::Other(
+                    "UNION queries must return the same columns".to_string(),
+                ));
+            }
+        }
+
+        let mut current = self.execute_parsed_query_with_params(left_query, param_values)?;
+        for row in &current {
+            validate_row_columns(&expected_cols, row)?;
+        }
+
+        for u in unions {
+            let mut right = self.execute_parsed_query_with_params(u.query, param_values)?;
+            for row in &right {
+                validate_row_columns(&expected_cols, row)?;
+            }
+
+            if u.all {
+                current.append(&mut right);
+            } else {
+                let mut deduped = Vec::new();
+                let mut seen = std::collections::HashSet::new();
+                for row in current.into_iter().chain(right) {
+                    if seen.insert(row_key(&row)) {
+                        deduped.push(row);
+                    }
+                }
+                current = deduped;
+            }
+        }
+
+        Ok(current)
     }
 
     /// Convert serde_json::Value to executor::Value (public for FFI)

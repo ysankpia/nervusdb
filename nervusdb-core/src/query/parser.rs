@@ -30,15 +30,32 @@ impl TokenParser {
     }
 
     fn parse_query(&mut self) -> Result<Query, Error> {
+        let mut clauses = self.parse_single_query_clauses()?;
+
+        while self.match_token(&TokenType::Union) {
+            let all = self.match_token(&TokenType::All);
+            let right_clauses = self.parse_single_query_clauses()?;
+            clauses.push(Clause::Union(UnionClause {
+                all,
+                query: Query {
+                    clauses: right_clauses,
+                },
+            }));
+        }
+
+        Ok(Query { clauses })
+    }
+
+    fn parse_single_query_clauses(&mut self) -> Result<Vec<Clause>, Error> {
         let mut clauses = Vec::new();
-        while !self.is_at_end() {
+        while !self.is_at_end() && !self.check(&TokenType::Union) {
             if let Some(clause) = self.parse_clause()? {
                 clauses.push(clause);
             } else {
                 break;
             }
         }
-        Ok(Query { clauses })
+        Ok(clauses)
     }
 
     fn parse_clause(&mut self) -> Result<Option<Clause>, Error> {
@@ -49,7 +66,6 @@ impl TokenParser {
 
         // Fail-fast on unsupported top-level clauses/keywords.
         match &self.peek().token_type {
-            TokenType::Union => return Err(Error::NotImplemented("UNION")),
             TokenType::Remove => return Err(Error::NotImplemented("REMOVE")),
             TokenType::Unwind => return Err(Error::NotImplemented("UNWIND")),
             TokenType::Call => return Err(Error::NotImplemented("CALL")),
@@ -883,5 +899,12 @@ mod tests {
             },
             _ => panic!("Expected MATCH"),
         }
+    }
+
+    #[test]
+    fn test_parse_union() {
+        let query = "MATCH (a)-[:KNOWS]->(b) RETURN b UNION MATCH (a)-[:LIKES]->(b) RETURN b";
+        let parsed = Parser::parse(query).unwrap();
+        assert!(matches!(parsed.clauses.last(), Some(Clause::Union(_))));
     }
 }

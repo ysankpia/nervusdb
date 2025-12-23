@@ -15,7 +15,8 @@ pub enum Clause {
     With(WithClause),
     Set(SetClause),
     Delete(DeleteClause),
-    // Remove, Union, Unwind can be added later
+    Union(UnionClause),
+    // Remove, Unwind can be added later
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -32,6 +33,12 @@ pub struct CreateClause {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MergeClause {
     pub pattern: Pattern,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UnionClause {
+    pub all: bool,
+    pub query: Query,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

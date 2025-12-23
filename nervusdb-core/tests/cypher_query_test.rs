@@ -339,7 +339,7 @@ fn test_unsupported_features_fail_fast() {
     db.add_fact(Fact::new("alice", "knows", "bob")).unwrap();
 
     let err = db
-        .execute_query("MATCH (n) RETURN n UNION MATCH (n) RETURN n")
+        .execute_query("UNWIND [1,2,3] AS n RETURN n")
         .unwrap_err();
     assert!(matches!(err, nervusdb_core::Error::NotImplemented(_)));
 
@@ -350,6 +350,36 @@ fn test_unsupported_features_fail_fast() {
     let _ = db.execute_query("MATCH (n) RETURN n ORDER BY n").unwrap();
     let _ = db.execute_query("MATCH (n) RETURN n SKIP 1").unwrap();
     // WITH requires proper syntax: MATCH (n) WITH n RETURN n
+}
+
+#[test]
+fn test_union_distinct_dedup() {
+    let dir = tempdir().unwrap();
+    let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
+
+    db.add_fact(Fact::new("alice", "knows", "bob")).unwrap();
+    db.add_fact(Fact::new("charlie", "likes", "bob")).unwrap();
+
+    let results = db
+        .execute_query("MATCH (a)-[:knows]->(b) RETURN b UNION MATCH (a)-[:likes]->(b) RETURN b")
+        .unwrap();
+    assert_eq!(results.len(), 1, "UNION should remove duplicates");
+}
+
+#[test]
+fn test_union_all_keeps_duplicates() {
+    let dir = tempdir().unwrap();
+    let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
+
+    db.add_fact(Fact::new("alice", "knows", "bob")).unwrap();
+    db.add_fact(Fact::new("charlie", "likes", "bob")).unwrap();
+
+    let results = db
+        .execute_query(
+            "MATCH (a)-[:knows]->(b) RETURN b UNION ALL MATCH (a)-[:likes]->(b) RETURN b",
+        )
+        .unwrap();
+    assert_eq!(results.len(), 2, "UNION ALL should keep duplicates");
 }
 
 #[test]
