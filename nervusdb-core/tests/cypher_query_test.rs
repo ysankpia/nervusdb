@@ -344,12 +344,10 @@ fn test_unsupported_features_fail_fast() {
     let err = db.execute_query("MATCH (n) RETURN DISTINCT n").unwrap_err();
     assert!(matches!(err, nervusdb_core::Error::NotImplemented(_)));
 
-    // ORDER BY and SKIP are now supported
+    // ORDER BY, SKIP, and WITH are now supported
     let _ = db.execute_query("MATCH (n) RETURN n ORDER BY n").unwrap();
     let _ = db.execute_query("MATCH (n) RETURN n SKIP 1").unwrap();
-
-    let err = db.execute_query("MATCH (n) RETURN n WITH n").unwrap_err();
-    assert!(matches!(err, nervusdb_core::Error::NotImplemented(_)));
+    // WITH requires proper syntax: MATCH (n) WITH n RETURN n
 }
 
 #[test]
@@ -939,4 +937,62 @@ fn test_aggregate_functions() {
         .execute_query("MATCH (p:Person) RETURN max(p.age)")
         .unwrap();
     assert_eq!(results.len(), 1);
+}
+
+#[test]
+fn test_with_clause() {
+    let dir = tempdir().unwrap();
+    let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
+
+    // Create test data
+    db.add_fact(Fact::new("alice", "type", "Person")).unwrap();
+    db.add_fact(Fact::new("bob", "type", "Person")).unwrap();
+    db.add_fact(Fact::new("charlie", "type", "Person")).unwrap();
+
+    let alice_id = db.resolve_id("alice").unwrap().unwrap();
+    let bob_id = db.resolve_id("bob").unwrap().unwrap();
+    let charlie_id = db.resolve_id("charlie").unwrap().unwrap();
+
+    db.set_node_property_binary(
+        alice_id,
+        &nervusdb_core::storage::property::serialize_properties(
+            &serde_json::from_value(serde_json::json!({"age": 25.0})).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    db.set_node_property_binary(
+        bob_id,
+        &nervusdb_core::storage::property::serialize_properties(
+            &serde_json::from_value(serde_json::json!({"age": 30.0})).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    db.set_node_property_binary(
+        charlie_id,
+        &nervusdb_core::storage::property::serialize_properties(
+            &serde_json::from_value(serde_json::json!({"age": 35.0})).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    // Test WITH basic projection
+    let results = db
+        .execute_query("MATCH (p:Person) WITH p RETURN p")
+        .unwrap();
+    assert_eq!(results.len(), 3);
+
+    // Test WITH LIMIT
+    let results = db
+        .execute_query("MATCH (p:Person) WITH p LIMIT 2 RETURN p")
+        .unwrap();
+    assert_eq!(results.len(), 2);
+
+    // Test WITH ORDER BY
+    let results = db
+        .execute_query("MATCH (p:Person) WITH p ORDER BY p.age RETURN p")
+        .unwrap();
+    assert_eq!(results.len(), 3);
 }

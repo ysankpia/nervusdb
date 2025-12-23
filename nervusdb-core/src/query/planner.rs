@@ -182,6 +182,78 @@ impl QueryPlanner {
                 Clause::Return(r) => {
                     return_clause = Some(r);
                 }
+                Clause::With(with_clause) => {
+                    // WITH acts as a pipeline: project current results, then continue
+                    let current_plan = plan.ok_or_else(|| {
+                        Error::Other("WITH clause requires a preceding MATCH clause".to_string())
+                    })?;
+
+                    // Apply any pending WHERE first
+                    let mut with_plan = if let Some(w) = where_clause.take() {
+                        PhysicalPlan::Filter(FilterNode {
+                            input: Box::new(current_plan),
+                            predicate: w.expression,
+                        })
+                    } else {
+                        current_plan
+                    };
+
+                    // Project the WITH items
+                    let projections: Vec<(Expression, String)> = with_clause
+                        .items
+                        .into_iter()
+                        .map(|item| {
+                            let alias = item
+                                .alias
+                                .unwrap_or_else(|| Self::infer_alias(&item.expression));
+                            (item.expression, alias)
+                        })
+                        .collect();
+
+                    with_plan = PhysicalPlan::Project(ProjectNode {
+                        input: Box::new(with_plan),
+                        projections,
+                    });
+
+                    // Apply WITH's WHERE clause
+                    if let Some(w) = with_clause.where_clause {
+                        with_plan = PhysicalPlan::Filter(FilterNode {
+                            input: Box::new(with_plan),
+                            predicate: w.expression,
+                        });
+                    }
+
+                    // Apply ORDER BY
+                    if let Some(order_by) = with_clause.order_by {
+                        let order_items = order_by
+                            .items
+                            .into_iter()
+                            .map(|item| (item.expression, item.direction))
+                            .collect();
+                        with_plan = PhysicalPlan::Sort(SortNode {
+                            input: Box::new(with_plan),
+                            order_by: order_items,
+                        });
+                    }
+
+                    // Apply SKIP
+                    if let Some(skip) = with_clause.skip {
+                        with_plan = PhysicalPlan::Skip(SkipNode {
+                            input: Box::new(with_plan),
+                            skip,
+                        });
+                    }
+
+                    // Apply LIMIT
+                    if let Some(limit) = with_clause.limit {
+                        with_plan = PhysicalPlan::Limit(LimitNode {
+                            input: Box::new(with_plan),
+                            limit,
+                        });
+                    }
+
+                    plan = Some(with_plan);
+                }
                 _ => return Err(Error::Other("Unsupported clause".to_string())),
             }
         }

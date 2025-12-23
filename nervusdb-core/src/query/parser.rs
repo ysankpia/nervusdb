@@ -50,7 +50,6 @@ impl TokenParser {
         // Fail-fast on unsupported top-level clauses/keywords.
         match &self.peek().token_type {
             TokenType::Optional => return Err(Error::NotImplemented("OPTIONAL MATCH")),
-            TokenType::With => return Err(Error::NotImplemented("WITH")),
             TokenType::Union => return Err(Error::NotImplemented("UNION")),
             TokenType::Merge => return Err(Error::NotImplemented("MERGE")),
             TokenType::Remove => return Err(Error::NotImplemented("REMOVE")),
@@ -68,6 +67,9 @@ impl TokenParser {
         }
         if self.match_token(&TokenType::Return) {
             return Ok(Some(Clause::Return(self.parse_return()?)));
+        }
+        if self.match_token(&TokenType::With) {
+            return Ok(Some(Clause::With(self.parse_with()?)));
         }
         if self.match_token(&TokenType::Where) {
             return Ok(Some(Clause::Where(self.parse_where()?)));
@@ -178,6 +180,56 @@ impl TokenParser {
             }
             _ => Err(Error::Other(format!("Expected integer after {}", context))),
         }
+    }
+
+    fn parse_with(&mut self) -> Result<WithClause, Error> {
+        let distinct = self.match_token(&TokenType::Distinct);
+        let mut items = Vec::new();
+
+        loop {
+            items.push(self.parse_return_item()?);
+            if !self.match_token(&TokenType::Comma) {
+                break;
+            }
+        }
+
+        // Parse optional WHERE after WITH
+        let where_clause = if self.match_token(&TokenType::Where) {
+            Some(self.parse_where()?)
+        } else {
+            None
+        };
+
+        // Parse ORDER BY
+        let order_by = if self.match_token(&TokenType::Order) {
+            self.consume(&TokenType::By, "Expected BY after ORDER")?;
+            Some(self.parse_order_by()?)
+        } else {
+            None
+        };
+
+        // Parse SKIP
+        let skip = if self.match_token(&TokenType::Skip) {
+            Some(self.parse_integer("SKIP")?)
+        } else {
+            None
+        };
+
+        // Parse LIMIT
+        let limit = if self.match_token(&TokenType::Limit) {
+            Some(self.parse_integer("LIMIT")?)
+        } else {
+            None
+        };
+
+        Ok(WithClause {
+            distinct,
+            items,
+            where_clause,
+            order_by,
+            limit,
+            skip,
+        })
     }
 
     fn parse_return_item(&mut self) -> Result<ReturnItem, Error> {
