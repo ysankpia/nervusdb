@@ -741,8 +741,40 @@ impl TokenParser {
                 self.consume(&TokenType::RightParen, "Expected ')'")?;
                 Ok(expr)
             }
+            TokenType::Case => {
+                self.advance(); // consume CASE
+                Ok(Expression::Case(Box::new(self.parse_case_expression()?)))
+            }
             _ => Err(Error::Other(format!("Unexpected token {:?}", token))),
         }
+    }
+
+    fn parse_case_expression(&mut self) -> Result<CaseExpression, Error> {
+        let mut alternatives = Vec::new();
+
+        while self.match_token(&TokenType::When) {
+            let when = self.parse_expression()?;
+            self.consume(&TokenType::Then, "Expected THEN after CASE WHEN")?;
+            let then = self.parse_expression()?;
+            alternatives.push(CaseAlternative { when, then });
+        }
+
+        if alternatives.is_empty() {
+            return Err(Error::Other("CASE requires at least one WHEN".to_string()));
+        }
+
+        let else_expression = if self.match_token(&TokenType::Else) {
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+
+        self.consume(&TokenType::End, "Expected END to close CASE")?;
+
+        Ok(CaseExpression {
+            alternatives,
+            else_expression,
+        })
     }
 
     // Helpers

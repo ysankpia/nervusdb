@@ -837,6 +837,17 @@ fn evaluate_expression_value_streaming(
                 },
             }
         }
+        Expression::Case(case_expr) => {
+            for alt in &case_expr.alternatives {
+                if evaluate_expression_streaming(&alt.when, record, ctx) {
+                    return evaluate_expression_value_streaming(&alt.then, record, ctx);
+                }
+            }
+            match &case_expr.else_expression {
+                Some(expr) => evaluate_expression_value_streaming(expr, record, ctx),
+                None => Value::Null,
+            }
+        }
         Expression::FunctionCall(func) => match func.name.to_lowercase().as_str() {
             "id" => match func
                 .arguments
@@ -2014,6 +2025,17 @@ pub fn evaluate_expression_value(
                     Value::Float(f) => Value::Float(-f),
                     _ => Value::Null,
                 },
+            }
+        }
+        Expression::Case(case_expr) => {
+            for alt in &case_expr.alternatives {
+                if evaluate_expression(&alt.when, record, ctx) {
+                    return evaluate_expression_value(&alt.then, record, ctx);
+                }
+            }
+            match &case_expr.else_expression {
+                Some(expr) => evaluate_expression_value(expr, record, ctx),
+                None => Value::Null,
             }
         }
         Expression::FunctionCall(func) => match func.name.to_lowercase().as_str() {

@@ -164,9 +164,22 @@ pub enum Expression {
     Binary(Box<BinaryExpression>),
     Unary(Box<UnaryExpression>),
     FunctionCall(FunctionCall),
+    Case(Box<CaseExpression>),
     List(Vec<Expression>),
     Map(PropertyMap),
     Parameter(String), // $param
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CaseExpression {
+    pub alternatives: Vec<CaseAlternative>,
+    pub else_expression: Option<Expression>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CaseAlternative {
+    pub when: Expression,
+    pub then: Expression,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
