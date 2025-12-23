@@ -1,3 +1,5 @@
+#![cfg(all(feature = "temporal", not(target_arch = "wasm32")))]
+
 use nervusdb_core::{EpisodeInput, TemporalStore};
 use redb::Database;
 use serde_json::Value;

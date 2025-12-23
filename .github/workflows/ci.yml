@@ -50,3 +50,57 @@ jobs:
 
       - name: Build release
         run: cargo build --workspace --release --exclude nervusdb-py
+
+  node-ci:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: bindings/node/pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-node-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install Node deps
+        run: pnpm -C bindings/node install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm -C bindings/node typecheck
+
+      - name: Build native addon
+        run: pnpm -C bindings/node build:native
+
+      - name: Node tests (TS-only)
+        run: pnpm -C bindings/node test
+
+      - name: Node tests (native addon)
+        run: pnpm -C bindings/node test:native
+
+      - name: Crash smoke (3-5 iterations)
+        run: cargo run -p nervusdb-core --bin nervus-crash-test -- driver tmp-ci-crash-smoke --iterations 5 --min-ms 2 --max-ms 15 --batch 500 --subject-pool 500 --predicate-pool 64 --object-pool 500 --verify-retries 25 --verify-backoff-ms 20

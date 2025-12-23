@@ -9,7 +9,7 @@ pub mod migration;
 pub mod parser;
 pub mod query;
 pub mod storage;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "temporal", not(target_arch = "wasm32")))]
 pub mod temporal_v2; // New multi-table architecture
 pub mod triple;
 
@@ -26,7 +26,7 @@ pub use error::{Error, Result};
 #[cfg(not(target_arch = "wasm32"))]
 use redb::{Database as RedbDatabase, WriteTransaction};
 // Re-export Temporal Store v2 types (replacing legacy v1)
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "temporal", not(target_arch = "wasm32")))]
 pub use temporal_v2::{
     EnsureEntityOptions, EpisodeInput, EpisodeLinkOptions, EpisodeLinkRecord, FactWriteInput,
     StoredAlias, StoredEntity, StoredEpisode, StoredFact, TemporalStoreV2 as TemporalStore,
@@ -54,7 +54,7 @@ pub struct Database {
     redb: Arc<RedbDatabase>,
     #[cfg(not(target_arch = "wasm32"))]
     active_write: Option<WriteTransaction>,
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(feature = "temporal", not(target_arch = "wasm32")))]
     temporal: TemporalStore,
     cursors: HashMap<u64, QueryCursor>,
     next_cursor_id: u64,
@@ -133,7 +133,7 @@ impl Database {
         #[cfg(target_arch = "wasm32")]
         let store = open_store(&path)?;
 
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(feature = "temporal", not(target_arch = "wasm32")))]
         let temporal = TemporalStore::open(redb.clone())?;
 
         Ok(Self {
@@ -142,7 +142,7 @@ impl Database {
             redb,
             #[cfg(not(target_arch = "wasm32"))]
             active_write: None,
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(feature = "temporal", not(target_arch = "wasm32")))]
             temporal,
             cursors: HashMap::new(),
             next_cursor_id: 1,
@@ -1043,30 +1043,22 @@ impl Database {
         self.next_cursor_id = 1;
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn temporal_store(&self) -> Option<&TemporalStore> {
-        return Some(&self.temporal);
-    }
-    #[cfg(target_arch = "wasm32")]
-    pub fn temporal_store(&self) -> Option<&()> {
-        return None;
+    #[cfg(all(feature = "temporal", not(target_arch = "wasm32")))]
+    pub fn temporal_store(&self) -> &TemporalStore {
+        &self.temporal
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn temporal_store_mut(&mut self) -> Option<&mut TemporalStore> {
-        return Some(&mut self.temporal);
-    }
-    #[cfg(target_arch = "wasm32")]
-    pub fn temporal_store_mut(&mut self) -> Option<&mut ()> {
-        return None;
+    #[cfg(all(feature = "temporal", not(target_arch = "wasm32")))]
+    pub fn temporal_store_mut(&mut self) -> &mut TemporalStore {
+        &mut self.temporal
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(feature = "temporal", not(target_arch = "wasm32")))]
     pub fn timeline_query(&self, query: TimelineQuery) -> Vec<StoredFact> {
         self.temporal.query_timeline(&query).unwrap_or_default()
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(feature = "temporal", not(target_arch = "wasm32")))]
     pub fn timeline_trace(&self, fact_id: u64) -> Vec<StoredEpisode> {
         self.temporal.trace_back(fact_id).unwrap_or_default()
     }
@@ -1208,15 +1200,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg(all(feature = "temporal", not(target_arch = "wasm32")))]
     fn timeline_query_via_database() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("timeline-db");
         let mut db = Database::open(Options::new(&path)).unwrap();
 
         {
-            let store = db
-                .temporal_store_mut()
-                .expect("temporal store not available");
+            let store = db.temporal_store_mut();
             let alice = store
                 .ensure_entity(
                     "agent",
@@ -1271,12 +1262,7 @@ mod tests {
                 .unwrap();
         }
 
-        let alice_id = db
-            .temporal_store()
-            .expect("temporal store not available")
-            .get_entities()
-            .unwrap()[0]
-            .entity_id;
+        let alice_id = db.temporal_store().get_entities().unwrap()[0].entity_id;
         let timeline = db.timeline_query(TimelineQuery {
             entity_id: alice_id,
             predicate_key: Some("mentions".into()),

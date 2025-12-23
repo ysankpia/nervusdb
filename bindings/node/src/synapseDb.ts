@@ -1,12 +1,9 @@
-import { PluginManager, type NervusDBPlugin } from './plugins/base.js';
-import { PathfindingPlugin } from './plugins/pathfinding.js';
-import { CypherPlugin } from './plugins/cypher.js';
-import { AggregationPlugin } from './plugins/aggregation.js';
 import { warnExperimental } from './utils/experimental.js';
 import {
   PersistentStore,
   FactInput,
   FactRecord,
+  NativeDatabaseHandle,
   TripleKey,
   TemporalEpisodeInput,
   TemporalEpisodeLinkRecord,
@@ -22,14 +19,67 @@ import type {
   CommitBatchOptions,
   BeginBatchOptions,
 } from './types/openOptions.js';
-import { AggregationPipeline } from './extensions/query/aggregation.js';
-import type { CypherResult, CypherExecutionOptions } from './extensions/query/cypher.js';
 import type { TemporalMemoryStore } from './core/storage/temporal/temporalStore.js';
 
 export interface FactOptions {
   subjectProperties?: Record<string, unknown>;
   objectProperties?: Record<string, unknown>;
   edgeProperties?: Record<string, unknown>;
+}
+
+export type CypherRecord = Record<string, unknown>;
+
+export interface CypherResult {
+  records: CypherRecord[];
+  summary: {
+    statement: string;
+    parameters: Record<string, unknown>;
+    native: true;
+  };
+}
+
+export interface CypherExecutionOptions {
+  readonly?: boolean;
+}
+
+export interface NativePathResult {
+  path: bigint[];
+  cost: number;
+  hops: number;
+}
+
+export interface NativePageRankEntry {
+  nodeId: bigint;
+  score: number;
+}
+
+export interface NativePageRankResult {
+  scores: NativePageRankEntry[];
+  iterations: number;
+  converged: boolean;
+}
+
+export interface GraphAlgorithmsAPI {
+  bfsShortestPath(
+    startId: number | bigint,
+    endId: number | bigint,
+    predicateId?: number | bigint | null,
+    options?: { maxHops?: number; bidirectional?: boolean },
+  ): NativePathResult | null;
+
+  dijkstraShortestPath(
+    startId: number | bigint,
+    endId: number | bigint,
+    predicateId?: number | bigint | null,
+    options?: { maxHops?: number },
+  ): NativePathResult | null;
+
+  pagerank(options?: {
+    predicateId?: number | bigint | null;
+    damping?: number;
+    maxIterations?: number;
+    tolerance?: number;
+  }): NativePageRankResult | null;
 }
 
 // 重新导出核心类型
@@ -66,31 +116,19 @@ export type {
 /**
  * NervusDB - 嵌入式三元组知识库
  *
- * 统一的知识库实现，包含：
- * - 核心存储与查询功能
- * - 插件系统（默认加载 PathfindingPlugin + AggregationPlugin）
- * - 可选实验性功能（Cypher 查询）
- *
- * "好品味"原则：简单的 API，强大的功能，没有特殊情况。
+ * 目标：薄绑定（thin binding）。
+ * - TypeScript 只做参数/类型转换
+ * - 所有查询/算法/执行器都在 Rust Core
  */
 export class NervusDB {
-  private snapshotDepth = 0;
-  private pluginManager: PluginManager;
-  private hasCypherPlugin: boolean;
+  public readonly algorithms: GraphAlgorithmsAPI;
   public readonly memory: TemporalMemoryAPI;
+  private readonly cypherEnabled: boolean;
 
-  private constructor(
-    private readonly store: PersistentStore,
-    plugins: NervusDBPlugin[],
-    hasCypher: boolean,
-  ) {
-    this.hasCypherPlugin = hasCypher;
-    this.pluginManager = new PluginManager(this, store);
+  private constructor(private readonly store: PersistentStore, cypherEnabled: boolean) {
+    this.cypherEnabled = cypherEnabled;
+    this.algorithms = this.createAlgorithmsApi();
     this.memory = this.createTemporalApi();
-
-    for (const plugin of plugins) {
-      this.pluginManager.register(plugin);
-    }
   }
 
   private createTemporalApi(): TemporalMemoryAPI {
@@ -114,18 +152,12 @@ export class NervusDB {
     const envEnableExperimental = process.env.SYNAPSEDB_ENABLE_EXPERIMENTAL_QUERIES === '1';
     const enableCypher = experimental.cypher ?? envEnableExperimental;
 
-    const plugins: NervusDBPlugin[] = [new PathfindingPlugin(), new AggregationPlugin()];
-
     if (enableCypher) {
-      plugins.push(new CypherPlugin());
       warnExperimental('Cypher 查询语言前端');
     }
 
     const store = await PersistentStore.open(path, options ?? {});
-    const db = new NervusDB(store, plugins, enableCypher);
-    await db.pluginManager.initialize();
-
-    return db;
+    return new NervusDB(store, enableCypher);
   }
 
   // ===================
@@ -200,10 +232,6 @@ export class NervusDB {
     }
   }
 
-  aggregate(): AggregationPipeline {
-    return new AggregationPipeline(this.store);
-  }
-
   async cypher(
     query: string,
     params?: Record<string, unknown>,
@@ -262,22 +290,6 @@ export class NervusDB {
     this.store.abortBatch();
   }
 
-  async snapshot<T>(fn: (db: NervusDB) => Promise<T>): Promise<T> {
-    this.snapshotDepth++;
-    const pinned = this.store.getCurrentEpoch();
-    await this.store.pushPinnedEpoch(pinned);
-    try {
-      return await fn(this);
-    } finally {
-      await this.store.popPinnedEpoch();
-      this.snapshotDepth--;
-    }
-  }
-
-  async withSnapshot<T>(fn: (db: NervusDB) => Promise<T>): Promise<T> {
-    return this.snapshot(fn);
-  }
-
   // ===================
   // 生命周期 API
   // ===================
@@ -287,24 +299,7 @@ export class NervusDB {
   }
 
   async close(): Promise<void> {
-    await this.pluginManager.cleanup();
     await this.store.close();
-  }
-
-  // ===================
-  // 插件 API
-  // ===================
-
-  plugin<T extends NervusDBPlugin>(name: string): T | undefined {
-    return this.pluginManager.get<T>(name);
-  }
-
-  hasPlugin(name: string): boolean {
-    return this.pluginManager.has(name);
-  }
-
-  listPlugins(): Array<{ name: string; version: string }> {
-    return this.pluginManager.list();
   }
 
   getStore(): PersistentStore {
@@ -316,117 +311,24 @@ export class NervusDB {
   }
 
   // ===================
-  // 路径查找 API
-  // ===================
-
-  shortestPath(
-    from: string,
-    to: string,
-    options?: {
-      predicates?: string[];
-      maxHops?: number;
-      direction?: 'forward' | 'reverse' | 'both';
-    },
-  ): FactRecord[] | null {
-    const plugin = this.pluginManager.get<PathfindingPlugin>('pathfinding');
-    if (!plugin) throw new Error('Pathfinding plugin not available');
-    return plugin.shortestPath(from, to, options);
-  }
-
-  shortestPathBidirectional(
-    from: string,
-    to: string,
-    options?: {
-      predicates?: string[];
-      maxHops?: number;
-    },
-  ): FactRecord[] | null {
-    const plugin = this.pluginManager.get<PathfindingPlugin>('pathfinding');
-    if (!plugin) throw new Error('Pathfinding plugin not available');
-    return plugin.shortestPathBidirectional(from, to, options);
-  }
-
-  shortestPathWeighted(
-    from: string,
-    to: string,
-    options?: { predicate?: string; weightProperty?: string },
-  ): FactRecord[] | null {
-    const plugin = this.pluginManager.get<PathfindingPlugin>('pathfinding');
-    if (!plugin) throw new Error('Pathfinding plugin not available');
-    return plugin.shortestPathWeighted(from, to, options);
-  }
-
-  // ===================
-  // 图算法 API (Rust Native)
-  // ===================
-
-  /**
-   * PageRank 算法
-   * 计算图中所有节点的 PageRank 分数
-   *
-   * @param options.predicate - 只考虑特定谓词的边（可选）
-   * @param options.damping - 阻尼系数，默认 0.85
-   * @param options.maxIterations - 最大迭代次数，默认 100
-   * @param options.tolerance - 收敛容差，默认 1e-6
-   * @returns PageRank 结果，包含每个节点的分数、迭代次数和是否收敛
-   */
-  pagerank(options?: {
-    predicate?: string;
-    damping?: number;
-    maxIterations?: number;
-    tolerance?: number;
-  }): { scores: Array<{ nodeId: number; nodeValue: string; score: number }>; iterations: number; converged: boolean } | null {
-    const nativeHandle = this.store.getNativeHandle();
-    const pagerankFn = nativeHandle.pagerank;
-    if (!pagerankFn) {
-      // Native PageRank 不可用
-      return null;
-    }
-
-    const predicateId = options?.predicate
-      ? this.store.getNodeIdByValue(options.predicate)
-      : undefined;
-
-    const result = pagerankFn.call(
-      nativeHandle,
-      predicateId !== undefined ? BigInt(predicateId) : null,
-      options?.damping ?? null,
-      options?.maxIterations ?? null,
-      options?.tolerance ?? null,
-    );
-
-    // 转换结果，将节点 ID 解析为值
-    const scores = result.scores.map((entry: { nodeId: bigint; score: number }) => {
-      const nodeId = Number(entry.nodeId);
-      return {
-        nodeId,
-        nodeValue: this.store.getNodeValueById(nodeId) ?? `<unknown:${nodeId}>`,
-        score: entry.score,
-      };
-    });
-
-    return {
-      scores,
-      iterations: result.iterations,
-      converged: result.converged,
-    };
-  }
-
-  // ===================
   // Cypher 查询 API
   // ===================
 
   async cypherQuery(
     statement: string,
     parameters: Record<string, unknown> = {},
-    options?: CypherExecutionOptions,
+    _options?: CypherExecutionOptions,
   ): Promise<CypherResult> {
-    try {
-      const rows = this.store.query(statement as any) as any[];
-      return { records: rows, summary: { native: true } as any };
-    } catch {
-      return this.requireCypherPlugin().cypherQuery(statement, parameters, options);
-    }
+    this.ensureCypherEnabled();
+    const records = this.store.executeQuery(statement, parameters) as CypherRecord[];
+    return {
+      records,
+      summary: {
+        statement,
+        parameters,
+        native: true,
+      },
+    };
   }
 
   async cypherRead(
@@ -434,28 +336,61 @@ export class NervusDB {
     parameters: Record<string, unknown> = {},
     options?: CypherExecutionOptions,
   ): Promise<CypherResult> {
-    return this.requireCypherPlugin().cypherRead(statement, parameters, options);
+    return this.cypherQuery(statement, parameters, options);
   }
 
-  validateCypher(statement: string): { valid: boolean; errors: string[] } {
-    return this.requireCypherPlugin().validateCypher(statement);
+  private ensureCypherEnabled(): void {
+    if (this.cypherEnabled) return;
+    throw new Error(
+      'Cypher 处于实验阶段且默认关闭。请在 open() 时传入 experimental.cypher = true，或设置 SYNAPSEDB_ENABLE_EXPERIMENTAL_QUERIES=1。',
+    );
   }
 
-  clearCypherCache(): void {
-    return this.requireCypherPlugin().clearCypherOptimizationCache();
-  }
+  private createAlgorithmsApi(): GraphAlgorithmsAPI {
+    const handle = this.store.getNativeHandle();
+    const must = <T>(value: T | undefined, name: string): T => {
+      if (value) return value;
+      throw new Error(`Native method not available: ${name} (upgrade native addon)`);
+    };
+    const toBigInt = (v: number | bigint) => (typeof v === 'bigint' ? v : BigInt(v));
 
-  private requireCypherPlugin(): CypherPlugin {
-    if (!this.hasCypherPlugin) {
-      throw new Error(
-        'Cypher 插件未启用。请在 open() 时传入 experimental.cypher = true，或设置环境变量 SYNAPSEDB_ENABLE_EXPERIMENTAL_QUERIES=1。',
-      );
-    }
-    const plugin = this.pluginManager.get<CypherPlugin>('cypher');
-    if (!plugin) {
-      throw new Error('Cypher 插件加载失败，请检查 experimental 配置。');
-    }
-    return plugin;
+    return {
+      bfsShortestPath: (startId, endId, predicateId, options) => {
+        const fn = must(handle.bfsShortestPath, 'bfsShortestPath');
+        return (
+          fn.call(
+            handle as NativeDatabaseHandle,
+            toBigInt(startId),
+            toBigInt(endId),
+            predicateId == null ? null : toBigInt(predicateId),
+            options?.maxHops ?? null,
+            options?.bidirectional ?? null,
+          ) ?? null
+        );
+      },
+      dijkstraShortestPath: (startId, endId, predicateId, options) => {
+        const fn = must(handle.dijkstraShortestPath, 'dijkstraShortestPath');
+        return (
+          fn.call(
+            handle as NativeDatabaseHandle,
+            toBigInt(startId),
+            toBigInt(endId),
+            predicateId == null ? null : toBigInt(predicateId),
+            options?.maxHops ?? null,
+          ) ?? null
+        );
+      },
+      pagerank: (options) => {
+        const fn = must(handle.pagerank, 'pagerank');
+        return fn.call(
+          handle as NativeDatabaseHandle,
+          options?.predicateId == null ? null : toBigInt(options.predicateId),
+          options?.damping ?? null,
+          options?.maxIterations ?? null,
+          options?.tolerance ?? null,
+        );
+      },
+    };
   }
 }
 
@@ -463,7 +398,4 @@ export type {
   NervusDBOpenOptions,
   CommitBatchOptions,
   BeginBatchOptions,
-  NervusDBPlugin,
-  CypherResult,
-  CypherExecutionOptions,
 };

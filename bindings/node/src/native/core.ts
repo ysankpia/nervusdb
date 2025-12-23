@@ -244,104 +244,145 @@ function resolveNativeAddonPath(): string | null {
   // import.meta.url example: file:///path/to/node_modules/@nervusdb/core/dist/index.mjs
   // We need to go up from dist/ to find native/
   const moduleDir = new URL('..', import.meta.url).pathname;
-  const baseDir = join(moduleDir, 'native', 'nervusdb-node');
-  const direct = join(baseDir, 'index.node');
-  if (existsSync(direct)) return direct;
-
-  const npmDir = join(baseDir, 'npm');
-  if (!existsSync(npmDir)) {
-    if (process.env.NERVUSDB_EXPECT_NATIVE === '1') {
-      console.error(`[Native Loader] Native npm directory not found: ${npmDir}`);
-    }
-    return null;
-  }
+  const baseDirCandidates = [
+    // When running from dist/, moduleDir points to package root.
+    join(moduleDir, 'native', 'nervusdb-node'),
+    // When running from src/, moduleDir points to <root>/src. Fall back to <root>/native.
+    join(moduleDir, '..', 'native', 'nervusdb-node'),
+  ];
 
   const packageName = 'nervusdb-node';
   const platform = process.platform;
   const arch = process.arch;
-  const entries = readdirSync(npmDir, { withFileTypes: true });
-
-  // Include both regular files and symlinks in our search
-  const fileEntries = entries.filter(
-    (entry) => (entry.isFile() || entry.isSymbolicLink()) && entry.name.endsWith('.node'),
-  );
-
-  // 1. Check for index.node directly in npm directory (standard output)
-  const npmIndex = fileEntries.find((entry) => entry.name === 'index.node');
-  if (npmIndex) {
-    return join(npmDir, npmIndex.name);
-  }
-
   const platformToken = `${platform}-${arch}`;
 
-  const exactMatch = fileEntries.find(
-    (entry) =>
-      entry.name.startsWith(`${packageName}.`) &&
-      entry.name.includes(platform) &&
-      entry.name.includes(arch),
-  );
-  if (exactMatch) {
-    return join(npmDir, exactMatch.name);
-  }
+  let lastCheckedNpmDir: string | null = null;
+  let lastAvailableFiles: string[] | null = null;
 
-  // Some platforms may include libc info (e.g. gnu/musl). Try partial match on platform token.
-  const libcAwareMatch = fileEntries.find(
-    (entry) => entry.name.startsWith(`${packageName}.`) && entry.name.includes(platformToken),
-  );
-  if (libcAwareMatch) {
-    return join(npmDir, libcAwareMatch.name);
-  }
+  for (const baseDir of baseDirCandidates) {
+    const direct = join(baseDir, 'index.node');
+    if (existsSync(direct)) return direct;
 
-  const fallbackFile = fileEntries.find((entry) => entry.name.startsWith(`${packageName}.`));
-  if (fallbackFile) {
-    return join(npmDir, fallbackFile.name);
-  }
-
-  // Check platform-specific subdirectories (e.g., darwin-arm64/)
-  const dirEntries = entries.filter((entry) => entry.isDirectory());
-
-  // First pass: Look for exact platform match
-  for (const dirEntry of dirEntries) {
-    if (!dirEntry.name.includes(platformToken)) continue;
-
-    const dirPath = join(npmDir, dirEntry.name);
-    try {
-      const dirFiles = readdirSync(dirPath, { withFileTypes: true });
-      const nodeFiles = dirFiles.filter((f) => f.isFile() && f.name.endsWith('.node'));
-
-      if (nodeFiles.length > 0) {
-        const exactMatch = nodeFiles.find((f) => f.name.includes(platformToken));
-        if (exactMatch) {
-          return join(dirPath, exactMatch.name);
-        }
-        // Fallback to any .node file in matching directory
-        return join(dirPath, nodeFiles[0].name);
-      }
-    } catch {
+    const npmDir = join(baseDir, 'npm');
+    if (!existsSync(npmDir)) {
       continue;
     }
-  }
+    lastCheckedNpmDir = npmDir;
 
-  // Second pass: Look for legacy index.node in any subdirectory (fallback)
-  // Only do this if we haven't found a specific platform match
-  for (const dirEntry of dirEntries) {
-    const dirPath = join(npmDir, dirEntry.name);
-    try {
-      const dirFiles = readdirSync(dirPath, { withFileTypes: true });
-      const indexNode = dirFiles.find((f) => f.isFile() && f.name === 'index.node');
-      if (indexNode) {
-        return join(dirPath, indexNode.name);
+    const entries = readdirSync(npmDir, { withFileTypes: true });
+
+    // Include both regular files and symlinks in our search
+    const fileEntries = entries.filter(
+      (entry) => (entry.isFile() || entry.isSymbolicLink()) && entry.name.endsWith('.node'),
+    );
+    lastAvailableFiles = fileEntries.map((entry) => entry.name);
+
+    // 1. Check for index.node directly in npm directory (standard output)
+    const npmIndex = fileEntries.find((entry) => entry.name === 'index.node');
+    if (npmIndex) {
+      return join(npmDir, npmIndex.name);
+    }
+
+    // 2. Common N-API output: index.<platform>-<arch>(-libc).node
+    const indexExactMatch = fileEntries.find(
+      (entry) =>
+        entry.name.startsWith('index.') &&
+        entry.name.includes(platform) &&
+        entry.name.includes(arch) &&
+        entry.name.endsWith('.node'),
+    );
+    if (indexExactMatch) {
+      return join(npmDir, indexExactMatch.name);
+    }
+
+    const indexLibcAwareMatch = fileEntries.find(
+      (entry) => entry.name.startsWith('index.') && entry.name.includes(platformToken),
+    );
+    if (indexLibcAwareMatch) {
+      return join(npmDir, indexLibcAwareMatch.name);
+    }
+
+    const exactMatch = fileEntries.find(
+      (entry) =>
+        entry.name.startsWith(`${packageName}.`) &&
+        entry.name.includes(platform) &&
+        entry.name.includes(arch),
+    );
+    if (exactMatch) {
+      return join(npmDir, exactMatch.name);
+    }
+
+    // Some platforms may include libc info (e.g. gnu/musl). Try partial match on platform token.
+    const libcAwareMatch = fileEntries.find(
+      (entry) => entry.name.startsWith(`${packageName}.`) && entry.name.includes(platformToken),
+    );
+    if (libcAwareMatch) {
+      return join(npmDir, libcAwareMatch.name);
+    }
+
+    const indexFallback = fileEntries.find((entry) => entry.name.startsWith('index.'));
+    if (indexFallback) {
+      return join(npmDir, indexFallback.name);
+    }
+
+    const fallbackFile = fileEntries.find((entry) => entry.name.startsWith(`${packageName}.`));
+    if (fallbackFile) {
+      return join(npmDir, fallbackFile.name);
+    }
+
+    // Check platform-specific subdirectories (e.g., darwin-arm64/)
+    const dirEntries = entries.filter((entry) => entry.isDirectory());
+
+    // First pass: Look for exact platform match
+    for (const dirEntry of dirEntries) {
+      if (!dirEntry.name.includes(platformToken)) continue;
+
+      const dirPath = join(npmDir, dirEntry.name);
+      try {
+        const dirFiles = readdirSync(dirPath, { withFileTypes: true });
+        const nodeFiles = dirFiles.filter((f) => f.isFile() && f.name.endsWith('.node'));
+
+        if (nodeFiles.length > 0) {
+          const exactInDir = nodeFiles.find((f) => f.name.includes(platformToken));
+          if (exactInDir) {
+            return join(dirPath, exactInDir.name);
+          }
+          // Fallback to any .node file in matching directory
+          return join(dirPath, nodeFiles[0].name);
+        }
+      } catch {
+        continue;
       }
-    } catch {
-      continue;
+    }
+
+    // Second pass: Look for legacy index.node in any subdirectory (fallback)
+    // Only do this if we haven't found a specific platform match
+    for (const dirEntry of dirEntries) {
+      const dirPath = join(npmDir, dirEntry.name);
+      try {
+        const dirFiles = readdirSync(dirPath, { withFileTypes: true });
+        const indexNode = dirFiles.find((f) => f.isFile() && f.name === 'index.node');
+        if (indexNode) {
+          return join(dirPath, indexNode.name);
+        }
+      } catch {
+        continue;
+      }
     }
   }
 
   if (process.env.NERVUSDB_EXPECT_NATIVE === '1') {
-    const availableFiles = fileEntries.map((entry) => entry.name);
-    console.error(
-      `[Native Loader] Failed to resolve addon. Platform=${platform}, arch=${arch}. Expecting file like "${packageName}.${platformToken}.node" in ${npmDir}. Available files: ${availableFiles.join(', ') || 'none'}.`,
-    );
+    if (lastCheckedNpmDir) {
+      console.error(
+        `[Native Loader] Failed to resolve addon. Platform=${platform}, arch=${arch}. Expecting file like "index.${platformToken}.node" or "${packageName}.${platformToken}.node" in ${lastCheckedNpmDir}. Available files: ${lastAvailableFiles?.join(', ') || 'none'}.`,
+      );
+    } else {
+      console.error(
+        `[Native Loader] Native npm directory not found in candidates: ${baseDirCandidates
+          .map((d) => join(d, 'npm'))
+          .join(', ')}.`,
+      );
+    }
   }
 
   return null;

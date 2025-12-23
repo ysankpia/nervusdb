@@ -1,3 +1,5 @@
+#![cfg(all(feature = "temporal", not(target_arch = "wasm32")))]
+
 use nervusdb_core::{
     EnsureEntityOptions, EpisodeInput, FactWriteInput, TemporalStore, TimelineQuery, TimelineRole,
 };

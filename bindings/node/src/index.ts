@@ -17,6 +17,13 @@ export { NervusDB } from './synapseDb.js';
 export type {
   FactRecord,
   FactInput,
+  CypherRecord,
+  CypherResult,
+  CypherExecutionOptions,
+  GraphAlgorithmsAPI,
+  NativePageRankEntry,
+  NativePageRankResult,
+  NativePathResult,
   TemporalMemoryAPI,
   TemporalEpisodeInput,
   TemporalEpisodeLinkRecord,
@@ -33,16 +40,6 @@ export { NervusDB as CoreNervusDB } from './synapseDb.js';
 export { NervusDB as ExtendedNervusDB } from './synapseDb.js';
 
 // =======================
-// 插件系统
-// =======================
-export type { NervusDBPlugin } from './plugins/base.js';
-export { PluginManager } from './plugins/base.js';
-export { PathfindingPlugin } from './plugins/pathfinding.js';
-/** @experimental Cypher 查询语言仍处于实验阶段 */
-export { CypherPlugin } from './plugins/cypher.js';
-export { AggregationPlugin } from './plugins/aggregation.js';
-
-// =======================
 // 存储层
 // =======================
 export { PersistentStore } from './core/storage/persistentStore.js';
@@ -50,11 +47,6 @@ export type { PersistedFact } from './core/storage/persistentStore.js';
 
 // 时间记忆（通过 Native 调用 Rust）
 export { TemporalMemoryStore } from './core/storage/temporal/temporalStore.js';
-
-// =======================
-// 查询扩展
-// =======================
-export { AggregationPipeline } from './extensions/query/aggregation.js';
 
 // =======================
 // 配置

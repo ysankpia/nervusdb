@@ -12,5 +12,9 @@ napi-derive = "2.15.0"
 nervusdb-core = { path = "../../../../nervusdb-core" }
 serde_json = "1.0"
 
+[features]
+default = []
+temporal = ["nervusdb-core/temporal"]
+
 [build-dependencies]
 napi-build = "2.0.1"

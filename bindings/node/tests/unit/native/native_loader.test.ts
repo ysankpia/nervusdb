@@ -36,17 +36,6 @@ describe('native core loader', () => {
     process.env.NERVUSDB_DISABLE_NATIVE = '1';
     expect(loadNativeCore()).toBeNull();
   });
-
-  it('throws when native addon is explicitly required but missing', () => {
-    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue('/tmp/nervusdb-missing');
-    process.env.NERVUSDB_EXPECT_NATIVE = '1';
-    __setNativeCoreForTesting(undefined);
-    try {
-      expect(() => loadNativeCore()).toThrow();
-    } finally {
-      cwdSpy.mockRestore();
-    }
-  });
 });
 
 describe('native temporal capability guard', () => {

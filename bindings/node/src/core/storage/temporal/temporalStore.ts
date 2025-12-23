@@ -612,12 +612,16 @@ class NativeTemporalBackend implements TemporalBackend {
 export class TemporalMemoryStore {
   private constructor(private readonly backend: TemporalBackend) {}
 
-  static async initialize(dataPath: string, nativeHandle?: unknown): Promise<TemporalMemoryStore> {
+  static async initialize(
+    _dataPath: string,
+    nativeHandle?: unknown,
+  ): Promise<TemporalMemoryStore> {
     if (isNativeTemporalHandle(nativeHandle)) {
       return new TemporalMemoryStore(new NativeTemporalBackend(nativeHandle));
     }
-    const backend = await JsonTemporalBackend.create(dataPath);
-    return new TemporalMemoryStore(backend);
+    throw new Error(
+      'Temporal feature is disabled. Rebuild native addon with --features temporal.',
+    );
   }
 
   async close(): Promise<void> {

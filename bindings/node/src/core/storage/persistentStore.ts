@@ -5,7 +5,7 @@
  * All storage operations are delegated to the native Rust implementation.
  */
 
-import { openNativeHandle } from '../../native/core.js';
+import { openNativeHandle, nativeTemporalSupported } from '../../native/core.js';
 import { LabelManager } from '../../graph/labels.js';
 import type { FactInput } from './types.js';
 import {
@@ -178,7 +178,13 @@ export class PersistentStore {
       );
     }
 
-    return new PersistentStore(path, native);
+    void options;
+
+    const store = new PersistentStore(path, native);
+    if (nativeTemporalSupported(native)) {
+      await store.openTemporal();
+    }
+    return store;
   }
 
   // ========================================================================
@@ -434,13 +440,6 @@ export class PersistentStore {
   // Temporal Memory Integration
   // ========================================================================
 
-  get temporal(): TemporalMemoryStore {
-    if (!this.temporalStore) {
-      throw new Error('Temporal store not initialized. Call openTemporal() first.');
-    }
-    return this.temporalStore;
-  }
-
   async openTemporal(): Promise<void> {
     if (!this.temporalStore) {
       this.temporalStore = await TemporalMemoryStore.initialize(this.path, this.native);
@@ -529,35 +528,35 @@ export class PersistentStore {
   }
 
   // Temporal memory methods (delegate to this.temporal)
-  getTemporalMemory() {
-    return this.temporal;
+  getTemporalMemory(): TemporalMemoryStore | undefined {
+    return this.temporalStore ?? undefined;
   }
 
   addEpisodeToTemporalStore(episode: EpisodeInput) {
-    return this.temporal.addEpisode(episode);
+    return this.requireTemporalStore().addEpisode(episode);
   }
 
   ensureTemporalEntity(kind: string, canonicalName: string, options?: EnsureEntityOptions) {
-    return this.temporal.ensureEntity(kind, canonicalName, options ?? {});
+    return this.requireTemporalStore().ensureEntity(kind, canonicalName, options ?? {});
   }
 
   upsertTemporalFact(fact: FactWriteInput) {
-    return this.temporal.upsertFact(fact);
+    return this.requireTemporalStore().upsertFact(fact);
   }
 
   linkTemporalEpisode(
     episodeId: number,
     linkOptions: { entityId?: number | null; factId?: number | null; role: string },
   ) {
-    return this.temporal.linkEpisode(episodeId, linkOptions);
+    return this.requireTemporalStore().linkEpisode(episodeId, linkOptions);
   }
 
   queryTemporalTimeline(query: TimelineQuery) {
-    return this.temporal.queryTimeline(query);
+    return this.requireTemporalStore().queryTimeline(query);
   }
 
   traceTemporalFact(factId: number) {
-    return this.temporal.traceBack(factId);
+    return this.requireTemporalStore().traceBack(factId);
   }
 
   // ========================================================================
@@ -579,6 +578,9 @@ export class PersistentStore {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    if (this.temporalStore) {
+      await this.temporalStore.close();
+    }
     this.native.close();
   }
 
@@ -598,6 +600,13 @@ export class PersistentStore {
     if (this.closed) {
       throw new Error('Database is closed');
     }
+  }
+
+  private requireTemporalStore(): TemporalMemoryStore {
+    if (this.temporalStore) return this.temporalStore;
+    throw new Error(
+      'Temporal feature is disabled. Rebuild native addon with --features temporal.',
+    );
   }
 
   private toFactRecord(triple: NativeTriple): FactRecord {
