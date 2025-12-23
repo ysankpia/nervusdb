@@ -206,4 +206,47 @@ mod tests {
             Ordering::Less
         );
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn test_redb_table_roundtrip() {
+        use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
+        use tempfile::NamedTempFile;
+
+        const TEST_TABLE: TableDefinition<VarintTripleKey, ()> =
+            TableDefinition::new("test_varint");
+
+        let tmp = NamedTempFile::new().unwrap();
+        let db = Database::create(tmp.path()).unwrap();
+
+        // Insert
+        let write_txn = db.begin_write().unwrap();
+        {
+            let mut table = write_txn.open_table(TEST_TABLE).unwrap();
+            table.insert(VarintTripleKey::new(1, 2, 3), ()).unwrap();
+            table
+                .insert(VarintTripleKey::new(100, 200, 300), ())
+                .unwrap();
+            table
+                .insert(VarintTripleKey::new(10000, 20000, 30000), ())
+                .unwrap();
+        }
+        write_txn.commit().unwrap();
+
+        // Read back
+        let read_txn = db.begin_read().unwrap();
+        let table = read_txn.open_table(TEST_TABLE).unwrap();
+
+        let keys: Vec<_> = table
+            .iter()
+            .unwrap()
+            .map(|r| r.unwrap().0.value())
+            .collect();
+        assert_eq!(keys.len(), 3);
+
+        // Verify ordering (should be sorted by s, p, o)
+        assert_eq!(keys[0].decode(), (1, 2, 3));
+        assert_eq!(keys[1].decode(), (100, 200, 300));
+        assert_eq!(keys[2].decode(), (10000, 20000, 30000));
+    }
 }
