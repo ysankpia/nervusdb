@@ -6,6 +6,7 @@ pub enum PhysicalPlan {
     Scan(ScanNode),
     Filter(FilterNode),
     Project(ProjectNode),
+    Limit(LimitNode),
     NestedLoopJoin(NestedLoopJoinNode),
     Expand(ExpandNode),
     Create(CreateNode),
@@ -29,6 +30,12 @@ pub struct FilterNode {
 pub struct ProjectNode {
     pub input: Box<PhysicalPlan>,
     pub projections: Vec<(Expression, String)>, // (Expr, Alias)
+}
+
+#[derive(Debug, Clone)]
+pub struct LimitNode {
+    pub input: Box<PhysicalPlan>,
+    pub limit: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -167,6 +174,13 @@ impl QueryPlanner {
                 input: Box::new(final_plan),
                 projections,
             });
+
+            if let Some(limit) = r.limit {
+                final_plan = PhysicalPlan::Limit(LimitNode {
+                    input: Box::new(final_plan),
+                    limit,
+                });
+            }
         }
 
         Ok(final_plan)

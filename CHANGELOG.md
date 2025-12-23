@@ -6,6 +6,21 @@
 
 - （占位）下一次改动从这里开始写。
 
+## [1.0.0] - 2025-12-23
+
+### 新增
+
+- **v1.0 契约封版**：`nervusdb-core/include/nervusdb.h` 作为稳定 C ABI（SQLite 风格 stmt API）
+- **Cypher 子集白名单**：新增 `LIMIT`；白名单外语法 fail-fast（返回 `not implemented: ...`）
+
+### 变更
+
+- **绑定层收敛**：Node 侧提供 Statement/流式消费路径，避免大结果集在 V8 堆里“对象爆炸”
+
+### 验证
+
+- **Crash Gate**：发布前复跑 1000 次 crash-test（门禁要求 0 失败）
+
 ## [0.1.0] - 2025-12-23
 
 ### 新增

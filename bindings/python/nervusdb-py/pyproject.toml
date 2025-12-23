@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "nervusdb"
-version = "0.1.0"
+version = "1.0.0"
 description = "Python bindings for NervusDB"
 authors = [{ name = "NervusDB" }]
 requires-python = ">=3.8"

@@ -1,3 +1,4 @@
+use crate::Error;
 use crate::query::ast::*;
 use crate::query::lexer::{Lexer, Token, TokenType};
 
@@ -7,9 +8,9 @@ pub struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    pub fn parse(input: &'a str) -> Result<Query, String> {
+    pub fn parse(input: &'a str) -> Result<Query, Error> {
         let mut lexer = Lexer::new(input);
-        let tokens = lexer.tokenize()?;
+        let tokens = lexer.tokenize().map_err(Error::Other)?;
         let mut parser = TokenParser::new(tokens);
         parser.parse_query()
     }
@@ -28,7 +29,7 @@ impl TokenParser {
         }
     }
 
-    fn parse_query(&mut self) -> Result<Query, String> {
+    fn parse_query(&mut self) -> Result<Query, Error> {
         let mut clauses = Vec::new();
         while !self.is_at_end() {
             if let Some(clause) = self.parse_clause()? {
@@ -40,7 +41,27 @@ impl TokenParser {
         Ok(Query { clauses })
     }
 
-    fn parse_clause(&mut self) -> Result<Option<Clause>, String> {
+    fn parse_clause(&mut self) -> Result<Option<Clause>, Error> {
+        // Ignore optional trailing semicolons.
+        if self.match_token(&TokenType::Semicolon) {
+            return Ok(None);
+        }
+
+        // Fail-fast on unsupported top-level clauses/keywords.
+        match &self.peek().token_type {
+            TokenType::Optional => return Err(Error::NotImplemented("OPTIONAL MATCH")),
+            TokenType::With => return Err(Error::NotImplemented("WITH")),
+            TokenType::Union => return Err(Error::NotImplemented("UNION")),
+            TokenType::Order => return Err(Error::NotImplemented("ORDER BY")),
+            TokenType::Skip => return Err(Error::NotImplemented("SKIP")),
+            TokenType::Merge => return Err(Error::NotImplemented("MERGE")),
+            TokenType::Remove => return Err(Error::NotImplemented("REMOVE")),
+            TokenType::Unwind => return Err(Error::NotImplemented("UNWIND")),
+            TokenType::Call => return Err(Error::NotImplemented("CALL")),
+            TokenType::Foreach => return Err(Error::NotImplemented("FOREACH")),
+            _ => {}
+        }
+
         if self.match_token(&TokenType::Match) {
             return Ok(Some(Clause::Match(self.parse_match()?)));
         }
@@ -61,32 +82,30 @@ impl TokenParser {
         }
 
         if !self.is_at_end() {
-            return Err(format!("Unexpected token {:?}", self.peek()));
+            return Err(Error::Other(format!("Unexpected token {:?}", self.peek())));
         }
 
         Ok(None)
     }
 
-    fn parse_match(&mut self) -> Result<MatchClause, String> {
-        let optional = if self.check(&TokenType::Optional) {
-            self.advance();
-            self.consume(&TokenType::Match, "Expected MATCH after OPTIONAL")?;
-            true
-        } else {
-            false
-        };
-
+    fn parse_match(&mut self) -> Result<MatchClause, Error> {
         let pattern = self.parse_pattern()?;
-        Ok(MatchClause { optional, pattern })
+        Ok(MatchClause {
+            optional: false,
+            pattern,
+        })
     }
 
-    fn parse_create(&mut self) -> Result<CreateClause, String> {
+    fn parse_create(&mut self) -> Result<CreateClause, Error> {
         let pattern = self.parse_pattern()?;
         Ok(CreateClause { pattern })
     }
 
-    fn parse_return(&mut self) -> Result<ReturnClause, String> {
-        let distinct = self.match_token(&TokenType::Distinct);
+    fn parse_return(&mut self) -> Result<ReturnClause, Error> {
+        if self.match_token(&TokenType::Distinct) {
+            return Err(Error::NotImplemented("RETURN DISTINCT"));
+        }
+        let distinct = false;
         let mut items = Vec::new();
 
         loop {
@@ -96,22 +115,45 @@ impl TokenParser {
             }
         }
 
+        if self.check(&TokenType::Order) {
+            return Err(Error::NotImplemented("ORDER BY"));
+        }
+        if self.check(&TokenType::Skip) {
+            return Err(Error::NotImplemented("SKIP"));
+        }
+
+        let limit = if self.match_token(&TokenType::Limit) {
+            match &self.advance().token_type {
+                TokenType::Number(n) => {
+                    if *n < 0.0 || n.fract() != 0.0 || *n > (u32::MAX as f64) {
+                        return Err(Error::Other(
+                            "LIMIT expects a non-negative integer".to_string(),
+                        ));
+                    }
+                    Some(*n as u32)
+                }
+                _ => return Err(Error::Other("Expected integer after LIMIT".to_string())),
+            }
+        } else {
+            None
+        };
+
         Ok(ReturnClause {
             distinct,
             items,
             order_by: None,
-            limit: None,
+            limit,
             skip: None,
         })
     }
 
-    fn parse_return_item(&mut self) -> Result<ReturnItem, String> {
+    fn parse_return_item(&mut self) -> Result<ReturnItem, Error> {
         let expression = self.parse_expression()?;
         let alias = if self.match_token(&TokenType::As) {
             if let TokenType::Identifier(name) = &self.advance().token_type {
                 Some(name.clone())
             } else {
-                return Err("Expected identifier after AS".to_string());
+                return Err(Error::Other("Expected identifier after AS".to_string()));
             }
         } else {
             None
@@ -119,12 +161,12 @@ impl TokenParser {
         Ok(ReturnItem { expression, alias })
     }
 
-    fn parse_where(&mut self) -> Result<WhereClause, String> {
+    fn parse_where(&mut self) -> Result<WhereClause, Error> {
         let expression = self.parse_expression()?;
         Ok(WhereClause { expression })
     }
 
-    fn parse_set(&mut self) -> Result<SetClause, String> {
+    fn parse_set(&mut self) -> Result<SetClause, Error> {
         let mut items = Vec::new();
 
         loop {
@@ -134,12 +176,16 @@ impl TokenParser {
                 self.advance();
                 name
             } else {
-                return Err("Expected variable name in SET clause".to_string());
+                return Err(Error::Other(
+                    "Expected variable name in SET clause".to_string(),
+                ));
             };
 
             // Expect dot
             if !self.match_token(&TokenType::Dot) {
-                return Err("Expected '.' after variable in SET clause".to_string());
+                return Err(Error::Other(
+                    "Expected '.' after variable in SET clause".to_string(),
+                ));
             }
 
             // Parse property name
@@ -148,12 +194,14 @@ impl TokenParser {
                 self.advance();
                 prop
             } else {
-                return Err("Expected property name in SET clause".to_string());
+                return Err(Error::Other(
+                    "Expected property name in SET clause".to_string(),
+                ));
             };
 
             // Expect '='
             if !self.match_token(&TokenType::Equals) {
-                return Err("Expected '=' in SET clause".to_string());
+                return Err(Error::Other("Expected '=' in SET clause".to_string()));
             }
 
             // Parse value expression
@@ -176,13 +224,13 @@ impl TokenParser {
         Ok(SetClause { items })
     }
 
-    fn parse_delete(&mut self) -> Result<DeleteClause, String> {
+    fn parse_delete(&mut self) -> Result<DeleteClause, Error> {
         // Check for optional DETACH keyword
         let detach = self.match_token(&TokenType::Detach);
 
         // Expect DELETE keyword
         if !self.match_token(&TokenType::Delete) {
-            return Err("Expected DELETE keyword".to_string());
+            return Err(Error::Other("Expected DELETE keyword".to_string()));
         }
 
         // Parse comma-separated list of expressions to delete
@@ -199,7 +247,9 @@ impl TokenParser {
         }
 
         if expressions.is_empty() {
-            return Err("DELETE requires at least one expression".to_string());
+            return Err(Error::Other(
+                "DELETE requires at least one expression".to_string(),
+            ));
         }
 
         Ok(DeleteClause {
@@ -208,7 +258,7 @@ impl TokenParser {
         })
     }
 
-    fn parse_pattern(&mut self) -> Result<Pattern, String> {
+    fn parse_pattern(&mut self) -> Result<Pattern, Error> {
         let mut elements = Vec::new();
         elements.push(PathElement::Node(self.parse_node()?));
 
@@ -220,7 +270,7 @@ impl TokenParser {
         Ok(Pattern { elements })
     }
 
-    fn parse_node(&mut self) -> Result<NodePattern, String> {
+    fn parse_node(&mut self) -> Result<NodePattern, Error> {
         self.consume(&TokenType::LeftParen, "Expected '('")?;
 
         let variable = if let TokenType::Identifier(name) = &self.peek().token_type {
@@ -236,7 +286,7 @@ impl TokenParser {
             if let TokenType::Identifier(label) = &self.advance().token_type {
                 labels.push(label.clone());
             } else {
-                return Err("Expected label identifier".to_string());
+                return Err(Error::Other("Expected label identifier".to_string()));
             }
         }
 
@@ -255,13 +305,13 @@ impl TokenParser {
         })
     }
 
-    fn parse_relationship(&mut self) -> Result<RelationshipPattern, String> {
+    fn parse_relationship(&mut self) -> Result<RelationshipPattern, Error> {
         let mut direction = if self.match_token(&TokenType::LeftArrow) {
             RelationshipDirection::RightToLeft
         } else if self.match_token(&TokenType::Dash) {
             RelationshipDirection::Undirected
         } else {
-            return Err("Expected relationship start".to_string());
+            return Err(Error::Other("Expected relationship start".to_string()));
         };
 
         let mut variable = None;
@@ -279,7 +329,9 @@ impl TokenParser {
                 if let TokenType::Identifier(t) = &self.advance().token_type {
                     types.push(t.clone());
                 } else {
-                    return Err("Expected relationship type identifier".to_string());
+                    return Err(Error::Other(
+                        "Expected relationship type identifier".to_string(),
+                    ));
                 }
             }
 
@@ -292,7 +344,9 @@ impl TokenParser {
 
         if self.match_token(&TokenType::RightArrow) {
             if direction == RelationshipDirection::RightToLeft {
-                return Err("Invalid relationship direction <->".to_string());
+                return Err(Error::Other(
+                    "Invalid relationship direction <->".to_string(),
+                ));
             }
             direction = RelationshipDirection::LeftToRight;
         } else if self.match_token(&TokenType::Dash) {
@@ -313,7 +367,7 @@ impl TokenParser {
         })
     }
 
-    fn parse_property_map(&mut self) -> Result<PropertyMap, String> {
+    fn parse_property_map(&mut self) -> Result<PropertyMap, Error> {
         self.consume(&TokenType::LeftBrace, "Expected '{'")?;
         let mut properties = Vec::new();
 
@@ -321,7 +375,7 @@ impl TokenParser {
             let key = if let TokenType::Identifier(k) = &self.advance().token_type {
                 k.clone()
             } else {
-                return Err("Expected property key".to_string());
+                return Err(Error::Other("Expected property key".to_string()));
             };
 
             self.consume(&TokenType::Colon, "Expected ':'")?;
@@ -337,11 +391,11 @@ impl TokenParser {
         Ok(PropertyMap { properties })
     }
 
-    fn parse_expression(&mut self) -> Result<Expression, String> {
+    fn parse_expression(&mut self) -> Result<Expression, Error> {
         self.parse_or()
     }
 
-    fn parse_or(&mut self) -> Result<Expression, String> {
+    fn parse_or(&mut self) -> Result<Expression, Error> {
         let mut expr = self.parse_and()?;
         while self.match_token(&TokenType::Or) {
             let right = self.parse_and()?;
@@ -354,7 +408,7 @@ impl TokenParser {
         Ok(expr)
     }
 
-    fn parse_and(&mut self) -> Result<Expression, String> {
+    fn parse_and(&mut self) -> Result<Expression, Error> {
         let mut expr = self.parse_equality()?;
         while self.match_token(&TokenType::And) {
             let right = self.parse_equality()?;
@@ -367,7 +421,7 @@ impl TokenParser {
         Ok(expr)
     }
 
-    fn parse_equality(&mut self) -> Result<Expression, String> {
+    fn parse_equality(&mut self) -> Result<Expression, Error> {
         let mut expr = self.parse_comparison()?;
         loop {
             let operator = if self.match_token(&TokenType::Equals) {
@@ -387,7 +441,7 @@ impl TokenParser {
         Ok(expr)
     }
 
-    fn parse_comparison(&mut self) -> Result<Expression, String> {
+    fn parse_comparison(&mut self) -> Result<Expression, Error> {
         let mut expr = self.parse_additive()?;
         loop {
             let operator = if self.match_token(&TokenType::LessThan) {
@@ -411,7 +465,7 @@ impl TokenParser {
         Ok(expr)
     }
 
-    fn parse_additive(&mut self) -> Result<Expression, String> {
+    fn parse_additive(&mut self) -> Result<Expression, Error> {
         let mut expr = self.parse_multiplicative()?;
         loop {
             let operator = if self.match_token(&TokenType::Plus) {
@@ -431,7 +485,7 @@ impl TokenParser {
         Ok(expr)
     }
 
-    fn parse_multiplicative(&mut self) -> Result<Expression, String> {
+    fn parse_multiplicative(&mut self) -> Result<Expression, Error> {
         let mut expr = self.parse_unary()?;
         loop {
             let operator = if self.match_token(&TokenType::Multiply) {
@@ -453,7 +507,7 @@ impl TokenParser {
         Ok(expr)
     }
 
-    fn parse_unary(&mut self) -> Result<Expression, String> {
+    fn parse_unary(&mut self) -> Result<Expression, Error> {
         if self.match_token(&TokenType::Not) {
             let argument = self.parse_unary()?;
             return Ok(Expression::Unary(Box::new(UnaryExpression {
@@ -471,7 +525,7 @@ impl TokenParser {
         self.parse_primary()
     }
 
-    fn parse_primary(&mut self) -> Result<Expression, String> {
+    fn parse_primary(&mut self) -> Result<Expression, Error> {
         let token = self.peek().clone();
         match &token.token_type {
             TokenType::String(s) => {
@@ -500,18 +554,17 @@ impl TokenParser {
                             property: prop.clone(),
                         }))
                     } else {
-                        Err("Expected property name".to_string())
+                        Err(Error::Other("Expected property name".to_string()))
                     }
                 } else {
                     Ok(Expression::Variable(name.clone()))
                 }
             }
             TokenType::Variable(name) => {
-                println!("[parser] variable token {}", name);
                 self.advance();
                 Ok(Expression::Parameter(name.clone()))
             }
-            _ => Err(format!("Unexpected token {:?}", token)),
+            _ => Err(Error::Other(format!("Unexpected token {:?}", token))),
         }
     }
 
@@ -556,11 +609,11 @@ impl TokenParser {
         }
     }
 
-    fn consume(&mut self, type_: &TokenType, message: &str) -> Result<&Token, String> {
+    fn consume(&mut self, type_: &TokenType, message: &str) -> Result<&Token, Error> {
         if self.check(type_) {
             Ok(self.advance())
         } else {
-            Err(message.to_string())
+            Err(Error::Other(message.to_string()))
         }
     }
 

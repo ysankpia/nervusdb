@@ -100,6 +100,7 @@ fn set_error(out_error: *mut *mut nervusdb_error, code: nervusdb_status, message
 
 fn status_from_error(err: &Error) -> nervusdb_status {
     match err {
+        Error::NotImplemented(_) => NERVUSDB_ERR_INVALID_ARGUMENT,
         Error::InvalidCursor(_) | Error::NotFound | Error::Other(_) => NERVUSDB_ERR_INTERNAL,
         _ => NERVUSDB_ERR_INTERNAL,
     }
@@ -768,7 +769,7 @@ pub unsafe extern "C" fn nervusdb_prepare_v2(
             }
         }
         Err(err) => {
-            set_error(out_error, NERVUSDB_ERR_INVALID_ARGUMENT, &err);
+            set_error(out_error, NERVUSDB_ERR_INVALID_ARGUMENT, &err.to_string());
             return NERVUSDB_ERR_INVALID_ARGUMENT;
         }
     }

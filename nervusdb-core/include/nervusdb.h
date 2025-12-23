@@ -30,6 +30,9 @@ typedef struct nervusdb_error {
 } nervusdb_error;
 
 // ABI version (increment only on breaking ABI changes).
+// Starting from v1.0.0, function signatures in this header are treated as a
+// stable contract. Do not change without a breaking version bump and an
+// explicit migration plan.
 #define NERVUSDB_ABI_VERSION 1
 
 typedef struct nervusdb_query_criteria {

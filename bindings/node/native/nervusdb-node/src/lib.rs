@@ -1018,7 +1018,7 @@ impl DatabaseHandle {
                     }
                 }
             }
-            Err(err) => return Err(napi::Error::new(Status::InvalidArg, err)),
+            Err(err) => return Err(napi::Error::new(Status::InvalidArg, err.to_string())),
         }
 
         if !projection_names.is_empty() {

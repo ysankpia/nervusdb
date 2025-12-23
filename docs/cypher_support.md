@@ -20,6 +20,8 @@ NervusDB 的 Cypher 是“够用就行”的子集实现：目标是 **嵌入式
   - 变量：`RETURN n`
   - 属性：`RETURN n.name, n.age`
   - 别名：`RETURN n AS x` / `RETURN n.name AS name`
+- `LIMIT`：
+  - `RETURN ... LIMIT 10`（当前仅支持 **非负整数**）
 
 ### 写入（基础）
 
@@ -52,5 +54,12 @@ Statement 的 `columnType()` / `column_*()` 对齐 C ABI（T10）：
 ## 不支持 / 已知限制
 
 - 这不是完整 Cypher：未承诺覆盖 Neo4j 的全部语法与优化器行为。
+- **白名单之外的语法会 fail-fast**：返回 `not implemented: <feature>`（禁止“跑错”）。
+- 明确不支持（会报 `NotImplemented`）：
+  - `OPTIONAL MATCH`
+  - `WITH`
+  - `UNION`
+  - `ORDER BY`
+  - `SKIP`
+  - `RETURN DISTINCT`
 - 大结果集建议走 Statement；一次性 `executeQuery()` 会导致 JS 堆分配/GC 压力（尤其是百万行级别）。
-

@@ -12,7 +12,7 @@
 use crate::error::Error;
 use crate::query::ast::{BinaryOperator, Expression, Literal, RelationshipDirection};
 use crate::query::planner::{
-    ExpandNode, FilterNode, NestedLoopJoinNode, PhysicalPlan, ProjectNode, ScanNode,
+    ExpandNode, FilterNode, LimitNode, NestedLoopJoinNode, PhysicalPlan, ProjectNode, ScanNode,
 };
 use crate::{Database, QueryCriteria, Triple};
 use std::collections::{HashMap, HashSet};
@@ -163,6 +163,7 @@ impl ExecutionPlan for PhysicalPlan {
             PhysicalPlan::Scan(node) => node.execute(ctx),
             PhysicalPlan::Filter(node) => node.execute(ctx),
             PhysicalPlan::Project(node) => node.execute(ctx),
+            PhysicalPlan::Limit(node) => node.execute(ctx),
             PhysicalPlan::NestedLoopJoin(node) => node.execute(ctx),
             PhysicalPlan::Expand(node) => node.execute(ctx),
             _ => Err(Error::Other("Unsupported physical plan type".to_string())),
@@ -174,6 +175,7 @@ impl ExecutionPlan for PhysicalPlan {
             PhysicalPlan::Scan(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Filter(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Project(node) => node.estimate_cardinality(ctx),
+            PhysicalPlan::Limit(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::NestedLoopJoin(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Expand(node) => node.estimate_cardinality(ctx),
             _ => 1,
@@ -536,6 +538,55 @@ impl ExecutionPlan for ExpandNode {
         // Expand 基数 = 输入基数 * 平均出度
         // 假设平均出度为 3
         self.input.estimate_cardinality(ctx) * 3
+    }
+}
+
+// ============================================================================
+// Limit
+// ============================================================================
+
+impl ExecutionPlan for LimitNode {
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a ExecutionContext<'a>,
+    ) -> Result<Box<dyn Iterator<Item = Result<Record, Error>> + 'a>, Error> {
+        let limit = usize::try_from(self.limit).unwrap_or(usize::MAX);
+        let inner = self.input.execute(ctx)?;
+
+        struct LimitIter<I> {
+            inner: I,
+            remaining: usize,
+        }
+
+        impl<I> Iterator for LimitIter<I>
+        where
+            I: Iterator<Item = Result<Record, Error>>,
+        {
+            type Item = Result<Record, Error>;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.remaining == 0 {
+                    return None;
+                }
+                match self.inner.next()? {
+                    Ok(v) => {
+                        self.remaining -= 1;
+                        Some(Ok(v))
+                    }
+                    Err(e) => Some(Err(e)),
+                }
+            }
+        }
+
+        Ok(Box::new(LimitIter {
+            inner,
+            remaining: limit,
+        }))
+    }
+
+    fn estimate_cardinality(&self, ctx: &ExecutionContext) -> usize {
+        let inner = self.input.estimate_cardinality(ctx);
+        inner.min(self.limit as usize)
     }
 }
 

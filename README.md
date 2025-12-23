@@ -1,5 +1,7 @@
 # NervusDB
 
+NervusDB: An Embedded, Crash-Safe Graph Database (Subset of Cypher, Powered by Rust)
+
 嵌入式三元组图数据库：**单文件 `redb` 存储 + 稳定 C ABI**，Rust 核心，绑定层只做参数搬运（Node/Python/WASM）。
 
 ## 快速开始（C / Rust）

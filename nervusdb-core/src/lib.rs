@@ -338,7 +338,7 @@ impl Database {
         use query::parser::Parser;
         use query::planner::QueryPlanner;
 
-        let query = Parser::parse(query_string).map_err(Error::Other)?;
+        let query = Parser::parse(query_string)?;
 
         let param_values: HashMap<String, query::executor::Value> = params
             .unwrap_or_default()

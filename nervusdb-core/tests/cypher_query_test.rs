@@ -317,6 +317,46 @@ fn test_where_logical_operators() {
 }
 
 #[test]
+fn test_limit_clause() {
+    let dir = tempdir().unwrap();
+    let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
+
+    db.add_fact(Fact::new("alice", "knows", "bob")).unwrap();
+    db.add_fact(Fact::new("bob", "knows", "charlie")).unwrap();
+
+    let results = db.execute_query("MATCH (n) RETURN n LIMIT 1").unwrap();
+    assert_eq!(results.len(), 1);
+
+    let results = db.execute_query("MATCH (n) RETURN n LIMIT 0").unwrap();
+    assert_eq!(results.len(), 0);
+}
+
+#[test]
+fn test_unsupported_features_fail_fast() {
+    let dir = tempdir().unwrap();
+    let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
+
+    db.add_fact(Fact::new("alice", "knows", "bob")).unwrap();
+
+    let err = db.execute_query("OPTIONAL MATCH (n) RETURN n").unwrap_err();
+    assert!(matches!(err, nervusdb_core::Error::NotImplemented(_)));
+
+    let err = db.execute_query("MATCH (n) RETURN DISTINCT n").unwrap_err();
+    assert!(matches!(err, nervusdb_core::Error::NotImplemented(_)));
+
+    let err = db
+        .execute_query("MATCH (n) RETURN n ORDER BY n")
+        .unwrap_err();
+    assert!(matches!(err, nervusdb_core::Error::NotImplemented(_)));
+
+    let err = db.execute_query("MATCH (n) RETURN n SKIP 1").unwrap_err();
+    assert!(matches!(err, nervusdb_core::Error::NotImplemented(_)));
+
+    let err = db.execute_query("MATCH (n) RETURN n WITH n").unwrap_err();
+    assert!(matches!(err, nervusdb_core::Error::NotImplemented(_)));
+}
+
+#[test]
 fn test_where_arithmetic_in_expressions() {
     let dir = tempdir().unwrap();
     let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
