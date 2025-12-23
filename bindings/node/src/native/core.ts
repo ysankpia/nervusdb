@@ -283,6 +283,25 @@ function resolveNativeAddonPath(): string | null {
       return join(npmDir, npmIndex.name);
     }
 
+    // 2. Common N-API output: index.<platform>-<arch>(-libc).node
+    const indexExactMatch = fileEntries.find(
+      (entry) =>
+        entry.name.startsWith('index.') &&
+        entry.name.includes(platform) &&
+        entry.name.includes(arch) &&
+        entry.name.endsWith('.node'),
+    );
+    if (indexExactMatch) {
+      return join(npmDir, indexExactMatch.name);
+    }
+
+    const indexLibcAwareMatch = fileEntries.find(
+      (entry) => entry.name.startsWith('index.') && entry.name.includes(platformToken),
+    );
+    if (indexLibcAwareMatch) {
+      return join(npmDir, indexLibcAwareMatch.name);
+    }
+
     const exactMatch = fileEntries.find(
       (entry) =>
         entry.name.startsWith(`${packageName}.`) &&
@@ -299,6 +318,11 @@ function resolveNativeAddonPath(): string | null {
     );
     if (libcAwareMatch) {
       return join(npmDir, libcAwareMatch.name);
+    }
+
+    const indexFallback = fileEntries.find((entry) => entry.name.startsWith('index.'));
+    if (indexFallback) {
+      return join(npmDir, indexFallback.name);
     }
 
     const fallbackFile = fileEntries.find((entry) => entry.name.startsWith(`${packageName}.`));
@@ -350,7 +374,7 @@ function resolveNativeAddonPath(): string | null {
   if (process.env.NERVUSDB_EXPECT_NATIVE === '1') {
     if (lastCheckedNpmDir) {
       console.error(
-        `[Native Loader] Failed to resolve addon. Platform=${platform}, arch=${arch}. Expecting file like "${packageName}.${platformToken}.node" in ${lastCheckedNpmDir}. Available files: ${lastAvailableFiles?.join(', ') || 'none'}.`,
+        `[Native Loader] Failed to resolve addon. Platform=${platform}, arch=${arch}. Expecting file like "index.${platformToken}.node" or "${packageName}.${platformToken}.node" in ${lastCheckedNpmDir}. Available files: ${lastAvailableFiles?.join(', ') || 'none'}.`,
       );
     } else {
       console.error(
