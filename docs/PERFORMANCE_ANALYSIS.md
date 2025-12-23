@@ -1,17 +1,25 @@
 # NervusDB 性能分析报告
 
+> Last updated: 2025-12-23（macOS 15.7.3 / Apple M4）
+
 ## 当前 Benchmark 结果（100万条数据）
+
+### 测量边界（别误读）
+
+- `NervusDB` 的插入数字只测 `batch_insert(triples)`（不含 `intern/bulk_intern` 的字典写入成本）
+- `redb (raw)` 是“与 `DiskHexastore` 同形的数据结构”基线：三索引表 `(u64,u64,u64)->()` + range 扫描；不含字典/属性层
+- 查询是点查基准：每次查询命中约 1 行；不代表全表扫描/遍历/聚合的吞吐
 
 | 数据库 | 插入/秒 | S?? 查询/秒 | ??O 查询/秒 |
 |--------|---------|-------------|-------------|
-| **SQLite** | 1,020,350 | 411,403 | 416,641 |
-| **redb (raw)** | 194,816 | 553,886 | 563,001 |
-| **NervusDB** | 465,685 | 727,418 | 952,317 |
+| **SQLite** | 995,699 | 390,117 | 396,242 |
+| **redb (raw)** | 485,783 | 924,538 | 827,969 |
+| **NervusDB** | 449,441 | 524,754 | 875,092 |
 
 ## 性能差距
 
-- NervusDB 插入约为 SQLite 的 **45.6%**（465K vs 1,020K，约慢 2.2 倍）
-- NervusDB 在本基准的两类点查（S?? / ??O）上已不落后（主要得益于读事务/表句柄复用）
+- NervusDB 插入约为 SQLite 的 **45.1%**（449K vs 996K，约慢 2.2 倍）
+- NervusDB 插入已接近 `redb (raw)`（449K vs 486K，约慢 7.5%）
 
 ## 已完成的优化
 
@@ -54,6 +62,16 @@ pub(crate) struct WriteTableHandles<'txn> {
 ### 2. Binding 侧的解码/resolve 开销
 
 - Rust 核心的查询返回的是 `u64` ID 三元组；Node/Python 若逐条 `resolveStr()` 还原字符串，会引入额外往返与分配。
+- Node 的 Cypher 路径虽然不再走 `JSON.parse`，但 N-API 仍会把 Rust 侧结果转换成大量 JS 对象；这不是零拷贝（1.0 可接受，但别自欺欺人）。
+
+## Cypher C API（T10）: JSON vs stmt（50K rows）
+
+基准：`MATCH (a:Person)-[r:KNOWS]->(b) RETURN a, r, b`（50K 行结果）
+
+| API | 总耗时 | 行/秒 | 备注 |
+|-----|-------:|------:|------|
+| `nervusdb_exec_cypher`（JSON） | 68.90ms | 725,664 | JSON 约 4.82MB（~96.4 B/row） |
+| `prepare_v2/step/column_*`（stmt） | 14.57ms | 3,430,914 | 当前实现仍是 eager：prepare 占主要成本，但已避免 JSON 文本序列化/解析 |
 
 ## 代码位置
 
@@ -62,6 +80,7 @@ pub(crate) struct WriteTableHandles<'txn> {
 - `nervusdb-core/src/storage/mod.rs` - Hexastore trait 定义
 - `nervusdb-core/src/lib.rs` - Database API
 - `nervusdb-core/examples/bench_compare.rs` - Benchmark 代码
+- `nervusdb-core/examples/bench_cypher_ffi.rs` - Cypher C API 基准（JSON vs stmt）
 
 关键结构/函数：
 - `WriteTableHandles` - 写事务表句柄与字符串缓存
@@ -77,4 +96,5 @@ pub(crate) struct WriteTableHandles<'txn> {
 
 ```bash
 cargo run --example bench_compare -p nervusdb-core --release
+cargo run --example bench_cypher_ffi -p nervusdb-core --release
 ```

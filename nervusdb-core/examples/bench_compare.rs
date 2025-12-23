@@ -208,44 +208,44 @@ fn bench_sqlite() -> (f64, f64, f64) {
 }
 
 fn bench_redb() -> (f64, f64, f64) {
-    use redb::{Database, MultimapTableDefinition, ReadableDatabase, TableDefinition};
+    use redb::{Database, ReadableDatabase, TableDefinition};
 
     println!("\n[redb] Starting benchmark...");
     let tmp = tempdir().unwrap();
     let db_path = tmp.path().join("bench.redb");
     let db = Database::create(&db_path).unwrap();
 
-    const SPO_TABLE: TableDefinition<&str, ()> = TableDefinition::new("spo");
-    const SUBJECT_IDX: MultimapTableDefinition<&str, &str> =
-        MultimapTableDefinition::new("subject_idx");
-    const OBJECT_IDX: MultimapTableDefinition<&str, &str> =
-        MultimapTableDefinition::new("object_idx");
+    // Use the same data shape as DiskHexastore:
+    // - SPO: (s,p,o)
+    // - POS: (p,o,s)
+    // - OSP: (o,s,p)
+    //
+    // The previous version built string keys via `format!()` inside the hot loop,
+    // which mostly measured allocation/formatting cost (garbage benchmark).
+    const SPO_TABLE: TableDefinition<(u64, u64, u64), ()> = TableDefinition::new("spo");
+    const POS_TABLE: TableDefinition<(u64, u64, u64), ()> = TableDefinition::new("pos");
+    const OSP_TABLE: TableDefinition<(u64, u64, u64), ()> = TableDefinition::new("osp");
 
-    // Pre-generate strings
-    let subjects: Vec<String> = (0..N).map(|i| format!("subject_{}", i)).collect();
-    let objects: Vec<String> = (0..N).map(|i| format!("object_{}", i + 1)).collect();
-    let predicate = "knows";
+    // Pre-generate IDs (mimic bulk_intern result shape without measuring interning).
+    let subjects: Vec<u64> = (1..=N as u64).collect();
+    let objects: Vec<u64> = ((N as u64 + 1)..=(2 * N) as u64).collect();
+    let predicate: u64 = (2 * N + 1) as u64;
 
     // Insert - open tables once, reuse handles
     let start = Instant::now();
     let write_txn = db.begin_write().unwrap();
     {
         let mut spo_table = write_txn.open_table(SPO_TABLE).unwrap();
-        let mut subject_idx = write_txn.open_multimap_table(SUBJECT_IDX).unwrap();
-        let mut object_idx = write_txn.open_multimap_table(OBJECT_IDX).unwrap();
+        let mut pos_table = write_txn.open_table(POS_TABLE).unwrap();
+        let mut osp_table = write_txn.open_table(OSP_TABLE).unwrap();
 
         for i in 0..N {
-            let spo_key = format!("{}:{}:{}", &subjects[i], predicate, &objects[i]);
-            let po_value = format!("{}:{}", predicate, &objects[i]);
-            let sp_value = format!("{}:{}", &subjects[i], predicate);
+            let s = subjects[i];
+            let o = objects[i];
 
-            spo_table.insert(spo_key.as_str(), ()).unwrap();
-            subject_idx
-                .insert(subjects[i].as_str(), po_value.as_str())
-                .unwrap();
-            object_idx
-                .insert(objects[i].as_str(), sp_value.as_str())
-                .unwrap();
+            spo_table.insert((s, predicate, o), ()).unwrap();
+            pos_table.insert((predicate, o, s), ()).unwrap();
+            osp_table.insert((o, s, predicate), ()).unwrap();
         }
     }
     write_txn.commit().unwrap();
@@ -261,13 +261,15 @@ fn bench_redb() -> (f64, f64, f64) {
     let start = Instant::now();
     {
         let read_txn = db.begin_read().unwrap();
-        let subject_idx = read_txn.open_multimap_table(SUBJECT_IDX).unwrap();
+        let spo_table = read_txn.open_table(SPO_TABLE).unwrap();
 
         for i in (0..N).step_by(step).take(QUERY_COUNT) {
-            let _results: Vec<_> = subject_idx
-                .get(subjects[i].as_str())
+            let s = subjects[i];
+            let bounds = (s, u64::MIN, u64::MIN)..=(s, u64::MAX, u64::MAX);
+            let _results: Vec<(u64, u64, u64)> = spo_table
+                .range(bounds)
                 .unwrap()
-                .map(|r| r.unwrap().value().to_string())
+                .map(|r| r.unwrap().0.value())
                 .collect();
         }
     }
@@ -282,13 +284,18 @@ fn bench_redb() -> (f64, f64, f64) {
     let start = Instant::now();
     {
         let read_txn = db.begin_read().unwrap();
-        let object_idx = read_txn.open_multimap_table(OBJECT_IDX).unwrap();
+        let osp_table = read_txn.open_table(OSP_TABLE).unwrap();
 
         for i in (0..N).step_by(step).take(QUERY_COUNT) {
-            let _results: Vec<_> = object_idx
-                .get(objects[i].as_str())
+            let o = objects[i];
+            let bounds = (o, u64::MIN, u64::MIN)..=(o, u64::MAX, u64::MAX);
+            let _results: Vec<(u64, u64, u64)> = osp_table
+                .range(bounds)
                 .unwrap()
-                .map(|r| r.unwrap().value().to_string())
+                .map(|r| {
+                    let (o, s, p) = r.unwrap().0.value();
+                    (s, p, o)
+                })
                 .collect();
         }
     }
