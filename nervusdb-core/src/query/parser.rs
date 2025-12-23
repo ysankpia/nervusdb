@@ -52,8 +52,6 @@ impl TokenParser {
             TokenType::Optional => return Err(Error::NotImplemented("OPTIONAL MATCH")),
             TokenType::With => return Err(Error::NotImplemented("WITH")),
             TokenType::Union => return Err(Error::NotImplemented("UNION")),
-            TokenType::Order => return Err(Error::NotImplemented("ORDER BY")),
-            TokenType::Skip => return Err(Error::NotImplemented("SKIP")),
             TokenType::Merge => return Err(Error::NotImplemented("MERGE")),
             TokenType::Remove => return Err(Error::NotImplemented("REMOVE")),
             TokenType::Unwind => return Err(Error::NotImplemented("UNWIND")),
@@ -115,25 +113,24 @@ impl TokenParser {
             }
         }
 
-        if self.check(&TokenType::Order) {
-            return Err(Error::NotImplemented("ORDER BY"));
-        }
-        if self.check(&TokenType::Skip) {
-            return Err(Error::NotImplemented("SKIP"));
-        }
+        // Parse ORDER BY
+        let order_by = if self.match_token(&TokenType::Order) {
+            self.consume(&TokenType::By, "Expected BY after ORDER")?;
+            Some(self.parse_order_by()?)
+        } else {
+            None
+        };
 
+        // Parse SKIP
+        let skip = if self.match_token(&TokenType::Skip) {
+            Some(self.parse_integer("SKIP")?)
+        } else {
+            None
+        };
+
+        // Parse LIMIT
         let limit = if self.match_token(&TokenType::Limit) {
-            match &self.advance().token_type {
-                TokenType::Number(n) => {
-                    if *n < 0.0 || n.fract() != 0.0 || *n > (u32::MAX as f64) {
-                        return Err(Error::Other(
-                            "LIMIT expects a non-negative integer".to_string(),
-                        ));
-                    }
-                    Some(*n as u32)
-                }
-                _ => return Err(Error::Other("Expected integer after LIMIT".to_string())),
-            }
+            Some(self.parse_integer("LIMIT")?)
         } else {
             None
         };
@@ -141,10 +138,46 @@ impl TokenParser {
         Ok(ReturnClause {
             distinct,
             items,
-            order_by: None,
+            order_by,
             limit,
-            skip: None,
+            skip,
         })
+    }
+
+    fn parse_order_by(&mut self) -> Result<OrderByClause, Error> {
+        let mut items = Vec::new();
+        loop {
+            let expression = self.parse_expression()?;
+            let direction = if self.match_token(&TokenType::Desc) {
+                Direction::Descending
+            } else {
+                self.match_token(&TokenType::Asc); // Optional ASC
+                Direction::Ascending
+            };
+            items.push(OrderByItem {
+                expression,
+                direction,
+            });
+            if !self.match_token(&TokenType::Comma) {
+                break;
+            }
+        }
+        Ok(OrderByClause { items })
+    }
+
+    fn parse_integer(&mut self, context: &str) -> Result<u32, Error> {
+        match &self.advance().token_type {
+            TokenType::Number(n) => {
+                if *n < 0.0 || n.fract() != 0.0 || *n > (u32::MAX as f64) {
+                    return Err(Error::Other(format!(
+                        "{} expects a non-negative integer",
+                        context
+                    )));
+                }
+                Ok(*n as u32)
+            }
+            _ => Err(Error::Other(format!("Expected integer after {}", context))),
+        }
     }
 
     fn parse_return_item(&mut self) -> Result<ReturnItem, Error> {

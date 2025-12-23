@@ -344,13 +344,9 @@ fn test_unsupported_features_fail_fast() {
     let err = db.execute_query("MATCH (n) RETURN DISTINCT n").unwrap_err();
     assert!(matches!(err, nervusdb_core::Error::NotImplemented(_)));
 
-    let err = db
-        .execute_query("MATCH (n) RETURN n ORDER BY n")
-        .unwrap_err();
-    assert!(matches!(err, nervusdb_core::Error::NotImplemented(_)));
-
-    let err = db.execute_query("MATCH (n) RETURN n SKIP 1").unwrap_err();
-    assert!(matches!(err, nervusdb_core::Error::NotImplemented(_)));
+    // ORDER BY and SKIP are now supported
+    let _ = db.execute_query("MATCH (n) RETURN n ORDER BY n").unwrap();
+    let _ = db.execute_query("MATCH (n) RETURN n SKIP 1").unwrap();
 
     let err = db.execute_query("MATCH (n) RETURN n WITH n").unwrap_err();
     assert!(matches!(err, nervusdb_core::Error::NotImplemented(_)));
@@ -803,4 +799,73 @@ fn test_delete_multiple_nodes() {
     assert_eq!(results.len(), 1, "Expected Charlie to remain");
 
     println!("✅ DELETE multiple nodes works");
+}
+
+#[test]
+fn test_order_by_and_skip() {
+    let dir = tempdir().unwrap();
+    let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
+
+    // Create nodes with different names
+    db.add_fact(Fact::new("charlie", "type", "Person")).unwrap();
+    db.add_fact(Fact::new("alice", "type", "Person")).unwrap();
+    db.add_fact(Fact::new("bob", "type", "Person")).unwrap();
+
+    // Set name properties
+    let charlie_id = db.resolve_id("charlie").unwrap().unwrap();
+    let alice_id = db.resolve_id("alice").unwrap().unwrap();
+    let bob_id = db.resolve_id("bob").unwrap().unwrap();
+
+    db.set_node_property_binary(
+        charlie_id,
+        &nervusdb_core::storage::property::serialize_properties(
+            &serde_json::from_value(serde_json::json!({"name": "Charlie", "age": 30})).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    db.set_node_property_binary(
+        alice_id,
+        &nervusdb_core::storage::property::serialize_properties(
+            &serde_json::from_value(serde_json::json!({"name": "Alice", "age": 25})).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    db.set_node_property_binary(
+        bob_id,
+        &nervusdb_core::storage::property::serialize_properties(
+            &serde_json::from_value(serde_json::json!({"name": "Bob", "age": 35})).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    // Test ORDER BY ASC
+    let results = db
+        .execute_query("MATCH (p:Person) RETURN p ORDER BY p.name")
+        .unwrap();
+    assert_eq!(results.len(), 3);
+    // Should be Alice, Bob, Charlie (alphabetical)
+
+    // Test ORDER BY DESC
+    let results = db
+        .execute_query("MATCH (p:Person) RETURN p ORDER BY p.age DESC")
+        .unwrap();
+    assert_eq!(results.len(), 3);
+    // Should be Bob (35), Charlie (30), Alice (25)
+
+    // Test SKIP
+    let results = db
+        .execute_query("MATCH (p:Person) RETURN p ORDER BY p.name SKIP 1")
+        .unwrap();
+    assert_eq!(results.len(), 2);
+    // Should skip Alice, return Bob and Charlie
+
+    // Test SKIP + LIMIT
+    let results = db
+        .execute_query("MATCH (p:Person) RETURN p ORDER BY p.name SKIP 1 LIMIT 1")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+    // Should return only Bob
 }

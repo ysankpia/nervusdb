@@ -7,6 +7,8 @@ pub enum PhysicalPlan {
     Filter(FilterNode),
     Project(ProjectNode),
     Limit(LimitNode),
+    Skip(SkipNode),
+    Sort(SortNode),
     NestedLoopJoin(NestedLoopJoinNode),
     Expand(ExpandNode),
     Create(CreateNode),
@@ -36,6 +38,18 @@ pub struct ProjectNode {
 pub struct LimitNode {
     pub input: Box<PhysicalPlan>,
     pub limit: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct SkipNode {
+    pub input: Box<PhysicalPlan>,
+    pub skip: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct SortNode {
+    pub input: Box<PhysicalPlan>,
+    pub order_by: Vec<(Expression, Direction)>,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +195,28 @@ impl QueryPlanner {
                 projections,
             });
 
+            // ORDER BY must come before SKIP and LIMIT
+            if let Some(order_by) = r.order_by {
+                let order_items = order_by
+                    .items
+                    .into_iter()
+                    .map(|item| (item.expression, item.direction))
+                    .collect();
+                final_plan = PhysicalPlan::Sort(SortNode {
+                    input: Box::new(final_plan),
+                    order_by: order_items,
+                });
+            }
+
+            // SKIP comes after ORDER BY
+            if let Some(skip) = r.skip {
+                final_plan = PhysicalPlan::Skip(SkipNode {
+                    input: Box::new(final_plan),
+                    skip,
+                });
+            }
+
+            // LIMIT comes last
             if let Some(limit) = r.limit {
                 final_plan = PhysicalPlan::Limit(LimitNode {
                     input: Box::new(final_plan),
