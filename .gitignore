@@ -47,6 +47,7 @@ yarn-error.log*
 # Database files (for testing)
 *.synapsedb
 *.nervusdb
+*.redb
 bindings/node/temp_verification_db
 bindings/node/temp_verification_db.redb
 repomix-output.xml

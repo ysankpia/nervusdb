@@ -1,8 +1,96 @@
 # NervusDB
 
-嵌入式三元组知识图谱数据库，纯 Rust 实现，专注于本地/边缘环境下的知识管理、链式联想与轻量推理。支持六序索引（Hexastore）、时序存储、Cypher 查询以及图算法。
+嵌入式三元组图数据库：**单文件 `redb` 存储 + 稳定 C ABI**，Rust 核心，绑定层只做参数搬运（Node/Python/WASM）。
 
-## 项目结构
+## 快速开始（C / Rust）
+
+### C（T10 stmt API：`prepare_v2 → step → column_* → finalize`）
+
+```c
+#include "nervusdb.h"
+#include <inttypes.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+static void die(nervusdb_error *err) {
+  fprintf(stderr, "nervusdb error (%d): %s\n", err ? err->code : -1,
+          err && err->message ? err->message : "<no message>");
+  nervusdb_free_error(err);
+  exit(1);
+}
+
+int main(void) {
+  nervusdb_db *db = NULL;
+  nervusdb_error *err = NULL;
+
+  if (nervusdb_open("demo.redb", &db, &err) != NERVUSDB_OK)
+    die(err);
+
+  uint64_t alice, knows, bob;
+  if (nervusdb_intern(db, "alice", &alice, &err) != NERVUSDB_OK)
+    die(err);
+  if (nervusdb_intern(db, "knows", &knows, &err) != NERVUSDB_OK)
+    die(err);
+  if (nervusdb_intern(db, "bob", &bob, &err) != NERVUSDB_OK)
+    die(err);
+
+  if (nervusdb_add_triple(db, alice, knows, bob, &err) != NERVUSDB_OK)
+    die(err);
+
+  nervusdb_stmt *stmt = NULL;
+  if (nervusdb_prepare_v2(db, "MATCH (a)-[r]->(b) RETURN a, r, b", NULL, &stmt,
+                          &err) != NERVUSDB_OK)
+    die(err);
+
+  for (;;) {
+    nervusdb_status rc = nervusdb_step(stmt, &err);
+    if (rc == NERVUSDB_ROW) {
+      uint64_t a = nervusdb_column_node_id(stmt, 0);
+      nervusdb_relationship r = nervusdb_column_relationship(stmt, 1);
+      uint64_t b = nervusdb_column_node_id(stmt, 2);
+      printf("a=%" PRIu64 "  r=(%" PRIu64 ",%" PRIu64 ",%" PRIu64 ")  b=%" PRIu64 "\n", a,
+             r.subject_id, r.predicate_id, r.object_id, b);
+      continue;
+    }
+    if (rc == NERVUSDB_DONE) {
+      break;
+    }
+    die(err);
+  }
+
+  nervusdb_finalize(stmt);
+  nervusdb_close(db);
+  return 0;
+}
+```
+
+> 重要：`nervusdb_column_*()` 返回的指针由 `stmt` 管理，**调用方禁止 free**；`column_text()` 的指针在下一次 `step()` 或 `finalize()` 后失效（见 `nervusdb-core/include/nervusdb.h` 注释）。
+
+### Rust（core API）
+
+```rust
+use nervusdb_core::{Database, Fact, Options, QueryCriteria};
+
+fn main() -> nervusdb_core::Result<()> {
+    let mut db = Database::open(Options::new("demo.redb"))?;
+
+    db.add_fact(Fact::new("alice", "knows", "bob"))?;
+
+    let knows = db.resolve_id("knows")?.expect("missing predicate id");
+    let triples: Vec<_> = db
+        .query(QueryCriteria {
+            subject_id: None,
+            predicate_id: Some(knows),
+            object_id: None,
+        })
+        .collect();
+
+    println!("triples = {:?}", triples);
+    Ok(())
+}
+```
+
+## 仓库结构（高层）
 
 ```
 nervusdb/
@@ -23,7 +111,18 @@ nervusdb/
     └── c/               # C 语言示例
 ```
 
-## 安装
+## 单文件语义
+
+- Rust/FFI 的 `open(path)` 会使用 `path.with_extension("redb")` 作为实际文件路径
+- 所以传入 `demo.redb` 会生成/打开 `demo.redb`；传入 `demo.db` 会打开 `demo.redb`
+
+## ABI 兼容性（1.0 起保证）
+
+- 编译期：`NERVUSDB_ABI_VERSION`
+- 运行期：`nervusdb_abi_version()` 必须等于上面的宏；不等就是你把头文件/动态库混用错了
+- 仅当发生破坏性 ABI 变更才 bump `NERVUSDB_ABI_VERSION`（1.0 发布后至少 90 天内禁止改 `nervusdb.h` 签名）
+
+## 安装 / 构建
 
 ### Rust (Cargo)
 
@@ -40,68 +139,14 @@ cd nervusdb
 cargo build --release
 ```
 
-## 快速上手
-
-### Rust
-
-```rust
-use nervusdb_core::{Database, Options, Fact};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 打开数据库
-    let mut db = Database::open(Options::new("demo.nervusdb"))?;
-
-    // 添加事实
-    let alice = db.intern("alice")?;
-    let knows = db.intern("knows")?;
-    let bob = db.intern("bob")?;
-
-    db.add_fact(Fact {
-        subject: "alice",
-        predicate: "knows",
-        object: "bob",
-        properties: None,
-    })?;
-
-    // 执行 Cypher 查询
-    let results = db.execute_query("MATCH (a)-[:knows]->(b) RETURN a, b")?;
-    println!("{:?}", results);
-
-    Ok(())
-}
-```
-
-### C
-
-```c
-#include "nervusdb.h"
-
-int main() {
-    nervusdb_db *db;
-    nervusdb_error *err = NULL;
-
-    nervusdb_open("demo.nervusdb", &db, &err);
-
-    uint64_t alice, knows, bob;
-    nervusdb_intern(db, "alice", &alice, &err);
-    nervusdb_intern(db, "knows", &knows, &err);
-    nervusdb_intern(db, "bob", &bob, &err);
-
-    nervusdb_add_triple(db, alice, knows, bob, &err);
-    nervusdb_close(db);
-
-    return 0;
-}
-```
-
 ## 核心特性
 
-- **六序索引 (Hexastore)**：SPO/SOP/PSO/POS/OSP/OPS 六种索引顺序，高效支持任意模式查询
-- **时序存储 (Temporal Store)**：支持 Episode、Fact 时间线追溯与查询
-- **Cypher 查询**：支持 MATCH/WHERE/RETURN/WITH/ORDER BY/LIMIT 等语法
-- **图算法**：内置 BFS/DFS/Dijkstra/A* 路径查找、PageRank/度中心性分析
-- **事务支持**：`begin_transaction()`/`commit_transaction()`/`abort_transaction()`
-- **多语言绑定**：Node.js (NAPI-RS)、Python (PyO3)、C (FFI)、WebAssembly
+- **三索引三元组存储**：`SPO / POS / OSP`（写放大更小，但仍覆盖常见查询模式）
+- **字典 Interning + LRU**：热字符串走内存缓存，避免反复 B-Tree 查找
+- **事务与崩溃一致性**：`kill -9` 下通过 crash-test 门禁（PR smoke + nightly 1000x）
+- **Cypher（实验性）**：提供 `exec_cypher(JSON)` + `stmt(step/column)` 两套 C API
+- **Temporal（可选）**：Cargo feature `temporal`，默认关闭
+- **绑定层薄包装**：Node.js (NAPI-RS)、Python (PyO3)、C (FFI)、WASM
 
 ## 开发与测试
 
@@ -122,6 +167,12 @@ cargo build --workspace --release
 ### 运行示例
 
 ```bash
+# Benchmark 对比（NervusDB / SQLite / redb）
+cargo run --example bench_compare -p nervusdb-core --release
+
+# Cypher C API（JSON vs stmt）
+cargo run --example bench_cypher_ffi -p nervusdb-core --release
+
 # Hexastore 基准测试
 cargo run --example bench_hexastore -p nervusdb-core
 
@@ -141,7 +192,7 @@ cargo run --bin nervus-migrate --features migration-cli -- <旧目录> <新文�
 
 - Issue/PR 遵循 GitHub 流程
 - pre-commit 和 pre-push 钩子已启用 (cargo fmt / clippy / test)
-- 架构文档位于 `docs/architecture/`
+- 任务/设计文档位于 `docs/task_progress.md` 与 `docs/design/`
 
 ## 许可证
 

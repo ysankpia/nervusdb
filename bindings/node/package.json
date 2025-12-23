@@ -1,7 +1,7 @@
 {
   "name": "@nervusdb/core",
   "version": "0.1.4",
-  "description": "NervusDB v1.1 - 高性能神经知识图谱数据库，支持流式查询、类型安全、属性索引与变长路径",
+  "description": "NervusDB Node 绑定：Rust Core 驱动的嵌入式三元组图数据库（单文件 redb）",
   "main": "dist/index.mjs",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -70,7 +70,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nervusdb/nervusdb.git"
+    "url": "git+https://github.com/LuQing-Studio/nervusdb.git"
   },
   "publishConfig": {
     "access": "public"
