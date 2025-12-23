@@ -338,7 +338,9 @@ fn test_unsupported_features_fail_fast() {
 
     db.add_fact(Fact::new("alice", "knows", "bob")).unwrap();
 
-    let err = db.execute_query("MERGE (n) RETURN n").unwrap_err();
+    let err = db
+        .execute_query("MATCH (n) RETURN n UNION MATCH (n) RETURN n")
+        .unwrap_err();
     assert!(matches!(err, nervusdb_core::Error::NotImplemented(_)));
 
     let err = db.execute_query("MATCH (n) RETURN DISTINCT n").unwrap_err();
@@ -404,6 +406,54 @@ fn test_create_single_node() {
     }
 
     println!("✅ CREATE single node works");
+}
+
+#[test]
+fn test_merge_single_node() {
+    let dir = tempdir().unwrap();
+    let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
+
+    // MERGE (n:Person {name: "Alice", age: 30})
+    let query = "MERGE (n:Person {name: \"Alice\", age: 30})";
+    let results = db.execute_query(query).unwrap();
+    assert_eq!(results.len(), 1, "Expected 1 result from MERGE");
+
+    let node_id = match results[0].get("n") {
+        Some(nervusdb_core::query::executor::Value::Node(id)) => *id,
+        _ => panic!("Expected Node value in result"),
+    };
+
+    // Second MERGE should be idempotent (same node id in this simplified model).
+    let results2 = db.execute_query(query).unwrap();
+    let node_id2 = match results2[0].get("n") {
+        Some(nervusdb_core::query::executor::Value::Node(id)) => *id,
+        _ => panic!("Expected Node value in result"),
+    };
+    assert_eq!(node_id2, node_id);
+
+    // Verify properties
+    if let Ok(Some(binary)) = db.get_node_property_binary(node_id) {
+        let props = nervusdb_core::storage::property::deserialize_properties(&binary).unwrap();
+        assert_eq!(props.get("name"), Some(&serde_json::json!("Alice")));
+        assert_eq!(props.get("age"), Some(&serde_json::json!(30.0)));
+    } else {
+        panic!("Node properties not found");
+    }
+}
+
+#[test]
+fn test_merge_relationship_idempotent() {
+    let dir = tempdir().unwrap();
+    let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
+
+    let query = "MERGE (a:Person {name: \"Alice\"})-[:KNOWS]->(b:Person {name: \"Bob\"})";
+    let _ = db.execute_query(query).unwrap();
+    let _ = db.execute_query(query).unwrap();
+
+    let results = db
+        .execute_query("MATCH (a)-[:KNOWS]->(b) RETURN a, b")
+        .unwrap();
+    assert_eq!(results.len(), 1, "Expected 1 KNOWS relationship");
 }
 
 #[test]
