@@ -19,4 +19,15 @@
 | T17 | 真流式执行器（消除 collect） | L3 | P0 | Done | feat/T17-arc-database | Arc<Database> 包装 + execute_streaming 返回 'static 迭代器；FFI 层无 collect() |
 | T18 | Node.js 属性写入优化 - 消除 JSON 序列化 | L2 | P0 | Done | feat/T18-msgpack-properties | 添加 *Direct 方法，直接传 JS Object，跳过 JSON.stringify/parse |
 | T19 | temporal_v2 分离为独立 crate | L3 | P1 | Done | refactor/T19-T20-architecture | 创建 nervusdb-temporal crate，nervusdb-core 通过 feature gate 依赖 |
+| T21 | Cypher ORDER BY + SKIP | L2 | P0 | Done | #10 | 支持 ORDER BY/SKIP；新增 Sort/Skip 计划节点 |
+| T22 | Cypher 聚合函数（COUNT/SUM/AVG/MIN/MAX） | L3 | P0 | Done | #11 | Aggregate 节点；支持分组聚合 |
+| T23 | Cypher WITH 子句 | L2 | P0 | Done | #12 | WITH 管线 + WHERE/DISTINCT/ORDER BY/SKIP/LIMIT |
+| T24 | Cypher OPTIONAL MATCH | L3 | P0 | Done | #13 | Left outer join 语义；无匹配返回 NULL |
+| T25 | Cypher MERGE | L3 | P0 | Done | #14 | 基础 MERGE 节点/关系；幂等创建 |
+| T26 | Cypher 可变长度路径 | L3 | P0 | Done | #15 | 变长路径匹配；受限于无关系变量/属性 |
+| T27 | Cypher UNION/UNION ALL | L2 | P0 | Done | #16 | 仅读查询；列对齐校验；distinct 去重 |
+| T28 | 扩展 Cypher 内置函数 | L2 | P0 | Done | #17 | type/labels/keys/size/toUpper/toLower/trim/coalesce |
+| T29 | Cypher CASE WHEN | L2 | P0 | Done | #18 | Case 表达式求值 |
+| T30 | EXISTS/CALL 子查询 | L3 | P0 | Done | #19 | EXISTS 模式/子查询；CALL 仅支持独立子查询 |
+| T31 | 列表字面量与推导式 | L2 | P0 | Done | #20 | List literal/comprehension；用于 IN/RETURN |
 | T32 | Cypher 基础补全：UNWIND + DISTINCT + COLLECT 测试覆盖 | L3 | P0 | WIP | feat/T32-cypher-unwind-distinct | UNWIND 行生成；DISTINCT 去重；补 COLLECT 行为测试 |
