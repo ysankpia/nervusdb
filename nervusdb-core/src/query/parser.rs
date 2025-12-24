@@ -844,7 +844,6 @@ impl TokenParser {
 
         Ok(())
     }
-
     fn parse_case_expression(&mut self) -> Result<CaseExpression, Error> {
         let mut alternatives = Vec::new();
 

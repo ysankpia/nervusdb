@@ -1368,7 +1368,6 @@ fn extract_exists_match_query(
 
     match_pattern.map(|p| (p, where_expr))
 }
-
 fn json_array_string(mut values: Vec<String>) -> Value {
     values.sort();
     let json =
