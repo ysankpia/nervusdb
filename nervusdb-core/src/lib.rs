@@ -500,6 +500,11 @@ impl Database {
         index.search(query, limit)
     }
 
+    #[cfg(all(feature = "vector", not(target_arch = "wasm32")))]
+    pub(crate) fn vector_index_config(&self) -> Option<&vector_index::VectorIndexConfig> {
+        self.vector_index.as_ref().map(|index| index.config())
+    }
+
     pub fn flush_indexes(&mut self) -> Result<()> {
         #[cfg(not(target_arch = "wasm32"))]
         if self.active_write.is_some() {

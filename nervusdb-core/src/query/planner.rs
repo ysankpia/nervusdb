@@ -7,6 +7,7 @@ pub enum PhysicalPlan {
     SingleRow(SingleRowNode),
     Scan(ScanNode),
     FtsCandidateScan(FtsCandidateScanNode),
+    VectorTopKScan(VectorTopKScanNode),
     Filter(FilterNode),
     Project(ProjectNode),
     Limit(LimitNode),
@@ -39,6 +40,15 @@ pub struct FtsCandidateScanNode {
     pub labels: Vec<String>,
     pub property: String,
     pub query: Expression,
+}
+
+#[derive(Debug, Clone)]
+pub struct VectorTopKScanNode {
+    pub alias: String,
+    pub labels: Vec<String>,
+    pub property: String,
+    pub query: Expression,
+    pub limit: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -447,7 +457,7 @@ impl QueryPlanner {
             }
         }
 
-        Ok(final_plan)
+        Ok(Self::maybe_rewrite_vector_topk(final_plan))
     }
 
     fn maybe_rewrite_txt_score_filter(filter: FilterNode) -> PhysicalPlan {
@@ -556,6 +566,137 @@ impl QueryPlanner {
             Expression::Literal(Literal::Float(f)) => Some(*f),
             _ => None,
         }
+    }
+
+    fn maybe_rewrite_vector_topk(plan: PhysicalPlan) -> PhysicalPlan {
+        if !cfg!(all(feature = "vector", not(target_arch = "wasm32"))) {
+            return plan;
+        }
+
+        let PhysicalPlan::Limit(LimitNode { input, limit }) = plan else {
+            return plan;
+        };
+
+        let PhysicalPlan::Sort(SortNode { input, order_by }) = *input else {
+            return PhysicalPlan::Limit(LimitNode { input, limit });
+        };
+
+        let Some((order_expr, Direction::Descending)) = order_by.first() else {
+            return PhysicalPlan::Limit(LimitNode {
+                input: Box::new(PhysicalPlan::Sort(SortNode { input, order_by })),
+                limit,
+            });
+        };
+        if order_by.len() != 1 {
+            return PhysicalPlan::Limit(LimitNode {
+                input: Box::new(PhysicalPlan::Sort(SortNode { input, order_by })),
+                limit,
+            });
+        }
+
+        let Some((pa, query)) = Self::match_vec_similarity_order_by(order_expr) else {
+            return PhysicalPlan::Limit(LimitNode {
+                input: Box::new(PhysicalPlan::Sort(SortNode { input, order_by })),
+                limit,
+            });
+        };
+
+        let PhysicalPlan::Project(ProjectNode { input, projections }) = *input else {
+            return PhysicalPlan::Limit(LimitNode {
+                input: Box::new(PhysicalPlan::Sort(SortNode { input, order_by })),
+                limit,
+            });
+        };
+
+        let PhysicalPlan::Scan(scan) = *input else {
+            return PhysicalPlan::Limit(LimitNode {
+                input: Box::new(PhysicalPlan::Sort(SortNode {
+                    input: Box::new(PhysicalPlan::Project(ProjectNode { input, projections })),
+                    order_by,
+                })),
+                limit,
+            });
+        };
+
+        if !scan.labels.is_empty() {
+            return PhysicalPlan::Limit(LimitNode {
+                input: Box::new(PhysicalPlan::Sort(SortNode {
+                    input: Box::new(PhysicalPlan::Project(ProjectNode {
+                        input: Box::new(PhysicalPlan::Scan(scan)),
+                        projections,
+                    })),
+                    order_by,
+                })),
+                limit,
+            });
+        }
+        if pa.variable != scan.alias {
+            return PhysicalPlan::Limit(LimitNode {
+                input: Box::new(PhysicalPlan::Sort(SortNode {
+                    input: Box::new(PhysicalPlan::Project(ProjectNode {
+                        input: Box::new(PhysicalPlan::Scan(scan)),
+                        projections,
+                    })),
+                    order_by,
+                })),
+                limit,
+            });
+        }
+
+        if !projections.iter().any(|(expr, alias)| {
+            alias == scan.alias.as_str()
+                && matches!(expr, Expression::Variable(name) if name == scan.alias.as_str())
+        }) {
+            return PhysicalPlan::Limit(LimitNode {
+                input: Box::new(PhysicalPlan::Sort(SortNode {
+                    input: Box::new(PhysicalPlan::Project(ProjectNode {
+                        input: Box::new(PhysicalPlan::Scan(scan)),
+                        projections,
+                    })),
+                    order_by,
+                })),
+                limit,
+            });
+        }
+
+        PhysicalPlan::Project(ProjectNode {
+            input: Box::new(PhysicalPlan::VectorTopKScan(VectorTopKScanNode {
+                alias: scan.alias,
+                labels: scan.labels,
+                property: pa.property,
+                query,
+                limit,
+            })),
+            projections,
+        })
+    }
+
+    fn match_vec_similarity_order_by(expr: &Expression) -> Option<(PropertyAccess, Expression)> {
+        let Expression::FunctionCall(fc) = expr else {
+            return None;
+        };
+        if !fc.name.eq_ignore_ascii_case("vec_similarity") {
+            return None;
+        }
+
+        let Some(Expression::PropertyAccess(pa)) = fc.arguments.first() else {
+            return None;
+        };
+        if pa.variable.is_empty() || pa.property.is_empty() {
+            return None;
+        }
+
+        let query = fc.arguments.get(1)?.clone();
+        if !matches!(
+            query,
+            Expression::Parameter(_)
+                | Expression::List(_)
+                | Expression::Literal(Literal::String(_))
+        ) {
+            return None;
+        }
+
+        Some((pa.clone(), query))
     }
 
     /// Check if expression contains aggregate function
@@ -744,6 +885,7 @@ impl QueryPlanner {
             PhysicalPlan::SingleRow(_) => HashSet::new(),
             PhysicalPlan::Scan(node) => HashSet::from([node.alias.clone()]),
             PhysicalPlan::FtsCandidateScan(node) => HashSet::from([node.alias.clone()]),
+            PhysicalPlan::VectorTopKScan(node) => HashSet::from([node.alias.clone()]),
             PhysicalPlan::Filter(node) => Self::extract_plan_output_aliases(&node.input),
             PhysicalPlan::Project(node) => node
                 .projections

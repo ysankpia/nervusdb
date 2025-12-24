@@ -8,7 +8,10 @@ use std::collections::HashMap;
 fn contains_fts_candidate_scan(plan: &PhysicalPlan) -> bool {
     match plan {
         PhysicalPlan::FtsCandidateScan(_) => true,
-        PhysicalPlan::SingleRow(_) | PhysicalPlan::Scan(_) | PhysicalPlan::Create(_) => false,
+        PhysicalPlan::SingleRow(_)
+        | PhysicalPlan::Scan(_)
+        | PhysicalPlan::VectorTopKScan(_)
+        | PhysicalPlan::Create(_) => false,
         PhysicalPlan::Filter(node) => contains_fts_candidate_scan(node.input.as_ref()),
         PhysicalPlan::Project(node) => contains_fts_candidate_scan(node.input.as_ref()),
         PhysicalPlan::Limit(node) => contains_fts_candidate_scan(node.input.as_ref()),

@@ -11,13 +11,14 @@
 
 use crate::error::Error;
 use crate::query::ast::{
-    BinaryOperator, Clause, Direction, ExistsExpression, Expression, ListComprehension, Literal,
-    PathElement, Pattern, PropertyMap, RelationshipDirection, RelationshipPattern,
+    BinaryOperator, Clause, Direction, ExistsExpression, Expression, FunctionCall,
+    ListComprehension, Literal, PathElement, Pattern, PropertyAccess, PropertyMap,
+    RelationshipDirection, RelationshipPattern,
 };
 use crate::query::planner::{
     AggregateFunction, AggregateNode, DistinctNode, ExpandNode, ExpandVarLengthNode, FilterNode,
     FtsCandidateScanNode, LeftOuterJoinNode, LimitNode, NestedLoopJoinNode, PhysicalPlan,
-    ProjectNode, ScanNode, SingleRowNode, SkipNode, SortNode, UnwindNode,
+    ProjectNode, ScanNode, SingleRowNode, SkipNode, SortNode, UnwindNode, VectorTopKScanNode,
 };
 use crate::{Database, QueryCriteria, Triple};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -236,6 +237,7 @@ impl ExecutionPlan for PhysicalPlan {
             PhysicalPlan::SingleRow(node) => node.execute(ctx),
             PhysicalPlan::Scan(node) => node.execute(ctx),
             PhysicalPlan::FtsCandidateScan(node) => node.execute(ctx),
+            PhysicalPlan::VectorTopKScan(node) => node.execute(ctx),
             PhysicalPlan::Filter(node) => node.execute(ctx),
             PhysicalPlan::Project(node) => node.execute(ctx),
             PhysicalPlan::Limit(node) => node.execute(ctx),
@@ -257,6 +259,7 @@ impl ExecutionPlan for PhysicalPlan {
             PhysicalPlan::SingleRow(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Scan(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::FtsCandidateScan(node) => node.estimate_cardinality(ctx),
+            PhysicalPlan::VectorTopKScan(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Filter(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Project(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Limit(node) => node.estimate_cardinality(ctx),
@@ -349,6 +352,20 @@ impl PhysicalPlan {
                         >)
                 }
             }
+            PhysicalPlan::VectorTopKScan(node) => {
+                // Delegate to the non-streaming implementation and materialize the limited result
+                // set, then hand out a 'static iterator for FFI.
+                let exec_ctx = ExecutionContext {
+                    db: ctx.db.as_ref(),
+                    params: ctx.params.as_ref(),
+                };
+                let iter = node.execute(&exec_ctx)?;
+                let mut records = Vec::new();
+                for item in iter {
+                    records.push(item?);
+                }
+                Ok(Box::new(records.into_iter().map(Ok)))
+            }
             PhysicalPlan::Filter(node) => {
                 let input_iter = node.input.execute_streaming(Arc::clone(&ctx))?;
                 let predicate = node.predicate;
@@ -396,12 +413,9 @@ impl PhysicalPlan {
                     for (expr, direction) in &order_by {
                         let val_a = evaluate_expression_value_streaming(expr, a, &ctx_clone);
                         let val_b = evaluate_expression_value_streaming(expr, b, &ctx_clone);
-                        let cmp = compare_values(&val_a, &val_b);
+                        let cmp = compare_values_for_sort(&val_a, &val_b, direction);
                         if cmp != std::cmp::Ordering::Equal {
-                            return match direction {
-                                Direction::Ascending => cmp,
-                                Direction::Descending => cmp.reverse(),
-                            };
+                            return cmp;
                         }
                     }
                     std::cmp::Ordering::Equal
@@ -1972,6 +1986,133 @@ impl ExecutionPlan for FtsCandidateScanNode {
     }
 }
 
+impl ExecutionPlan for VectorTopKScanNode {
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a ExecutionContext<'a>,
+    ) -> Result<Box<dyn Iterator<Item = Result<Record, Error>> + 'a>, Error> {
+        fn fallback<'a>(
+            node: &VectorTopKScanNode,
+            ctx: &'a ExecutionContext<'a>,
+            limit: usize,
+        ) -> Result<Box<dyn Iterator<Item = Result<Record, Error>> + 'a>, Error> {
+            let alias = node.alias.clone();
+            let property = node.property.clone();
+            let query_expr = node.query.clone();
+
+            let sort_expr = Expression::FunctionCall(FunctionCall {
+                name: "vec_similarity".to_string(),
+                arguments: vec![
+                    Expression::PropertyAccess(PropertyAccess {
+                        variable: alias.clone(),
+                        property,
+                    }),
+                    query_expr,
+                ],
+            });
+
+            let mut records = Vec::new();
+            if node.labels.is_empty() {
+                for item in scan_all_nodes_optimized(ctx.db, alias.clone()) {
+                    records.push(item?);
+                }
+            } else {
+                let labels = node.labels.clone();
+                for item in scan_labeled_nodes_optimized(ctx.db, &labels, alias.clone()) {
+                    records.push(item?);
+                }
+            }
+            records.sort_by(|a, b| {
+                let val_a = evaluate_expression_value(&sort_expr, a, ctx);
+                let val_b = evaluate_expression_value(&sort_expr, b, ctx);
+                compare_values_for_sort(&val_a, &val_b, &Direction::Descending)
+            });
+            records.truncate(limit);
+            Ok(Box::new(records.into_iter().map(Ok)))
+        }
+
+        let limit = usize::try_from(self.limit).unwrap_or(usize::MAX);
+        if limit == 0 || self.property.is_empty() {
+            return Ok(Box::new(std::iter::empty()));
+        }
+
+        // Only optimize global Top-K for now. Label filtering stays on the exact path.
+        if !self.labels.is_empty() {
+            return fallback(self, ctx, limit);
+        }
+
+        #[cfg(all(feature = "vector", not(target_arch = "wasm32")))]
+        {
+            let query_value = evaluate_expression_value(&self.query, &Record::new(), ctx);
+            let Some(query_vec) = value_to_vector(&query_value) else {
+                return fallback(self, ctx, limit);
+            };
+
+            let Some(config) = ctx.db.vector_index_config() else {
+                return fallback(self, ctx, limit);
+            };
+
+            let metric = config.metric.to_lowercase();
+            if config.property != self.property
+                || query_vec.len() != config.dim
+                || !(metric == "cosine" || metric == "cos")
+            {
+                return fallback(self, ctx, limit);
+            }
+
+            let hits = match ctx.db.vector_search(&query_vec, limit) {
+                Ok(h) => h,
+                Err(_) => return fallback(self, ctx, limit),
+            };
+
+            // Re-score candidates using the exact `vec_similarity` semantics to keep ordering
+            // consistent with the executor.
+            let alias = self.alias.clone();
+            let property_expr = Expression::PropertyAccess(PropertyAccess {
+                variable: alias.clone(),
+                property: self.property.clone(),
+            });
+            let mut scored: Vec<(u64, Option<f32>)> = Vec::with_capacity(hits.len());
+            for (node_id, _) in hits {
+                let mut record = Record::new();
+                record.insert(alias.clone(), Value::Node(node_id));
+
+                let value = evaluate_expression_value(&property_expr, &record, ctx);
+                let score = value_to_vector(&value).and_then(|v| cosine_similarity(&v, &query_vec));
+                scored.push((node_id, score));
+            }
+
+            scored.sort_by(|(id_a, s_a), (id_b, s_b)| match (s_a, s_b) {
+                (Some(a), Some(b)) => b
+                    .partial_cmp(a)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| id_a.cmp(id_b)),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => id_a.cmp(id_b),
+            });
+
+            let candidate_ids: Vec<u64> = scored.into_iter().map(|(id, _)| id).collect();
+            return Ok(Box::new(candidate_ids.into_iter().map(move |node_id| {
+                let mut record = Record::new();
+                record.insert(alias.clone(), Value::Node(node_id));
+                Ok(record)
+            })));
+        }
+        #[cfg(not(all(feature = "vector", not(target_arch = "wasm32"))))]
+        {
+            fallback(self, ctx, limit)
+        }
+    }
+
+    fn estimate_cardinality(&self, ctx: &ExecutionContext) -> usize {
+        let scan_est = ScanStats::estimate_scan_cardinality(ctx.db, &self.labels)
+            .estimated_cardinality
+            .max(1);
+        scan_est.min(self.limit as usize)
+    }
+}
+
 /// 优化的全节点扫描 - 避免全表扫描
 fn scan_all_nodes_optimized(
     db: &Database,
@@ -2774,12 +2915,9 @@ impl ExecutionPlan for SortNode {
             for (expr, direction) in order_by {
                 let val_a = evaluate_expression_value(expr, a, ctx);
                 let val_b = evaluate_expression_value(expr, b, ctx);
-                let cmp = compare_values(&val_a, &val_b);
+                let cmp = compare_values_for_sort(&val_a, &val_b, direction);
                 if cmp != std::cmp::Ordering::Equal {
-                    return match direction {
-                        Direction::Ascending => cmp,
-                        Direction::Descending => cmp.reverse(),
-                    };
+                    return cmp;
                 }
             }
             std::cmp::Ordering::Equal
@@ -2950,9 +3088,25 @@ fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
         (Value::Boolean(x), Value::Boolean(y)) => x.cmp(y),
         (Value::Node(x), Value::Node(y)) => x.cmp(y),
         (Value::Null, Value::Null) => std::cmp::Ordering::Equal,
-        (Value::Null, _) => std::cmp::Ordering::Greater, // NULL sorts last
+        (Value::Null, _) => std::cmp::Ordering::Greater, // NULL sorts last (ASC)
         (_, Value::Null) => std::cmp::Ordering::Less,
         _ => std::cmp::Ordering::Equal,
+    }
+}
+
+fn compare_values_for_sort(a: &Value, b: &Value, direction: &Direction) -> std::cmp::Ordering {
+    // Keep NULLs last for both ASC and DESC.
+    match (a, b) {
+        (Value::Null, Value::Null) => std::cmp::Ordering::Equal,
+        (Value::Null, _) => std::cmp::Ordering::Greater,
+        (_, Value::Null) => std::cmp::Ordering::Less,
+        _ => {
+            let cmp = compare_values(a, b);
+            match direction {
+                Direction::Ascending => cmp,
+                Direction::Descending => cmp.reverse(),
+            }
+        }
     }
 }
 

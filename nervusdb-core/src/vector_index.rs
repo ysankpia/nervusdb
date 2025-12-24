@@ -35,6 +35,10 @@ pub struct VectorIndex {
 }
 
 impl VectorIndex {
+    pub(crate) fn config(&self) -> &VectorIndexConfig {
+        &self.config
+    }
+
     pub fn open_or_rebuild(db: &Database, redb_path: &Path) -> Result<Option<Self>> {
         let sidecar_path = redb_path.with_extension("redb.usearch");
         let Some(config) = read_config(db)? else {
