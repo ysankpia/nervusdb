@@ -1076,6 +1076,7 @@ impl DatabaseHandle {
         let planner = QueryPlanner::new();
         let plan = planner.plan(ast).map_err(map_error)?;
 
+        #[allow(clippy::arc_with_non_send_sync)]
         let ctx = Arc::new(nervusdb_core::query::executor::ArcExecutionContext::new(
             Arc::clone(&db_arc),
             param_values,
@@ -1611,8 +1612,10 @@ impl DatabaseHandle {
 #[napi]
 pub fn open(options: OpenOptions) -> NapiResult<DatabaseHandle> {
     let path = PathBuf::from(options.data_path);
+    #[allow(clippy::arc_with_non_send_sync)]
     let db = Arc::new(Database::open(Options::new(path)).map_err(map_error)?);
     Ok(DatabaseHandle {
+        #[allow(clippy::arc_with_non_send_sync)]
         inner: Arc::new(Mutex::new(SharedDb { db: Some(db) })),
     })
 }
