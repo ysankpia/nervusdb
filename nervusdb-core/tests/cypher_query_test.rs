@@ -277,6 +277,34 @@ fn test_where_parameter_binding() {
 }
 
 #[test]
+fn test_vec_similarity_function() {
+    use std::collections::HashMap;
+
+    let dir = tempdir().unwrap();
+    let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
+
+    let doc = db.add_fact(Fact::new("doc", "type", "Doc")).unwrap();
+    db.set_node_property(doc.subject_id, r#"{"embedding":[1.0,0.0]}"#)
+        .unwrap();
+
+    let mut params = HashMap::new();
+    params.insert("q".to_string(), serde_json::json!([1.0, 0.0]));
+
+    let results = db
+        .execute_query_with_params(
+            "MATCH (n:Doc) RETURN vec_similarity(n.embedding, $q) AS s",
+            Some(params),
+        )
+        .unwrap();
+    assert_eq!(results.len(), 1);
+
+    let Some(nervusdb_core::query::executor::Value::Float(s)) = results[0].get("s") else {
+        panic!("Expected vec_similarity to return a float");
+    };
+    assert!((s - 1.0).abs() < 1e-9);
+}
+
+#[test]
 fn test_where_logical_operators() {
     let dir = tempdir().unwrap();
     let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();

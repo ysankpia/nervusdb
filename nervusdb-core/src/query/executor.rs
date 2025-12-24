@@ -28,6 +28,7 @@ pub enum Value {
     Float(f64),
     Boolean(bool),
     Null,
+    Vector(Vec<f32>),
     Node(u64),
     Relationship(Triple),
 }
@@ -39,6 +40,7 @@ impl PartialEq for Value {
             (Value::Float(a), Value::Float(b)) => a == b,
             (Value::Boolean(a), Value::Boolean(b)) => a == b,
             (Value::Null, Value::Null) => true,
+            (Value::Vector(a), Value::Vector(b)) => a == b,
             (Value::Node(a), Value::Node(b)) => a == b,
             (Value::Relationship(a), Value::Relationship(b)) => a == b,
             _ => false,
@@ -829,6 +831,18 @@ fn evaluate_expression_value_streaming(
                     serde_json::Value::Number(n) => Value::Float(n.as_f64().unwrap_or(0.0)),
                     serde_json::Value::Bool(b) => Value::Boolean(*b),
                     serde_json::Value::Null => Value::Null,
+                    serde_json::Value::Array(items) => {
+                        let mut out = Vec::with_capacity(items.len());
+                        for item in items {
+                            let Some(n) = item.as_f64() else {
+                                return Value::String(
+                                    serde_json::Value::Array(items.clone()).to_string(),
+                                );
+                            };
+                            out.push(n as f32);
+                        }
+                        Value::Vector(out)
+                    }
                     _ => Value::Null,
                 };
             }
@@ -938,6 +952,32 @@ fn evaluate_expression_value_streaming(
             list_comprehension_value_streaming(comp.as_ref(), record, ctx)
         }
         Expression::FunctionCall(func) => match func.name.to_lowercase().as_str() {
+            "vec_similarity" => {
+                let Some(left) = func
+                    .arguments
+                    .first()
+                    .map(|arg| evaluate_expression_value_streaming(arg, record, ctx))
+                else {
+                    return Value::Null;
+                };
+                let Some(right) = func
+                    .arguments
+                    .get(1)
+                    .map(|arg| evaluate_expression_value_streaming(arg, record, ctx))
+                else {
+                    return Value::Null;
+                };
+                let Some(left_vec) = value_to_vector(&left) else {
+                    return Value::Null;
+                };
+                let Some(right_vec) = value_to_vector(&right) else {
+                    return Value::Null;
+                };
+                let Some(sim) = cosine_similarity(&left_vec, &right_vec) else {
+                    return Value::Null;
+                };
+                Value::Float(sim as f64)
+            }
             "id" => match func
                 .arguments
                 .first()
@@ -1076,6 +1116,7 @@ fn evaluate_list_source_streaming(
         ),
         _ => match evaluate_expression_value_streaming(expr, record, ctx) {
             Value::String(s) => parse_executor_list_string(&s),
+            Value::Vector(v) => Some(v.iter().map(|f| Value::Float(*f as f64)).collect()),
             _ => None,
         },
     }
@@ -1089,6 +1130,15 @@ fn executor_value_to_json(value: &Value) -> serde_json::Value {
             .map(serde_json::Value::Number)
             .unwrap_or(serde_json::Value::Null),
         Value::String(s) => serde_json::Value::String(s.clone()),
+        Value::Vector(v) => serde_json::Value::Array(
+            v.iter()
+                .map(|f| {
+                    serde_json::Number::from_f64(*f as f64)
+                        .map(serde_json::Value::Number)
+                        .unwrap_or(serde_json::Value::Null)
+                })
+                .collect(),
+        ),
         Value::Node(id) => serde_json::Value::Number(serde_json::Number::from(*id)),
         Value::Relationship(triple) => serde_json::Value::String(format!("{triple:?}")),
     }
@@ -1112,14 +1162,59 @@ fn parse_executor_list_string(input: &str) -> Option<Vec<Value>> {
     Some(items.iter().map(json_to_executor_value).collect())
 }
 
+fn parse_executor_vector_string(input: &str) -> Option<Vec<f32>> {
+    let json = serde_json::from_str::<serde_json::Value>(input).ok()?;
+    let serde_json::Value::Array(items) = json else {
+        return None;
+    };
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        out.push(item.as_f64()? as f32);
+    }
+    Some(out)
+}
+
+fn value_to_vector(value: &Value) -> Option<Vec<f32>> {
+    match value {
+        Value::Vector(v) => Some(v.clone()),
+        Value::String(s) => parse_executor_vector_string(s),
+        _ => None,
+    }
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> Option<f32> {
+    if a.is_empty() || a.len() != b.len() {
+        return None;
+    }
+    let mut dot = 0.0f32;
+    let mut norm_a = 0.0f32;
+    let mut norm_b = 0.0f32;
+    for (x, y) in a.iter().zip(b.iter()) {
+        dot += x * y;
+        norm_a += x * x;
+        norm_b += y * y;
+    }
+    let denom = norm_a.sqrt() * norm_b.sqrt();
+    if denom == 0.0 {
+        return None;
+    }
+    Some(dot / denom)
+}
+
 fn value_in_list(needle: &Value, haystack: &Value) -> Value {
-    let Value::String(input) = haystack else {
-        return Value::Null;
-    };
-    let Some(items) = parse_executor_list_string(input) else {
-        return Value::Null;
-    };
-    Value::Boolean(items.iter().any(|v| v == needle))
+    match haystack {
+        Value::String(input) => {
+            let Some(items) = parse_executor_list_string(input) else {
+                return Value::Null;
+            };
+            Value::Boolean(items.iter().any(|v| v == needle))
+        }
+        Value::Vector(items) => match needle {
+            Value::Float(f) => Value::Boolean(items.iter().any(|v| (*v as f64) == *f)),
+            _ => Value::Null,
+        },
+        _ => Value::Null,
+    }
 }
 
 fn unwind_value_to_list(value: Value) -> Result<Vec<Value>, Error> {
@@ -1127,6 +1222,7 @@ fn unwind_value_to_list(value: Value) -> Result<Vec<Value>, Error> {
         Value::Null => Ok(Vec::new()),
         Value::String(input) => parse_executor_list_string(&input)
             .ok_or_else(|| Error::Other("UNWIND expects a list expression".to_string())),
+        Value::Vector(items) => Ok(items.into_iter().map(|f| Value::Float(f as f64)).collect()),
         _ => Err(Error::Other("UNWIND expects a list expression".to_string())),
     }
 }
@@ -2688,6 +2784,18 @@ pub fn evaluate_expression_value(
                     serde_json::Value::Number(n) => Value::Float(n.as_f64().unwrap_or(0.0)),
                     serde_json::Value::Bool(b) => Value::Boolean(*b),
                     serde_json::Value::Null => Value::Null,
+                    serde_json::Value::Array(items) => {
+                        let mut out = Vec::with_capacity(items.len());
+                        for item in items {
+                            let Some(n) = item.as_f64() else {
+                                return Value::String(
+                                    serde_json::Value::Array(items.clone()).to_string(),
+                                );
+                            };
+                            out.push(n as f32);
+                        }
+                        Value::Vector(out)
+                    }
                     _ => Value::Null,
                 };
             }
@@ -2795,6 +2903,32 @@ pub fn evaluate_expression_value(
         Expression::List(elements) => list_literal_value(elements, record, ctx),
         Expression::ListComprehension(comp) => list_comprehension_value(comp.as_ref(), record, ctx),
         Expression::FunctionCall(func) => match func.name.to_lowercase().as_str() {
+            "vec_similarity" => {
+                let Some(left) = func
+                    .arguments
+                    .first()
+                    .map(|arg| evaluate_expression_value(arg, record, ctx))
+                else {
+                    return Value::Null;
+                };
+                let Some(right) = func
+                    .arguments
+                    .get(1)
+                    .map(|arg| evaluate_expression_value(arg, record, ctx))
+                else {
+                    return Value::Null;
+                };
+                let Some(left_vec) = value_to_vector(&left) else {
+                    return Value::Null;
+                };
+                let Some(right_vec) = value_to_vector(&right) else {
+                    return Value::Null;
+                };
+                let Some(sim) = cosine_similarity(&left_vec, &right_vec) else {
+                    return Value::Null;
+                };
+                Value::Float(sim as f64)
+            }
             "id" => match func
                 .arguments
                 .first()

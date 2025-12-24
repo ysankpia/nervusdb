@@ -622,6 +622,15 @@ pub unsafe extern "C" fn nervusdb_exec_cypher(
                         crate::query::executor::Value::Float(f) => serde_json::json!(f),
                         crate::query::executor::Value::Boolean(b) => serde_json::Value::Bool(b),
                         crate::query::executor::Value::Null => serde_json::Value::Null,
+                        crate::query::executor::Value::Vector(v) => serde_json::Value::Array(
+                            v.into_iter()
+                                .map(|f| {
+                                    serde_json::Number::from_f64(f as f64)
+                                        .map(serde_json::Value::Number)
+                                        .unwrap_or(serde_json::Value::Null)
+                                })
+                                .collect(),
+                        ),
                         crate::query::executor::Value::Node(id) => serde_json::json!({ "id": id }),
                         crate::query::executor::Value::Relationship(id) => {
                             serde_json::json!({ "id": id })
@@ -741,6 +750,20 @@ fn convert_stmt_value(value: crate::query::executor::Value) -> StmtValue {
         crate::query::executor::Value::Float(f) => StmtValue::Float(f),
         crate::query::executor::Value::Boolean(b) => StmtValue::Boolean(b),
         crate::query::executor::Value::Null => StmtValue::Null,
+        crate::query::executor::Value::Vector(v) => {
+            let json = serde_json::Value::Array(
+                v.into_iter()
+                    .map(|f| {
+                        serde_json::Number::from_f64(f as f64)
+                            .map(serde_json::Value::Number)
+                            .unwrap_or(serde_json::Value::Null)
+                    })
+                    .collect(),
+            );
+            let mut bytes = json.to_string().into_bytes();
+            bytes.push(0);
+            StmtValue::Text(bytes.into_boxed_slice())
+        }
         crate::query::executor::Value::Node(id) => StmtValue::Node(id),
         crate::query::executor::Value::Relationship(triple) => StmtValue::Relationship(triple),
     }

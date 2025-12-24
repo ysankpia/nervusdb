@@ -574,6 +574,16 @@ impl Database {
             serde_json::Value::Number(n) => ExecValue::Float(n.as_f64().unwrap_or(0.0)),
             serde_json::Value::Bool(b) => ExecValue::Boolean(b),
             serde_json::Value::Null => ExecValue::Null,
+            serde_json::Value::Array(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in &items {
+                    let Some(n) = item.as_f64() else {
+                        return ExecValue::String(serde_json::Value::Array(items).to_string());
+                    };
+                    out.push(n as f32);
+                }
+                ExecValue::Vector(out)
+            }
             _ => ExecValue::Null,
         }
     }
