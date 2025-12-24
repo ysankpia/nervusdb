@@ -374,7 +374,6 @@ impl Database {
         {
             return Err(Error::NotImplemented("CALL with other clauses"));
         }
-
         if query
             .clauses
             .iter()

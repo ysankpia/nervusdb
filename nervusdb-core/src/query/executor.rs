@@ -1059,7 +1059,6 @@ fn value_in_list(needle: &Value, haystack: &Value) -> Value {
     };
     Value::Boolean(items.iter().any(|v| v == needle))
 }
-
 fn evaluate_exists_streaming(
     exists_expr: &ExistsExpression,
     record: &Record,
@@ -1493,7 +1492,6 @@ fn extract_exists_match_query(
 
     match_pattern.map(|p| (p, where_expr))
 }
-
 fn json_array_string(mut values: Vec<String>) -> Value {
     values.sort();
     let json =
@@ -2764,7 +2762,6 @@ fn evaluate_list_source(
         },
     }
 }
-
 fn evaluate_exists(
     exists_expr: &ExistsExpression,
     record: &Record,

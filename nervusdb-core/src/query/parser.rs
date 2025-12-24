@@ -866,7 +866,6 @@ impl TokenParser {
             map_expression,
         })
     }
-
     fn parse_braced_subquery(&mut self) -> Result<Query, Error> {
         self.consume(&TokenType::LeftBrace, "Expected '{'")?;
 
@@ -930,7 +929,6 @@ impl TokenParser {
 
         Ok(())
     }
-
     fn parse_case_expression(&mut self) -> Result<CaseExpression, Error> {
         let mut alternatives = Vec::new();
 
