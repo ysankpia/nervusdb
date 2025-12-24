@@ -1130,6 +1130,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nervusdb-cli"
+version = "1.0.3"
+dependencies = [
+ "clap",
+ "nervusdb-core",
+ "serde_json",
+]
+
+[[package]]
 name = "nervusdb-core"
 version = "1.0.3"
 dependencies = [
