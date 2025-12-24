@@ -327,10 +327,10 @@ impl PhysicalPlan {
 
                     return Ok(Box::new(candidate_ids.into_iter().filter_map(
                         move |node_id| {
-                            if let Some((type_id, label_ids)) = type_and_labels.as_ref() {
-                                if !node_has_labels_streaming(&db, node_id, *type_id, label_ids) {
-                                    return None;
-                                }
+                            if let Some((type_id, label_ids)) = type_and_labels.as_ref()
+                                && !node_has_labels_streaming(&db, node_id, *type_id, label_ids)
+                            {
+                                return None;
                             }
 
                             let mut record = Record::new();
@@ -1951,11 +1951,12 @@ impl ExecutionPlan for FtsCandidateScanNode {
 
         Ok(Box::new(candidate_ids.into_iter().filter_map(
             move |node_id| {
-                if let Some((type_id, label_ids)) = type_and_labels.as_ref() {
-                    if !node_has_labels(db, node_id, *type_id, label_ids) {
-                        return None;
-                    }
+                if let Some((type_id, label_ids)) = type_and_labels.as_ref()
+                    && !node_has_labels(db, node_id, *type_id, label_ids)
+                {
+                    return None;
                 }
+
                 let mut record = Record::new();
                 record.insert(alias.clone(), Value::Node(node_id));
                 Some(Ok(record))
