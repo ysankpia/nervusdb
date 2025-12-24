@@ -15,9 +15,9 @@ use crate::query::ast::{
     PathElement, Pattern, PropertyMap, RelationshipDirection, RelationshipPattern,
 };
 use crate::query::planner::{
-    AggregateFunction, AggregateNode, ExpandNode, ExpandVarLengthNode, FilterNode,
+    AggregateFunction, AggregateNode, DistinctNode, ExpandNode, ExpandVarLengthNode, FilterNode,
     LeftOuterJoinNode, LimitNode, NestedLoopJoinNode, PhysicalPlan, ProjectNode, ScanNode,
-    SkipNode, SortNode,
+    SingleRowNode, SkipNode, SortNode, UnwindNode,
 };
 use crate::{Database, QueryCriteria, Triple};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -71,6 +71,20 @@ impl Record {
             self.values.insert(k.clone(), v.clone());
         }
     }
+}
+
+fn record_distinct_key(record: &Record) -> String {
+    let mut keys: Vec<&String> = record.values.keys().collect();
+    keys.sort();
+    let mut out = String::new();
+    for key in keys {
+        if let Some(value) = record.values.get(key) {
+            out.push_str(key);
+            out.push('=');
+            out.push_str(&format!("{:?};", value));
+        }
+    }
+    out
 }
 
 impl Default for Record {
@@ -217,34 +231,40 @@ impl ExecutionPlan for PhysicalPlan {
         ctx: &'a ExecutionContext<'a>,
     ) -> Result<Box<dyn Iterator<Item = Result<Record, Error>> + 'a>, Error> {
         match self {
+            PhysicalPlan::SingleRow(node) => node.execute(ctx),
             PhysicalPlan::Scan(node) => node.execute(ctx),
             PhysicalPlan::Filter(node) => node.execute(ctx),
             PhysicalPlan::Project(node) => node.execute(ctx),
             PhysicalPlan::Limit(node) => node.execute(ctx),
             PhysicalPlan::Skip(node) => node.execute(ctx),
             PhysicalPlan::Sort(node) => node.execute(ctx),
+            PhysicalPlan::Distinct(node) => node.execute(ctx),
             PhysicalPlan::Aggregate(node) => node.execute(ctx),
             PhysicalPlan::NestedLoopJoin(node) => node.execute(ctx),
             PhysicalPlan::LeftOuterJoin(node) => node.execute(ctx),
             PhysicalPlan::Expand(node) => node.execute(ctx),
             PhysicalPlan::ExpandVarLength(node) => node.execute(ctx),
+            PhysicalPlan::Unwind(node) => node.execute(ctx),
             _ => Err(Error::Other("Unsupported physical plan type".to_string())),
         }
     }
 
     fn estimate_cardinality(&self, ctx: &ExecutionContext) -> usize {
         match self {
+            PhysicalPlan::SingleRow(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Scan(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Filter(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Project(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Limit(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Skip(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Sort(node) => node.estimate_cardinality(ctx),
+            PhysicalPlan::Distinct(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Aggregate(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::NestedLoopJoin(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::LeftOuterJoin(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Expand(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::ExpandVarLength(node) => node.estimate_cardinality(ctx),
+            PhysicalPlan::Unwind(node) => node.estimate_cardinality(ctx),
             _ => 1,
         }
     }
@@ -263,6 +283,7 @@ impl PhysicalPlan {
         ctx: Arc<ArcExecutionContext>,
     ) -> Result<Box<dyn Iterator<Item = Result<Record, Error>> + 'static>, Error> {
         match self {
+            PhysicalPlan::SingleRow(_) => Ok(Box::new(std::iter::once(Ok(Record::new())))),
             PhysicalPlan::Scan(node) => {
                 let alias = node.alias;
                 let labels = node.labels;
@@ -333,6 +354,23 @@ impl PhysicalPlan {
                 });
                 Ok(Box::new(records.into_iter().map(Ok)))
             }
+            PhysicalPlan::Distinct(node) => {
+                let input_iter = node.input.execute_streaming(Arc::clone(&ctx))?;
+                let mut seen: HashSet<String> = HashSet::new();
+                Ok(Box::new(input_iter.filter_map(
+                    move |result| match result {
+                        Ok(record) => {
+                            let key = record_distinct_key(&record);
+                            if seen.insert(key) {
+                                Some(Ok(record))
+                            } else {
+                                None
+                            }
+                        }
+                        Err(err) => Some(Err(err)),
+                    },
+                )))
+            }
             PhysicalPlan::Expand(node) => {
                 let input_iter = node.input.execute_streaming(Arc::clone(&ctx))?;
                 Ok(Box::new(StreamingExpandIterator::new(
@@ -344,6 +382,30 @@ impl PhysicalPlan {
                     node.rel_type,
                     ctx,
                 )))
+            }
+            PhysicalPlan::Unwind(node) => {
+                let input_iter = node.input.execute_streaming(Arc::clone(&ctx))?;
+                let expression = node.expression;
+                let alias = node.alias;
+                let ctx_clone = Arc::clone(&ctx);
+                Ok(Box::new(input_iter.flat_map(move |result| {
+                    match result {
+                        Ok(record) => {
+                            match unwind_values_streaming(&expression, &record, &ctx_clone) {
+                                Ok(values) => values
+                                    .into_iter()
+                                    .map(|value| {
+                                        let mut new_record = record.clone();
+                                        new_record.insert(alias.clone(), value);
+                                        Ok(new_record)
+                                    })
+                                    .collect::<Vec<_>>(),
+                                Err(err) => vec![Err(err)],
+                            }
+                        }
+                        Err(err) => vec![Err(err)],
+                    }
+                })))
             }
             PhysicalPlan::ExpandVarLength(node) => {
                 let input_iter = node.input.execute_streaming(Arc::clone(&ctx))?;
@@ -1059,6 +1121,44 @@ fn value_in_list(needle: &Value, haystack: &Value) -> Value {
     };
     Value::Boolean(items.iter().any(|v| v == needle))
 }
+
+fn unwind_value_to_list(value: Value) -> Result<Vec<Value>, Error> {
+    match value {
+        Value::Null => Ok(Vec::new()),
+        Value::String(input) => parse_executor_list_string(&input)
+            .ok_or_else(|| Error::Other("UNWIND expects a list expression".to_string())),
+        _ => Err(Error::Other("UNWIND expects a list expression".to_string())),
+    }
+}
+
+fn unwind_values_streaming(
+    expr: &Expression,
+    record: &Record,
+    ctx: &ArcExecutionContext,
+) -> Result<Vec<Value>, Error> {
+    match expr {
+        Expression::List(elements) => Ok(elements
+            .iter()
+            .map(|e| evaluate_expression_value_streaming(e, record, ctx))
+            .collect()),
+        _ => unwind_value_to_list(evaluate_expression_value_streaming(expr, record, ctx)),
+    }
+}
+
+fn unwind_values(
+    expr: &Expression,
+    record: &Record,
+    ctx: &ExecutionContext,
+) -> Result<Vec<Value>, Error> {
+    match expr {
+        Expression::List(elements) => Ok(elements
+            .iter()
+            .map(|e| evaluate_expression_value(e, record, ctx))
+            .collect()),
+        _ => unwind_value_to_list(evaluate_expression_value(expr, record, ctx)),
+    }
+}
+
 fn evaluate_exists_streaming(
     exists_expr: &ExistsExpression,
     record: &Record,
@@ -1552,6 +1652,77 @@ fn edge_property_keys_value(db: &Database, triple: &Triple) -> Value {
 // ============================================================================
 // Optimized ScanNode Implementation
 // ============================================================================
+
+impl ExecutionPlan for SingleRowNode {
+    fn execute<'a>(
+        &'a self,
+        _ctx: &'a ExecutionContext<'a>,
+    ) -> Result<Box<dyn Iterator<Item = Result<Record, Error>> + 'a>, Error> {
+        Ok(Box::new(std::iter::once(Ok(Record::new()))))
+    }
+
+    fn estimate_cardinality(&self, _ctx: &ExecutionContext) -> usize {
+        1
+    }
+}
+
+impl ExecutionPlan for DistinctNode {
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a ExecutionContext<'a>,
+    ) -> Result<Box<dyn Iterator<Item = Result<Record, Error>> + 'a>, Error> {
+        let input_iter = self.input.execute(ctx)?;
+        let mut seen: HashSet<String> = HashSet::new();
+        Ok(Box::new(input_iter.filter_map(
+            move |result| match result {
+                Ok(record) => {
+                    let key = record_distinct_key(&record);
+                    if seen.insert(key) {
+                        Some(Ok(record))
+                    } else {
+                        None
+                    }
+                }
+                Err(err) => Some(Err(err)),
+            },
+        )))
+    }
+
+    fn estimate_cardinality(&self, ctx: &ExecutionContext) -> usize {
+        self.input.estimate_cardinality(ctx)
+    }
+}
+
+impl ExecutionPlan for UnwindNode {
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a ExecutionContext<'a>,
+    ) -> Result<Box<dyn Iterator<Item = Result<Record, Error>> + 'a>, Error> {
+        let input_iter = self.input.execute(ctx)?;
+        let expression = self.expression.clone();
+        let alias = self.alias.clone();
+        Ok(Box::new(input_iter.flat_map(move |result| {
+            match result {
+                Ok(record) => match unwind_values(&expression, &record, ctx) {
+                    Ok(values) => values
+                        .into_iter()
+                        .map(|value| {
+                            let mut new_record = record.clone();
+                            new_record.insert(alias.clone(), value);
+                            Ok(new_record)
+                        })
+                        .collect::<Vec<_>>(),
+                    Err(err) => vec![Err(err)],
+                },
+                Err(err) => vec![Err(err)],
+            }
+        })))
+    }
+
+    fn estimate_cardinality(&self, ctx: &ExecutionContext) -> usize {
+        self.input.estimate_cardinality(ctx)
+    }
+}
 
 impl ExecutionPlan for ScanNode {
     fn execute<'a>(

@@ -10,6 +10,7 @@ pub enum Clause {
     Match(MatchClause),
     Create(CreateClause),
     Merge(MergeClause),
+    Unwind(UnwindClause),
     Call(CallClause),
     Return(ReturnClause),
     Where(WhereClause),
@@ -17,7 +18,7 @@ pub enum Clause {
     Set(SetClause),
     Delete(DeleteClause),
     Union(UnionClause),
-    // Remove, Unwind can be added later
+    // Remove can be added later
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -34,6 +35,12 @@ pub struct CreateClause {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MergeClause {
     pub pattern: Pattern,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UnwindClause {
+    pub expression: Expression,
+    pub alias: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

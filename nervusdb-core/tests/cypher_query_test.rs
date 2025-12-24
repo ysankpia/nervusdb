@@ -338,18 +338,63 @@ fn test_unsupported_features_fail_fast() {
 
     db.add_fact(Fact::new("alice", "knows", "bob")).unwrap();
 
-    let err = db
-        .execute_query("UNWIND [1,2,3] AS n RETURN n")
-        .unwrap_err();
-    assert!(matches!(err, nervusdb_core::Error::NotImplemented(_)));
+    let _ = db.execute_query("UNWIND [1,2,3] AS n RETURN n").unwrap();
+    let _ = db.execute_query("MATCH (n) RETURN DISTINCT n").unwrap();
 
-    let err = db.execute_query("MATCH (n) RETURN DISTINCT n").unwrap_err();
-    assert!(matches!(err, nervusdb_core::Error::NotImplemented(_)));
-
-    // ORDER BY, SKIP, and WITH are now supported
+    // ORDER BY, SKIP, WITH, UNWIND, and DISTINCT are now supported
     let _ = db.execute_query("MATCH (n) RETURN n ORDER BY n").unwrap();
     let _ = db.execute_query("MATCH (n) RETURN n SKIP 1").unwrap();
     // WITH requires proper syntax: MATCH (n) WITH n RETURN n
+}
+
+#[test]
+fn test_unwind_list_rows() {
+    let dir = tempdir().unwrap();
+    let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
+
+    let results = db
+        .execute_query("UNWIND [1, 2, 3] AS n RETURN n ORDER BY n")
+        .unwrap();
+    assert_eq!(results.len(), 3);
+
+    let values: Vec<f64> = results
+        .iter()
+        .filter_map(|row| match row.get("n") {
+            Some(nervusdb_core::query::executor::Value::Float(v)) => Some(*v),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(values, vec![1.0, 2.0, 3.0]);
+}
+
+#[test]
+fn test_return_distinct_dedup() {
+    let dir = tempdir().unwrap();
+    let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
+
+    let _ = db
+        .execute_query("CREATE (n:Person {name: \"Alice\"})")
+        .unwrap();
+    let _ = db
+        .execute_query("CREATE (m:Person {name: \"Alice\"})")
+        .unwrap();
+    let _ = db
+        .execute_query("CREATE (k:Person {name: \"Bob\"})")
+        .unwrap();
+
+    let results = db
+        .execute_query("MATCH (n:Person) RETURN DISTINCT n.name AS name ORDER BY name")
+        .unwrap();
+    assert_eq!(results.len(), 2);
+
+    let names: Vec<String> = results
+        .iter()
+        .filter_map(|row| match row.get("name") {
+            Some(nervusdb_core::query::executor::Value::String(name)) => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(names, vec!["Alice".to_string(), "Bob".to_string()]);
 }
 
 #[test]
@@ -1087,6 +1132,34 @@ fn test_aggregate_functions() {
         .execute_query("MATCH (p:Person) RETURN max(p.age)")
         .unwrap();
     assert_eq!(results.len(), 1);
+}
+
+#[test]
+fn test_collect_function() {
+    let dir = tempdir().unwrap();
+    let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
+
+    let _ = db
+        .execute_query("CREATE (a:Person {name: \"Alice\"})")
+        .unwrap();
+    let _ = db
+        .execute_query("CREATE (b:Person {name: \"Bob\"})")
+        .unwrap();
+    let _ = db
+        .execute_query("CREATE (c:Person {name: \"Carol\"})")
+        .unwrap();
+
+    let results = db
+        .execute_query("MATCH (p:Person) RETURN collect(p.name) AS names")
+        .unwrap();
+    assert_eq!(results.len(), 1);
+
+    let Some(nervusdb_core::query::executor::Value::String(names)) = results[0].get("names") else {
+        panic!("Expected collect to return a string list representation");
+    };
+    assert!(names.contains("Alice"));
+    assert!(names.contains("Bob"));
+    assert!(names.contains("Carol"));
 }
 
 #[test]

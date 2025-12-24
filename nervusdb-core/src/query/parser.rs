@@ -67,7 +67,6 @@ impl TokenParser {
         // Fail-fast on unsupported top-level clauses/keywords.
         match &self.peek().token_type {
             TokenType::Remove => return Err(Error::NotImplemented("REMOVE")),
-            TokenType::Unwind => return Err(Error::NotImplemented("UNWIND")),
             TokenType::Foreach => return Err(Error::NotImplemented("FOREACH")),
             _ => {}
         }
@@ -84,6 +83,9 @@ impl TokenParser {
         }
         if self.match_token(&TokenType::Merge) {
             return Ok(Some(Clause::Merge(self.parse_merge()?)));
+        }
+        if self.match_token(&TokenType::Unwind) {
+            return Ok(Some(Clause::Unwind(self.parse_unwind()?)));
         }
         if self.match_token(&TokenType::Call) {
             return Ok(Some(Clause::Call(self.parse_call()?)));
@@ -146,11 +148,23 @@ impl TokenParser {
         Ok(MergeClause { pattern })
     }
 
+    fn parse_unwind(&mut self) -> Result<UnwindClause, Error> {
+        let expression = self.parse_expression()?;
+        self.consume(&TokenType::As, "Expected AS after UNWIND expression")?;
+
+        let alias = if let TokenType::Identifier(name) = &self.advance().token_type {
+            name.clone()
+        } else {
+            return Err(Error::Other(
+                "Expected identifier after UNWIND AS".to_string(),
+            ));
+        };
+
+        Ok(UnwindClause { expression, alias })
+    }
+
     fn parse_return(&mut self) -> Result<ReturnClause, Error> {
-        if self.match_token(&TokenType::Distinct) {
-            return Err(Error::NotImplemented("RETURN DISTINCT"));
-        }
-        let distinct = false;
+        let distinct = self.match_token(&TokenType::Distinct);
         let mut items = Vec::new();
 
         loop {

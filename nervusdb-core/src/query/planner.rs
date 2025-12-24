@@ -4,21 +4,27 @@ use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub enum PhysicalPlan {
+    SingleRow(SingleRowNode),
     Scan(ScanNode),
     Filter(FilterNode),
     Project(ProjectNode),
     Limit(LimitNode),
     Skip(SkipNode),
     Sort(SortNode),
+    Distinct(DistinctNode),
     Aggregate(AggregateNode),
     NestedLoopJoin(NestedLoopJoinNode),
     LeftOuterJoin(LeftOuterJoinNode),
     Expand(ExpandNode),
     ExpandVarLength(ExpandVarLengthNode),
+    Unwind(UnwindNode),
     Create(CreateNode),
     Set(SetNode),
     Delete(DeleteNode),
 }
+
+#[derive(Debug, Clone)]
+pub struct SingleRowNode;
 
 #[derive(Debug, Clone)]
 pub struct ScanNode {
@@ -54,6 +60,11 @@ pub struct SkipNode {
 pub struct SortNode {
     pub input: Box<PhysicalPlan>,
     pub order_by: Vec<(Expression, Direction)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DistinctNode {
+    pub input: Box<PhysicalPlan>,
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +117,13 @@ pub struct ExpandVarLengthNode {
     pub rel_type: Option<String>,
     pub min_hops: u32,
     pub max_hops: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct UnwindNode {
+    pub input: Box<PhysicalPlan>,
+    pub expression: Expression,
+    pub alias: String,
 }
 
 #[derive(Debug, Clone)]
@@ -198,6 +216,14 @@ impl QueryPlanner {
                         plan = Some(create_plan);
                     }
                 }
+                Clause::Unwind(unwind_clause) => {
+                    let input_plan = plan.unwrap_or(PhysicalPlan::SingleRow(SingleRowNode));
+                    plan = Some(PhysicalPlan::Unwind(UnwindNode {
+                        input: Box::new(input_plan),
+                        expression: unwind_clause.expression,
+                        alias: unwind_clause.alias,
+                    }));
+                }
                 Clause::Merge(_) => return Err(Error::NotImplemented("MERGE")),
                 Clause::Call(_) => return Err(Error::NotImplemented("CALL")),
                 Clause::Set(set_clause) => {
@@ -233,7 +259,7 @@ impl QueryPlanner {
                 Clause::With(with_clause) => {
                     // WITH acts as a pipeline: project current results, then continue
                     let current_plan = plan.ok_or_else(|| {
-                        Error::Other("WITH clause requires a preceding MATCH clause".to_string())
+                        Error::Other("WITH clause requires a preceding clause".to_string())
                     })?;
 
                     // Apply any pending WHERE first
@@ -268,6 +294,12 @@ impl QueryPlanner {
                         with_plan = PhysicalPlan::Filter(FilterNode {
                             input: Box::new(with_plan),
                             predicate: w.expression,
+                        });
+                    }
+
+                    if with_clause.distinct {
+                        with_plan = PhysicalPlan::Distinct(DistinctNode {
+                            input: Box::new(with_plan),
                         });
                     }
 
@@ -369,6 +401,12 @@ impl QueryPlanner {
                 final_plan = PhysicalPlan::Project(ProjectNode {
                     input: Box::new(final_plan),
                     projections,
+                });
+            }
+
+            if r.distinct {
+                final_plan = PhysicalPlan::Distinct(DistinctNode {
+                    input: Box::new(final_plan),
                 });
             }
 
@@ -588,6 +626,7 @@ impl QueryPlanner {
 
     fn extract_plan_output_aliases(plan: &PhysicalPlan) -> HashSet<String> {
         match plan {
+            PhysicalPlan::SingleRow(_) => HashSet::new(),
             PhysicalPlan::Scan(node) => HashSet::from([node.alias.clone()]),
             PhysicalPlan::Filter(node) => Self::extract_plan_output_aliases(&node.input),
             PhysicalPlan::Project(node) => node
@@ -598,6 +637,7 @@ impl QueryPlanner {
             PhysicalPlan::Limit(node) => Self::extract_plan_output_aliases(&node.input),
             PhysicalPlan::Skip(node) => Self::extract_plan_output_aliases(&node.input),
             PhysicalPlan::Sort(node) => Self::extract_plan_output_aliases(&node.input),
+            PhysicalPlan::Distinct(node) => Self::extract_plan_output_aliases(&node.input),
             PhysicalPlan::Aggregate(node) => {
                 let mut out: HashSet<String> = node
                     .aggregations
@@ -632,6 +672,11 @@ impl QueryPlanner {
                 let mut out = Self::extract_plan_output_aliases(&node.input);
                 out.insert(node.start_node_alias.clone());
                 out.insert(node.end_node_alias.clone());
+                out
+            }
+            PhysicalPlan::Unwind(node) => {
+                let mut out = Self::extract_plan_output_aliases(&node.input);
+                out.insert(node.alias.clone());
                 out
             }
             PhysicalPlan::Create(_) | PhysicalPlan::Set(_) | PhysicalPlan::Delete(_) => {
