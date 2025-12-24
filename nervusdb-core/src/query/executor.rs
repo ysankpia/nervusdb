@@ -11,8 +11,8 @@
 
 use crate::error::Error;
 use crate::query::ast::{
-    BinaryOperator, Clause, Direction, ExistsExpression, Expression, Literal, PathElement, Pattern,
-    PropertyMap, RelationshipDirection, RelationshipPattern,
+    BinaryOperator, Clause, Direction, ExistsExpression, Expression, ListComprehension, Literal,
+    PathElement, Pattern, PropertyMap, RelationshipDirection, RelationshipPattern,
 };
 use crate::query::planner::{
     AggregateFunction, AggregateNode, ExpandNode, ExpandVarLengthNode, FilterNode,
@@ -824,6 +824,23 @@ fn evaluate_expression_value_streaming(
                     (Value::Float(l), Value::Float(r)) if r != 0.0 => Value::Float(l % r),
                     _ => Value::Null,
                 },
+                BinaryOperator::In => value_in_list(&left, &right),
+                BinaryOperator::NotIn => match value_in_list(&left, &right) {
+                    Value::Boolean(b) => Value::Boolean(!b),
+                    other => other,
+                },
+                BinaryOperator::StartsWith => match (left, right) {
+                    (Value::String(l), Value::String(r)) => Value::Boolean(l.starts_with(&r)),
+                    _ => Value::Null,
+                },
+                BinaryOperator::EndsWith => match (left, right) {
+                    (Value::String(l), Value::String(r)) => Value::Boolean(l.ends_with(&r)),
+                    _ => Value::Null,
+                },
+                BinaryOperator::Contains => match (left, right) {
+                    (Value::String(l), Value::String(r)) => Value::Boolean(l.contains(&r)),
+                    _ => Value::Null,
+                },
                 _ => Value::Null,
             }
         }
@@ -853,6 +870,10 @@ fn evaluate_expression_value_streaming(
         }
         Expression::Exists(exists_expr) => {
             Value::Boolean(evaluate_exists_streaming(exists_expr.as_ref(), record, ctx))
+        }
+        Expression::List(elements) => list_literal_value_streaming(elements, record, ctx),
+        Expression::ListComprehension(comp) => {
+            list_comprehension_value_streaming(comp.as_ref(), record, ctx)
         }
         Expression::FunctionCall(func) => match func.name.to_lowercase().as_str() {
             "id" => match func
@@ -935,6 +956,109 @@ fn evaluate_expression_value_streaming(
     }
 }
 
+fn list_literal_value_streaming(
+    elements: &[Expression],
+    record: &Record,
+    ctx: &ArcExecutionContext,
+) -> Value {
+    let json = serde_json::Value::Array(
+        elements
+            .iter()
+            .map(|e| executor_value_to_json(&evaluate_expression_value_streaming(e, record, ctx)))
+            .collect(),
+    );
+    Value::String(json.to_string())
+}
+
+fn list_comprehension_value_streaming(
+    comp: &ListComprehension,
+    record: &Record,
+    ctx: &ArcExecutionContext,
+) -> Value {
+    let Some(items) = evaluate_list_source_streaming(&comp.list, record, ctx) else {
+        return Value::Null;
+    };
+
+    let mut out = Vec::new();
+    for item in items {
+        let mut scoped = record.clone();
+        scoped.insert(comp.variable.clone(), item);
+
+        if let Some(where_expr) = &comp.where_expression
+            && !evaluate_expression_streaming(where_expr, &scoped, ctx)
+        {
+            continue;
+        }
+
+        let mapped = match &comp.map_expression {
+            Some(expr) => evaluate_expression_value_streaming(expr, &scoped, ctx),
+            None => scoped.get(&comp.variable).cloned().unwrap_or(Value::Null),
+        };
+        out.push(executor_value_to_json(&mapped));
+    }
+
+    Value::String(serde_json::Value::Array(out).to_string())
+}
+
+fn evaluate_list_source_streaming(
+    expr: &Expression,
+    record: &Record,
+    ctx: &ArcExecutionContext,
+) -> Option<Vec<Value>> {
+    match expr {
+        Expression::List(elements) => Some(
+            elements
+                .iter()
+                .map(|e| evaluate_expression_value_streaming(e, record, ctx))
+                .collect(),
+        ),
+        _ => match evaluate_expression_value_streaming(expr, record, ctx) {
+            Value::String(s) => parse_executor_list_string(&s),
+            _ => None,
+        },
+    }
+}
+
+fn executor_value_to_json(value: &Value) -> serde_json::Value {
+    match value {
+        Value::Null => serde_json::Value::Null,
+        Value::Boolean(b) => serde_json::Value::Bool(*b),
+        Value::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        Value::String(s) => serde_json::Value::String(s.clone()),
+        Value::Node(id) => serde_json::Value::Number(serde_json::Number::from(*id)),
+        Value::Relationship(triple) => serde_json::Value::String(format!("{triple:?}")),
+    }
+}
+
+fn json_to_executor_value(value: &serde_json::Value) -> Value {
+    match value {
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(b) => Value::Boolean(*b),
+        serde_json::Value::Number(n) => Value::Float(n.as_f64().unwrap_or(0.0)),
+        serde_json::Value::String(s) => Value::String(s.clone()),
+        _ => Value::Null,
+    }
+}
+
+fn parse_executor_list_string(input: &str) -> Option<Vec<Value>> {
+    let json = serde_json::from_str::<serde_json::Value>(input).ok()?;
+    let serde_json::Value::Array(items) = json else {
+        return None;
+    };
+    Some(items.iter().map(json_to_executor_value).collect())
+}
+
+fn value_in_list(needle: &Value, haystack: &Value) -> Value {
+    let Value::String(input) = haystack else {
+        return Value::Null;
+    };
+    let Some(items) = parse_executor_list_string(input) else {
+        return Value::Null;
+    };
+    Value::Boolean(items.iter().any(|v| v == needle))
+}
 fn evaluate_exists_streaming(
     exists_expr: &ExistsExpression,
     record: &Record,
@@ -2450,6 +2574,23 @@ pub fn evaluate_expression_value(
                     (Value::Float(l), Value::Float(r)) if r != 0.0 => Value::Float(l % r),
                     _ => Value::Null,
                 },
+                BinaryOperator::In => value_in_list(&left, &right),
+                BinaryOperator::NotIn => match value_in_list(&left, &right) {
+                    Value::Boolean(b) => Value::Boolean(!b),
+                    other => other,
+                },
+                BinaryOperator::StartsWith => match (left, right) {
+                    (Value::String(l), Value::String(r)) => Value::Boolean(l.starts_with(&r)),
+                    _ => Value::Null,
+                },
+                BinaryOperator::EndsWith => match (left, right) {
+                    (Value::String(l), Value::String(r)) => Value::Boolean(l.ends_with(&r)),
+                    _ => Value::Null,
+                },
+                BinaryOperator::Contains => match (left, right) {
+                    (Value::String(l), Value::String(r)) => Value::Boolean(l.contains(&r)),
+                    _ => Value::Null,
+                },
                 _ => Value::Null,
             }
         }
@@ -2480,6 +2621,8 @@ pub fn evaluate_expression_value(
         Expression::Exists(exists_expr) => {
             Value::Boolean(evaluate_exists(exists_expr.as_ref(), record, ctx))
         }
+        Expression::List(elements) => list_literal_value(elements, record, ctx),
+        Expression::ListComprehension(comp) => list_comprehension_value(comp.as_ref(), record, ctx),
         Expression::FunctionCall(func) => match func.name.to_lowercase().as_str() {
             "id" => match func
                 .arguments
@@ -2561,6 +2704,64 @@ pub fn evaluate_expression_value(
     }
 }
 
+fn list_literal_value(elements: &[Expression], record: &Record, ctx: &ExecutionContext) -> Value {
+    let json = serde_json::Value::Array(
+        elements
+            .iter()
+            .map(|e| executor_value_to_json(&evaluate_expression_value(e, record, ctx)))
+            .collect(),
+    );
+    Value::String(json.to_string())
+}
+
+fn list_comprehension_value(
+    comp: &ListComprehension,
+    record: &Record,
+    ctx: &ExecutionContext,
+) -> Value {
+    let Some(items) = evaluate_list_source(&comp.list, record, ctx) else {
+        return Value::Null;
+    };
+
+    let mut out = Vec::new();
+    for item in items {
+        let mut scoped = record.clone();
+        scoped.insert(comp.variable.clone(), item);
+
+        if let Some(where_expr) = &comp.where_expression
+            && !evaluate_expression(where_expr, &scoped, ctx)
+        {
+            continue;
+        }
+
+        let mapped = match &comp.map_expression {
+            Some(expr) => evaluate_expression_value(expr, &scoped, ctx),
+            None => scoped.get(&comp.variable).cloned().unwrap_or(Value::Null),
+        };
+        out.push(executor_value_to_json(&mapped));
+    }
+
+    Value::String(serde_json::Value::Array(out).to_string())
+}
+
+fn evaluate_list_source(
+    expr: &Expression,
+    record: &Record,
+    ctx: &ExecutionContext,
+) -> Option<Vec<Value>> {
+    match expr {
+        Expression::List(elements) => Some(
+            elements
+                .iter()
+                .map(|e| evaluate_expression_value(e, record, ctx))
+                .collect(),
+        ),
+        _ => match evaluate_expression_value(expr, record, ctx) {
+            Value::String(s) => parse_executor_list_string(&s),
+            _ => None,
+        },
+    }
+}
 fn evaluate_exists(
     exists_expr: &ExistsExpression,
     record: &Record,

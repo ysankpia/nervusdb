@@ -613,6 +613,19 @@ impl TokenParser {
                 BinaryOperator::GreaterThan
             } else if self.match_token(&TokenType::GreaterEqual) {
                 BinaryOperator::GreaterThanOrEqual
+            } else if self.match_token(&TokenType::In) {
+                BinaryOperator::In
+            } else if self.match_token(&TokenType::Not) {
+                self.consume(&TokenType::In, "Expected IN after NOT")?;
+                BinaryOperator::NotIn
+            } else if self.match_token(&TokenType::Starts) {
+                self.consume(&TokenType::With, "Expected WITH after STARTS")?;
+                BinaryOperator::StartsWith
+            } else if self.match_token(&TokenType::Ends) {
+                self.consume(&TokenType::With, "Expected WITH after ENDS")?;
+                BinaryOperator::EndsWith
+            } else if self.match_token(&TokenType::Contains) {
+                BinaryOperator::Contains
             } else {
                 break;
             };
@@ -649,7 +662,9 @@ impl TokenParser {
     fn parse_multiplicative(&mut self) -> Result<Expression, Error> {
         let mut expr = self.parse_unary()?;
         loop {
-            let operator = if self.match_token(&TokenType::Multiply) {
+            let operator = if self.match_token(&TokenType::Multiply)
+                || self.match_token(&TokenType::Asterisk)
+            {
                 BinaryOperator::Multiply
             } else if self.match_token(&TokenType::Divide) {
                 BinaryOperator::Divide
@@ -756,6 +771,14 @@ impl TokenParser {
                 self.advance(); // consume CASE
                 Ok(Expression::Case(Box::new(self.parse_case_expression()?)))
             }
+            TokenType::LeftBracket => {
+                self.advance(); // consume '['
+                if self.is_list_comprehension_start() {
+                    let comp = self.parse_list_comprehension()?;
+                    return Ok(Expression::ListComprehension(Box::new(comp)));
+                }
+                Ok(self.parse_list_literal()?)
+            }
             TokenType::Exists => {
                 self.advance(); // consume EXISTS
 
@@ -781,6 +804,68 @@ impl TokenParser {
         }
     }
 
+    fn is_list_comprehension_start(&self) -> bool {
+        matches!(self.peek().token_type, TokenType::Identifier(_))
+            && matches!(self.peek_next().token_type, TokenType::In)
+    }
+
+    fn parse_list_literal(&mut self) -> Result<Expression, Error> {
+        let mut elements = Vec::new();
+        if self.check(&TokenType::RightBracket) {
+            self.advance();
+            return Ok(Expression::List(elements));
+        }
+
+        loop {
+            elements.push(self.parse_expression()?);
+            if !self.match_token(&TokenType::Comma) {
+                break;
+            }
+        }
+
+        self.consume(&TokenType::RightBracket, "Expected ']' after list")?;
+        Ok(Expression::List(elements))
+    }
+
+    fn parse_list_comprehension(&mut self) -> Result<ListComprehension, Error> {
+        let variable = if let TokenType::Identifier(name) = &self.advance().token_type {
+            name.clone()
+        } else {
+            return Err(Error::Other(
+                "Expected identifier at start of list comprehension".to_string(),
+            ));
+        };
+
+        self.consume(&TokenType::In, "Expected IN in list comprehension")?;
+        let list = self.parse_expression()?;
+
+        let where_expression = if self.match_token(&TokenType::Where) {
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+
+        let map_expression = if self.match_token(&TokenType::Pipe) {
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+
+        self.consume(
+            &TokenType::RightBracket,
+            &format!(
+                "Expected ']' to close list comprehension, found {:?}",
+                self.peek()
+            ),
+        )?;
+
+        Ok(ListComprehension {
+            variable,
+            list,
+            where_expression,
+            map_expression,
+        })
+    }
     fn parse_braced_subquery(&mut self) -> Result<Query, Error> {
         self.consume(&TokenType::LeftBrace, "Expected '{'")?;
 
@@ -878,6 +963,14 @@ impl TokenParser {
             &self.tokens[self.tokens.len() - 1] // EOF
         } else {
             &self.tokens[self.position]
+        }
+    }
+
+    fn peek_next(&self) -> &Token {
+        if self.position + 1 >= self.tokens.len() {
+            self.peek()
+        } else {
+            &self.tokens[self.position + 1]
         }
     }
 

@@ -1205,3 +1205,73 @@ fn test_call_subquery_standalone_returns_results() {
     assert_eq!(results.len(), 1);
     assert!(results[0].contains_key("n"));
 }
+
+#[test]
+fn test_list_literal_return() {
+    let dir = tempdir().unwrap();
+    let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
+
+    let _ = db
+        .execute_query("CREATE (n:Person {name: \"Alice\"})")
+        .unwrap();
+
+    let results = db
+        .execute_query("MATCH (n:Person) RETURN [1, 2, 3] AS l LIMIT 1")
+        .unwrap();
+
+    let Some(nervusdb_core::query::executor::Value::String(list)) = results[0].get("l") else {
+        panic!("Expected list literal to return a JSON string");
+    };
+
+    let json = serde_json::from_str::<serde_json::Value>(list).unwrap();
+    let arr = json.as_array().expect("Expected JSON array");
+    assert_eq!(arr.len(), 3);
+    assert!(arr.iter().all(|v| v.as_f64().is_some()));
+}
+
+#[test]
+fn test_list_comprehension_filters_and_maps() {
+    let dir = tempdir().unwrap();
+    let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
+
+    let _ = db
+        .execute_query("CREATE (n:Person {name: \"Alice\"})")
+        .unwrap();
+
+    let results = db
+        .execute_query("MATCH (n:Person) RETURN [x IN [1, 2, 3] WHERE x > 1 | x * 2] AS l LIMIT 1")
+        .unwrap();
+
+    let Some(nervusdb_core::query::executor::Value::String(list)) = results[0].get("l") else {
+        panic!("Expected list comprehension to return a JSON string");
+    };
+
+    let json = serde_json::from_str::<serde_json::Value>(list).unwrap();
+    let arr = json.as_array().expect("Expected JSON array");
+    let numbers: Vec<f64> = arr.iter().filter_map(|v| v.as_f64()).collect();
+    assert_eq!(numbers, vec![4.0, 6.0]);
+}
+
+#[test]
+fn test_in_operator_with_list_literal() {
+    let dir = tempdir().unwrap();
+    let mut db = Database::open(Options::new(dir.path().join("test.db"))).unwrap();
+
+    let _ = db
+        .execute_query("CREATE (a:Person {name: \"Alice\"})")
+        .unwrap();
+    let _ = db
+        .execute_query("CREATE (b:Person {name: \"Bob\"})")
+        .unwrap();
+    let _ = db
+        .execute_query("CREATE (c:Person {name: \"Carol\"})")
+        .unwrap();
+
+    let results = db
+        .execute_query(
+            "MATCH (n:Person) WHERE n.name IN [\"Alice\", \"Bob\"] RETURN n ORDER BY n.name",
+        )
+        .unwrap();
+
+    assert_eq!(results.len(), 2);
+}
