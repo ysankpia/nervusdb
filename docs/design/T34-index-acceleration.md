@@ -1,4 +1,4 @@
-# T34: Phase 2 — Index Acceleration (Planner Pushdown)
+# T34: FTS Index Pushdown (txt_score)
 
 ## 1. Context
 
@@ -11,7 +11,6 @@ Phase 2 的目标就是让“索引产出候选集”，而不是让“全表产
 
 - 对最常见的检索形态做下推加速（不改 Cypher 语法）：
   - `WHERE txt_score(n.prop, $q) > t`
-  - `WHERE vec_similarity(n.prop, $v) > t`（需要先定语义）
 - 保证 **不破坏用户可观察语义**（尤其是结果集与过滤条件的一致性）。
 - 实现要“蠢但清晰”：尽量少引入 planner special cases，避免把 executor 搞成一坨 if/else。
 
@@ -20,17 +19,12 @@ Phase 2 的目标就是让“索引产出候选集”，而不是让“全表产
 - 不新增 Cypher 语法糖（例如 `MATCH ... WHERE n.prop ~ $q`）。
 - 不做通用代价模型/全局重排（先做单点识别）。
 - 不搞后台异步索引 commit / 自动 flush（仍由 `flush_indexes()` 控制）。
+- 不做 Vector 下推；Vector 走 Top-K（Sort+Limit）下推单独放到 T35。
 
-## 4. Key Decision (Vector 语义)
+## 4. Key Insight (Why FTS pushdown is safe)
 
-FTS 的 `txt_score` 语义本来就是 **TopK 截断**（见 `TXT_SCORE_TOP_K`），所以“用索引产出候选集”不会改变语义。
-
-Vector 则不同：
-
-- `vec_similarity` 是精确计算（property vector vs query vector）。
-- `vector_search` 是 ANN（HNSW）——近似检索。
-
-要做 vec pushdown，必须先回答一句话：**我们是否接受“planner 自动下推”引入的近似结果差异？**
+FTS 的 `txt_score` 语义本来就是 **TopK 截断**（见 `TXT_SCORE_TOP_K`），因此当 predicate 为 `> 0`（或 `>= 正数`）时，
+用索引先产出候选集再做过滤，与“全量扫描每行调用 `txt_score`”语义一致。
 
 ## 5. Solution
 
@@ -66,8 +60,6 @@ FilterNode 仍保留：
 ### 5.3 Optional Follow-ups
 
 - 若 query 同时有 `ORDER BY txt_score(...) DESC LIMIT k`，可以让候选 scan 按 score 产出并前推 Limit，避免 Sort materialize。
-- Vector pushdown：
-  - 只有在 Vector 语义明确（允许近似/或者引入新的显式函数）后才做。
 
 ## 6. Testing Strategy
 
@@ -80,5 +72,4 @@ FilterNode 仍保留：
 ## 7. Risks
 
 - Planner 识别范围越大，越容易引入隐式语义差异；必须从最窄可验证的 pattern 开始。
-- Vector pushdown 是最大风险点：近似检索是否允许必须由产品语义决定，否则就是“偷偷改结果”。
-
+- `txt_score(...) >= 0` 不能下推（会把“全量都满足”的语义错误压缩到 TopK）；必须显式规避。
