@@ -50,7 +50,6 @@ impl TokenParser {
         // Fail-fast on unsupported top-level clauses/keywords.
         match &self.peek().token_type {
             TokenType::Union => return Err(Error::NotImplemented("UNION")),
-            TokenType::Merge => return Err(Error::NotImplemented("MERGE")),
             TokenType::Remove => return Err(Error::NotImplemented("REMOVE")),
             TokenType::Unwind => return Err(Error::NotImplemented("UNWIND")),
             TokenType::Call => return Err(Error::NotImplemented("CALL")),
@@ -67,6 +66,9 @@ impl TokenParser {
         }
         if self.match_token(&TokenType::Create) {
             return Ok(Some(Clause::Create(self.parse_create()?)));
+        }
+        if self.match_token(&TokenType::Merge) {
+            return Ok(Some(Clause::Merge(self.parse_merge()?)));
         }
         if self.match_token(&TokenType::Return) {
             return Ok(Some(Clause::Return(self.parse_return()?)));
@@ -110,6 +112,11 @@ impl TokenParser {
     fn parse_create(&mut self) -> Result<CreateClause, Error> {
         let pattern = self.parse_pattern()?;
         Ok(CreateClause { pattern })
+    }
+
+    fn parse_merge(&mut self) -> Result<MergeClause, Error> {
+        let pattern = self.parse_pattern()?;
+        Ok(MergeClause { pattern })
     }
 
     fn parse_return(&mut self) -> Result<ReturnClause, Error> {
@@ -820,5 +827,13 @@ mod tests {
             Clause::Match(m) => assert!(m.optional),
             _ => panic!("Expected OPTIONAL MATCH"),
         }
+    }
+
+    #[test]
+    fn test_parse_merge() {
+        let query = "MERGE (n:Person) RETURN n";
+        let parsed = Parser::parse(query).unwrap();
+        assert_eq!(parsed.clauses.len(), 2);
+        assert!(matches!(&parsed.clauses[0], Clause::Merge(_)));
     }
 }

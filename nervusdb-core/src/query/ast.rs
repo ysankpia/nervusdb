@@ -9,12 +9,13 @@ pub struct Query {
 pub enum Clause {
     Match(MatchClause),
     Create(CreateClause),
+    Merge(MergeClause),
     Return(ReturnClause),
     Where(WhereClause),
     With(WithClause),
     Set(SetClause),
     Delete(DeleteClause),
-    // Merge, Remove, Union, Unwind can be added later
+    // Remove, Union, Unwind can be added later
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -25,6 +26,11 @@ pub struct MatchClause {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CreateClause {
+    pub pattern: Pattern,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MergeClause {
     pub pattern: Pattern,
 }
 

@@ -372,6 +372,13 @@ impl Database {
             return self.execute_create_pattern(&create_clause.pattern);
         }
 
+        // Handle MERGE queries directly (simplified: only standalone MERGE for MVP)
+        if query.clauses.len() == 1
+            && let Clause::Merge(merge_clause) = &query.clauses[0]
+        {
+            return self.execute_merge_pattern(&merge_clause.pattern);
+        }
+
         // Handle SET queries specially (needs mutation)
         if has_set {
             return self.execute_set_query_with_plan(&query, &param_values);
@@ -556,6 +563,175 @@ impl Database {
         }
 
         Ok(vec![result_record])
+    }
+
+    fn execute_merge_pattern(
+        &mut self,
+        pattern: &query::ast::Pattern,
+    ) -> Result<Vec<std::collections::HashMap<String, query::executor::Value>>> {
+        use query::ast::{PathElement, RelationshipDirection};
+        use query::executor::Value;
+        use std::collections::HashMap;
+
+        let mut result_record: HashMap<String, Value> = HashMap::new();
+        let mut last_node_info: Option<(String, u64)> = None;
+
+        let mut i = 0;
+        while i < pattern.elements.len() {
+            match &pattern.elements[i] {
+                PathElement::Node(node_pattern) => {
+                    let anon_name = format!("_anon{}", i);
+                    let node_str = node_pattern.variable.as_deref().unwrap_or(&anon_name);
+                    let label = node_pattern
+                        .labels
+                        .first()
+                        .map(|s| s.as_str())
+                        .unwrap_or("Node");
+
+                    let node_id = self.ensure_node(node_str, label)?;
+
+                    // Upsert node properties if specified.
+                    if let Some(props) = &node_pattern.properties {
+                        let props_map = self.convert_property_map_to_json(props)?;
+                        let binary = crate::storage::property::serialize_properties(&props_map)?;
+                        self.set_node_property_binary(node_id, &binary)?;
+                    }
+
+                    if let Some(var) = &node_pattern.variable {
+                        result_record.insert(var.clone(), Value::Node(node_id));
+                        last_node_info = Some((var.clone(), node_id));
+                    } else {
+                        last_node_info = Some((anon_name, node_id));
+                    }
+                }
+                PathElement::Relationship(rel_pattern) => {
+                    if i + 1 >= pattern.elements.len() {
+                        return Err(Error::Other(
+                            "Relationship must be followed by a node".to_string(),
+                        ));
+                    }
+
+                    let Some((_, start_node_id)) = last_node_info else {
+                        return Err(Error::Other("Relationship must follow a node".to_string()));
+                    };
+
+                    i += 1;
+                    let PathElement::Node(end_node_pattern) = &pattern.elements[i] else {
+                        return Err(Error::Other("Expected node after relationship".to_string()));
+                    };
+
+                    let end_anon_name = format!("_anon{}", i);
+                    let end_node_str = end_node_pattern
+                        .variable
+                        .as_deref()
+                        .unwrap_or(&end_anon_name);
+                    let end_label = end_node_pattern
+                        .labels
+                        .first()
+                        .map(|s| s.as_str())
+                        .unwrap_or("Node");
+
+                    let end_node_id = self.ensure_node(end_node_str, end_label)?;
+
+                    // Upsert end node properties
+                    if let Some(props) = &end_node_pattern.properties {
+                        let props_map = self.convert_property_map_to_json(props)?;
+                        let binary = crate::storage::property::serialize_properties(&props_map)?;
+                        self.set_node_property_binary(end_node_id, &binary)?;
+                    }
+
+                    if let Some(var) = &end_node_pattern.variable {
+                        result_record.insert(var.clone(), Value::Node(end_node_id));
+                    }
+
+                    let rel_type = rel_pattern
+                        .types
+                        .first()
+                        .map(|s| s.as_str())
+                        .unwrap_or("RELATED_TO");
+
+                    let (subject_id, object_id) = match rel_pattern.direction {
+                        RelationshipDirection::LeftToRight => (start_node_id, end_node_id),
+                        RelationshipDirection::RightToLeft => (end_node_id, start_node_id),
+                        RelationshipDirection::Undirected => (start_node_id, end_node_id),
+                    };
+
+                    let rel_triple = self.ensure_relationship(subject_id, rel_type, object_id)?;
+
+                    // Upsert relationship properties if specified.
+                    if let Some(props) = &rel_pattern.properties {
+                        let props_map = self.convert_property_map_to_json(props)?;
+                        let binary = crate::storage::property::serialize_properties(&props_map)?;
+                        self.set_edge_property_binary(
+                            rel_triple.subject_id,
+                            rel_triple.predicate_id,
+                            rel_triple.object_id,
+                            &binary,
+                        )?;
+                    }
+
+                    if let Some(var) = &rel_pattern.variable {
+                        result_record.insert(var.clone(), Value::Relationship(rel_triple));
+                    }
+
+                    last_node_info = end_node_pattern
+                        .variable
+                        .as_ref()
+                        .map(|v| (v.clone(), end_node_id))
+                        .or(Some((end_anon_name, end_node_id)));
+                }
+            }
+            i += 1;
+        }
+
+        Ok(vec![result_record])
+    }
+
+    fn ensure_node(&mut self, node_str: &str, label: &str) -> Result<u64> {
+        let node_id = self.resolve_id(node_str)?;
+        let type_id = self.resolve_id("type")?;
+        let label_id = self.resolve_id(label)?;
+
+        if let (Some(node_id), Some(type_id), Some(label_id)) = (node_id, type_id, label_id) {
+            let criteria = QueryCriteria {
+                subject_id: Some(node_id),
+                predicate_id: Some(type_id),
+                object_id: Some(label_id),
+            };
+            if self.query(criteria).next().is_some() {
+                return Ok(node_id);
+            }
+        }
+
+        let fact = self.add_fact(Fact::new(node_str, "type", label))?;
+        Ok(fact.subject_id)
+    }
+
+    fn ensure_relationship(
+        &mut self,
+        subject_id: u64,
+        rel_type: &str,
+        object_id: u64,
+    ) -> Result<Triple> {
+        if let Some(predicate_id) = self.resolve_id(rel_type)? {
+            let criteria = QueryCriteria {
+                subject_id: Some(subject_id),
+                predicate_id: Some(predicate_id),
+                object_id: Some(object_id),
+            };
+            if self.query(criteria).next().is_some() {
+                return Ok(Triple::new(subject_id, predicate_id, object_id));
+            }
+        }
+
+        let subject_str = self
+            .resolve_str(subject_id)?
+            .ok_or_else(|| Error::Other("Subject node not found".to_string()))?;
+        let object_str = self
+            .resolve_str(object_id)?
+            .ok_or_else(|| Error::Other("Object node not found".to_string()))?;
+
+        self.add_fact(Fact::new(&subject_str, rel_type, &object_str))
     }
 
     fn convert_property_map_to_json(

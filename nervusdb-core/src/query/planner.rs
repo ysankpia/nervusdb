@@ -186,6 +186,7 @@ impl QueryPlanner {
                         plan = Some(create_plan);
                     }
                 }
+                Clause::Merge(_) => return Err(Error::NotImplemented("MERGE")),
                 Clause::Set(set_clause) => {
                     // SET requires a previous plan (usually MATCH)
                     let current_plan = plan.ok_or_else(|| {
