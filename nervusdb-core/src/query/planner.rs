@@ -222,6 +222,7 @@ impl QueryPlanner {
                         expressions: delete_clause.expressions,
                     }));
                 }
+                Clause::Union(_) => return Err(Error::NotImplemented("UNION")),
                 Clause::Where(w) => {
                     where_clause = Some(w);
                 }
