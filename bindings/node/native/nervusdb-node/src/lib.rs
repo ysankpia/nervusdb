@@ -177,6 +177,7 @@ impl StatementHandle {
             Some(CoreValue::Float(_)) => Ok(VALUE_FLOAT),
             Some(CoreValue::Boolean(_)) => Ok(VALUE_BOOL),
             Some(CoreValue::Null) => Ok(VALUE_NULL),
+            Some(CoreValue::Vector(_)) => Ok(VALUE_TEXT),
             Some(CoreValue::Node(_)) => Ok(VALUE_NODE),
             Some(CoreValue::Relationship(_)) => Ok(VALUE_RELATIONSHIP),
             None => Ok(VALUE_NULL),
@@ -187,6 +188,19 @@ impl StatementHandle {
     pub fn column_text(&self, column: i32) -> NapiResult<Option<String>> {
         match self.cell(column)? {
             Some(CoreValue::String(value)) => Ok(Some(value.clone())),
+            Some(CoreValue::Vector(items)) => {
+                let json = serde_json::Value::Array(
+                    items
+                        .iter()
+                        .map(|f| {
+                            serde_json::Number::from_f64(*f as f64)
+                                .map(serde_json::Value::Number)
+                                .unwrap_or(serde_json::Value::Null)
+                        })
+                        .collect(),
+                );
+                Ok(Some(json.to_string()))
+            }
             _ => Ok(None),
         }
     }
@@ -930,6 +944,17 @@ impl DatabaseHandle {
                                 serde_json::Value::Bool(b)
                             }
                             nervusdb_core::query::executor::Value::Null => serde_json::Value::Null,
+                            nervusdb_core::query::executor::Value::Vector(v) => {
+                                serde_json::Value::Array(
+                                    v.into_iter()
+                                        .map(|f| {
+                                            serde_json::Number::from_f64(f as f64)
+                                                .map(serde_json::Value::Number)
+                                                .unwrap_or(serde_json::Value::Null)
+                                        })
+                                        .collect(),
+                                )
+                            }
                             nervusdb_core::query::executor::Value::Node(id) => {
                                 serde_json::json!({ "id": id })
                             }

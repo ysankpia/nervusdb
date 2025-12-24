@@ -43,6 +43,15 @@ fn executor_value_to_json(value: query::executor::Value) -> JsonValue {
         query::executor::Value::Float(f) => serde_json::json!(f),
         query::executor::Value::Boolean(b) => JsonValue::Bool(b),
         query::executor::Value::Null => JsonValue::Null,
+        query::executor::Value::Vector(v) => JsonValue::Array(
+            v.into_iter()
+                .map(|f| {
+                    serde_json::Number::from_f64(f as f64)
+                        .map(JsonValue::Number)
+                        .unwrap_or(JsonValue::Null)
+                })
+                .collect(),
+        ),
         query::executor::Value::Node(id) => serde_json::json!({ "id": id }),
         query::executor::Value::Relationship(triple) => serde_json::json!({
             "subject_id": triple.subject_id,
