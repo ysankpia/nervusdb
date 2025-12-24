@@ -240,8 +240,17 @@ impl FtsIndex {
     }
 
     pub fn txt_score(&self, node_id: u64, property: &str, query: &str) -> Result<f32> {
+        let scores = self.scores_for_query(property, query)?;
+        Ok(*scores.get(&node_id).unwrap_or(&0.0))
+    }
+
+    pub(crate) fn scores_for_query(
+        &self,
+        property: &str,
+        query: &str,
+    ) -> Result<Arc<HashMap<u64, f32>>> {
         if property.is_empty() || query.is_empty() {
-            return Ok(0.0);
+            return Ok(Arc::new(HashMap::new()));
         }
 
         let key = TxtScoreCacheKey {
@@ -257,19 +266,17 @@ impl FtsIndex {
             cache.get(&key).cloned()
         };
 
-        let scores = if let Some(scores) = cached {
-            scores
-        } else {
-            let scores = Arc::new(self.search_scores(property, query)?);
-            let mut cache = self
-                .txt_score_cache
-                .lock()
-                .map_err(|_| Error::Other("txt_score cache lock poisoned".to_string()))?;
-            cache.put(key, Arc::clone(&scores));
-            scores
-        };
+        if let Some(scores) = cached {
+            return Ok(scores);
+        }
 
-        Ok(*scores.get(&node_id).unwrap_or(&0.0))
+        let scores = Arc::new(self.search_scores(property, query)?);
+        let mut cache = self
+            .txt_score_cache
+            .lock()
+            .map_err(|_| Error::Other("txt_score cache lock poisoned".to_string()))?;
+        cache.put(key, Arc::clone(&scores));
+        Ok(scores)
     }
 
     fn search_scores(&self, property: &str, query: &str) -> Result<HashMap<u64, f32>> {

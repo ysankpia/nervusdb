@@ -410,6 +410,16 @@ impl Database {
     }
 
     #[cfg(all(feature = "fts", not(target_arch = "wasm32")))]
+    pub(crate) fn fts_scores_for_query(
+        &self,
+        property: &str,
+        query: &str,
+    ) -> Option<Arc<HashMap<u64, f32>>> {
+        let index = self.fts_index.as_ref()?;
+        index.scores_for_query(property, query).ok()
+    }
+
+    #[cfg(all(feature = "fts", not(target_arch = "wasm32")))]
     pub fn configure_fts_index(&mut self, mode: &str) -> Result<()> {
         if self.active_write.is_some() {
             return Err(Error::Other(

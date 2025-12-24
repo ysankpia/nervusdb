@@ -32,3 +32,4 @@
 | T31 | 列表字面量与推导式 | L2 | P0 | Done | #20 | List literal/comprehension；用于 IN/RETURN |
 | T32 | Cypher 基础补全：UNWIND + DISTINCT + COLLECT 测试覆盖 | L3 | P0 | Done | #21 | UNWIND 行生成；DISTINCT 去重；补 COLLECT 行为测试 |
 | T33 | Vector Index + Full-Text Search（usearch + tantivy） | L3 | P0 | Done | #26 | MVP 落地：feature gate + sidecar + 重建；`vec_similarity`/`txt_score`；Phase 2 见 T34 |
+| T34 | FTS 下推：`txt_score` 谓词走索引候选集 | L3 | P0 | Done | #27 | planner 重写 Scan→FtsCandidateScan；限制：`txt_score(n.prop, $q) > 0` / `>= 正数`；Vector TopK 下推见 T35 |

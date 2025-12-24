@@ -16,8 +16,8 @@ use crate::query::ast::{
 };
 use crate::query::planner::{
     AggregateFunction, AggregateNode, DistinctNode, ExpandNode, ExpandVarLengthNode, FilterNode,
-    LeftOuterJoinNode, LimitNode, NestedLoopJoinNode, PhysicalPlan, ProjectNode, ScanNode,
-    SingleRowNode, SkipNode, SortNode, UnwindNode,
+    FtsCandidateScanNode, LeftOuterJoinNode, LimitNode, NestedLoopJoinNode, PhysicalPlan,
+    ProjectNode, ScanNode, SingleRowNode, SkipNode, SortNode, UnwindNode,
 };
 use crate::{Database, QueryCriteria, Triple};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -235,6 +235,7 @@ impl ExecutionPlan for PhysicalPlan {
         match self {
             PhysicalPlan::SingleRow(node) => node.execute(ctx),
             PhysicalPlan::Scan(node) => node.execute(ctx),
+            PhysicalPlan::FtsCandidateScan(node) => node.execute(ctx),
             PhysicalPlan::Filter(node) => node.execute(ctx),
             PhysicalPlan::Project(node) => node.execute(ctx),
             PhysicalPlan::Limit(node) => node.execute(ctx),
@@ -255,6 +256,7 @@ impl ExecutionPlan for PhysicalPlan {
         match self {
             PhysicalPlan::SingleRow(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Scan(node) => node.estimate_cardinality(ctx),
+            PhysicalPlan::FtsCandidateScan(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Filter(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Project(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Limit(node) => node.estimate_cardinality(ctx),
@@ -295,6 +297,56 @@ impl PhysicalPlan {
                     Ok(Box::new(scan_all_nodes_streaming(db, alias)))
                 } else {
                     Ok(Box::new(scan_labeled_nodes_streaming(db, labels, alias)))
+                }
+            }
+            PhysicalPlan::FtsCandidateScan(node) => {
+                #[cfg(all(feature = "fts", not(target_arch = "wasm32")))]
+                {
+                    let alias = node.alias;
+                    let labels = node.labels;
+                    let property = node.property;
+                    let query_expr = node.query;
+                    let db = Arc::clone(&ctx.db);
+
+                    let query = match resolve_query_string_streaming(&query_expr, &ctx) {
+                        Some(q) => q,
+                        None => {
+                            return Ok(Box::new(std::iter::empty())
+                                as Box<dyn Iterator<Item = Result<Record, Error>> + 'static>);
+                        }
+                    };
+
+                    let Some(scores) = db.fts_scores_for_query(property.as_str(), query.as_str())
+                    else {
+                        return Ok(Box::new(std::iter::empty())
+                            as Box<dyn Iterator<Item = Result<Record, Error>> + 'static>);
+                    };
+
+                    let candidate_ids: Vec<u64> = scores.keys().copied().collect();
+                    let type_and_labels = resolve_label_ids_streaming(&db, &labels);
+
+                    return Ok(Box::new(candidate_ids.into_iter().filter_map(
+                        move |node_id| {
+                            if let Some((type_id, label_ids)) = type_and_labels.as_ref()
+                                && !node_has_labels_streaming(&db, node_id, *type_id, label_ids)
+                            {
+                                return None;
+                            }
+
+                            let mut record = Record::new();
+                            record.insert(alias.clone(), Value::Node(node_id));
+                            Some(Ok(record))
+                        },
+                    )));
+                }
+
+                #[cfg(not(all(feature = "fts", not(target_arch = "wasm32"))))]
+                {
+                    let _ = node;
+                    Ok(Box::new(std::iter::empty())
+                        as Box<
+                            dyn Iterator<Item = Result<Record, Error>> + 'static,
+                        >)
                 }
             }
             PhysicalPlan::Filter(node) => {
@@ -1869,6 +1921,57 @@ impl ExecutionPlan for ScanNode {
     }
 }
 
+impl ExecutionPlan for FtsCandidateScanNode {
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a ExecutionContext<'a>,
+    ) -> Result<Box<dyn Iterator<Item = Result<Record, Error>> + 'a>, Error> {
+        let Some(query) = resolve_query_string(&self.query, ctx) else {
+            return Ok(Box::new(std::iter::empty()));
+        };
+        if query.is_empty() || self.property.is_empty() {
+            return Ok(Box::new(std::iter::empty()));
+        }
+
+        #[cfg(all(feature = "fts", not(target_arch = "wasm32")))]
+        let Some(scores) = ctx
+            .db
+            .fts_scores_for_query(self.property.as_str(), query.as_str())
+        else {
+            return Ok(Box::new(std::iter::empty()));
+        };
+        #[cfg(not(all(feature = "fts", not(target_arch = "wasm32"))))]
+        let scores: std::sync::Arc<std::collections::HashMap<u64, f32>> =
+            std::sync::Arc::new(std::collections::HashMap::new());
+
+        let alias = self.alias.clone();
+        let db = ctx.db;
+        let type_and_labels = resolve_label_ids(db, &self.labels);
+        let candidate_ids: Vec<u64> = scores.keys().copied().collect();
+
+        Ok(Box::new(candidate_ids.into_iter().filter_map(
+            move |node_id| {
+                if let Some((type_id, label_ids)) = type_and_labels.as_ref()
+                    && !node_has_labels(db, node_id, *type_id, label_ids)
+                {
+                    return None;
+                }
+
+                let mut record = Record::new();
+                record.insert(alias.clone(), Value::Node(node_id));
+                Some(Ok(record))
+            },
+        )))
+    }
+
+    fn estimate_cardinality(&self, ctx: &ExecutionContext) -> usize {
+        let scan_est = ScanStats::estimate_scan_cardinality(ctx.db, &self.labels)
+            .estimated_cardinality
+            .max(1);
+        scan_est.min(10_000)
+    }
+}
+
 /// 优化的全节点扫描 - 避免全表扫描
 fn scan_all_nodes_optimized(
     db: &Database,
@@ -1949,6 +2052,88 @@ fn scan_labeled_nodes_optimized<'a>(
             Ok(record)
         })
     }))
+}
+
+fn resolve_query_string(expr: &Expression, ctx: &ExecutionContext) -> Option<String> {
+    match expr {
+        Expression::Literal(Literal::String(s)) => Some(s.clone()),
+        Expression::Parameter(name) => match ctx.params.get(name) {
+            Some(Value::String(s)) => Some(s.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn resolve_label_ids(db: &Database, labels: &[String]) -> Option<(u64, Vec<u64>)> {
+    if labels.is_empty() {
+        return None;
+    }
+    let type_id = db.resolve_id("type").ok().flatten()?;
+    let mut label_ids = Vec::with_capacity(labels.len());
+    for label in labels {
+        label_ids.push(db.resolve_id(label).ok().flatten()?);
+    }
+    Some((type_id, label_ids))
+}
+
+fn node_has_labels(db: &Database, node_id: u64, type_id: u64, label_ids: &[u64]) -> bool {
+    for label_id in label_ids {
+        let criteria = QueryCriteria {
+            subject_id: Some(node_id),
+            predicate_id: Some(type_id),
+            object_id: Some(*label_id),
+        };
+        if db.query(criteria).next().is_none() {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(all(feature = "fts", not(target_arch = "wasm32")))]
+fn resolve_query_string_streaming(expr: &Expression, ctx: &ArcExecutionContext) -> Option<String> {
+    match expr {
+        Expression::Literal(Literal::String(s)) => Some(s.clone()),
+        Expression::Parameter(name) => match ctx.params.get(name) {
+            Some(Value::String(s)) => Some(s.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+#[cfg(all(feature = "fts", not(target_arch = "wasm32")))]
+fn resolve_label_ids_streaming(db: &Arc<Database>, labels: &[String]) -> Option<(u64, Vec<u64>)> {
+    if labels.is_empty() {
+        return None;
+    }
+    let type_id = db.resolve_id("type").ok().flatten()?;
+    let mut label_ids = Vec::with_capacity(labels.len());
+    for label in labels {
+        label_ids.push(db.resolve_id(label).ok().flatten()?);
+    }
+    Some((type_id, label_ids))
+}
+
+#[cfg(all(feature = "fts", not(target_arch = "wasm32")))]
+fn node_has_labels_streaming(
+    db: &Arc<Database>,
+    node_id: u64,
+    type_id: u64,
+    label_ids: &[u64],
+) -> bool {
+    for label_id in label_ids {
+        let criteria = QueryCriteria {
+            subject_id: Some(node_id),
+            predicate_id: Some(type_id),
+            object_id: Some(*label_id),
+        };
+        if db.query(criteria).next().is_none() {
+            return false;
+        }
+    }
+    true
 }
 
 // ============================================================================

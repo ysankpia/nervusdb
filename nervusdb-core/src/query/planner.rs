@@ -6,6 +6,7 @@ use std::collections::HashSet;
 pub enum PhysicalPlan {
     SingleRow(SingleRowNode),
     Scan(ScanNode),
+    FtsCandidateScan(FtsCandidateScanNode),
     Filter(FilterNode),
     Project(ProjectNode),
     Limit(LimitNode),
@@ -30,6 +31,14 @@ pub struct SingleRowNode;
 pub struct ScanNode {
     pub alias: String,
     pub labels: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FtsCandidateScanNode {
+    pub alias: String,
+    pub labels: Vec<String>,
+    pub property: String,
+    pub query: Expression,
 }
 
 #[derive(Debug, Clone)]
@@ -158,6 +167,13 @@ impl QueryPlanner {
     }
 
     pub fn plan(&self, query: Query) -> Result<PhysicalPlan, Error> {
+        fn make_filter(input: PhysicalPlan, predicate: Expression) -> PhysicalPlan {
+            QueryPlanner::maybe_rewrite_txt_score_filter(FilterNode {
+                input: Box::new(input),
+                predicate,
+            })
+        }
+
         let mut plan: Option<PhysicalPlan> = None;
         let mut where_clause: Option<WhereClause> = None;
         let mut return_clause: Option<ReturnClause> = None;
@@ -264,10 +280,7 @@ impl QueryPlanner {
 
                     // Apply any pending WHERE first
                     let mut with_plan = if let Some(w) = where_clause.take() {
-                        PhysicalPlan::Filter(FilterNode {
-                            input: Box::new(current_plan),
-                            predicate: w.expression,
-                        })
+                        make_filter(current_plan, w.expression)
                     } else {
                         current_plan
                     };
@@ -291,10 +304,7 @@ impl QueryPlanner {
 
                     // Apply WITH's WHERE clause
                     if let Some(w) = with_clause.where_clause {
-                        with_plan = PhysicalPlan::Filter(FilterNode {
-                            input: Box::new(with_plan),
-                            predicate: w.expression,
-                        });
+                        with_plan = make_filter(with_plan, w.expression);
                     }
 
                     if with_clause.distinct {
@@ -341,10 +351,7 @@ impl QueryPlanner {
             plan.ok_or_else(|| Error::Other("No MATCH or CREATE clause found".to_string()))?;
 
         if let Some(w) = where_clause {
-            final_plan = PhysicalPlan::Filter(FilterNode {
-                input: Box::new(final_plan),
-                predicate: w.expression,
-            });
+            final_plan = make_filter(final_plan, w.expression);
         }
 
         if let Some(r) = return_clause {
@@ -441,6 +448,114 @@ impl QueryPlanner {
         }
 
         Ok(final_plan)
+    }
+
+    fn maybe_rewrite_txt_score_filter(filter: FilterNode) -> PhysicalPlan {
+        if !cfg!(all(feature = "fts", not(target_arch = "wasm32"))) {
+            return PhysicalPlan::Filter(filter);
+        }
+
+        let FilterNode { input, predicate } = filter;
+        let PhysicalPlan::Scan(scan) = *input else {
+            return PhysicalPlan::Filter(FilterNode { input, predicate });
+        };
+
+        let Some((property, query)) =
+            Self::find_txt_score_candidate(&predicate, scan.alias.as_str())
+        else {
+            return PhysicalPlan::Filter(FilterNode {
+                input: Box::new(PhysicalPlan::Scan(scan)),
+                predicate,
+            });
+        };
+
+        PhysicalPlan::Filter(FilterNode {
+            input: Box::new(PhysicalPlan::FtsCandidateScan(FtsCandidateScanNode {
+                alias: scan.alias,
+                labels: scan.labels,
+                property,
+                query,
+            })),
+            predicate,
+        })
+    }
+
+    fn find_txt_score_candidate(
+        predicate: &Expression,
+        scan_alias: &str,
+    ) -> Option<(String, Expression)> {
+        let mut conjuncts = Vec::new();
+        Self::flatten_and(predicate, &mut conjuncts);
+
+        conjuncts
+            .into_iter()
+            .find_map(|expr| Self::match_txt_score_threshold(expr, scan_alias))
+    }
+
+    fn flatten_and<'a>(expr: &'a Expression, out: &mut Vec<&'a Expression>) {
+        if let Expression::Binary(b) = expr
+            && matches!(b.operator, BinaryOperator::And)
+        {
+            Self::flatten_and(&b.left, out);
+            Self::flatten_and(&b.right, out);
+        } else {
+            out.push(expr);
+        }
+    }
+
+    fn match_txt_score_threshold(
+        expr: &Expression,
+        scan_alias: &str,
+    ) -> Option<(String, Expression)> {
+        let Expression::Binary(b) = expr else {
+            return None;
+        };
+        if !matches!(
+            b.operator,
+            BinaryOperator::GreaterThan | BinaryOperator::GreaterThanOrEqual
+        ) {
+            return None;
+        }
+
+        let Expression::FunctionCall(fc) = &b.left else {
+            return None;
+        };
+        if !fc.name.eq_ignore_ascii_case("txt_score") {
+            return None;
+        }
+
+        let Some(Expression::PropertyAccess(pa)) = fc.arguments.first() else {
+            return None;
+        };
+        if pa.variable != scan_alias || pa.property.is_empty() {
+            return None;
+        }
+
+        let query = fc.arguments.get(1)?.clone();
+        if !matches!(
+            query,
+            Expression::Parameter(_) | Expression::Literal(Literal::String(_))
+        ) {
+            return None;
+        }
+
+        let threshold = Self::number_literal(&b.right)?;
+        match b.operator {
+            BinaryOperator::GreaterThan if threshold < 0.0 => return None,
+            BinaryOperator::GreaterThanOrEqual if threshold <= 0.0 => return None,
+            BinaryOperator::GreaterThan | BinaryOperator::GreaterThanOrEqual => {}
+            _ => return None,
+        }
+
+        Some((pa.property.clone(), query))
+    }
+
+    fn number_literal(expr: &Expression) -> Option<f64> {
+        match expr {
+            Expression::Literal(Literal::Integer(i)) => Some(*i as f64),
+            Expression::Literal(Literal::Float(f)) => Some(*f),
+            _ => None,
+        }
     }
 
     /// Check if expression contains aggregate function
@@ -628,6 +743,7 @@ impl QueryPlanner {
         match plan {
             PhysicalPlan::SingleRow(_) => HashSet::new(),
             PhysicalPlan::Scan(node) => HashSet::from([node.alias.clone()]),
+            PhysicalPlan::FtsCandidateScan(node) => HashSet::from([node.alias.clone()]),
             PhysicalPlan::Filter(node) => Self::extract_plan_output_aliases(&node.input),
             PhysicalPlan::Project(node) => node
                 .projections
