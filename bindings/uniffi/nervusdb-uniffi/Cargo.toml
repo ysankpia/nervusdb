@@ -1,0 +1,17 @@
+[package]
+name = "nervusdb-uniffi"
+version = "1.0.3"
+edition = "2021"
+license = "AGPL-3.0-only"
+description = "UniFFI bindings for NervusDB (C ABI Statement contract mirrored)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+nervusdb-core = { path = "../../../nervusdb-core" }
+serde_json = "1"
+uniffi = "0.28"
+
+[build-dependencies]
+uniffi = { version = "0.28", features = ["build"] }
