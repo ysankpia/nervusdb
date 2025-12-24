@@ -31,4 +31,4 @@
 | T30 | EXISTS/CALL 子查询 | L3 | P0 | Done | #19 | EXISTS 模式/子查询；CALL 仅支持独立子查询 |
 | T31 | 列表字面量与推导式 | L2 | P0 | Done | #20 | List literal/comprehension；用于 IN/RETURN |
 | T32 | Cypher 基础补全：UNWIND + DISTINCT + COLLECT 测试覆盖 | L3 | P0 | Done | #21 | UNWIND 行生成；DISTINCT 去重；补 COLLECT 行为测试 |
-| T33 | Vector Index + Full-Text Search（usearch + tantivy） | L3 | P0 | Done | docs/T33-vector-and-fts | MVP 落地：feature gate + sidecar + 重建；`vec_similarity`/`txt_score`；Phase 2 见 T34 |
+| T33 | Vector Index + Full-Text Search（usearch + tantivy） | L3 | P0 | Done | #26 | MVP 落地：feature gate + sidecar + 重建；`vec_similarity`/`txt_score`；Phase 2 见 T34 |
