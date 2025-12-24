@@ -10,9 +10,10 @@
 //! 3. 基础统计信息支持 Join 顺序优化
 
 use crate::error::Error;
-use crate::query::ast::{BinaryOperator, Expression, Literal, RelationshipDirection};
+use crate::query::ast::{BinaryOperator, Direction, Expression, Literal, RelationshipDirection};
 use crate::query::planner::{
     ExpandNode, FilterNode, LimitNode, NestedLoopJoinNode, PhysicalPlan, ProjectNode, ScanNode,
+    SkipNode, SortNode,
 };
 use crate::{Database, QueryCriteria, Triple};
 use std::collections::{HashMap, HashSet};
@@ -203,6 +204,8 @@ impl ExecutionPlan for PhysicalPlan {
             PhysicalPlan::Filter(node) => node.execute(ctx),
             PhysicalPlan::Project(node) => node.execute(ctx),
             PhysicalPlan::Limit(node) => node.execute(ctx),
+            PhysicalPlan::Skip(node) => node.execute(ctx),
+            PhysicalPlan::Sort(node) => node.execute(ctx),
             PhysicalPlan::NestedLoopJoin(node) => node.execute(ctx),
             PhysicalPlan::Expand(node) => node.execute(ctx),
             _ => Err(Error::Other("Unsupported physical plan type".to_string())),
@@ -215,6 +218,8 @@ impl ExecutionPlan for PhysicalPlan {
             PhysicalPlan::Filter(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Project(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Limit(node) => node.estimate_cardinality(ctx),
+            PhysicalPlan::Skip(node) => node.estimate_cardinality(ctx),
+            PhysicalPlan::Sort(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::NestedLoopJoin(node) => node.estimate_cardinality(ctx),
             PhysicalPlan::Expand(node) => node.estimate_cardinality(ctx),
             _ => 1,
@@ -277,6 +282,33 @@ impl PhysicalPlan {
                 let limit = usize::try_from(node.limit).unwrap_or(usize::MAX);
                 let input_iter = node.input.execute_streaming(ctx)?;
                 Ok(Box::new(input_iter.take(limit)))
+            }
+            PhysicalPlan::Skip(node) => {
+                let skip = usize::try_from(node.skip).unwrap_or(0);
+                let input_iter = node.input.execute_streaming(ctx)?;
+                Ok(Box::new(input_iter.skip(skip)))
+            }
+            PhysicalPlan::Sort(node) => {
+                let input_iter = node.input.execute_streaming(Arc::clone(&ctx))?;
+                let order_by = node.order_by;
+                let ctx_clone = Arc::clone(&ctx);
+                // Sort requires materialization - collect all records, sort, then iterate
+                let mut records: Vec<Record> = input_iter.filter_map(|r| r.ok()).collect();
+                records.sort_by(|a, b| {
+                    for (expr, direction) in &order_by {
+                        let val_a = evaluate_expression_value_streaming(expr, a, &ctx_clone);
+                        let val_b = evaluate_expression_value_streaming(expr, b, &ctx_clone);
+                        let cmp = compare_values(&val_a, &val_b);
+                        if cmp != std::cmp::Ordering::Equal {
+                            return match direction {
+                                Direction::Ascending => cmp,
+                                Direction::Descending => cmp.reverse(),
+                            };
+                        }
+                    }
+                    std::cmp::Ordering::Equal
+                });
+                Ok(Box::new(records.into_iter().map(Ok)))
             }
             PhysicalPlan::Expand(node) => {
                 let input_iter = node.input.execute_streaming(Arc::clone(&ctx))?;
@@ -1082,6 +1114,76 @@ impl ExecutionPlan for LimitNode {
     fn estimate_cardinality(&self, ctx: &ExecutionContext) -> usize {
         let inner = self.input.estimate_cardinality(ctx);
         inner.min(self.limit as usize)
+    }
+}
+
+// ============================================================================
+// Skip
+// ============================================================================
+
+impl ExecutionPlan for SkipNode {
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a ExecutionContext<'a>,
+    ) -> Result<Box<dyn Iterator<Item = Result<Record, Error>> + 'a>, Error> {
+        let skip = usize::try_from(self.skip).unwrap_or(0);
+        let inner = self.input.execute(ctx)?;
+        Ok(Box::new(inner.skip(skip)))
+    }
+
+    fn estimate_cardinality(&self, ctx: &ExecutionContext) -> usize {
+        let inner = self.input.estimate_cardinality(ctx);
+        inner.saturating_sub(self.skip as usize)
+    }
+}
+
+// ============================================================================
+// Sort
+// ============================================================================
+
+impl ExecutionPlan for SortNode {
+    fn execute<'a>(
+        &'a self,
+        ctx: &'a ExecutionContext<'a>,
+    ) -> Result<Box<dyn Iterator<Item = Result<Record, Error>> + 'a>, Error> {
+        // Sort requires materialization
+        let mut records: Vec<Record> = self.input.execute(ctx)?.filter_map(|r| r.ok()).collect();
+        let order_by = &self.order_by;
+
+        records.sort_by(|a, b| {
+            for (expr, direction) in order_by {
+                let val_a = evaluate_expression_value(expr, a, ctx);
+                let val_b = evaluate_expression_value(expr, b, ctx);
+                let cmp = compare_values(&val_a, &val_b);
+                if cmp != std::cmp::Ordering::Equal {
+                    return match direction {
+                        Direction::Ascending => cmp,
+                        Direction::Descending => cmp.reverse(),
+                    };
+                }
+            }
+            std::cmp::Ordering::Equal
+        });
+
+        Ok(Box::new(records.into_iter().map(Ok)))
+    }
+
+    fn estimate_cardinality(&self, ctx: &ExecutionContext) -> usize {
+        self.input.estimate_cardinality(ctx)
+    }
+}
+
+/// Compare two Values for ordering
+fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {
+    match (a, b) {
+        (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+        (Value::String(x), Value::String(y)) => x.cmp(y),
+        (Value::Boolean(x), Value::Boolean(y)) => x.cmp(y),
+        (Value::Node(x), Value::Node(y)) => x.cmp(y),
+        (Value::Null, Value::Null) => std::cmp::Ordering::Equal,
+        (Value::Null, _) => std::cmp::Ordering::Greater, // NULL sorts last
+        (_, Value::Null) => std::cmp::Ordering::Less,
+        _ => std::cmp::Ordering::Equal,
     }
 }
 
