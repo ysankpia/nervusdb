@@ -3,6 +3,6 @@ members = [
     "nervusdb-core",
     "nervusdb-temporal",
     "bindings/node/native/nervusdb-node",
-    "bindings/python/nervusdb-py"
+    "bindings/uniffi/nervusdb-uniffi"
 ]
 resolver = "2"

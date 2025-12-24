@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.4,<2.0"]
+requires = ["maturin>=1.10,<2.0", "uniffi-bindgen>=0.28,<0.29"]
 build-backend = "maturin"
 
 [project]
@@ -19,5 +19,7 @@ classifiers = [
 ]
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
-manifest-path = "Cargo.toml"
+bindings = "uniffi"
+manifest-path = "../../uniffi/nervusdb-uniffi/Cargo.toml"
+python-source = "python"
+python-packages = ["nervusdb"]

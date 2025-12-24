@@ -1,32 +1,33 @@
 from pathlib import Path
 
-from nervusdb import DatabaseHandle, open as open_db
+import nervusdb
 
 
 def test_basic_roundtrip(tmp_path: Path) -> None:
     db_path = tmp_path / "py_binding"
+    with nervusdb.Database(str(db_path)) as db:
+        db.add_fact("Alice", "knows", "Bob")
+        stmt = db.prepare_v2("MATCH (a)-[r]->(b) RETURN a, r, b", None)
+        try:
+            assert stmt.column_count() == 3
+            assert stmt.column_name(0) == "a"
+            assert stmt.column_name(1) == "r"
+            assert stmt.column_name(2) == "b"
 
-    with DatabaseHandle(str(db_path)) as db:
-        alice = db.intern("Alice")
-        bob = db.intern("Bob")
-        knows = db.intern("knows")
+            assert stmt.step() is True
+            assert stmt.column_type(0) == nervusdb.ValueType.NODE
+            assert stmt.column_type(1) == nervusdb.ValueType.RELATIONSHIP
+            assert stmt.column_type(2) == nervusdb.ValueType.NODE
 
-        triple = db.add_fact("Alice", "knows", "Bob")
-        assert triple == (alice, knows, bob)
+            assert stmt.column_node_id(0) is not None
+            rel = stmt.column_relationship(1)
+            assert rel is not None
+            assert rel.predicate_id > 0
 
-        inserted = db.batch_add_triples([(alice, knows, bob), (bob, knows, alice)])
-        assert inserted >= 1
+            assert stmt.step() is False
+        finally:
+            stmt.finalize()
 
-        results = db.query(subject=alice, predicate=None, object=None)
-        assert any(item[2] == bob for item in results)
-
-        deleted = db.batch_delete_triples([(bob, knows, alice)])
-        assert deleted == 1
-
-
-def test_open_function(tmp_path: Path) -> None:
-    db = open_db(str(tmp_path / "open_fn"))
-    try:
-        assert db.intern("Carol") > 0
-    finally:
-        db.close()
+        rows = list(db.prepare("MATCH (a)-[r]->(b) RETURN a, r, b"))
+        assert len(rows) == 1
+        assert set(rows[0].keys()) == {"a", "r", "b"}

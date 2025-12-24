@@ -43,13 +43,13 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --exclude nervusdb-py -- -W warnings
+        run: cargo clippy --workspace --all-targets -- -W warnings
 
       - name: Run tests
-        run: cargo test --workspace --exclude nervusdb-py
+        run: cargo test --workspace
 
       - name: Build release
-        run: cargo build --workspace --release --exclude nervusdb-py
+        run: cargo build --workspace --release
 
   node-ci:
     runs-on: ${{ matrix.os }}
@@ -104,3 +104,37 @@ jobs:
 
       - name: Crash smoke (3-5 iterations)
         run: cargo run -p nervusdb-core --bin nervus-crash-test -- driver tmp-ci-crash-smoke --iterations 5 --min-ms 2 --max-ms 15 --batch 500 --subject-pool 500 --predicate-pool 64 --object-pool 500 --verify-retries 25 --verify-backoff-ms 20
+
+  python-ci:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python build deps
+        run: python -m pip install -U pip && python -m pip install "maturin==1.10.2" "uniffi-bindgen==0.28.3" pytest
+
+      - name: Build wheel
+        run: maturin build -o dist
+        working-directory: bindings/python/nervusdb-py
+
+      - name: Install wheel
+        run: python -m pip install --force-reinstall dist/*.whl
+        working-directory: bindings/python/nervusdb-py
+
+      - name: Python tests
+        run: pytest -q
+        working-directory: bindings/python/nervusdb-py

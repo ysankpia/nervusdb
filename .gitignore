@@ -20,6 +20,8 @@ nervusdb-core/target/
 bindings/node/native/nervusdb-node/target/
 bindings/node/native/nervusdb-node/npm/**/*.node
 bindings/python/nervusdb-py/target/
+**/.venv/
+**/.pytest_cache/
 
 # OS
 .DS_Store
