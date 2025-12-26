@@ -31,11 +31,16 @@ impl MemTable {
         self.tombstoned_edges.insert(key);
     }
 
-    pub fn freeze_into_run(self) -> L0Run {
+    pub fn freeze_into_run(self, txid: u64) -> L0Run {
         let mut edges_by_src: BTreeMap<InternalNodeId, Vec<EdgeKey>> = BTreeMap::new();
         for (src, edges) in self.out {
             edges_by_src.insert(src, edges.into_iter().collect());
         }
-        L0Run::new(edges_by_src, self.tombstoned_nodes, self.tombstoned_edges)
+        L0Run::new(
+            txid,
+            edges_by_src,
+            self.tombstoned_nodes,
+            self.tombstoned_edges,
+        )
     }
 }

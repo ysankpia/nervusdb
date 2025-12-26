@@ -38,6 +38,20 @@ pub enum WalRecord {
         rel: u32,
         dst: u32,
     },
+    ManifestSwitch {
+        epoch: u64,
+        segments: Vec<SegmentPointer>,
+    },
+    Checkpoint {
+        up_to_txid: u64,
+        epoch: u64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SegmentPointer {
+    pub id: u64,
+    pub meta_page_id: u64,
 }
 
 impl WalRecord {
@@ -51,6 +65,8 @@ impl WalRecord {
             WalRecord::CreateEdge { .. } => 6,
             WalRecord::TombstoneNode { .. } => 7,
             WalRecord::TombstoneEdge { .. } => 8,
+            WalRecord::ManifestSwitch { .. } => 9,
+            WalRecord::Checkpoint { .. } => 10,
         }
     }
 
@@ -85,6 +101,23 @@ impl WalRecord {
             }
             WalRecord::TombstoneNode { node } => {
                 out.extend_from_slice(&node.to_le_bytes());
+            }
+            WalRecord::ManifestSwitch { epoch, segments } => {
+                out.extend_from_slice(&epoch.to_le_bytes());
+                let count: u32 = segments
+                    .len()
+                    .try_into()
+                    .map_err(|_| Error::WalProtocol("too many segments"))
+                    .unwrap();
+                out.extend_from_slice(&count.to_le_bytes());
+                for seg in segments {
+                    out.extend_from_slice(&seg.id.to_le_bytes());
+                    out.extend_from_slice(&seg.meta_page_id.to_le_bytes());
+                }
+            }
+            WalRecord::Checkpoint { up_to_txid, epoch } => {
+                out.extend_from_slice(&up_to_txid.to_le_bytes());
+                out.extend_from_slice(&epoch.to_le_bytes());
             }
         }
         out
@@ -156,6 +189,35 @@ impl WalRecord {
                 let rel = u32::from_le_bytes(payload[4..8].try_into().unwrap());
                 let dst = u32::from_le_bytes(payload[8..12].try_into().unwrap());
                 Ok(WalRecord::TombstoneEdge { src, rel, dst })
+            }
+            9 => {
+                if payload.len() < 8 + 4 {
+                    return Err(Error::WalProtocol("invalid ManifestSwitch payload length"));
+                }
+                let epoch = u64::from_le_bytes(payload[0..8].try_into().unwrap());
+                let count = u32::from_le_bytes(payload[8..12].try_into().unwrap()) as usize;
+                let mut offset = 12;
+                let expected = 12 + count * 16;
+                if payload.len() != expected {
+                    return Err(Error::WalProtocol("invalid ManifestSwitch payload length"));
+                }
+                let mut segments = Vec::with_capacity(count);
+                for _ in 0..count {
+                    let id = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+                    let meta_page_id =
+                        u64::from_le_bytes(payload[offset + 8..offset + 16].try_into().unwrap());
+                    segments.push(SegmentPointer { id, meta_page_id });
+                    offset += 16;
+                }
+                Ok(WalRecord::ManifestSwitch { epoch, segments })
+            }
+            10 => {
+                if payload.len() != 16 {
+                    return Err(Error::WalProtocol("invalid Checkpoint payload length"));
+                }
+                let up_to_txid = u64::from_le_bytes(payload[0..8].try_into().unwrap());
+                let epoch = u64::from_le_bytes(payload[8..16].try_into().unwrap());
+                Ok(WalRecord::Checkpoint { up_to_txid, epoch })
             }
             _ => Err(Error::WalProtocol("unknown record type")),
         }
@@ -335,7 +397,8 @@ impl WalReader {
             return Ok(None);
         };
 
-        if len > (1 + 8 + PAGE_SIZE + 8) as u32 {
+        const MAX_WAL_RECORD_LEN: u32 = 1024 * 1024; // 1MB
+        if len > MAX_WAL_RECORD_LEN {
             return Err(Error::WalRecordTooLarge(len));
         }
 

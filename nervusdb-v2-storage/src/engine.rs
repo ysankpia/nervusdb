@@ -3,7 +3,7 @@ use crate::idmap::{ExternalId, IdMap, InternalNodeId, LabelId};
 use crate::memtable::MemTable;
 use crate::pager::Pager;
 use crate::snapshot::{L0Run, RelTypeId, Snapshot};
-use crate::wal::{CommittedTx, Wal, WalRecord};
+use crate::wal::{CommittedTx, SegmentPointer, Wal, WalRecord};
 use crate::{Error, Result};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,6 +23,8 @@ pub struct GraphEngine {
     write_lock: Mutex<()>,
     next_txid: AtomicU64,
     next_segment_id: AtomicU64,
+    manifest_epoch: AtomicU64,
+    checkpoint_txid: AtomicU64,
 }
 
 impl GraphEngine {
@@ -36,8 +38,27 @@ impl GraphEngine {
         let mut idmap = IdMap::load(&mut pager)?;
 
         let committed = wal.replay_committed()?;
+        let state = scan_recovery_state(&committed);
+
+        let mut segments: Vec<Arc<CsrSegment>> = Vec::new();
+        let mut max_seg_id = 0u64;
+        for ptr in &state.manifest_segments {
+            let seg = Arc::new(CsrSegment::load(&mut pager, ptr.meta_page_id)?);
+            if seg.id.0 != ptr.id {
+                return Err(Error::WalProtocol("csr segment id mismatch"));
+            }
+            max_seg_id = max_seg_id.max(seg.id.0);
+            segments.push(seg);
+        }
+
         let mut runs = Vec::new();
-        replay_graph_transactions(&mut pager, &mut idmap, committed, &mut runs)?;
+        replay_graph_transactions(
+            &mut pager,
+            &mut idmap,
+            committed,
+            state.checkpoint_txid,
+            &mut runs,
+        )?;
 
         runs.reverse(); // newest first for read path
 
@@ -48,10 +69,12 @@ impl GraphEngine {
             wal: Mutex::new(wal),
             idmap: Mutex::new(idmap),
             published_runs: RwLock::new(Arc::new(runs)),
-            published_segments: RwLock::new(Arc::new(Vec::new())),
+            published_segments: RwLock::new(Arc::new(segments)),
             write_lock: Mutex::new(()),
-            next_txid: AtomicU64::new(1),
-            next_segment_id: AtomicU64::new(1),
+            next_txid: AtomicU64::new(state.max_txid.saturating_add(1).max(1)),
+            next_segment_id: AtomicU64::new(max_seg_id.saturating_add(1).max(1)),
+            manifest_epoch: AtomicU64::new(state.manifest_epoch),
+            checkpoint_txid: AtomicU64::new(state.checkpoint_txid),
         })
     }
 
@@ -96,38 +119,72 @@ impl GraphEngine {
         *current = Arc::new(next);
     }
 
-    fn publish_segment(&self, seg: Arc<CsrSegment>) {
-        let mut current = self.published_segments.write().unwrap();
-        let mut next = Vec::with_capacity(current.len() + 1);
-        next.push(seg);
-        next.extend(current.iter().cloned());
-        *current = Arc::new(next);
-    }
-
-    /// M2: Explicit compaction.
+    /// M2/T45: Explicit compaction.
     ///
-    /// Current implementation is intentionally simple:
-    /// - Compacts all currently published L0 runs into a single in-memory CSR segment.
-    /// - Clears published runs for new snapshots.
-    ///
-    /// Durability/manifest is handled in T45.
+    /// Invariants:
+    /// - Writes CSR segment pages to `.ndb` and fsyncs before publishing the manifest in WAL.
+    /// - Writes `ManifestSwitch` + `Checkpoint` as a committed WAL tx to make the switch atomic.
     pub fn compact(&self) -> Result<()> {
         let _guard = self.write_lock.lock().unwrap();
 
-        let runs = {
-            let mut current = self.published_runs.write().unwrap();
-            let taken = current.clone();
-            *current = Arc::new(Vec::new());
-            taken
-        };
+        let runs = self.published_runs.read().unwrap().clone();
 
         if runs.is_empty() {
             return Ok(());
         }
 
         let seg_id = SegmentId(self.next_segment_id.fetch_add(1, Ordering::Relaxed));
-        let seg = Arc::new(build_segment_from_runs(seg_id, &runs));
-        self.publish_segment(seg);
+        let mut seg = build_segment_from_runs(seg_id, &runs);
+
+        {
+            let mut pager = self.pager.lock().unwrap();
+            seg.persist(&mut pager)?;
+            pager.sync()?;
+        }
+
+        let up_to_txid = runs.iter().map(|r| r.txid()).max().unwrap_or(0);
+        let epoch = self.manifest_epoch.load(Ordering::Relaxed) + 1;
+
+        let new_segments = {
+            let current = self.published_segments.read().unwrap().clone();
+            let mut next = Vec::with_capacity(current.len() + 1);
+            next.push(Arc::new(seg));
+            next.extend(current.iter().cloned());
+            Arc::new(next)
+        };
+
+        let pointers: Vec<SegmentPointer> = new_segments
+            .iter()
+            .map(|s| SegmentPointer {
+                id: s.id.0,
+                meta_page_id: s.meta_page_id,
+            })
+            .collect();
+
+        let system_txid = self.next_txid.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut wal = self.wal.lock().unwrap();
+            wal.append(&WalRecord::BeginTx { txid: system_txid })?;
+            wal.append(&WalRecord::ManifestSwitch {
+                epoch,
+                segments: pointers,
+            })?;
+            wal.append(&WalRecord::Checkpoint { up_to_txid, epoch })?;
+            wal.append(&WalRecord::CommitTx { txid: system_txid })?;
+            wal.fsync()?;
+        }
+
+        {
+            let mut cur_runs = self.published_runs.write().unwrap();
+            *cur_runs = Arc::new(Vec::new());
+        }
+        {
+            let mut cur_segs = self.published_segments.write().unwrap();
+            *cur_segs = new_segments;
+        }
+
+        self.manifest_epoch.store(epoch, Ordering::Relaxed);
+        self.checkpoint_txid.store(up_to_txid, Ordering::Relaxed);
         Ok(())
     }
 }
@@ -168,6 +225,7 @@ fn build_segment_from_runs(seg_id: SegmentId, runs: &Arc<Vec<Arc<L0Run>>>) -> Cs
     if edges.is_empty() {
         return CsrSegment {
             id: seg_id,
+            meta_page_id: 0,
             min_src: 0,
             max_src: 0,
             offsets: vec![0, 0],
@@ -200,6 +258,7 @@ fn build_segment_from_runs(seg_id: SegmentId, runs: &Arc<Vec<Arc<L0Run>>>) -> Cs
 
     CsrSegment {
         id: seg_id,
+        meta_page_id: 0,
         min_src,
         max_src,
         offsets,
@@ -253,7 +312,7 @@ impl<'a> WriteTxn<'a> {
     }
 
     pub fn commit(self) -> Result<()> {
-        let run = self.memtable.freeze_into_run();
+        let run = self.memtable.freeze_into_run(self.txid);
 
         // 1) Append WAL and fsync (durability Full by default).
         {
@@ -309,9 +368,14 @@ fn replay_graph_transactions(
     pager: &mut Pager,
     idmap: &mut IdMap,
     committed: Vec<CommittedTx>,
+    checkpoint_txid: u64,
     out_runs: &mut Vec<Arc<L0Run>>,
 ) -> Result<()> {
     for tx in committed {
+        if tx.txid <= checkpoint_txid {
+            continue;
+        }
+
         let mut memtable = MemTable::default();
 
         for op in tx.ops {
@@ -337,15 +401,94 @@ fn replay_graph_transactions(
                 WalRecord::BeginTx { .. }
                 | WalRecord::CommitTx { .. }
                 | WalRecord::PageWrite { .. }
-                | WalRecord::PageFree { .. } => {}
+                | WalRecord::PageFree { .. }
+                | WalRecord::ManifestSwitch { .. }
+                | WalRecord::Checkpoint { .. } => {}
             }
         }
 
-        let run = Arc::new(memtable.freeze_into_run());
+        let run = Arc::new(memtable.freeze_into_run(tx.txid));
         if !run.is_empty() {
             out_runs.push(run);
         }
     }
 
     Ok(())
+}
+
+#[derive(Debug, Default, Clone)]
+struct RecoveryState {
+    manifest_epoch: u64,
+    manifest_segments: Vec<SegmentPointer>,
+    checkpoint_txid: u64,
+    max_txid: u64,
+}
+
+fn scan_recovery_state(committed: &[CommittedTx]) -> RecoveryState {
+    let mut state = RecoveryState::default();
+    for tx in committed {
+        state.max_txid = state.max_txid.max(tx.txid);
+        for op in &tx.ops {
+            match op {
+                WalRecord::ManifestSwitch { epoch, segments } => {
+                    if *epoch >= state.manifest_epoch {
+                        state.manifest_epoch = *epoch;
+                        state.manifest_segments = segments.clone();
+                        state.checkpoint_txid = 0;
+                    }
+                }
+                WalRecord::Checkpoint { up_to_txid, epoch } => {
+                    if *epoch == state.manifest_epoch {
+                        state.checkpoint_txid = state.checkpoint_txid.max(*up_to_txid);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    state
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn t45_compaction_persists_manifest_and_skips_replay_before_checkpoint() {
+        let dir = tempdir().unwrap();
+        let ndb = dir.path().join("graph.ndb");
+        let wal = dir.path().join("graph.wal");
+
+        {
+            let engine = GraphEngine::open(&ndb, &wal).unwrap();
+            let (a, _b, c) = {
+                let mut tx = engine.begin_write();
+                let a = tx.create_node(10, 1).unwrap();
+                let b = tx.create_node(20, 1).unwrap();
+                let c = tx.create_node(30, 1).unwrap();
+                tx.create_edge(a, 7, b);
+                tx.commit().unwrap();
+                (a, b, c)
+            };
+
+            {
+                let mut tx = engine.begin_write();
+                tx.create_edge(a, 7, c);
+                tx.commit().unwrap();
+            }
+
+            engine.compact().unwrap();
+            assert_eq!(engine.published_runs.read().unwrap().len(), 0);
+            assert_eq!(engine.published_segments.read().unwrap().len(), 1);
+        }
+
+        let engine = GraphEngine::open(&ndb, &wal).unwrap();
+        assert_eq!(engine.published_runs.read().unwrap().len(), 0);
+        assert_eq!(engine.published_segments.read().unwrap().len(), 1);
+
+        let snap = engine.begin_read();
+        let a = engine.lookup_internal_id(10).unwrap();
+        assert_eq!(snap.neighbors(a, Some(7)).count(), 2);
+    }
 }

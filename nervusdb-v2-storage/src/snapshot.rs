@@ -14,6 +14,7 @@ pub struct EdgeKey {
 
 #[derive(Debug)]
 pub struct L0Run {
+    txid: u64,
     edges_by_src: BTreeMap<InternalNodeId, Vec<EdgeKey>>,
     tombstoned_nodes: BTreeSet<InternalNodeId>,
     tombstoned_edges: BTreeSet<EdgeKey>,
@@ -21,15 +22,21 @@ pub struct L0Run {
 
 impl L0Run {
     pub fn new(
+        txid: u64,
         edges_by_src: BTreeMap<InternalNodeId, Vec<EdgeKey>>,
         tombstoned_nodes: BTreeSet<InternalNodeId>,
         tombstoned_edges: BTreeSet<EdgeKey>,
     ) -> Self {
         Self {
+            txid,
             edges_by_src,
             tombstoned_nodes,
             tombstoned_edges,
         }
+    }
+
+    pub(crate) fn txid(&self) -> u64 {
+        self.txid
     }
 
     fn edges_for_src(&self, src: InternalNodeId) -> &[EdgeKey] {
