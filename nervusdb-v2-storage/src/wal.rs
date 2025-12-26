@@ -410,9 +410,9 @@ impl WalReader {
 
         let got_crc = crc32(&body);
         if got_crc != crc {
-            return Err(Error::WalChecksumMismatch {
-                offset: record_offset,
-            });
+            // In crash scenarios, it's acceptable to have a torn final record.
+            // Treat CRC mismatch as end-of-log and ignore the tail.
+            return Ok(None);
         }
 
         self.offset += 4 + 4 + len as u64;
@@ -588,5 +588,48 @@ mod tests {
                 dst: 3
             }
         )));
+    }
+
+    #[test]
+    fn replay_ignores_trailing_crc_mismatch() {
+        let dir = tempdir().unwrap();
+        let ndb = dir.path().join("test.ndb");
+        let wal_path = dir.path().join("test.wal");
+
+        let begin2_offset;
+        {
+            let _pager = Pager::open(&ndb).unwrap();
+            let mut wal = Wal::open(&wal_path).unwrap();
+
+            let mut page = [0u8; PAGE_SIZE];
+            page[0] = 0xCC;
+
+            wal.append(&WalRecord::BeginTx { txid: 1 }).unwrap();
+            wal.append(&WalRecord::PageWrite {
+                page_id: 2,
+                page: Box::new(page),
+            })
+            .unwrap();
+            wal.append(&WalRecord::CommitTx { txid: 1 }).unwrap();
+
+            begin2_offset = wal.append(&WalRecord::BeginTx { txid: 2 }).unwrap();
+            wal.fsync().unwrap();
+        }
+
+        // Corrupt the CRC field of the last record.
+        {
+            let mut file = OpenOptions::new().write(true).open(&wal_path).unwrap();
+            file.seek(SeekFrom::Start(begin2_offset + 4)).unwrap();
+            file.write_all(&0u32.to_le_bytes()).unwrap();
+            file.flush().unwrap();
+        }
+
+        let mut pager = Pager::open(&ndb).unwrap();
+        let wal = Wal::open(&wal_path).unwrap();
+        let stats = wal.replay_into(&mut pager).unwrap();
+        assert_eq!(stats.committed_txs, 1);
+
+        let page = pager.read_page(PageId::new(2)).unwrap();
+        assert_eq!(page[0], 0xCC);
     }
 }
