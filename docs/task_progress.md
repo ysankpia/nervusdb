@@ -42,3 +42,9 @@
 | T41 | v2 Workspace / Crate 结构与边界 | L2 | P0 | Done | docs/T41-v2-workspace-structure | 定义 v2 新 crates（v2-storage/v2-query/v2 facade/v2-cli）与边界；明确 feature gate（WASM in-memory、显式 compaction、durability）；v1 不重构不被打断；M1 先复制 parser/planner，避免早期抽共享 crate |
 | T42 | v2 M0：Pager + WAL Replay（Kernel 可验证内核） | L3 | P0 | Done | feat/T42-v2-m0-pager-wal | 新增 `nervusdb-v2-storage`：实现 page store（8KB）+ bitmap 分配 + redo WAL（len+crc）+ replay；提供最小集成测试（崩溃/尾部损坏 WAL 可恢复） |
 | T43 | v2 M1：IDMap + MemTable + Snapshot（Log-Structured Graph） | L3 | P0 | Done | feat/T43-v2-m1-idmap-memtable-snapshot | 实现 I2E 持久化（E2I 启动重建）、邻接 MemTable + tombstone、commit 冻结 L0Run、Snapshot 读隔离、WAL 扩展为图语义事件与 replay |
+| T44 | v2 M2：CSR Segments + 显式 Compaction | L3 | P0 | Plan | - | 定义 CSR segment 磁盘布局、多段管理、读路径 merge（L0Runs+segments）、tombstone 吸收与 `db.compact()` 规则 |
+| T45 | v2 Durability / Checkpoint / Crash Model | L3 | P0 | Plan | - | 明确 WAL fsync / .ndb flush 顺序、manifest 原子切换、recovery 算法与不变量；为 compaction/crash gate 提供契约 |
+| T46 | v2 Public API Facade（Rust） | L2 | P0 | Plan | - | 定义对外最小稳定 API（Db/ReadTxn/WriteTxn/compact/checkpoint）与 WASM in-memory 策略、错误模型 |
+| T47 | v2 Query ↔ Storage 边界 | L3 | P0 | Plan | - | 定义 storage trait 与 streaming 契约；明确复用 v1 AST/Planner、executor 重写的接口落点 |
+| T48 | v2 Benchmarks & Perf Gate | L2 | P1 | Plan | - | 定义最小基准集与回归门禁（M1 vs M2 traversal 提升目标与回归阈值） |
+| T49 | v2 Crash Gate | L3 | P1 | Plan | - | 设计 v2 crash harness（writer/verify/driver）与 CI 策略，验证 T45 不变量 |
