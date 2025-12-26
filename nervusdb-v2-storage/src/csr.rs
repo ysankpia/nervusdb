@@ -86,6 +86,7 @@ impl CsrSegment {
 
 const META_MAGIC: [u8; 8] = *b"NDBCSRv1";
 
+#[allow(clippy::too_many_arguments)]
 fn encode_meta(
     out: &mut [u8; PAGE_SIZE],
     id: SegmentId,
@@ -134,7 +135,7 @@ fn encode_meta(
 }
 
 fn decode_segment(meta_page: &[u8; PAGE_SIZE], pager: &mut Pager) -> Result<CsrSegment> {
-    if &meta_page[0..8] != META_MAGIC {
+    if meta_page[0..8] != META_MAGIC {
         return Err(Error::WalProtocol("invalid csr meta magic"));
     }
 
