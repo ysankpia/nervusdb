@@ -102,6 +102,7 @@ impl GraphEngine {
             _guard: guard,
             txid,
             created_nodes: Vec::new(),
+            created_external_ids: std::collections::HashSet::new(),
             memtable: MemTable::default(),
         }
     }
@@ -271,6 +272,7 @@ pub struct WriteTxn<'a> {
     _guard: std::sync::MutexGuard<'a, ()>,
     txid: u64,
     created_nodes: Vec<(ExternalId, LabelId, InternalNodeId)>,
+    created_external_ids: std::collections::HashSet<ExternalId>,
     memtable: MemTable,
 }
 
@@ -280,12 +282,12 @@ impl<'a> WriteTxn<'a> {
         external_id: ExternalId,
         label_id: LabelId,
     ) -> Result<InternalNodeId> {
-        if self.created_nodes.iter().any(|(e, _, _)| *e == external_id) {
-            return Err(Error::WalProtocol("duplicate external id in same tx"));
-        }
-
         if self.engine.lookup_internal_id(external_id).is_some() {
             return Err(Error::WalProtocol("external id already exists"));
+        }
+
+        if !self.created_external_ids.insert(external_id) {
+            return Err(Error::WalProtocol("duplicate external id in same tx"));
         }
 
         let base_next = {
