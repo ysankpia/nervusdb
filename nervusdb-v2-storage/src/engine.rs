@@ -1,3 +1,4 @@
+use crate::csr::{CsrSegment, EdgeRecord, SegmentId};
 use crate::idmap::{ExternalId, IdMap, InternalNodeId, LabelId};
 use crate::memtable::MemTable;
 use crate::pager::Pager;
@@ -18,8 +19,10 @@ pub struct GraphEngine {
     idmap: Mutex<IdMap>,
 
     published_runs: RwLock<Arc<Vec<Arc<L0Run>>>>,
+    published_segments: RwLock<Arc<Vec<Arc<CsrSegment>>>>,
     write_lock: Mutex<()>,
     next_txid: AtomicU64,
+    next_segment_id: AtomicU64,
 }
 
 impl GraphEngine {
@@ -45,8 +48,10 @@ impl GraphEngine {
             wal: Mutex::new(wal),
             idmap: Mutex::new(idmap),
             published_runs: RwLock::new(Arc::new(runs)),
+            published_segments: RwLock::new(Arc::new(Vec::new())),
             write_lock: Mutex::new(()),
             next_txid: AtomicU64::new(1),
+            next_segment_id: AtomicU64::new(1),
         })
     }
 
@@ -62,7 +67,8 @@ impl GraphEngine {
 
     pub fn begin_read(&self) -> Snapshot {
         let runs = self.published_runs.read().unwrap().clone();
-        Snapshot::new(runs)
+        let segments = self.published_segments.read().unwrap().clone();
+        Snapshot::new(runs, segments)
     }
 
     pub fn begin_write(&self) -> WriteTxn<'_> {
@@ -88,6 +94,116 @@ impl GraphEngine {
         next.push(run);
         next.extend(current.iter().cloned());
         *current = Arc::new(next);
+    }
+
+    fn publish_segment(&self, seg: Arc<CsrSegment>) {
+        let mut current = self.published_segments.write().unwrap();
+        let mut next = Vec::with_capacity(current.len() + 1);
+        next.push(seg);
+        next.extend(current.iter().cloned());
+        *current = Arc::new(next);
+    }
+
+    /// M2: Explicit compaction.
+    ///
+    /// Current implementation is intentionally simple:
+    /// - Compacts all currently published L0 runs into a single in-memory CSR segment.
+    /// - Clears published runs for new snapshots.
+    ///
+    /// Durability/manifest is handled in T45.
+    pub fn compact(&self) -> Result<()> {
+        let _guard = self.write_lock.lock().unwrap();
+
+        let runs = {
+            let mut current = self.published_runs.write().unwrap();
+            let taken = current.clone();
+            *current = Arc::new(Vec::new());
+            taken
+        };
+
+        if runs.is_empty() {
+            return Ok(());
+        }
+
+        let seg_id = SegmentId(self.next_segment_id.fetch_add(1, Ordering::Relaxed));
+        let seg = Arc::new(build_segment_from_runs(seg_id, &runs));
+        self.publish_segment(seg);
+        Ok(())
+    }
+}
+
+fn build_segment_from_runs(seg_id: SegmentId, runs: &Arc<Vec<Arc<L0Run>>>) -> CsrSegment {
+    // Apply the same semantics as snapshot merge: newest->oldest, key-based tombstones.
+    use std::collections::{BTreeMap, HashSet};
+
+    let mut blocked_nodes: HashSet<InternalNodeId> = HashSet::new();
+    let mut blocked_edges: HashSet<crate::snapshot::EdgeKey> = HashSet::new();
+    let mut seen_edges: HashSet<crate::snapshot::EdgeKey> = HashSet::new();
+    let mut edges: Vec<crate::snapshot::EdgeKey> = Vec::new();
+
+    for run in runs.iter() {
+        blocked_nodes.extend(run.iter_tombstoned_nodes());
+        blocked_edges.extend(run.iter_tombstoned_edges());
+
+        for e in run.iter_edges() {
+            if blocked_nodes.contains(&e.src) || blocked_nodes.contains(&e.dst) {
+                continue;
+            }
+            if blocked_edges.contains(&e) {
+                continue;
+            }
+            if !seen_edges.insert(e) {
+                continue;
+            }
+            edges.push(e);
+        }
+    }
+
+    edges.sort();
+
+    let (min_src, max_src) = edges.iter().fold((u32::MAX, 0u32), |(min_s, max_s), e| {
+        (min_s.min(e.src), max_s.max(e.src))
+    });
+
+    if edges.is_empty() {
+        return CsrSegment {
+            id: seg_id,
+            min_src: 0,
+            max_src: 0,
+            offsets: vec![0, 0],
+            edges: Vec::new(),
+        };
+    }
+
+    let range = (max_src - min_src) as usize + 2;
+    let mut offsets = vec![0u64; range];
+    let mut edges_by_src: BTreeMap<InternalNodeId, Vec<EdgeRecord>> = BTreeMap::new();
+    for e in edges {
+        edges_by_src.entry(e.src).or_default().push(EdgeRecord {
+            rel: e.rel,
+            dst: e.dst,
+        });
+    }
+
+    let mut edge_vec: Vec<EdgeRecord> = Vec::new();
+    let mut cursor = 0u64;
+    for src in min_src..=max_src {
+        let idx = (src - min_src) as usize;
+        offsets[idx] = cursor;
+        if let Some(mut list) = edges_by_src.remove(&src) {
+            list.sort_by_key(|r| (r.rel, r.dst));
+            cursor += list.len() as u64;
+            edge_vec.extend(list);
+        }
+    }
+    offsets[(max_src - min_src) as usize + 1] = cursor;
+
+    CsrSegment {
+        id: seg_id,
+        min_src,
+        max_src,
+        offsets,
+        edges: edge_vec,
     }
 }
 

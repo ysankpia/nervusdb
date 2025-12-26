@@ -1,3 +1,4 @@
+use crate::csr::CsrSegment;
 use crate::idmap::InternalNodeId;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
@@ -60,25 +61,30 @@ impl L0Run {
 #[derive(Debug, Clone)]
 pub struct Snapshot {
     runs: Arc<Vec<Arc<L0Run>>>,
+    segments: Arc<Vec<Arc<CsrSegment>>>,
 }
 
 impl Snapshot {
-    pub fn new(runs: Arc<Vec<Arc<L0Run>>>) -> Self {
-        Self { runs }
+    pub fn new(runs: Arc<Vec<Arc<L0Run>>>, segments: Arc<Vec<Arc<CsrSegment>>>) -> Self {
+        Self { runs, segments }
     }
 
     pub fn neighbors(&self, src: InternalNodeId, rel: Option<RelTypeId>) -> NeighborsIter {
-        NeighborsIter::new(self.runs.clone(), src, rel)
+        NeighborsIter::new(self.runs.clone(), self.segments.clone(), src, rel)
     }
 }
 
 pub struct NeighborsIter {
     runs: Arc<Vec<Arc<L0Run>>>,
+    segments: Arc<Vec<Arc<CsrSegment>>>,
     src: InternalNodeId,
     rel: Option<RelTypeId>,
     run_idx: usize,
     edge_idx: usize,
     current_edges: Vec<EdgeKey>,
+    segment_idx: usize,
+    segment_edge_idx: usize,
+    current_segment_edges: Vec<EdgeKey>,
     blocked_nodes: HashSet<InternalNodeId>,
     blocked_edges: HashSet<EdgeKey>,
     seen_edges: HashSet<EdgeKey>,
@@ -86,14 +92,23 @@ pub struct NeighborsIter {
 }
 
 impl NeighborsIter {
-    fn new(runs: Arc<Vec<Arc<L0Run>>>, src: InternalNodeId, rel: Option<RelTypeId>) -> Self {
+    fn new(
+        runs: Arc<Vec<Arc<L0Run>>>,
+        segments: Arc<Vec<Arc<CsrSegment>>>,
+        src: InternalNodeId,
+        rel: Option<RelTypeId>,
+    ) -> Self {
         Self {
             runs,
+            segments,
             src,
             rel,
             run_idx: 0,
             edge_idx: 0,
             current_edges: Vec::new(),
+            segment_idx: 0,
+            segment_edge_idx: 0,
+            current_segment_edges: Vec::new(),
             blocked_nodes: HashSet::new(),
             blocked_edges: HashSet::new(),
             seen_edges: HashSet::new(),
@@ -123,6 +138,18 @@ impl NeighborsIter {
         self.current_edges
             .extend_from_slice(run.edges_for_src(self.src));
     }
+
+    fn load_segment(&mut self) {
+        self.current_segment_edges.clear();
+        self.segment_edge_idx = 0;
+
+        let Some(seg) = self.segments.get(self.segment_idx) else {
+            return;
+        };
+
+        self.current_segment_edges
+            .extend(seg.neighbors(self.src, self.rel).collect::<Vec<_>>());
+    }
 }
 
 impl Iterator for NeighborsIter {
@@ -135,13 +162,39 @@ impl Iterator for NeighborsIter {
 
         loop {
             if self.edge_idx >= self.current_edges.len() {
-                if self.run_idx >= self.runs.len() {
-                    self.terminated = true;
-                    return None;
+                if self.run_idx < self.runs.len() {
+                    self.load_run();
+                    self.run_idx += 1;
+                    continue;
                 }
-                self.load_run();
-                self.run_idx += 1;
-                continue;
+
+                // After exhausting runs, scan CSR segments (new->old).
+                if self.segment_edge_idx >= self.current_segment_edges.len() {
+                    if self.segment_idx >= self.segments.len() {
+                        self.terminated = true;
+                        return None;
+                    }
+                    self.load_segment();
+                    self.segment_idx += 1;
+                    continue;
+                }
+
+                let edge = self.current_segment_edges[self.segment_edge_idx];
+                self.segment_edge_idx += 1;
+
+                if self.blocked_nodes.contains(&edge.dst) {
+                    continue;
+                }
+
+                if self.blocked_edges.contains(&edge) {
+                    continue;
+                }
+
+                if !self.seen_edges.insert(edge) {
+                    continue;
+                }
+
+                return Some(edge);
             }
 
             let edge = self.current_edges[self.edge_idx];

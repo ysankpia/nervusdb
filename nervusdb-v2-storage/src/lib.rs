@@ -1,3 +1,4 @@
+pub mod csr;
 pub mod engine;
 mod error;
 pub mod idmap;
