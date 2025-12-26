@@ -5,5 +5,7 @@ members = [
     "bindings/node/native/nervusdb-node",
     "bindings/uniffi/nervusdb-uniffi",
     "nervusdb-cli"
-, "nervusdb-v2-storage"]
+, "nervusdb-v2-storage"
+, "nervusdb-v2"
+]
 resolver = "2"
