@@ -122,12 +122,7 @@ impl Bitmap {
             return None;
         }
 
-        for id in start..end {
-            if !self.get_bit(id) {
-                return Some(id);
-            }
-        }
-        None
+        (start..end).find(|&id| !self.get_bit(id))
     }
 }
 
@@ -147,6 +142,7 @@ impl Pager {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&path)?;
 
         if !existed || file.metadata()?.len() == 0 {

@@ -7,10 +7,19 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WalRecord {
-    BeginTx { txid: u64 },
-    CommitTx { txid: u64 },
-    PageWrite { page_id: u64, page: [u8; PAGE_SIZE] },
-    PageFree { page_id: u64 },
+    BeginTx {
+        txid: u64,
+    },
+    CommitTx {
+        txid: u64,
+    },
+    PageWrite {
+        page_id: u64,
+        page: Box<[u8; PAGE_SIZE]>,
+    },
+    PageFree {
+        page_id: u64,
+    },
 }
 
 impl WalRecord {
@@ -32,7 +41,7 @@ impl WalRecord {
             }
             WalRecord::PageWrite { page_id, page } => {
                 out.extend_from_slice(&page_id.to_le_bytes());
-                out.extend_from_slice(page);
+                out.extend_from_slice(page.as_ref());
             }
             WalRecord::PageFree { page_id } => {
                 out.extend_from_slice(&page_id.to_le_bytes());
@@ -62,8 +71,8 @@ impl WalRecord {
                     return Err(Error::WalProtocol("invalid PageWrite payload length"));
                 }
                 let page_id = u64::from_le_bytes(payload[0..8].try_into().unwrap());
-                let mut page = [0u8; PAGE_SIZE];
-                page.copy_from_slice(&payload[8..]);
+                let mut page = Box::new([0u8; PAGE_SIZE]);
+                page.as_mut_slice().copy_from_slice(&payload[8..]);
                 Ok(WalRecord::PageWrite { page_id, page })
             }
             4 => {
@@ -88,6 +97,7 @@ impl Wal {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&path)?;
         Ok(Self { path, file })
     }
@@ -173,7 +183,7 @@ fn apply_op(pager: &mut Pager, op: WalRecord) -> Result<()> {
         WalRecord::PageWrite { page_id, page } => {
             let pid = PageId::new(page_id);
             pager.ensure_allocated(pid)?;
-            pager.write_page(pid, &page)?;
+            pager.write_page(pid, page.as_ref())?;
             Ok(())
         }
         WalRecord::PageFree { page_id } => pager.free_page(PageId::new(page_id)),
@@ -273,8 +283,11 @@ mod tests {
             page[PAGE_SIZE - 1] = 0x22;
 
             wal.append(&WalRecord::BeginTx { txid: 1 }).unwrap();
-            wal.append(&WalRecord::PageWrite { page_id: 2, page })
-                .unwrap();
+            wal.append(&WalRecord::PageWrite {
+                page_id: 2,
+                page: Box::new(page),
+            })
+            .unwrap();
             wal.append(&WalRecord::CommitTx { txid: 1 }).unwrap();
             wal.fsync().unwrap();
         }
@@ -303,8 +316,11 @@ mod tests {
             page[0] = 0xAA;
 
             wal.append(&WalRecord::BeginTx { txid: 1 }).unwrap();
-            wal.append(&WalRecord::PageWrite { page_id: 2, page })
-                .unwrap();
+            wal.append(&WalRecord::PageWrite {
+                page_id: 2,
+                page: Box::new(page),
+            })
+            .unwrap();
             wal.fsync().unwrap();
         }
 
@@ -330,8 +346,11 @@ mod tests {
             page[0] = 0x7F;
 
             wal.append(&WalRecord::BeginTx { txid: 1 }).unwrap();
-            wal.append(&WalRecord::PageWrite { page_id: 2, page })
-                .unwrap();
+            wal.append(&WalRecord::PageWrite {
+                page_id: 2,
+                page: Box::new(page),
+            })
+            .unwrap();
             wal.append(&WalRecord::CommitTx { txid: 1 }).unwrap();
 
             let mut file = OpenOptions::new().append(true).open(&wal_path).unwrap();
