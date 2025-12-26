@@ -38,4 +38,4 @@
 | T37 | UniFFI 多语言绑定：以 C ABI Statement 为唯一硬契约（Python 重做、扩展 Swift/Kotlin/Ruby） | L3 | P0 | Done | #31 | Python 重做已落地（同步真流式）；Node 门禁与真流式修复拆到 T38；`nervusdb.h` 不改 ABI |
 | T38 | Node 真流式 Statement + 契约门禁（对齐 `nervusdb.h`） | L3 | P0 | Plan | - | 现状：Node `prepareV2` 仍在 Rust 侧预加载 `Vec<Vec<Value>>`，是伪流式；目标：改为 `PhysicalPlan::execute_streaming` 真流式并加 CI 契约检查 |
 | T39 | Rust CLI（查询/流式输出） | L2 | P1 | Plan | - | 新增 `nervusdb` CLI：以流式方式执行 Cypher 并输出 NDJSON；保持不破坏现有库/ABI |
-| T40 | NervusDB v2 Kernel Spec（Property Graph + LSM Segments） | L3 | P0 | Plan | feat/T40-v2-kernel-spec | v2 不兼容 v1：新 crate/新磁盘格式；Single-Writer+Snapshot Readers；.ndb+.wal；MemTable 冻结为 L0 runs；多 CSR segments + 显式 compaction；MVP: 单 label、属性仅在 WAL/MemTable、tombstone 删除、WASM 仅 in-memory |
+| T40 | NervusDB v2 Kernel Spec（Property Graph + LSM Segments） | L3 | P0 | Done | feat/T40-v2-kernel-spec | v2 不兼容 v1：新 crate/新磁盘格式；Single-Writer+Snapshot Readers；.ndb+.wal；MemTable 冻结为 L0 runs；多 CSR segments + 显式 compaction；MVP: 单 label、属性仅在 WAL/MemTable、tombstone 删除、WASM 仅 in-memory |
