@@ -147,10 +147,10 @@ impl Iterator for NeighborsIter {
             let edge = self.current_edges[self.edge_idx];
             self.edge_idx += 1;
 
-            if let Some(rel) = self.rel {
-                if edge.rel != rel {
-                    continue;
-                }
+            if let Some(rel) = self.rel
+                && edge.rel != rel
+            {
+                continue;
             }
 
             if self.blocked_nodes.contains(&edge.dst) {

@@ -73,6 +73,11 @@ impl IdMap {
     }
 
     #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.i2e_len == 0
+    }
+
+    #[inline]
     pub fn next_internal_id(&self) -> InternalNodeId {
         u32::try_from(self.i2e_len).unwrap_or(u32::MAX)
     }

@@ -271,7 +271,7 @@ impl Wal {
                     }
                     out.push(CommittedTx {
                         txid,
-                        ops: pending.drain(..).collect(),
+                        ops: std::mem::take(&mut pending),
                     });
                     current_txid = None;
                 }
