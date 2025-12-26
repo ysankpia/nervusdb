@@ -1,3 +1,4 @@
+pub mod api;
 pub mod csr;
 pub mod engine;
 mod error;

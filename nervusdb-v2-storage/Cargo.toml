@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 crc32fast = "1.5.0"
 thiserror = "2.0"
+nervusdb-v2-api = { path = "../nervusdb-v2-api" }
 
 [dev-dependencies]
 tempfile = "3"

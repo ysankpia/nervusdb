@@ -45,6 +45,6 @@
 | T44 | v2 M2：CSR Segments + 显式 Compaction | L3 | P0 | Done | feat/T44-v2-m2-csr-compaction | 实现内存 CSR segment + `GraphEngine::compact()`（显式 compaction）并扩展 Snapshot 读路径支持 segments；持久化/manifest 原子切换在 T45 |
 | T45 | v2 Durability / Checkpoint / Crash Model | L3 | P0 | Done | feat/T45-v2-durability-manifest | CSR 段持久化（meta+blob pages）+ WAL ManifestSwitch/Checkpoint；recovery 按 checkpoint 跳过已固化 tx；保证 `.ndb` fsync 先于 WAL manifest 提交 |
 | T46 | v2 Public API Facade（Rust） | L2 | P0 | Done | feat/T46-v2-facade-api | 新增 `nervusdb-v2` facade：`Db/ReadTxn/WriteTxn` 最小 API（open/begin_read/begin_write/compact/checkpoint）并提供 smoke test |
-| T47 | v2 Query ↔ Storage 边界 | L3 | P0 | Plan | - | 定义 storage trait 与 streaming 契约；明确复用 v1 AST/Planner、executor 重写的接口落点 |
+| T47 | v2 Query ↔ Storage 边界 | L3 | P0 | Done | feat/T47-v2-api-boundary | 新增 `nervusdb-v2-api` 定义 `GraphStore/GraphSnapshot` streaming 契约；`nervusdb-v2-storage::GraphEngine` 实现该 trait 并补测试 |
 | T48 | v2 Benchmarks & Perf Gate | L2 | P1 | Plan | - | 定义最小基准集与回归门禁（M1 vs M2 traversal 提升目标与回归阈值） |
 | T49 | v2 Crash Gate | L3 | P1 | Plan | - | 设计 v2 crash harness（writer/verify/driver）与 CI 策略，验证 T45 不变量 |

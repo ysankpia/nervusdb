@@ -1204,10 +1204,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nervusdb-v2-api"
+version = "0.1.0"
+
+[[package]]
 name = "nervusdb-v2-storage"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
+ "nervusdb-v2-api",
  "tempfile",
  "thiserror 2.0.17",
 ]

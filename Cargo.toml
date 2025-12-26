@@ -7,5 +7,6 @@ members = [
     "nervusdb-cli"
 , "nervusdb-v2-storage"
 , "nervusdb-v2"
+, "nervusdb-v2-api"
 ]
 resolver = "2"
