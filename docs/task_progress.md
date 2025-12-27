@@ -53,3 +53,10 @@
 | T52 | v2 M3：Query API（prepare/execute_streaming + 参数） | L3 | P0 | Done | #55 | `nervusdb-v2-query` 提供 `prepare/PreparedQuery::execute_streaming/Params`；支持 `RETURN 1` 与单跳 `MATCH (n)-[:<u32>]->(m) RETURN ... LIMIT ...`；附测试覆盖 |
 | T53 | v2 M3：Query Tests + CLI 验收路径 | L2 | P0 | Done | #57 | 增加 v2 query 端到端集成测试（v2-storage + v2-query）；CLI 新增 `nervusdb v2 query`，流式 NDJSON 输出 |
 | T54 | v2 属性存储层（Property Storage Layer） | L3 | P0 | WIP | feat/T54-v2-property-storage | 实现节点/边属性存储（MemTable/L0Run/WAL/API）；为 Filter/Create 算子提供基础；设计文档见 `docs/design/T54-v2-property-storage.md` |
+| T57 | v2.0.0 正式版发布（Spec 6.3 实现） | L3 | P0 | Plan | feat/v2.0.0 | 稳定公开 Rust API；Cypher 基础读写闭环测试覆盖；数据一致性测试（tombstone/crash/compaction）；性能基准方法论；设计文档见 `docs/design/T57-v2.0.0-release.md` |
+
+## 阻塞任务
+
+| ID | Task | Dependency | Status |
+|:---|:-----|:----------:|:------:|
+| T54 | v2 属性存储层 | - | WIP |
