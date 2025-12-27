@@ -66,7 +66,7 @@ impl LabelSnapshot {
     /// Iterate over all label IDs.
     #[inline]
     pub fn iter_ids(&self) -> impl Iterator<Item = LabelId> + '_ {
-        (0..self.i2s.len() as LabelId)
+        0..self.i2s.len() as LabelId
     }
 }
 
