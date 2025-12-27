@@ -1,7 +1,8 @@
-use crate::ast::{Expression, Literal, PathElement, Pattern};
+use crate::ast::{AggregateFunction, Expression, Literal, PathElement, Pattern};
 use crate::error::{Error, Result};
 pub use nervusdb_v2_api::LabelId;
 use nervusdb_v2_api::{EdgeKey, ExternalId, GraphSnapshot, InternalNodeId, RelTypeId};
+use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -14,6 +15,27 @@ pub enum Value {
     Bool(bool),
     Null,
 }
+
+// Custom Hash implementation for Value (since Float doesn't implement Hash)
+impl Hash for Value {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Value::NodeId(id) => id.hash(state),
+            Value::ExternalId(ext) => ext.hash(state),
+            Value::EdgeKey(key) => key.hash(state),
+            Value::Int(i) => i.hash(state),
+            Value::Float(f) => {
+                // Hash by bit pattern for consistency
+                f.to_bits().hash(state);
+            }
+            Value::String(s) => s.hash(state),
+            Value::Bool(b) => b.hash(state),
+            Value::Null => 0u8.hash(state),
+        }
+    }
+}
+
+impl Eq for Value {}
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Row {
@@ -100,6 +122,12 @@ pub enum Plan {
         input: Box<Plan>,
         columns: Vec<String>,
     },
+    /// Aggregation: COUNT, SUM, AVG with optional grouping
+    Aggregate {
+        input: Box<Plan>,
+        group_by: Vec<String>,                        // Variables to group by
+        aggregates: Vec<(AggregateFunction, String)>, // (Function, Alias)
+    },
     /// `CREATE (n)-[:rel]->(m)` - create pattern
     Create { pattern: Pattern },
     /// `DELETE` - delete nodes/edges (with input plan for variable resolution)
@@ -176,6 +204,14 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
             let input_iter = execute_plan(snapshot, input, params);
             let names: Vec<&str> = columns.iter().map(|s| s.as_str()).collect();
             Box::new(input_iter.map(move |result| result.map(|row| row.project(&names))))
+        }
+        Plan::Aggregate {
+            input,
+            group_by,
+            aggregates,
+        } => {
+            let input_iter = execute_plan(snapshot, input, params);
+            execute_aggregate(input_iter, group_by.clone(), aggregates.clone())
         }
         Plan::Create { pattern: _ } => {
             // CREATE should be executed via execute_write, not execute_plan
@@ -704,6 +740,211 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
                 self.stack.push((next_node, next_depth, new_path));
             }
         }
+    }
+}
+
+/// Aggregation iterator: groups input rows and computes aggregates
+struct AggregateIter<I: Iterator<Item = Result<Row>>> {
+    input: I,
+    group_by: Vec<String>,
+    aggregates: Vec<(AggregateFunction, String)>,
+    // Groups: key = group values, value = accumulator
+    groups: std::collections::HashMap<Vec<Value>, GroupAccumulator>,
+    input_exhausted: bool,
+}
+
+struct GroupAccumulator {
+    count: usize,
+    sum: f64,
+    avg_count: usize,
+    // For evaluating expressions per group member
+    member_rows: Vec<Row>,
+}
+
+impl<I: Iterator<Item = Result<Row>>> AggregateIter<I> {
+    fn new(input: I, group_by: Vec<String>, aggregates: Vec<(AggregateFunction, String)>) -> Self {
+        Self {
+            input,
+            group_by,
+            aggregates,
+            groups: std::collections::HashMap::new(),
+            input_exhausted: false,
+        }
+    }
+
+    /// Collect all input and group rows
+    fn collect_groups(&mut self) {
+        if self.input_exhausted {
+            return;
+        }
+
+        let group_by = self.group_by.clone();
+        for item in self.input.by_ref() {
+            match item {
+                Ok(row) => {
+                    let key = Self::extract_group_key(&group_by, &row);
+                    self.groups
+                        .entry(key)
+                        .or_insert_with(|| GroupAccumulator {
+                            count: 0,
+                            sum: 0.0,
+                            avg_count: 0,
+                            member_rows: Vec::new(),
+                        })
+                        .member_rows
+                        .push(row);
+                }
+                Err(_) => {
+                    // Errors will be propagated in next()
+                }
+            }
+        }
+        self.input_exhausted = true;
+    }
+
+    fn extract_group_key(group_by: &[String], row: &Row) -> Vec<Value> {
+        group_by
+            .iter()
+            .filter_map(|var| {
+                row.cols
+                    .iter()
+                    .find(|(k, _)| k == var)
+                    .map(|(_, v)| v.clone())
+            })
+            .collect()
+    }
+}
+
+impl<I: Iterator<Item = Result<Row>>> Iterator for AggregateIter<I> {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Phase 1: Collect all input rows and group them
+        if !self.input_exhausted {
+            self.collect_groups();
+        }
+        // Phase 2: We're done after first iteration (all groups computed)
+        None
+    }
+}
+
+/// Simple aggregation executor that collects all input, groups, and computes aggregates
+fn execute_aggregate<'a>(
+    input: Box<dyn Iterator<Item = Result<Row>> + 'a>,
+    group_by: Vec<String>,
+    aggregates: Vec<(AggregateFunction, String)>,
+) -> Box<dyn Iterator<Item = Result<Row>> + 'a> {
+    // Collect all rows and group them
+    let mut groups: std::collections::HashMap<Vec<Value>, Vec<Row>> =
+        std::collections::HashMap::new();
+
+    for item in input {
+        let row = match item {
+            Ok(r) => r,
+            Err(e) => return Box::new(std::iter::once(Err(e))),
+        };
+
+        let key: Vec<Value> = group_by
+            .iter()
+            .filter_map(|var| {
+                row.cols
+                    .iter()
+                    .find(|(k, _)| k == var)
+                    .map(|(_, v)| v.clone())
+            })
+            .collect();
+
+        groups.entry(key).or_insert_with(Vec::new).push(row);
+    }
+
+    // Convert to result rows
+    let results: Vec<Result<Row>> = groups
+        .into_iter()
+        .map(|(key, rows)| {
+            // Build group key row
+            let mut result = Row::default();
+            for (i, var) in group_by.iter().enumerate() {
+                if i < key.len() {
+                    result = result.with(var, key[i].clone());
+                }
+            }
+
+            // Compute aggregates
+            for (func, alias) in &aggregates {
+                let value = match func {
+                    AggregateFunction::Count(None) => {
+                        // COUNT(*)
+                        Value::Float(rows.len() as f64)
+                    }
+                    AggregateFunction::Count(Some(expr)) => {
+                        // COUNT(expr) - count non-null values
+                        let count = rows
+                            .iter()
+                            .filter(|r| !matches!(evaluate_expression(expr, r), Value::Null))
+                            .count();
+                        Value::Float(count as f64)
+                    }
+                    AggregateFunction::Sum(expr) => {
+                        let sum: f64 = rows
+                            .iter()
+                            .filter_map(|r| {
+                                if let Value::Float(f) = evaluate_expression(expr, r) {
+                                    Some(f)
+                                } else {
+                                    None
+                                }
+                            })
+                            .sum();
+                        Value::Float(sum)
+                    }
+                    AggregateFunction::Avg(expr) => {
+                        let values: Vec<f64> = rows
+                            .iter()
+                            .filter_map(|r| {
+                                if let Value::Float(f) = evaluate_expression(expr, r) {
+                                    Some(f)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        if values.is_empty() {
+                            Value::Null
+                        } else {
+                            Value::Float(values.iter().sum::<f64>() / values.len() as f64)
+                        }
+                    }
+                };
+                result = result.with(alias, value);
+            }
+
+            Ok(result)
+        })
+        .collect();
+
+    Box::new(results.into_iter())
+}
+
+/// Simple expression evaluator for aggregate functions
+fn evaluate_expression(expr: &Expression, row: &Row) -> Value {
+    match expr {
+        Expression::Variable(name) => row
+            .cols
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
+            .unwrap_or(Value::Null),
+        Expression::PropertyAccess(prop) => {
+            // For now, just return the node value (property access not fully implemented)
+            row.cols
+                .iter()
+                .find(|(k, _)| k == &prop.variable)
+                .map(|(_, v)| v.clone())
+                .unwrap_or(Value::Null)
+        }
+        Expression::Literal(Literal::Number(n)) => Value::Float(*n),
+        Expression::Literal(Literal::String(s)) => Value::String(s.clone()),
+        _ => Value::Null,
     }
 }
 

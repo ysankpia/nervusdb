@@ -253,6 +253,14 @@ pub struct FunctionCall {
     pub args: Vec<Expression>,
 }
 
+/// Aggregate function types for RETURN clause aggregation
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum AggregateFunction {
+    Count(Option<Expression>), // None for COUNT(*)
+    Sum(Expression),
+    Avg(Expression),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CaseExpression {
     pub when_clauses: Vec<(Expression, Expression)>,

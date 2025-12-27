@@ -11,6 +11,7 @@ pub enum PhysicalPlan {
     Scan(ScanNode),
     Filter(FilterNode),
     Project(ProjectNode),
+    Aggregate(AggregateNode),
     Limit(LimitNode),
     Skip(SkipNode),
     Sort(SortNode),
@@ -23,7 +24,7 @@ pub enum PhysicalPlan {
     Create(CreateNode),
     Set(SetNode),
     Delete(DeleteNode),
-    // v1-only nodes intentionally dropped for v2 M3 (FTS/Vector/Aggregate/VarLength...)
+    // v1-only nodes intentionally dropped for v2 M3 (FTS/Vector/VarLength...)
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +46,13 @@ pub struct FilterNode {
 pub struct ProjectNode {
     pub input: Box<PhysicalPlan>,
     pub projections: Vec<(Expression, String)>, // (Expr, Alias)
+}
+
+#[derive(Debug, Clone)]
+pub struct AggregateNode {
+    pub input: Box<PhysicalPlan>,
+    pub group_by: Vec<String>, // Variables to group by
+    pub aggregates: Vec<(AggregateFunction, String)>, // (Function, Alias)
 }
 
 #[derive(Debug, Clone)]
@@ -219,6 +227,47 @@ impl QueryPlanner {
         }
 
         if let Some(r) = return_clause {
+            // Check for aggregation
+            let has_aggregate = r
+                .items
+                .iter()
+                .any(|item| Self::contains_aggregate(&item.expression));
+
+            if has_aggregate {
+                // Extract group_by and aggregates
+                let mut group_by = Vec::<String>::new();
+                let mut aggregates = Vec::<(AggregateFunction, String)>::new();
+
+                for item in &r.items {
+                    let alias = item
+                        .alias
+                        .clone()
+                        .unwrap_or_else(|| Self::expr_to_alias(&item.expression));
+
+                    if let Some((func, _)) = Self::extract_aggregate(&item.expression) {
+                        aggregates.push((func, alias));
+                    } else if let Expression::Variable(var) = &item.expression {
+                        // Non-aggregate: treat as group_by key
+                        if !group_by.contains(var) {
+                            group_by.push(var.clone());
+                        }
+                    } else if let Expression::PropertyAccess(prop) = &item.expression {
+                        // Property access without aggregate: add to group_by
+                        if !group_by.contains(&prop.variable) {
+                            group_by.push(prop.variable.clone());
+                        }
+                    }
+                }
+
+                // Create aggregate node
+                plan = PhysicalPlan::Aggregate(AggregateNode {
+                    input: Box::new(plan),
+                    group_by,
+                    aggregates,
+                });
+            }
+
+            // Always add project for column aliases
             plan = PhysicalPlan::Project(ProjectNode {
                 input: Box::new(plan),
                 projections: r
@@ -377,6 +426,15 @@ impl QueryPlanner {
                 }
                 Self::collect_output_aliases(&n.input, out);
             }
+            PhysicalPlan::Aggregate(n) => {
+                for (_, alias) in &n.aggregates {
+                    out.insert(alias.clone());
+                }
+                for group_var in &n.group_by {
+                    out.insert(group_var.clone());
+                }
+                Self::collect_output_aliases(&n.input, out);
+            }
             PhysicalPlan::Limit(n) => Self::collect_output_aliases(&n.input, out),
             PhysicalPlan::Skip(n) => Self::collect_output_aliases(&n.input, out),
             PhysicalPlan::Sort(n) => Self::collect_output_aliases(&n.input, out),
@@ -414,6 +472,46 @@ impl QueryPlanner {
             Expression::Variable(v) => v.clone(),
             Expression::PropertyAccess(p) => format!("{}.{}", p.variable, p.property),
             _ => "expr".to_string(),
+        }
+    }
+
+    fn contains_aggregate(expr: &Expression) -> bool {
+        matches!(expr, Expression::FunctionCall(fc) if Self::is_aggregate_function(&fc.name))
+    }
+
+    fn is_aggregate_function(name: &str) -> bool {
+        matches!(name.to_uppercase().as_str(), "COUNT" | "SUM" | "AVG")
+    }
+
+    fn extract_aggregate(expr: &Expression) -> Option<(AggregateFunction, Expression)> {
+        if let Expression::FunctionCall(fc) = expr {
+            if Self::is_aggregate_function(&fc.name) {
+                match fc.name.to_uppercase().as_str() {
+                    "COUNT" => {
+                        let arg = fc.args.first().cloned();
+                        Some((AggregateFunction::Count(arg), expr.clone()))
+                    }
+                    "SUM" => {
+                        if let Some(arg) = fc.args.first().cloned() {
+                            Some((AggregateFunction::Sum(arg), expr.clone()))
+                        } else {
+                            None
+                        }
+                    }
+                    "AVG" => {
+                        if let Some(arg) = fc.args.first().cloned() {
+                            Some((AggregateFunction::Avg(arg), expr.clone()))
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        } else {
+            None
         }
     }
 }

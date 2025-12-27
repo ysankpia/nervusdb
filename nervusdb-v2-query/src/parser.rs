@@ -569,8 +569,13 @@ impl TokenParser {
             TokenType::Identifier(name) => {
                 let name = name.clone();
                 self.advance();
-                // Check for property access (e.g., `a.age`)
-                if self.check(&TokenType::Dot) {
+                // Check for function call (e.g., COUNT(...), SUM(...), AVG(...))
+                if self.check(&TokenType::LeftParen) {
+                    self.advance(); // consume '('
+                    let args = self.parse_function_arguments()?;
+                    Expression::FunctionCall(FunctionCall { name, args })
+                } else if self.check(&TokenType::Dot) {
+                    // Check for property access on identifier (e.g., n.age)
                     self.advance(); // consume the dot
                     Expression::PropertyAccess(PropertyAccess {
                         variable: name,
@@ -579,6 +584,16 @@ impl TokenParser {
                 } else {
                     Expression::Variable(name)
                 }
+            }
+            TokenType::LeftBracket => {
+                // List literal (e.g., [1, 2, 3])
+                self.advance(); // consume '['
+                Expression::List(self.parse_list()?)
+            }
+            TokenType::LeftBrace => {
+                // Map literal (e.g., {key: value})
+                self.advance(); // consume '{'
+                Expression::Map(self.parse_property_map()?)
             }
             _ => return Err(Error::NotImplemented("expression")),
         };
@@ -610,6 +625,51 @@ impl TokenParser {
         let query = self.parse_query()?;
         self.consume(&TokenType::RightBrace, "Expected '}' after subquery")?;
         Ok(query)
+    }
+
+    fn parse_function_arguments(&mut self) -> Result<Vec<Expression>, Error> {
+        let mut args = Vec::new();
+
+        // Handle empty arguments (e.g., COUNT())
+        if self.check(&TokenType::RightParen) {
+            self.advance();
+            return Ok(args);
+        }
+
+        // Parse first argument
+        args.push(self.parse_expression()?);
+
+        // Parse additional arguments
+        while self.match_token(&TokenType::Comma) {
+            args.push(self.parse_expression()?);
+        }
+
+        self.consume(
+            &TokenType::RightParen,
+            "Expected ')' after function arguments",
+        )?;
+        Ok(args)
+    }
+
+    fn parse_list(&mut self) -> Result<Vec<Expression>, Error> {
+        let mut items = Vec::new();
+
+        // Handle empty list: []
+        if self.check(&TokenType::RightBracket) {
+            self.advance();
+            return Ok(items);
+        }
+
+        // Parse first item
+        items.push(self.parse_expression()?);
+
+        // Parse additional items
+        while self.match_token(&TokenType::Comma) {
+            items.push(self.parse_expression()?);
+        }
+
+        self.consume(&TokenType::RightBracket, "Expected ']' after list")?;
+        Ok(items)
     }
 
     fn peek_is_identifier(&self) -> bool {

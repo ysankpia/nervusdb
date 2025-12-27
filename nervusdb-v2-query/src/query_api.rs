@@ -208,7 +208,16 @@ fn compile_m3_plan(query: Query) -> Result<Plan> {
     for item in &ret.items {
         let name = match &item.expression {
             Expression::Variable(v) => v.clone(),
-            _ => return Err(Error::NotImplemented("only variable projection in v2 M3")),
+            Expression::FunctionCall(_) | Expression::List(_) | Expression::Literal(_) => item
+                .alias
+                .clone()
+                .unwrap_or_else(|| match &item.expression {
+                    Expression::FunctionCall(fc) => fc.name.clone(),
+                    Expression::List(_) => "list".to_string(),
+                    Expression::Literal(l) => format!("{:?}", l),
+                    _ => "expr".to_string(),
+                }),
+            _ => return Err(Error::NotImplemented("expression projection in v2 M3")),
         };
         project.push(item.alias.clone().unwrap_or(name));
     }
