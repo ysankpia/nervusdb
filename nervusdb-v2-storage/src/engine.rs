@@ -406,6 +406,24 @@ fn replay_graph_transactions(
                 WalRecord::TombstoneEdge { src, rel, dst } => {
                     memtable.tombstone_edge(src, rel, dst)
                 }
+                WalRecord::SetNodeProperty { node, key, value } => {
+                    memtable.set_node_property(node, key, value);
+                }
+                WalRecord::SetEdgeProperty {
+                    src,
+                    rel,
+                    dst,
+                    key,
+                    value,
+                } => {
+                    memtable.set_edge_property(src, rel, dst, key, value);
+                }
+                WalRecord::RemoveNodeProperty { node, key } => {
+                    memtable.remove_node_property(node, &key);
+                }
+                WalRecord::RemoveEdgeProperty { src, rel, dst, key } => {
+                    memtable.remove_edge_property(src, rel, dst, &key);
+                }
                 WalRecord::BeginTx { .. }
                 | WalRecord::CommitTx { .. }
                 | WalRecord::PageWrite { .. }

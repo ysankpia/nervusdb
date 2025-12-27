@@ -106,6 +106,16 @@ impl std::fmt::Display for DecodeError {
 
 impl std::error::Error for DecodeError {}
 
+impl PropertyValue {
+    /// Get float value if this is a Float variant.
+    pub fn as_float(&self) -> Option<f64> {
+        match self {
+            PropertyValue::Float(f) => Some(*f),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,15 +187,5 @@ mod tests {
         let encoded = v.encode();
         let decoded = PropertyValue::decode(&encoded).unwrap();
         assert_eq!(PropertyValue::String(long_str), decoded);
-    }
-}
-
-impl PropertyValue {
-    /// Get float value if this is a Float variant.
-    pub fn as_float(&self) -> Option<f64> {
-        match self {
-            PropertyValue::Float(f) => Some(*f),
-            _ => None,
-        }
     }
 }

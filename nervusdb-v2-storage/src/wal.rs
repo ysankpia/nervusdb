@@ -1,11 +1,12 @@
 use crate::pager::{PageId, Pager};
+use crate::property::PropertyValue;
 use crate::{Error, PAGE_SIZE, Result};
 use crc32fast::Hasher;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum WalRecord {
     BeginTx {
         txid: u64,
@@ -46,6 +47,28 @@ pub enum WalRecord {
         up_to_txid: u64,
         epoch: u64,
     },
+    SetNodeProperty {
+        node: u32,
+        key: String,
+        value: PropertyValue,
+    },
+    SetEdgeProperty {
+        src: u32,
+        rel: u32,
+        dst: u32,
+        key: String,
+        value: PropertyValue,
+    },
+    RemoveNodeProperty {
+        node: u32,
+        key: String,
+    },
+    RemoveEdgeProperty {
+        src: u32,
+        rel: u32,
+        dst: u32,
+        key: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +90,10 @@ impl WalRecord {
             WalRecord::TombstoneEdge { .. } => 8,
             WalRecord::ManifestSwitch { .. } => 9,
             WalRecord::Checkpoint { .. } => 10,
+            WalRecord::SetNodeProperty { .. } => 11,
+            WalRecord::SetEdgeProperty { .. } => 12,
+            WalRecord::RemoveNodeProperty { .. } => 13,
+            WalRecord::RemoveEdgeProperty { .. } => 14,
         }
     }
 
@@ -118,6 +145,52 @@ impl WalRecord {
             WalRecord::Checkpoint { up_to_txid, epoch } => {
                 out.extend_from_slice(&up_to_txid.to_le_bytes());
                 out.extend_from_slice(&epoch.to_le_bytes());
+            }
+            WalRecord::SetNodeProperty { node, key, value } => {
+                out.extend_from_slice(&node.to_le_bytes());
+                let key_bytes = key.as_bytes();
+                let key_len = u32::try_from(key_bytes.len())
+                    .unwrap_or_else(|_| panic!("key too long: {} bytes", key_bytes.len()));
+                out.extend_from_slice(&key_len.to_le_bytes());
+                out.extend_from_slice(key_bytes);
+                let value_bytes = value.encode();
+                out.extend_from_slice(&value_bytes);
+            }
+            WalRecord::SetEdgeProperty {
+                src,
+                rel,
+                dst,
+                key,
+                value,
+            } => {
+                out.extend_from_slice(&src.to_le_bytes());
+                out.extend_from_slice(&rel.to_le_bytes());
+                out.extend_from_slice(&dst.to_le_bytes());
+                let key_bytes = key.as_bytes();
+                let key_len = u32::try_from(key_bytes.len())
+                    .unwrap_or_else(|_| panic!("key too long: {} bytes", key_bytes.len()));
+                out.extend_from_slice(&key_len.to_le_bytes());
+                out.extend_from_slice(key_bytes);
+                let value_bytes = value.encode();
+                out.extend_from_slice(&value_bytes);
+            }
+            WalRecord::RemoveNodeProperty { node, key } => {
+                out.extend_from_slice(&node.to_le_bytes());
+                let key_bytes = key.as_bytes();
+                let key_len = u32::try_from(key_bytes.len())
+                    .unwrap_or_else(|_| panic!("key too long: {} bytes", key_bytes.len()));
+                out.extend_from_slice(&key_len.to_le_bytes());
+                out.extend_from_slice(key_bytes);
+            }
+            WalRecord::RemoveEdgeProperty { src, rel, dst, key } => {
+                out.extend_from_slice(&src.to_le_bytes());
+                out.extend_from_slice(&rel.to_le_bytes());
+                out.extend_from_slice(&dst.to_le_bytes());
+                let key_bytes = key.as_bytes();
+                let key_len = u32::try_from(key_bytes.len())
+                    .unwrap_or_else(|_| panic!("key too long: {} bytes", key_bytes.len()));
+                out.extend_from_slice(&key_len.to_le_bytes());
+                out.extend_from_slice(key_bytes);
             }
         }
         out
@@ -218,6 +291,86 @@ impl WalRecord {
                 let up_to_txid = u64::from_le_bytes(payload[0..8].try_into().unwrap());
                 let epoch = u64::from_le_bytes(payload[8..16].try_into().unwrap());
                 Ok(WalRecord::Checkpoint { up_to_txid, epoch })
+            }
+            11 => {
+                // SetNodeProperty: [node: u32][key_len: u32][key: bytes][value: encoded]
+                if payload.len() < 4 + 4 {
+                    return Err(Error::WalProtocol("invalid SetNodeProperty payload length"));
+                }
+                let node = u32::from_le_bytes(payload[0..4].try_into().unwrap());
+                let key_len = u32::from_le_bytes(payload[4..8].try_into().unwrap()) as usize;
+                if payload.len() < 8 + key_len {
+                    return Err(Error::WalProtocol("invalid SetNodeProperty payload length"));
+                }
+                let key = String::from_utf8(payload[8..8 + key_len].to_vec())
+                    .map_err(|_| Error::WalProtocol("invalid UTF-8 in key"))?;
+                let value_bytes = &payload[8 + key_len..];
+                let value = PropertyValue::decode(value_bytes)
+                    .map_err(|_| Error::WalProtocol("property decode error"))?;
+                Ok(WalRecord::SetNodeProperty { node, key, value })
+            }
+            12 => {
+                // SetEdgeProperty: [src: u32][rel: u32][dst: u32][key_len: u32][key: bytes][value: encoded]
+                if payload.len() < 12 + 4 {
+                    return Err(Error::WalProtocol("invalid SetEdgeProperty payload length"));
+                }
+                let src = u32::from_le_bytes(payload[0..4].try_into().unwrap());
+                let rel = u32::from_le_bytes(payload[4..8].try_into().unwrap());
+                let dst = u32::from_le_bytes(payload[8..12].try_into().unwrap());
+                let key_len = u32::from_le_bytes(payload[12..16].try_into().unwrap()) as usize;
+                if payload.len() < 16 + key_len {
+                    return Err(Error::WalProtocol("invalid SetEdgeProperty payload length"));
+                }
+                let key = String::from_utf8(payload[16..16 + key_len].to_vec())
+                    .map_err(|_| Error::WalProtocol("invalid UTF-8 in key"))?;
+                let value_bytes = &payload[16 + key_len..];
+                let value = PropertyValue::decode(value_bytes)
+                    .map_err(|_| Error::WalProtocol("property decode error"))?;
+                Ok(WalRecord::SetEdgeProperty {
+                    src,
+                    rel,
+                    dst,
+                    key,
+                    value,
+                })
+            }
+            13 => {
+                // RemoveNodeProperty: [node: u32][key_len: u32][key: bytes]
+                if payload.len() < 4 + 4 {
+                    return Err(Error::WalProtocol(
+                        "invalid RemoveNodeProperty payload length",
+                    ));
+                }
+                let node = u32::from_le_bytes(payload[0..4].try_into().unwrap());
+                let key_len = u32::from_le_bytes(payload[4..8].try_into().unwrap()) as usize;
+                if payload.len() != 8 + key_len {
+                    return Err(Error::WalProtocol(
+                        "invalid RemoveNodeProperty payload length",
+                    ));
+                }
+                let key = String::from_utf8(payload[8..8 + key_len].to_vec())
+                    .map_err(|_| Error::WalProtocol("invalid UTF-8 in key"))?;
+                Ok(WalRecord::RemoveNodeProperty { node, key })
+            }
+            14 => {
+                // RemoveEdgeProperty: [src: u32][rel: u32][dst: u32][key_len: u32][key: bytes]
+                if payload.len() < 12 + 4 {
+                    return Err(Error::WalProtocol(
+                        "invalid RemoveEdgeProperty payload length",
+                    ));
+                }
+                let src = u32::from_le_bytes(payload[0..4].try_into().unwrap());
+                let rel = u32::from_le_bytes(payload[4..8].try_into().unwrap());
+                let dst = u32::from_le_bytes(payload[8..12].try_into().unwrap());
+                let key_len = u32::from_le_bytes(payload[12..16].try_into().unwrap()) as usize;
+                if payload.len() != 16 + key_len {
+                    return Err(Error::WalProtocol(
+                        "invalid RemoveEdgeProperty payload length",
+                    ));
+                }
+                let key = String::from_utf8(payload[16..16 + key_len].to_vec())
+                    .map_err(|_| Error::WalProtocol("invalid UTF-8 in key"))?;
+                Ok(WalRecord::RemoveEdgeProperty { src, rel, dst, key })
             }
             _ => Err(Error::WalProtocol("unknown record type")),
         }
