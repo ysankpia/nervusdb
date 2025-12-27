@@ -222,12 +222,15 @@ fn compile_m3_plan(query: Query) -> Result<Plan> {
         project.push(item.alias.clone().unwrap_or(name));
     }
 
+    // Don't use embedded limit when we have RETURN limit - we'll use separate Limit node
+    let limit = if ret.limit.is_some() { None } else { ret.limit };
+
     let mut plan = Plan::MatchOut {
         src_alias,
         rel,
         edge_alias,
         dst_alias,
-        limit: ret.limit,
+        limit,
         project: project.clone(),
         project_external: false,
     };
@@ -245,6 +248,53 @@ fn compile_m3_plan(query: Query) -> Result<Plan> {
         input: Box::new(plan),
         columns: project,
     };
+
+    // Add ORDER BY if present
+    if let Some(order_by) = &ret.order_by {
+        let items: Vec<(String, crate::ast::Direction)> = order_by
+            .items
+            .iter()
+            .map(|item| {
+                let col = match &item.expression {
+                    Expression::Variable(v) => v.clone(),
+                    _ => {
+                        return Err(Error::NotImplemented(
+                            "ORDER BY with non-variable expression in v2 M3",
+                        ));
+                    }
+                };
+                let direction = item.direction.clone();
+                Ok((col, direction))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        plan = Plan::OrderBy {
+            input: Box::new(plan),
+            items,
+        };
+    }
+
+    // Add SKIP if present
+    if let Some(skip) = ret.skip {
+        plan = Plan::Skip {
+            input: Box::new(plan),
+            skip: skip as u32,
+        };
+    }
+
+    // Add LIMIT if present (override embedded limit in MatchOut)
+    if let Some(limit) = ret.limit {
+        plan = Plan::Limit {
+            input: Box::new(plan),
+            limit: limit as u32,
+        };
+    }
+
+    // Add DISTINCT if present
+    if ret.distinct {
+        plan = Plan::Distinct {
+            input: Box::new(plan),
+        };
+    }
 
     Ok(plan)
 }
