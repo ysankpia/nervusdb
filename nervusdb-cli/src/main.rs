@@ -1,11 +1,15 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use nervusdb_core::query::executor::Value;
+use nervusdb_core::query::executor::Value as V1Value;
 use nervusdb_core::query::parser::Parser as CypherParser;
 use nervusdb_core::query::planner::QueryPlanner;
 use nervusdb_core::{Database, Options};
+use nervusdb_v2_api::GraphStore;
+use nervusdb_v2_query::Value as V2Value;
+use nervusdb_v2_query::prepare;
+use nervusdb_v2_storage::engine::GraphEngine;
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[derive(Parser)]
@@ -18,6 +22,18 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     Query(QueryArgs),
+    V2(V2Args),
+}
+
+#[derive(Parser)]
+struct V2Args {
+    #[command(subcommand)]
+    command: V2Commands,
+}
+
+#[derive(Subcommand)]
+enum V2Commands {
+    Query(V2QueryArgs),
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -47,13 +63,35 @@ struct QueryArgs {
     format: OutputFormat,
 }
 
-fn value_to_json(value: &Value) -> serde_json::Value {
+#[derive(Parser)]
+struct V2QueryArgs {
+    /// Database base path (v2 will derive `<path>.ndb`/`<path>.wal` if needed)
+    #[arg(long)]
+    db: PathBuf,
+
+    /// Cypher query string (v2 M3 supports only a minimal subset)
+    #[arg(long, conflicts_with = "file")]
+    cypher: Option<String>,
+
+    /// Read Cypher query from file
+    #[arg(long)]
+    file: Option<PathBuf>,
+
+    /// Parameters as a JSON object (M3: parsed but currently ignored by supported queries)
+    #[arg(long)]
+    params_json: Option<String>,
+
+    #[arg(long, value_enum, default_value = "ndjson")]
+    format: OutputFormat,
+}
+
+fn value_to_json_v1(value: &V1Value) -> serde_json::Value {
     match value {
-        Value::String(s) => serde_json::Value::String(s.clone()),
-        Value::Float(f) => serde_json::json!(f),
-        Value::Boolean(b) => serde_json::Value::Bool(*b),
-        Value::Null => serde_json::Value::Null,
-        Value::Vector(items) => serde_json::Value::Array(
+        V1Value::String(s) => serde_json::Value::String(s.clone()),
+        V1Value::Float(f) => serde_json::json!(f),
+        V1Value::Boolean(b) => serde_json::Value::Bool(*b),
+        V1Value::Null => serde_json::Value::Null,
+        V1Value::Vector(items) => serde_json::Value::Array(
             items
                 .iter()
                 .map(|f| {
@@ -63,8 +101,8 @@ fn value_to_json(value: &Value) -> serde_json::Value {
                 })
                 .collect(),
         ),
-        Value::Node(id) => serde_json::json!({ "node_id": id }),
-        Value::Relationship(triple) => serde_json::json!({
+        V1Value::Node(id) => serde_json::json!({ "node_id": id }),
+        V1Value::Relationship(triple) => serde_json::json!({
             "subject_id": triple.subject_id,
             "predicate_id": triple.predicate_id,
             "object_id": triple.object_id,
@@ -72,7 +110,19 @@ fn value_to_json(value: &Value) -> serde_json::Value {
     }
 }
 
-fn parse_params_json(raw: Option<String>) -> Result<HashMap<String, Value>, String> {
+fn value_to_json_v2(value: &V2Value) -> serde_json::Value {
+    match value {
+        V2Value::NodeId(iid) => serde_json::json!({ "internal_node_id": iid }),
+        V2Value::ExternalId(id) => serde_json::json!(id),
+        V2Value::EdgeKey(e) => serde_json::json!({ "src": e.src, "rel": e.rel, "dst": e.dst }),
+        V2Value::Int(i) => serde_json::json!(i),
+        V2Value::String(s) => serde_json::Value::String(s.clone()),
+        V2Value::Bool(b) => serde_json::Value::Bool(*b),
+        V2Value::Null => serde_json::Value::Null,
+    }
+}
+
+fn parse_params_json_v1(raw: Option<String>) -> Result<HashMap<String, V1Value>, String> {
     let Some(raw) = raw else {
         return Ok(HashMap::new());
     };
@@ -87,11 +137,40 @@ fn parse_params_json(raw: Option<String>) -> Result<HashMap<String, Value>, Stri
         .collect())
 }
 
-fn read_query(args: &QueryArgs) -> Result<String, String> {
-    if let Some(query) = args.cypher.as_ref() {
+fn parse_params_json_v2(raw: Option<String>) -> Result<nervusdb_v2_query::Params, String> {
+    let Some(raw) = raw else {
+        return Ok(nervusdb_v2_query::Params::new());
+    };
+    if raw.trim().is_empty() {
+        return Ok(nervusdb_v2_query::Params::new());
+    }
+    let parsed: HashMap<String, serde_json::Value> = serde_json::from_str(&raw)
+        .map_err(|e| format!("params_json must be a JSON object: {e}"))?;
+    let mut out = nervusdb_v2_query::Params::new();
+    for (k, v) in parsed {
+        let vv = match v {
+            serde_json::Value::Null => V2Value::Null,
+            serde_json::Value::Bool(b) => V2Value::Bool(b),
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    V2Value::Int(i)
+                } else {
+                    return Err("v2 params_json only supports integer numbers in M3".to_string());
+                }
+            }
+            serde_json::Value::String(s) => V2Value::String(s),
+            _ => return Err("v2 params_json only supports scalar values in M3".to_string()),
+        };
+        out.insert(k, vv);
+    }
+    Ok(out)
+}
+
+fn read_query(cypher: Option<&String>, file: Option<&PathBuf>) -> Result<String, String> {
+    if let Some(query) = cypher {
         return Ok(query.clone());
     }
-    let Some(path) = args.file.as_ref() else {
+    let Some(path) = file else {
         return Err("either --cypher or --file is required".to_string());
     };
     std::fs::read_to_string(path)
@@ -99,8 +178,8 @@ fn read_query(args: &QueryArgs) -> Result<String, String> {
 }
 
 fn run_query(args: QueryArgs) -> Result<(), String> {
-    let query = read_query(&args)?;
-    let params = parse_params_json(args.params_json)?;
+    let query = read_query(args.cypher.as_ref(), args.file.as_ref())?;
+    let params = parse_params_json_v1(args.params_json)?;
 
     #[allow(clippy::arc_with_non_send_sync)]
     let db = Arc::new(Database::open(Options::new(&args.db)).map_err(|e| e.to_string())?);
@@ -121,7 +200,44 @@ fn run_query(args: QueryArgs) -> Result<(), String> {
                 let record = item.map_err(|e| e.to_string())?;
                 let mut map = serde_json::Map::with_capacity(record.values.len());
                 for (k, v) in &record.values {
-                    map.insert(k.clone(), value_to_json(v));
+                    map.insert(k.clone(), value_to_json_v1(v));
+                }
+                serde_json::to_writer(&mut stdout, &serde_json::Value::Object(map))
+                    .map_err(|e| e.to_string())?;
+                stdout.write_all(b"\n").map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn derive_v2_paths(path: &Path) -> (PathBuf, PathBuf) {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("ndb") => (path.to_path_buf(), path.with_extension("wal")),
+        Some("wal") => (path.with_extension("ndb"), path.to_path_buf()),
+        _ => (path.with_extension("ndb"), path.with_extension("wal")),
+    }
+}
+
+fn run_v2_query(args: V2QueryArgs) -> Result<(), String> {
+    let query = read_query(args.cypher.as_ref(), args.file.as_ref())?;
+    let params = parse_params_json_v2(args.params_json)?;
+
+    let (ndb, wal) = derive_v2_paths(&args.db);
+    let engine = GraphEngine::open(&ndb, &wal).map_err(|e| e.to_string())?;
+    let snap = engine.snapshot();
+
+    let prepared = prepare(query.as_str()).map_err(|e| e.to_string())?;
+
+    let mut stdout = std::io::stdout().lock();
+    match args.format {
+        OutputFormat::Ndjson => {
+            for row in prepared.execute_streaming(&snap, &params) {
+                let row = row.map_err(|e| e.to_string())?;
+                let mut map = serde_json::Map::with_capacity(row.columns().len());
+                for (k, v) in row.columns() {
+                    map.insert(k.clone(), value_to_json_v2(v));
                 }
                 serde_json::to_writer(&mut stdout, &serde_json::Value::Object(map))
                     .map_err(|e| e.to_string())?;
@@ -137,6 +253,9 @@ fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
         Commands::Query(args) => run_query(args),
+        Commands::V2(args) => match args.command {
+            V2Commands::Query(args) => run_v2_query(args),
+        },
     };
 
     if let Err(message) = result {
