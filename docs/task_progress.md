@@ -51,4 +51,4 @@
 | T50 | v2 M3：Query Crate（复用 Parser/Planner 的落地） | L3 | P0 | Done | #51 | 新增 `nervusdb-v2-query`（独立于 v1）；务实策略：复制 v1 `query/{ast,lexer,parser,planner}`，先保证可编译与最小语法子集（设计文档见 `docs/design/T50-v2-m3-query-crate.md`） |
 | T51 | v2 M3：Executor MVP（基于 GraphSnapshot 的流式算子） | L3 | P0 | Done | #53 | 定义最小算子集（Scan/Expand/Filter/Project/Limit），Pull-based streaming；扩展 `GraphSnapshot` 支持 nodes/label/external/tombstone，并在 v2 storage 实现；新增最小 executor scaffold |
 | T52 | v2 M3：Query API（prepare/execute_streaming + 参数） | L3 | P0 | Done | #55 | `nervusdb-v2-query` 提供 `prepare/PreparedQuery::execute_streaming/Params`；支持 `RETURN 1` 与单跳 `MATCH (n)-[:<u32>]->(m) RETURN ... LIMIT ...`；附测试覆盖 |
-| T53 | v2 M3：Query Tests + CLI 验收路径 | L2 | P0 | WIP | feat/T53-v2-cli-and-tests | 建立最小“用户视角”验收：集成测试锁行为；CLI（或示例）能跑通并输出 NDJSON（对齐 v1 流式形态） |
+| T53 | v2 M3：Query Tests + CLI 验收路径 | L2 | P0 | Done | #57 | 增加 v2 query 端到端集成测试（v2-storage + v2-query）；CLI 新增 `nervusdb v2 query`，流式 NDJSON 输出 |
