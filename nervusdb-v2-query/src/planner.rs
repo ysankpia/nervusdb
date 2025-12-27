@@ -18,6 +18,7 @@ pub enum PhysicalPlan {
     NestedLoopJoin(NestedLoopJoinNode),
     LeftOuterJoin(LeftOuterJoinNode),
     Expand(ExpandNode),
+    ExpandVariable(ExpandVariableNode),
     Unwind(UnwindNode),
     Create(CreateNode),
     Set(SetNode),
@@ -91,6 +92,18 @@ pub struct ExpandNode {
     pub end_node_alias: String,
     pub direction: RelationshipDirection,
     pub rel_type: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExpandVariableNode {
+    pub input: Box<PhysicalPlan>,
+    pub start_node_alias: String,
+    pub rel_alias: String,
+    pub end_node_alias: String,
+    pub direction: RelationshipDirection,
+    pub rel_type: Option<String>,
+    pub min_hops: u32,
+    pub max_hops: Option<u32>, // None = unbounded
 }
 
 #[derive(Debug, Clone)]
@@ -232,14 +245,98 @@ impl QueryPlanner {
     }
 
     fn plan_pattern(&self, pattern: &Pattern) -> Result<PhysicalPlan, Error> {
-        // T50: minimal implementation to keep the crate compiling.
-        // T51 will replace this with GraphSnapshot-oriented operators.
-        let aliases = Self::extract_pattern_aliases(pattern);
-        let alias = aliases.first().cloned().unwrap_or_else(|| "_".to_string());
-        Ok(PhysicalPlan::Scan(ScanNode {
-            alias,
-            labels: Vec::new(),
-        }))
+        // Handle pattern elements (nodes and relationships)
+        // Pattern: (a)-[:TYPE]->(b) or (a)-[:TYPE*1..3]->(b)
+
+        if pattern.elements.is_empty() {
+            return Ok(PhysicalPlan::SingleRow(SingleRowNode));
+        }
+
+        // Process elements pairwise: Node -> Relationship -> Node -> ...
+        let mut current_plan: Option<PhysicalPlan> = None;
+        let mut elements = pattern.elements.iter().peekable();
+
+        while let Some(element) = elements.next() {
+            match element {
+                PathElement::Node(node) => {
+                    // If there's no relationship after this node, it's a standalone node scan
+                    if elements.peek().is_none() {
+                        let alias = node.variable.clone().unwrap_or_else(|| "_".to_string());
+                        current_plan = Some(PhysicalPlan::Scan(ScanNode {
+                            alias,
+                            labels: node.labels.clone(),
+                        }));
+                    }
+                    // If next is relationship, we'll handle it in Relationship case
+                }
+                PathElement::Relationship(rel) => {
+                    // Get the next node (must exist after relationship)
+                    let next_element = elements.next();
+                    let end_node = match next_element {
+                        Some(PathElement::Node(n)) => n,
+                        _ => {
+                            return Err(Error::NotImplemented(
+                                "malformed pattern: relationship must be followed by node",
+                            ));
+                        }
+                    };
+
+                    // Extract relationship info
+                    let rel_type = rel.types.first().cloned();
+                    let direction = rel.direction.clone();
+
+                    // Extract node aliases
+                    // We need to find the start node alias from previous state or from this relationship's context
+                    // For now, use placeholders that will be set during execution
+                    let start_node_alias =
+                        rel.variable.clone().unwrap_or_else(|| "_start".to_string());
+                    let rel_alias = rel.variable.clone().unwrap_or_else(|| "_rel".to_string());
+                    let end_node_alias = end_node
+                        .variable
+                        .clone()
+                        .unwrap_or_else(|| "_end".to_string());
+
+                    // Check for variable-length pattern
+                    let next_plan = if let Some(var_len) = &rel.variable_length {
+                        let min = var_len.min.unwrap_or(1);
+                        let max = var_len.max;
+                        PhysicalPlan::ExpandVariable(ExpandVariableNode {
+                            input: Box::new(
+                                current_plan
+                                    .clone()
+                                    .unwrap_or_else(|| PhysicalPlan::SingleRow(SingleRowNode)),
+                            ),
+                            start_node_alias: start_node_alias.clone(),
+                            rel_alias: rel_alias.clone(),
+                            end_node_alias: end_node_alias.clone(),
+                            direction: direction.clone(),
+                            rel_type,
+                            min_hops: min,
+                            max_hops: max,
+                        })
+                    } else {
+                        // Single-hop expand
+                        PhysicalPlan::Expand(ExpandNode {
+                            input: Box::new(
+                                current_plan
+                                    .clone()
+                                    .unwrap_or_else(|| PhysicalPlan::SingleRow(SingleRowNode)),
+                            ),
+                            start_node_alias: start_node_alias.clone(),
+                            rel_alias: rel_alias.clone(),
+                            end_node_alias: end_node_alias.clone(),
+                            direction: direction.clone(),
+                            rel_type,
+                        })
+                    };
+
+                    current_plan = Some(next_plan);
+                }
+            }
+        }
+
+        // If no elements produced a plan, return single row
+        Ok(current_plan.unwrap_or_else(|| PhysicalPlan::SingleRow(SingleRowNode)))
     }
 
     fn extract_pattern_aliases(pattern: &Pattern) -> Vec<String> {
@@ -293,6 +390,12 @@ impl QueryPlanner {
                 Self::collect_output_aliases(&n.right, out);
             }
             PhysicalPlan::Expand(n) => {
+                out.insert(n.start_node_alias.clone());
+                out.insert(n.rel_alias.clone());
+                out.insert(n.end_node_alias.clone());
+                Self::collect_output_aliases(&n.input, out);
+            }
+            PhysicalPlan::ExpandVariable(n) => {
                 out.insert(n.start_node_alias.clone());
                 out.insert(n.rel_alias.clone());
                 out.insert(n.end_node_alias.clone());
