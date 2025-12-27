@@ -1,10 +1,10 @@
-use crate::ast::{AggregateFunction, Expression, Literal, PathElement, Pattern};
+use crate::ast::{AggregateFunction, Direction, Expression, Literal, PathElement, Pattern};
 use crate::error::{Error, Result};
 pub use nervusdb_v2_api::LabelId;
 use nervusdb_v2_api::{EdgeKey, ExternalId, GraphSnapshot, InternalNodeId, RelTypeId};
 use std::hash::{Hash, Hasher};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum Value {
     NodeId(InternalNodeId),
     ExternalId(ExternalId),
@@ -128,6 +128,17 @@ pub enum Plan {
         group_by: Vec<String>,                        // Variables to group by
         aggregates: Vec<(AggregateFunction, String)>, // (Function, Alias)
     },
+    /// `ORDER BY` - sort results
+    OrderBy {
+        input: Box<Plan>,
+        items: Vec<(String, Direction)>, // (column_name, ASC|DESC)
+    },
+    /// `SKIP` - skip first n rows
+    Skip { input: Box<Plan>, skip: u32 },
+    /// `LIMIT` - limit result count
+    Limit { input: Box<Plan>, limit: u32 },
+    /// `RETURN DISTINCT` - deduplicate results
+    Distinct { input: Box<Plan> },
     /// `CREATE (n)-[:rel]->(m)` - create pattern
     Create { pattern: Pattern },
     /// `DELETE` - delete nodes/edges (with input plan for variable resolution)
@@ -212,6 +223,73 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
         } => {
             let input_iter = execute_plan(snapshot, input, params);
             execute_aggregate(input_iter, group_by.clone(), aggregates.clone())
+        }
+        Plan::OrderBy { input, items } => {
+            let input_iter = execute_plan(snapshot, input, params);
+            let rows: Vec<Result<Row>> = input_iter.collect();
+            let mut sortable: Vec<(Result<Row>, Vec<(Value, Direction)>)> = rows
+                .into_iter()
+                .map(|row| {
+                    let sort_keys: Vec<(Value, Direction)> = items
+                        .iter()
+                        .map(|(col, dir)| {
+                            let val = row
+                                .as_ref()
+                                .ok()
+                                .and_then(|r| r.cols.iter().find(|(n, _)| n == col))
+                                .map(|(_, v)| v.clone())
+                                .unwrap_or(Value::Null);
+                            (val, dir.clone())
+                        })
+                        .collect();
+                    (row, sort_keys)
+                })
+                .collect();
+
+            sortable.sort_by(|a, b| {
+                for ((val_a, dir_a), (val_b, _)) in a.1.iter().zip(b.1.iter()) {
+                    match val_a.partial_cmp(val_b) {
+                        Some(std::cmp::Ordering::Equal) => continue,
+                        Some(order) => {
+                            return if *dir_a == Direction::Ascending {
+                                order
+                            } else {
+                                order.reverse()
+                            };
+                        }
+                        None => return std::cmp::Ordering::Equal,
+                    }
+                }
+                std::cmp::Ordering::Equal
+            });
+
+            Box::new(sortable.into_iter().map(|(row, _)| row))
+        }
+        Plan::Skip { input, skip } => {
+            let input_iter = execute_plan(snapshot, input, params);
+            Box::new(input_iter.skip(*skip as usize))
+        }
+        Plan::Limit { input, limit } => {
+            let input_iter = execute_plan(snapshot, input, params);
+            Box::new(input_iter.take(*limit as usize))
+        }
+        Plan::Distinct { input } => {
+            let input_iter = execute_plan(snapshot, input, params);
+            let mut seen = std::collections::HashSet::new();
+            Box::new(input_iter.filter(move |result| {
+                if let Ok(row) = result {
+                    let key = row
+                        .columns()
+                        .iter()
+                        .map(|(_, v)| format!("{:?}", v))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    if seen.insert(key) {
+                        return true;
+                    }
+                }
+                false
+            }))
         }
         Plan::Create { pattern: _ } => {
             // CREATE should be executed via execute_write, not execute_plan
