@@ -208,9 +208,7 @@ impl TokenParser {
         let expression = self.parse_expression()?;
 
         // Parse alias: `AS foo` or bare identifier after expression.
-        let alias = if self.match_token(&TokenType::As) {
-            Some(self.parse_identifier("RETURN alias")?)
-        } else if self.peek_is_identifier() {
+        let alias = if self.match_token(&TokenType::As) || self.peek_is_identifier() {
             Some(self.parse_identifier("RETURN alias")?)
         } else {
             None

@@ -48,7 +48,7 @@
 | T47 | v2 Query ↔ Storage 边界 | L3 | P0 | Done | feat/T47-v2-api-boundary | 新增 `nervusdb-v2-api` 定义 `GraphStore/GraphSnapshot` streaming 契约；`nervusdb-v2-storage::GraphEngine` 实现该 trait 并补测试 |
 | T48 | v2 Benchmarks & Perf Gate | L2 | P1 | Done | feat/T48-v2-bench-perf-gate | 新增 `bench_v2`（insert + neighbors hot/cold + M1/M2 对比）与 `docs/perf/V2_BENCH.md`；提供 `scripts/v2_bench.sh` 便捷落盘 |
 | T49 | v2 Crash Gate | L3 | P1 | Done | feat/T49-v2-crash-gate | 新增 `nervusdb-v2-crash-test`（driver/writer/verify）+ `crash-gate-v2.yml`（PR 小跑/定时大跑），验证 manifest/segment 与邻接一致性 |
-| T50 | v2 M3：Query Crate（复用 Parser/Planner 的落地） | L3 | P0 | WIP | feat/T50-v2-query-crate | 新增 `nervusdb-v2-query`（独立于 v1）；务实策略：复制 v1 `query/{ast,lexer,parser,planner}`，先保证可编译与最小语法子集（设计文档见 `docs/design/T50-v2-m3-query-crate.md`） |
+| T50 | v2 M3：Query Crate（复用 Parser/Planner 的落地） | L3 | P0 | Done | #51 | 新增 `nervusdb-v2-query`（独立于 v1）；务实策略：复制 v1 `query/{ast,lexer,parser,planner}`，先保证可编译与最小语法子集（设计文档见 `docs/design/T50-v2-m3-query-crate.md`） |
 | T51 | v2 M3：Executor MVP（基于 GraphSnapshot 的流式算子） | L3 | P0 | Plan | docs/T51-v2-m3-executor-mvp | 定义最小算子集（Scan/Expand/Filter/Project/Limit），Pull-based streaming；必要时扩展 `nervusdb-v2-api` 的 snapshot 能力（node scan / id resolve） |
 | T52 | v2 M3：Query API（prepare/execute_streaming + 参数） | L3 | P0 | Plan | docs/T52-v2-m3-query-api | 对外提供稳定入口：执行 Cypher 最小子集并流式返回行；参数/错误/结果列类型明确，供 CLI/绑定复用 |
 | T53 | v2 M3：Query Tests + CLI 验收路径 | L2 | P0 | Plan | docs/T53-v2-m3-query-tests | 建立最小“用户视角”验收：集成测试锁行为；CLI（或示例）能跑通并输出 NDJSON（对齐 v1 流式形态） |

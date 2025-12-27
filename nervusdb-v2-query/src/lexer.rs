@@ -287,11 +287,11 @@ impl<'a> Lexer<'a> {
     fn skip_block_comment(&mut self) {
         self.advance(); // consume '*'
         while let Some(char) = self.advance() {
-            if char == '*' {
-                if let Some(&'/') = self.chars.peek() {
-                    self.advance();
-                    break;
-                }
+            if char == '*'
+                && let Some(&'/') = self.chars.peek()
+            {
+                self.advance();
+                break;
             }
         }
     }
