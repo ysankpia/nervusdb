@@ -32,9 +32,9 @@ impl PreparedQuery {
     pub fn execute_streaming<'a, S: GraphSnapshot + 'a>(
         &'a self,
         snapshot: &'a S,
-        _params: &'a Params,
+        params: &'a Params,
     ) -> impl Iterator<Item = Result<Row>> + 'a {
-        execute_plan(snapshot, &self.plan)
+        execute_plan(snapshot, &self.plan, params)
     }
 }
 
@@ -47,15 +47,16 @@ pub fn prepare(cypher: &str) -> Result<PreparedQuery> {
 fn compile_m3_plan(query: Query) -> Result<Plan> {
     // Supported shapes (M3):
     // - RETURN 1
-    // - MATCH (n)-[:<u32>]->(m) RETURN n,m [LIMIT k]
+    // - MATCH (n)-[:<u32>]->(m) [WHERE ...] RETURN n,m [LIMIT k]
     let mut match_clause = None;
+    let mut where_clause = None;
     let mut return_clause = None;
 
     for clause in query.clauses {
         match clause {
             Clause::Match(m) => match_clause = Some(m),
+            Clause::Where(w) => where_clause = Some(w),
             Clause::Return(r) => return_clause = Some(r),
-            Clause::Where(_) => return Err(Error::NotImplemented("WHERE in v2 M3")),
             Clause::With(_) => return Err(Error::NotImplemented("WITH in v2 M3")),
             Clause::Create(_) => return Err(Error::NotImplemented("CREATE in v2 M3")),
             Clause::Merge(_) => return Err(Error::NotImplemented("MERGE in v2 M3")),
@@ -139,13 +140,29 @@ fn compile_m3_plan(query: Query) -> Result<Plan> {
         project.push(item.alias.clone().unwrap_or(name));
     }
 
-    Ok(Plan::MatchOut {
+    let mut plan = Plan::MatchOut {
         src_alias,
         rel,
         edge_alias,
         dst_alias,
         limit: ret.limit,
-        project,
+        project: project.clone(),
         project_external: false,
-    })
+    };
+
+    // Add WHERE filter if present
+    if let Some(w) = where_clause {
+        plan = Plan::Filter {
+            input: Box::new(plan),
+            predicate: w.expression,
+        };
+    }
+
+    // Add projection after filtering (to preserve columns for WHERE evaluation)
+    plan = Plan::Project {
+        input: Box::new(plan),
+        columns: project,
+    };
+
+    Ok(plan)
 }

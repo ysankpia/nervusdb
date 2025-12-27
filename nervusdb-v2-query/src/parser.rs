@@ -524,38 +524,70 @@ impl TokenParser {
     fn parse_expression(&mut self) -> Result<Expression, Error> {
         // T50: compile gate only.
         // Keep the full expression parser in v1; v2 M3 executor decides the supported subset.
-        match &self.peek().token_type {
+
+        // Parse left-hand side (primary expression)
+        let left = match &self.peek().token_type {
             TokenType::Number(n) => {
                 let n = *n;
                 self.advance();
-                Ok(Expression::Literal(Literal::Number(n)))
+                Expression::Literal(Literal::Number(n))
             }
             TokenType::String(s) => {
                 let s = s.clone();
                 self.advance();
-                Ok(Expression::Literal(Literal::String(s)))
+                Expression::Literal(Literal::String(s))
             }
             TokenType::Boolean(b) => {
                 let b = *b;
                 self.advance();
-                Ok(Expression::Literal(Literal::Boolean(b)))
+                Expression::Literal(Literal::Boolean(b))
             }
             TokenType::Null => {
                 self.advance();
-                Ok(Expression::Literal(Literal::Null))
+                Expression::Literal(Literal::Null)
             }
             TokenType::Variable(name) => {
                 let name = name.clone();
                 self.advance();
-                Ok(Expression::Parameter(name))
+                Expression::Parameter(name)
             }
             TokenType::Identifier(name) => {
                 let name = name.clone();
                 self.advance();
-                Ok(Expression::Variable(name))
+                // Check for property access (e.g., `a.age`)
+                if self.check(&TokenType::Dot) {
+                    self.advance(); // consume the dot
+                    Expression::PropertyAccess(PropertyAccess {
+                        variable: name,
+                        property: self.parse_identifier("property name")?,
+                    })
+                } else {
+                    Expression::Variable(name)
+                }
             }
-            _ => Err(Error::NotImplemented("expression")),
-        }
+            _ => return Err(Error::NotImplemented("expression")),
+        };
+
+        // Check for binary operator
+        let operator = match &self.peek().token_type {
+            TokenType::Equals => BinaryOperator::Equals,
+            TokenType::NotEquals => BinaryOperator::NotEquals,
+            TokenType::LessThan => BinaryOperator::LessThan,
+            TokenType::LessEqual => BinaryOperator::LessEqual,
+            TokenType::GreaterThan => BinaryOperator::GreaterThan,
+            TokenType::GreaterEqual => BinaryOperator::GreaterEqual,
+            TokenType::And => BinaryOperator::And,
+            TokenType::Or => BinaryOperator::Or,
+            _ => return Ok(left), // No binary operator, return primary expression
+        };
+
+        self.advance(); // consume operator
+        let right = self.parse_expression()?;
+        Ok(Expression::Binary(Box::new(BinaryExpression {
+            left,
+            operator,
+            right,
+        })))
     }
 
     fn parse_braced_subquery(&mut self) -> Result<Query, Error> {

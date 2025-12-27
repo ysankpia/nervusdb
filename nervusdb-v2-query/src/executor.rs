@@ -70,14 +70,27 @@ pub enum Plan {
         edge_alias: Option<String>,
         dst_alias: String,
         limit: Option<u32>,
+        // Note: project is kept for backward compatibility but projection
+        // should happen after filtering (see Plan::Project)
         project: Vec<String>,
         project_external: bool,
+    },
+    /// `MATCH ... WHERE ... RETURN ...` (with filter)
+    Filter {
+        input: Box<Plan>,
+        predicate: crate::ast::Expression,
+    },
+    /// Project columns from input row (runs after filtering)
+    Project {
+        input: Box<Plan>,
+        columns: Vec<String>,
     },
 }
 
 pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
     snapshot: &'a S,
     plan: &'a Plan,
+    params: &'a crate::query_api::Params,
 ) -> Box<dyn Iterator<Item = Result<Row>> + 'a> {
     match plan {
         Plan::ReturnOne => Box::new(std::iter::once(Ok(Row::default().with("1", Value::Int(1))))),
@@ -87,23 +100,32 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
             edge_alias,
             dst_alias,
             limit,
-            project,
-            project_external,
+            project: _,
+            project_external: _,
         } => {
-            let base = MatchOutIter::new(
-                snapshot,
-                src_alias,
-                *rel,
-                edge_alias.as_deref(),
-                dst_alias,
-                project,
-                *project_external,
-            );
+            let base =
+                MatchOutIter::new(snapshot, src_alias, *rel, edge_alias.as_deref(), dst_alias);
             if let Some(n) = limit {
                 Box::new(base.take(*n as usize))
             } else {
                 Box::new(base)
             }
+        }
+        Plan::Filter { input, predicate } => {
+            let input_iter = execute_plan(snapshot, input, params);
+            Box::new(input_iter.filter(move |result| {
+                match result {
+                    Ok(row) => {
+                        crate::evaluator::evaluate_expression_bool(predicate, row, snapshot, params)
+                    }
+                    Err(_) => true, // Pass through errors
+                }
+            }))
+        }
+        Plan::Project { input, columns } => {
+            let input_iter = execute_plan(snapshot, input, params);
+            let names: Vec<&str> = columns.iter().map(|s| s.as_str()).collect();
+            Box::new(input_iter.map(move |result| result.map(|row| row.project(&names))))
         }
     }
 }
@@ -114,9 +136,6 @@ struct MatchOutIter<'a, S: GraphSnapshot + 'a> {
     rel: Option<RelTypeId>,
     edge_alias: Option<&'a str>,
     dst_alias: &'a str,
-    project: &'a [String],
-    project_names: Vec<&'a str>,
-    project_external: bool,
     node_iter: Box<dyn Iterator<Item = InternalNodeId> + 'a>,
     cur_src: Option<InternalNodeId>,
     cur_edges: Option<S::Neighbors<'a>>,
@@ -129,8 +148,6 @@ impl<'a, S: GraphSnapshot + 'a> MatchOutIter<'a, S> {
         rel: Option<RelTypeId>,
         edge_alias: Option<&'a str>,
         dst_alias: &'a str,
-        project: &'a [String],
-        project_external: bool,
     ) -> Self {
         Self {
             snapshot,
@@ -138,9 +155,6 @@ impl<'a, S: GraphSnapshot + 'a> MatchOutIter<'a, S> {
             rel,
             edge_alias,
             dst_alias,
-            project,
-            project_names: project.iter().map(|s| s.as_str()).collect(),
-            project_external,
             node_iter: snapshot.nodes(),
             cur_src: None,
             cur_edges: None,
@@ -178,25 +192,8 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutIter<'a, S> {
                 }
                 row = row.with(self.dst_alias, Value::NodeId(edge.dst));
 
-                if self.project_external {
-                    if let Some(ext) = self.snapshot.resolve_external(edge.src) {
-                        row = row.with(
-                            format!("{}/external", self.src_alias),
-                            Value::ExternalId(ext),
-                        );
-                    }
-                    if let Some(ext) = self.snapshot.resolve_external(edge.dst) {
-                        row = row.with(
-                            format!("{}/external", self.dst_alias),
-                            Value::ExternalId(ext),
-                        );
-                    }
-                }
-
-                if self.project.is_empty() {
-                    return Some(Ok(row));
-                }
-                return Some(Ok(row.project(&self.project_names)));
+                // Always return full row - projection happens in Plan::Project
+                return Some(Ok(row));
             }
 
             self.cur_edges = None;
