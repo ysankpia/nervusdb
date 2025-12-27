@@ -8,5 +8,6 @@ members = [
 , "nervusdb-v2-storage"
 , "nervusdb-v2"
 , "nervusdb-v2-api"
+, "nervusdb-v2-query"
 ]
 resolver = "2"
