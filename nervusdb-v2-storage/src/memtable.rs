@@ -83,6 +83,38 @@ impl MemTable {
         }
     }
 
+    /// Get all node properties for WAL writing.
+    pub fn node_properties_for_wal(&self) -> Vec<(InternalNodeId, String, PropertyValue)> {
+        self.node_properties
+            .iter()
+            .flat_map(|(node, props)| {
+                props
+                    .iter()
+                    .map(move |(key, value)| (*node, key.clone(), value.clone()))
+            })
+            .collect()
+    }
+
+    /// Get all edge properties for WAL writing.
+    pub fn edge_properties_for_wal(
+        &self,
+    ) -> Vec<(
+        InternalNodeId,
+        RelTypeId,
+        InternalNodeId,
+        String,
+        PropertyValue,
+    )> {
+        self.edge_properties
+            .iter()
+            .flat_map(|(edge, props)| {
+                props.iter().map(move |(key, value)| {
+                    (edge.src, edge.rel, edge.dst, key.clone(), value.clone())
+                })
+            })
+            .collect()
+    }
+
     pub fn freeze_into_run(self, txid: u64) -> L0Run {
         let mut edges_by_src: BTreeMap<InternalNodeId, Vec<EdgeKey>> = BTreeMap::new();
         for (src, edges) in self.out {

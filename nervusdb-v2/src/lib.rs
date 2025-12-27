@@ -5,6 +5,16 @@ use std::path::{Path, PathBuf};
 pub use nervusdb_v2_storage::idmap::{ExternalId, InternalNodeId, LabelId};
 pub use nervusdb_v2_storage::{Error, Result};
 
+/// Property value types (re-exported from API for convenience).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PropertyValue {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    String(String),
+}
+
 #[derive(Debug)]
 pub struct Db {
     engine: GraphEngine,
@@ -102,8 +112,61 @@ impl<'a> WriteTxn<'a> {
         self.inner.tombstone_edge(src, rel, dst);
     }
 
+    pub fn set_node_property(
+        &mut self,
+        node: InternalNodeId,
+        key: String,
+        value: PropertyValue,
+    ) -> Result<()> {
+        let storage_value = convert_to_storage_property_value(value);
+        self.inner.set_node_property(node, key, storage_value);
+        Ok(())
+    }
+
+    pub fn set_edge_property(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+        key: String,
+        value: PropertyValue,
+    ) -> Result<()> {
+        let storage_value = convert_to_storage_property_value(value);
+        self.inner
+            .set_edge_property(src, rel, dst, key, storage_value);
+        Ok(())
+    }
+
+    pub fn remove_node_property(&mut self, node: InternalNodeId, key: &str) -> Result<()> {
+        self.inner.remove_node_property(node, key);
+        Ok(())
+    }
+
+    pub fn remove_edge_property(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+        key: &str,
+    ) -> Result<()> {
+        self.inner.remove_edge_property(src, rel, dst, key);
+        Ok(())
+    }
+
     pub fn commit(self) -> Result<()> {
         self.inner.commit()
+    }
+}
+
+fn convert_to_storage_property_value(
+    v: PropertyValue,
+) -> nervusdb_v2_storage::property::PropertyValue {
+    match v {
+        PropertyValue::Null => nervusdb_v2_storage::property::PropertyValue::Null,
+        PropertyValue::Bool(b) => nervusdb_v2_storage::property::PropertyValue::Bool(b),
+        PropertyValue::Int(i) => nervusdb_v2_storage::property::PropertyValue::Int(i),
+        PropertyValue::Float(f) => nervusdb_v2_storage::property::PropertyValue::Float(f),
+        PropertyValue::String(s) => nervusdb_v2_storage::property::PropertyValue::String(s),
     }
 }
 

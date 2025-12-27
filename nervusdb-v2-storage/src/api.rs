@@ -2,9 +2,10 @@ use crate::engine::GraphEngine;
 use crate::idmap::I2eRecord;
 use crate::snapshot;
 use nervusdb_v2_api::{
-    EdgeKey, ExternalId, GraphSnapshot, GraphStore, InternalNodeId, LabelId, RelTypeId,
+    EdgeKey, ExternalId, GraphSnapshot, GraphStore, InternalNodeId, LabelId, PropertyValue,
+    RelTypeId,
 };
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -82,5 +83,55 @@ impl GraphSnapshot for StorageSnapshot {
 
     fn is_tombstoned_node(&self, iid: InternalNodeId) -> bool {
         self.tombstoned_nodes.contains(&iid)
+    }
+
+    fn node_property(&self, iid: InternalNodeId, key: &str) -> Option<PropertyValue> {
+        self.inner
+            .node_property(iid, key)
+            .map(|v| convert_property_value(&v))
+    }
+
+    fn edge_property(&self, edge: EdgeKey, key: &str) -> Option<PropertyValue> {
+        let snapshot_edge = snapshot::EdgeKey {
+            src: edge.src,
+            rel: edge.rel,
+            dst: edge.dst,
+        };
+        self.inner
+            .edge_property(snapshot_edge, key)
+            .map(|v| convert_property_value(&v))
+    }
+
+    fn node_properties(&self, iid: InternalNodeId) -> Option<BTreeMap<String, PropertyValue>> {
+        self.inner.node_properties(iid).map(|props| {
+            props
+                .into_iter()
+                .map(|(k, v)| (k, convert_property_value(&v)))
+                .collect()
+        })
+    }
+
+    fn edge_properties(&self, edge: EdgeKey) -> Option<BTreeMap<String, PropertyValue>> {
+        let snapshot_edge = snapshot::EdgeKey {
+            src: edge.src,
+            rel: edge.rel,
+            dst: edge.dst,
+        };
+        self.inner.edge_properties(snapshot_edge).map(|props| {
+            props
+                .into_iter()
+                .map(|(k, v)| (k, convert_property_value(&v)))
+                .collect()
+        })
+    }
+}
+
+fn convert_property_value(v: &crate::property::PropertyValue) -> PropertyValue {
+    match v {
+        crate::property::PropertyValue::Null => PropertyValue::Null,
+        crate::property::PropertyValue::Bool(b) => PropertyValue::Bool(*b),
+        crate::property::PropertyValue::Int(i) => PropertyValue::Int(*i),
+        crate::property::PropertyValue::Float(f) => PropertyValue::Float(*f),
+        crate::property::PropertyValue::String(s) => PropertyValue::String(s.clone()),
     }
 }

@@ -120,6 +120,63 @@ impl Snapshot {
     pub(crate) fn runs(&self) -> &Arc<Vec<Arc<L0Run>>> {
         &self.runs
     }
+
+    /// Get node property from the most recent run that has it.
+    pub(crate) fn node_property(&self, node: InternalNodeId, key: &str) -> Option<PropertyValue> {
+        // Search from newest to oldest runs
+        for run in self.runs.iter() {
+            if let Some(value) = run.node_property(node, key) {
+                return Some(value.clone());
+            }
+        }
+        None
+    }
+
+    /// Get edge property from the most recent run that has it.
+    pub(crate) fn edge_property(&self, edge: EdgeKey, key: &str) -> Option<PropertyValue> {
+        // Search from newest to oldest runs
+        for run in self.runs.iter() {
+            if let Some(value) = run.edge_property(edge, key) {
+                return Some(value.clone());
+            }
+        }
+        None
+    }
+
+    /// Get all node properties merged from all runs (newest takes precedence).
+    pub(crate) fn node_properties(
+        &self,
+        node: InternalNodeId,
+    ) -> Option<BTreeMap<String, PropertyValue>> {
+        let mut merged = BTreeMap::new();
+        // Iterate from oldest to newest, so newer values overwrite older ones
+        for run in self.runs.iter().rev() {
+            if let Some(props) = run.node_properties(node) {
+                merged.extend(props.iter().map(|(k, v)| (k.clone(), v.clone())));
+            }
+        }
+        if merged.is_empty() {
+            None
+        } else {
+            Some(merged)
+        }
+    }
+
+    /// Get all edge properties merged from all runs (newest takes precedence).
+    pub(crate) fn edge_properties(&self, edge: EdgeKey) -> Option<BTreeMap<String, PropertyValue>> {
+        let mut merged = BTreeMap::new();
+        // Iterate from oldest to newest, so newer values overwrite older ones
+        for run in self.runs.iter().rev() {
+            if let Some(props) = run.edge_properties(edge) {
+                merged.extend(props.iter().map(|(k, v)| (k.clone(), v.clone())));
+            }
+        }
+        if merged.is_empty() {
+            None
+        } else {
+            Some(merged)
+        }
+    }
 }
 
 pub struct NeighborsIter {

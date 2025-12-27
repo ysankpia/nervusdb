@@ -319,7 +319,45 @@ impl<'a> WriteTxn<'a> {
         self.memtable.tombstone_edge(src, rel, dst);
     }
 
+    pub fn set_node_property(
+        &mut self,
+        node: InternalNodeId,
+        key: String,
+        value: crate::property::PropertyValue,
+    ) {
+        self.memtable.set_node_property(node, key, value);
+    }
+
+    pub fn set_edge_property(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+        key: String,
+        value: crate::property::PropertyValue,
+    ) {
+        self.memtable.set_edge_property(src, rel, dst, key, value);
+    }
+
+    pub fn remove_node_property(&mut self, node: InternalNodeId, key: &str) {
+        self.memtable.remove_node_property(node, key);
+    }
+
+    pub fn remove_edge_property(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+        key: &str,
+    ) {
+        self.memtable.remove_edge_property(src, rel, dst, key);
+    }
+
     pub fn commit(self) -> Result<()> {
+        // Extract property data before freezing (since freeze consumes memtable)
+        let node_properties = self.memtable.node_properties_for_wal();
+        let edge_properties = self.memtable.edge_properties_for_wal();
+
         let run = self.memtable.freeze_into_run(self.txid);
 
         // 1) Append WAL and fsync (durability Full by default).
@@ -350,6 +388,20 @@ impl<'a> WriteTxn<'a> {
                     src: edge.src,
                     rel: edge.rel,
                     dst: edge.dst,
+                })?;
+            }
+
+            // Write property operations
+            for (node, key, value) in node_properties {
+                wal.append(&WalRecord::SetNodeProperty { node, key, value })?;
+            }
+            for (src, rel, dst, key, value) in edge_properties {
+                wal.append(&WalRecord::SetEdgeProperty {
+                    src,
+                    rel,
+                    dst,
+                    key,
+                    value,
                 })?;
             }
 
