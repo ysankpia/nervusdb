@@ -1,3 +1,5 @@
+use nervusdb_v2_api::GraphStore;
+use nervusdb_v2_storage::api::StorageSnapshot;
 use nervusdb_v2_storage::engine::GraphEngine;
 use nervusdb_v2_storage::snapshot::{EdgeKey, RelTypeId, Snapshot};
 use std::path::{Path, PathBuf};
@@ -92,6 +94,14 @@ impl Db {
         ReadTxn {
             snapshot: self.engine.begin_read(),
         }
+    }
+
+    /// Creates a snapshot for query execution.
+    ///
+    /// Returns a `StorageSnapshot` that implements `GraphSnapshot` trait,
+    /// suitable for use with the query engine.
+    pub fn snapshot(&self) -> StorageSnapshot {
+        self.engine.snapshot()
     }
 
     /// Begins a write transaction.

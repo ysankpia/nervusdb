@@ -23,3 +23,6 @@ bindings = "uniffi"
 manifest-path = "../../uniffi/nervusdb-uniffi/Cargo.toml"
 python-source = "python"
 python-packages = ["nervusdb"]
+
+[tool.maturin.dependencies]
+features = ["v2"]

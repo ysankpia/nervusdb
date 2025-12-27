@@ -1247,6 +1247,8 @@ name = "nervusdb-uniffi"
 version = "1.0.3"
 dependencies = [
  "nervusdb-core",
+ "nervusdb-v2",
+ "nervusdb-v2-query",
  "serde_json",
  "uniffi",
 ]
@@ -1255,6 +1257,7 @@ dependencies = [
 name = "nervusdb-v2"
 version = "0.1.0"
 dependencies = [
+ "nervusdb-v2-api",
  "nervusdb-v2-storage",
  "tempfile",
 ]
