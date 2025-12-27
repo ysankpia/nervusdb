@@ -3,13 +3,14 @@ use nervusdb_core::query::executor::Value as V1Value;
 use nervusdb_core::query::parser::Parser as CypherParser;
 use nervusdb_core::query::planner::QueryPlanner;
 use nervusdb_core::{Database, Options};
+use nervusdb_v2::Db;
 use nervusdb_v2_api::GraphStore;
 use nervusdb_v2_query::Value as V2Value;
 use nervusdb_v2_query::prepare;
 use nervusdb_v2_storage::engine::GraphEngine;
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Parser)]
@@ -34,6 +35,7 @@ struct V2Args {
 #[derive(Subcommand)]
 enum V2Commands {
     Query(V2QueryArgs),
+    Write(V2WriteArgs),
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -85,6 +87,25 @@ struct V2QueryArgs {
     format: OutputFormat,
 }
 
+#[derive(Parser)]
+struct V2WriteArgs {
+    /// Database base path (v2 will derive `<path>.ndb`/`<path>.wal` if needed)
+    #[arg(long)]
+    db: PathBuf,
+
+    /// Cypher CREATE or DELETE query string (v2 M3)
+    #[arg(long, conflicts_with = "file")]
+    cypher: Option<String>,
+
+    /// Read Cypher query from file
+    #[arg(long)]
+    file: Option<PathBuf>,
+
+    /// Parameters as a JSON object (M3: supports scalar values)
+    #[arg(long)]
+    params_json: Option<String>,
+}
+
 fn value_to_json_v1(value: &V1Value) -> serde_json::Value {
     match value {
         V1Value::String(s) => serde_json::Value::String(s.clone()),
@@ -116,6 +137,7 @@ fn value_to_json_v2(value: &V2Value) -> serde_json::Value {
         V2Value::ExternalId(id) => serde_json::json!(id),
         V2Value::EdgeKey(e) => serde_json::json!({ "src": e.src, "rel": e.rel, "dst": e.dst }),
         V2Value::Int(i) => serde_json::json!(i),
+        V2Value::Float(f) => serde_json::json!(f),
         V2Value::String(s) => serde_json::Value::String(s.clone()),
         V2Value::Bool(b) => serde_json::Value::Bool(*b),
         V2Value::Null => serde_json::Value::Null,
@@ -212,28 +234,20 @@ fn run_query(args: QueryArgs) -> Result<(), String> {
     Ok(())
 }
 
-fn derive_v2_paths(path: &Path) -> (PathBuf, PathBuf) {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("ndb") => (path.to_path_buf(), path.with_extension("wal")),
-        Some("wal") => (path.with_extension("ndb"), path.to_path_buf()),
-        _ => (path.with_extension("ndb"), path.with_extension("wal")),
-    }
-}
-
 fn run_v2_query(args: V2QueryArgs) -> Result<(), String> {
     let query = read_query(args.cypher.as_ref(), args.file.as_ref())?;
     let params = parse_params_json_v2(args.params_json)?;
 
-    let (ndb, wal) = derive_v2_paths(&args.db);
-    let engine = GraphEngine::open(&ndb, &wal).map_err(|e| e.to_string())?;
-    let snap = engine.snapshot();
+    let db = Db::open(&args.db).map_err(|e| e.to_string())?;
+    let engine = GraphEngine::open(db.ndb_path(), db.wal_path()).map_err(|e| e.to_string())?;
+    let graph_snap = engine.snapshot();
 
     let prepared = prepare(query.as_str()).map_err(|e| e.to_string())?;
 
     let mut stdout = std::io::stdout().lock();
     match args.format {
         OutputFormat::Ndjson => {
-            for row in prepared.execute_streaming(&snap, &params) {
+            for row in prepared.execute_streaming(&graph_snap, &params) {
                 let row = row.map_err(|e| e.to_string())?;
                 let mut map = serde_json::Map::with_capacity(row.columns().len());
                 for (k, v) in row.columns() {
@@ -249,12 +263,35 @@ fn run_v2_query(args: V2QueryArgs) -> Result<(), String> {
     Ok(())
 }
 
+fn run_v2_write(args: V2WriteArgs) -> Result<(), String> {
+    let query = read_query(args.cypher.as_ref(), args.file.as_ref())?;
+    let params = parse_params_json_v2(args.params_json)?;
+
+    let db = Db::open(&args.db).map_err(|e| e.to_string())?;
+    let engine = GraphEngine::open(db.ndb_path(), db.wal_path()).map_err(|e| e.to_string())?;
+    let graph_snap = engine.snapshot();
+
+    let prepared = prepare(query.as_str()).map_err(|e| e.to_string())?;
+
+    let mut txn = db.begin_write();
+    let count = prepared
+        .execute_write(&graph_snap, &mut txn, &params)
+        .map_err(|e| e.to_string())?;
+    txn.commit().map_err(|e| e.to_string())?;
+
+    // Output the count as JSON
+    println!(r#"{{"count":{}}}"#, count);
+
+    Ok(())
+}
+
 fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
         Commands::Query(args) => run_query(args),
         Commands::V2(args) => match args.command {
             V2Commands::Query(args) => run_v2_query(args),
+            V2Commands::Write(args) => run_v2_write(args),
         },
     };
 

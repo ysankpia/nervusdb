@@ -8,7 +8,7 @@ pub mod planner;
 pub mod query_api;
 
 pub use error::{Error, Result};
-pub use executor::{Row, Value};
+pub use executor::{Row, Value, WriteableGraph};
 pub use query_api::{Params, PreparedQuery, prepare};
 
 pub fn parse(cypher: &str) -> Result<ast::Query> {
