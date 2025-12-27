@@ -108,10 +108,25 @@
 
 > 这不是现在就做完，但这是“什么时候是个头”的唯一答案：达到它就停。
 
-- [ ] 稳定的公开 Rust API（`nervusdb-v2` facade + `nervusdb-v2-query`）
-- [ ] Cypher：至少支持基础读写闭环（CREATE/MATCH/WHERE/RETURN/LIMIT）——每项必须有测试
-- [ ] 数据一致性：crash gate、恢复语义、tombstone/compaction 语义都被测试锁死
-- [ ] 性能：提供基准与对比方法（不需要赢所有人，但要可重复、可解释）
+- [x] 稳定的公开 Rust API（`nervusdb-v2` facade + `nervusdb-v2-query`）
+- [x] Cypher：至少支持基础读写闭环（CREATE/MATCH/WHERE/RETURN/LIMIT）——每项必须有测试
+- [x] 数据一致性：crash gate、恢复语义、tombstone/compaction 语义都被测试锁死
+- [x] 性能：提供基准与对比方法（不需要赢所有人，但要可重复、可解释）
+
+**v2.0.0 已完成功能**：
+
+- `RETURN 1`（常量返回）
+- 单跳匹配：`MATCH (n)-[:<u32>]->(m) RETURN n, m LIMIT k`
+- WHERE 过滤：`MATCH (a)-[:1]->(b) WHERE a.name = 'Alice' RETURN a, b`
+- CREATE：`CREATE (n)` / `CREATE (n {k: v})` / `CREATE (a)-[:1]->(b)`
+- DELETE / DETACH DELETE：`MATCH (a)-[:1]->(b) DELETE a` / `DETACH DELETE a`
+
+**测试覆盖**：
+- 11 个 CREATE/DELETE 测试
+- 8 个 tombstone 语义测试
+- 9 个 LIMIT 边界测试
+- 集成测试端到端通过
+- crash gate 通过
 
 ## 7. 待确认项（需要你拍板，不拍板我就按默认执行）
 
