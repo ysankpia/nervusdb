@@ -9,6 +9,24 @@ use std::thread::JoinHandle;
 
 uniffi::include_scaffolding!("nervusdb");
 
+#[cfg(not(feature = "v2"))]
+#[derive(Debug)]
+pub enum V2Error {
+    Other { message: String },
+}
+
+#[cfg(not(feature = "v2"))]
+impl std::fmt::Display for V2Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            V2Error::Other { message } => write!(f, "{message}"),
+        }
+    }
+}
+
+#[cfg(not(feature = "v2"))]
+impl std::error::Error for V2Error {}
+
 #[derive(Debug)]
 pub enum NervusError {
     Io { message: String },

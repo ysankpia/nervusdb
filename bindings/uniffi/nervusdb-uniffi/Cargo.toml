@@ -9,8 +9,15 @@ description = "UniFFI bindings for NervusDB (C ABI Statement contract mirrored)"
 name = "nervusdb_uniffi"
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = ["v1"]
+v1 = []
+v2 = ["nervusdb-v2", "nervusdb-v2-query"]
+
 [dependencies]
 nervusdb-core = { path = "../../../nervusdb-core" }
+nervusdb-v2 = { path = "../../../nervusdb-v2", optional = true, default-features = false }
+nervusdb-v2-query = { path = "../../../nervusdb-v2-query", optional = true, default-features = false }
 serde_json = "1"
 uniffi = "0.28"
 
