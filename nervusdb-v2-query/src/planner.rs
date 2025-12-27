@@ -304,7 +304,7 @@ impl QueryPlanner {
                             input: Box::new(
                                 current_plan
                                     .clone()
-                                    .unwrap_or_else(|| PhysicalPlan::SingleRow(SingleRowNode)),
+                                    .unwrap_or(PhysicalPlan::SingleRow(SingleRowNode)),
                             ),
                             start_node_alias: start_node_alias.clone(),
                             rel_alias: rel_alias.clone(),
@@ -320,7 +320,7 @@ impl QueryPlanner {
                             input: Box::new(
                                 current_plan
                                     .clone()
-                                    .unwrap_or_else(|| PhysicalPlan::SingleRow(SingleRowNode)),
+                                    .unwrap_or(PhysicalPlan::SingleRow(SingleRowNode)),
                             ),
                             start_node_alias: start_node_alias.clone(),
                             rel_alias: rel_alias.clone(),
@@ -336,7 +336,7 @@ impl QueryPlanner {
         }
 
         // If no elements produced a plan, return single row
-        Ok(current_plan.unwrap_or_else(|| PhysicalPlan::SingleRow(SingleRowNode)))
+        Ok(current_plan.unwrap_or(PhysicalPlan::SingleRow(SingleRowNode)))
     }
 
     fn extract_pattern_aliases(pattern: &Pattern) -> Vec<String> {

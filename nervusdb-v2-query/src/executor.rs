@@ -420,22 +420,22 @@ fn execute_delete<S: GraphSnapshot>(
             match expr {
                 Expression::Variable(var_name) => {
                     // Try to get node ID from row
-                    if let Some(node_id) = row.get_node(var_name) {
-                        if !nodes_to_delete.contains(&node_id) {
-                            nodes_to_delete.push(node_id);
-                        }
+                    if let Some(node_id) = row.get_node(var_name)
+                        && !nodes_to_delete.contains(&node_id)
+                    {
+                        nodes_to_delete.push(node_id);
                     }
                     // Note: edge variables would be handled similarly if we had get_edge method
                 }
                 Expression::PropertyAccess(_pa) => {
                     // DELETE n.property - set to null (not implemented)
                     return Err(Error::NotImplemented(
-                        "DELETE property not implemented in v2 M3".into(),
+                        "DELETE property not implemented in v2 M3",
                     ));
                 }
                 _ => {
                     return Err(Error::Other(
-                        "DELETE only supports variable expressions in v2 M3".into(),
+                        "DELETE only supports variable expressions in v2 M3".to_string(),
                     ));
                 }
             }
@@ -495,7 +495,7 @@ fn evaluate_property_value(
             }
         }
         _ => Err(Error::NotImplemented(
-            "complex expressions in property values not supported in v2 M3".into(),
+            "complex expressions in property values not supported in v2 M3",
         )),
     }
 }
@@ -507,10 +507,10 @@ fn convert_executor_value_to_property(value: &Value) -> Result<PropertyValue> {
         Value::Int(i) => Ok(PropertyValue::Int(*i)),
         Value::String(s) => Ok(PropertyValue::String(s.clone())),
         Value::Float(_) => Err(Error::NotImplemented(
-            "float values in properties not supported in v2 M3".into(),
+            "float values in properties not supported in v2 M3",
         )),
         Value::NodeId(_) | Value::ExternalId(_) | Value::EdgeKey(_) => Err(Error::NotImplemented(
-            "node/edge values in properties not supported in v2 M3".into(),
+            "node/edge values in properties not supported in v2 M3",
         )),
     }
 }
@@ -650,19 +650,16 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
 
     fn next(&mut self) -> Option<Self::Item> {
         // Check limit
-        if let Some(limit) = self.limit {
-            if self.emitted >= limit {
-                return None;
-            }
+        if let Some(limit) = self.limit
+            && self.emitted >= limit
+        {
+            return None;
         }
 
         loop {
             // If stack is empty, get next start node
             if self.stack.is_empty() {
-                let start_node = match self.next_start_node() {
-                    Some(n) => n,
-                    None => return None,
-                };
+                let start_node = self.next_start_node()?;
                 self.start_dfs(start_node);
             }
 
@@ -681,10 +678,10 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
                 let next_depth = depth + 1;
 
                 // Check max hops constraint
-                if let Some(max) = self.max_hops {
-                    if next_depth > max {
-                        continue;
-                    }
+                if let Some(max) = self.max_hops
+                    && next_depth > max
+                {
+                    continue;
                 }
 
                 // Build new path
