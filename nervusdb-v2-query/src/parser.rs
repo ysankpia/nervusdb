@@ -309,20 +309,22 @@ impl TokenParser {
 
     fn parse_pattern(&mut self) -> Result<Pattern, Error> {
         let mut elements = Vec::new();
-        loop {
-            if self.check(&TokenType::LeftParen) {
-                elements.push(PathElement::Node(self.parse_node_pattern()?));
-                continue;
-            }
-            if self.check(&TokenType::LeftBracket) {
-                elements.push(PathElement::Relationship(
-                    self.parse_relationship_pattern()?,
-                ));
-                continue;
-            }
-            break;
+        elements.push(PathElement::Node(self.parse_node_pattern()?));
+
+        while self.check_relationship_start() {
+            elements.push(PathElement::Relationship(
+                self.parse_relationship_pattern()?,
+            ));
+            elements.push(PathElement::Node(self.parse_node_pattern()?));
         }
         Ok(Pattern { elements })
+    }
+
+    fn check_relationship_start(&self) -> bool {
+        matches!(
+            self.peek().token_type,
+            TokenType::LeftArrow | TokenType::Dash
+        )
     }
 
     fn parse_node_pattern(&mut self) -> Result<NodePattern, Error> {
@@ -335,7 +337,23 @@ impl TokenParser {
 
         let mut labels = Vec::new();
         while self.match_token(&TokenType::Colon) {
-            labels.push(self.parse_identifier("node label")?);
+            match &self.peek().token_type {
+                TokenType::Identifier(label) => {
+                    labels.push(label.clone());
+                    self.advance();
+                }
+                TokenType::Number(n) => {
+                    let n = *n;
+                    self.advance();
+                    if n.fract() != 0.0 || n < 0.0 {
+                        return Err(Error::Other(
+                            "Label id must be a non-negative integer".into(),
+                        ));
+                    }
+                    labels.push(format!("{}", n as u64));
+                }
+                _ => return Err(Error::Other("Expected label identifier".to_string())),
+            }
         }
 
         let properties = if self.check(&TokenType::LeftBrace) {
@@ -353,39 +371,71 @@ impl TokenParser {
     }
 
     fn parse_relationship_pattern(&mut self) -> Result<RelationshipPattern, Error> {
-        self.consume(&TokenType::LeftBracket, "Expected '['")?;
-
-        let variable = if self.peek_is_identifier() {
-            Some(self.parse_identifier("relationship variable")?)
+        let mut direction = if self.match_token(&TokenType::LeftArrow) {
+            RelationshipDirection::RightToLeft
+        } else if self.match_token(&TokenType::Dash) {
+            RelationshipDirection::Undirected
         } else {
-            None
+            return Err(Error::Other("Expected relationship start".to_string()));
         };
 
+        let mut variable = None;
         let mut types = Vec::new();
-        while self.match_token(&TokenType::Colon) {
-            types.push(self.parse_identifier("relationship type")?);
+        let mut properties = None;
+        let mut variable_length = None;
+
+        if self.match_token(&TokenType::LeftBracket) {
+            if let TokenType::Identifier(name) = &self.peek().token_type {
+                variable = Some(name.clone());
+                self.advance();
+            }
+
+            while self.match_token(&TokenType::Colon) {
+                match &self.peek().token_type {
+                    TokenType::Identifier(t) => {
+                        types.push(t.clone());
+                        self.advance();
+                    }
+                    TokenType::Number(n) => {
+                        let n = *n;
+                        self.advance();
+                        if n.fract() != 0.0 || n < 0.0 {
+                            return Err(Error::Other(
+                                "Relationship type id must be a non-negative integer".into(),
+                            ));
+                        }
+                        types.push(format!("{}", n as u64));
+                    }
+                    _ => {
+                        return Err(Error::Other(
+                            "Expected relationship type identifier".to_string(),
+                        ));
+                    }
+                }
+            }
+
+            if self.match_token(&TokenType::Asterisk) {
+                variable_length = Some(self.parse_variable_length()?);
+            }
+
+            if self.check(&TokenType::LeftBrace) {
+                properties = Some(self.parse_property_map()?);
+            }
+
+            self.consume(&TokenType::RightBracket, "Expected ']'")?;
         }
 
-        let variable_length = if self.match_token(&TokenType::RangeDots) {
-            Some(self.parse_variable_length()?)
-        } else {
-            None
-        };
-
-        let properties = if self.check(&TokenType::LeftBrace) {
-            Some(self.parse_property_map()?)
-        } else {
-            None
-        };
-
-        self.consume(&TokenType::RightBracket, "Expected ']'")?;
-
-        let direction = if self.match_token(&TokenType::RightArrow) {
-            RelationshipDirection::LeftToRight
-        } else if self.match_token(&TokenType::LeftArrow) {
-            RelationshipDirection::RightToLeft
-        } else {
-            RelationshipDirection::Undirected
+        if self.match_token(&TokenType::RightArrow) {
+            if direction == RelationshipDirection::RightToLeft {
+                return Err(Error::Other(
+                    "Invalid relationship direction <->".to_string(),
+                ));
+            }
+            direction = RelationshipDirection::LeftToRight;
+        } else if self.match_token(&TokenType::Dash) {
+            // Keep current direction
+        } else if direction == RelationshipDirection::RightToLeft {
+            self.consume(&TokenType::Dash, "Expected '-'")?;
         };
 
         Ok(RelationshipPattern {

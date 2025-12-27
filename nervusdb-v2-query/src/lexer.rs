@@ -72,7 +72,6 @@ pub enum TokenType {
     GreaterEqual,
     Plus,
     Minus,
-    Multiply,
     Divide,
     Modulo,
     Power,
@@ -228,7 +227,7 @@ impl<'a> Lexer<'a> {
             }
             '=' => TokenType::Equals,
             '+' => TokenType::Plus,
-            '*' => TokenType::Multiply,
+            '*' => TokenType::Asterisk,
             '/' => TokenType::Divide,
             '%' => TokenType::Modulo,
             '^' => TokenType::Power,
