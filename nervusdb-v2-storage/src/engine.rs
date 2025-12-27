@@ -1,5 +1,6 @@
 use crate::csr::{CsrSegment, EdgeRecord, SegmentId};
 use crate::idmap::{ExternalId, I2eRecord, IdMap, InternalNodeId, LabelId};
+use crate::label_interner::{LabelInterner, LabelSnapshot};
 use crate::memtable::MemTable;
 use crate::pager::Pager;
 use crate::snapshot::{L0Run, RelTypeId, Snapshot};
@@ -17,9 +18,11 @@ pub struct GraphEngine {
     pager: Mutex<Pager>,
     wal: Mutex<Wal>,
     idmap: Mutex<IdMap>,
+    label_interner: Mutex<LabelInterner>,
 
     published_runs: RwLock<Arc<Vec<Arc<L0Run>>>>,
     published_segments: RwLock<Arc<Vec<Arc<CsrSegment>>>>,
+    published_labels: RwLock<Arc<LabelSnapshot>>,
     write_lock: Mutex<()>,
     next_txid: AtomicU64,
     next_segment_id: AtomicU64,
@@ -51,16 +54,22 @@ impl GraphEngine {
             segments.push(seg);
         }
 
+        // Build label interner from recovered state (first, before graph transactions)
+        let mut label_interner = LabelInterner::new();
+        replay_label_transactions(&committed, &mut label_interner)?;
+
         let mut runs = Vec::new();
         replay_graph_transactions(
             &mut pager,
             &mut idmap,
-            committed,
+            committed.clone(),
             state.checkpoint_txid,
             &mut runs,
         )?;
 
         runs.reverse(); // newest first for read path
+
+        let label_snapshot = label_interner.snapshot();
 
         Ok(Self {
             ndb_path,
@@ -68,8 +77,10 @@ impl GraphEngine {
             pager: Mutex::new(pager),
             wal: Mutex::new(wal),
             idmap: Mutex::new(idmap),
+            label_interner: Mutex::new(label_interner),
             published_runs: RwLock::new(Arc::new(runs)),
             published_segments: RwLock::new(Arc::new(segments)),
+            published_labels: RwLock::new(Arc::new(label_snapshot)),
             write_lock: Mutex::new(()),
             next_txid: AtomicU64::new(state.max_txid.saturating_add(1).max(1)),
             next_segment_id: AtomicU64::new(max_seg_id.saturating_add(1).max(1)),
@@ -110,6 +121,43 @@ impl GraphEngine {
     pub fn lookup_internal_id(&self, external_id: ExternalId) -> Option<InternalNodeId> {
         let idmap = self.idmap.lock().unwrap();
         idmap.lookup(external_id)
+    }
+
+    /// Get or create a label, returns the label ID.
+    ///
+    /// This is a write operation and must be called within a write transaction.
+    pub fn get_or_create_label(&self, name: &str) -> Result<LabelId> {
+        let mut interner = self.label_interner.lock().unwrap();
+        let old_len = interner.len();
+        let id = interner.get_or_create(name);
+
+        // Always update published labels when a new label is created
+        if interner.len() > old_len {
+            let snapshot = interner.snapshot();
+            let mut published = self.published_labels.write().unwrap();
+            *published = Arc::new(snapshot);
+        }
+
+        Ok(id)
+    }
+
+    /// Get a snapshot of the current label state for reading.
+    pub fn label_snapshot(&self) -> Arc<LabelSnapshot> {
+        self.published_labels.read().unwrap().clone()
+    }
+
+    /// Get label ID by name, returns None if not found.
+    pub fn get_label_id(&self, name: &str) -> Option<LabelId> {
+        self.label_interner.lock().unwrap().get_id(name)
+    }
+
+    /// Get label name by ID, returns None if not found.
+    pub fn get_label_name(&self, id: LabelId) -> Option<String> {
+        self.label_interner
+            .lock()
+            .unwrap()
+            .get_name(id)
+            .map(String::from)
     }
 
     pub fn scan_i2e_records(&self) -> Result<Vec<I2eRecord>> {
@@ -480,6 +528,7 @@ fn replay_graph_transactions(
                 | WalRecord::CommitTx { .. }
                 | WalRecord::PageWrite { .. }
                 | WalRecord::PageFree { .. }
+                | WalRecord::CreateLabel { .. }
                 | WalRecord::ManifestSwitch { .. }
                 | WalRecord::Checkpoint { .. } => {}
             }
@@ -491,6 +540,44 @@ fn replay_graph_transactions(
         }
     }
 
+    Ok(())
+}
+
+/// Replay label creation transactions from WAL.
+fn replay_label_transactions(
+    committed: &[CommittedTx],
+    interner: &mut LabelInterner,
+) -> Result<()> {
+    for tx in committed {
+        for op in &tx.ops {
+            match op {
+                WalRecord::CreateLabel { name, label_id } => {
+                    // Ensure the label exists at the expected ID
+                    let existing_id = interner.get_id(name);
+                    match existing_id {
+                        Some(id) => {
+                            if id != *label_id {
+                                return Err(Error::WalProtocol("label id mismatch"));
+                            }
+                        }
+                        None => {
+                            // Label doesn't exist, create it with correct ID
+                            // We need to insert at the correct position
+                            while interner.next_id() < *label_id {
+                                // Fill with dummy entries
+                                interner.get_or_create(&format!(
+                                    "__placeholder_{}",
+                                    interner.next_id()
+                                ));
+                            }
+                            interner.get_or_create(name);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
     Ok(())
 }
 

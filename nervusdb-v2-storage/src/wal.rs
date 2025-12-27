@@ -21,6 +21,10 @@ pub enum WalRecord {
     PageFree {
         page_id: u64,
     },
+    CreateLabel {
+        name: String,
+        label_id: u32,
+    },
     CreateNode {
         external_id: u64,
         label_id: u32,
@@ -84,6 +88,7 @@ impl WalRecord {
             WalRecord::CommitTx { .. } => 2,
             WalRecord::PageWrite { .. } => 3,
             WalRecord::PageFree { .. } => 4,
+            WalRecord::CreateLabel { .. } => 15,
             WalRecord::CreateNode { .. } => 5,
             WalRecord::CreateEdge { .. } => 6,
             WalRecord::TombstoneNode { .. } => 7,
@@ -110,6 +115,14 @@ impl WalRecord {
             }
             WalRecord::PageFree { page_id } => {
                 out.extend_from_slice(&page_id.to_le_bytes());
+            }
+            WalRecord::CreateLabel { name, label_id } => {
+                let name_bytes = name.as_bytes();
+                let name_len = u32::try_from(name_bytes.len())
+                    .unwrap_or_else(|_| panic!("label name too long: {} bytes", name_bytes.len()));
+                out.extend_from_slice(&label_id.to_le_bytes());
+                out.extend_from_slice(&name_len.to_le_bytes());
+                out.extend_from_slice(name_bytes);
             }
             WalRecord::CreateNode {
                 external_id,
@@ -224,6 +237,19 @@ impl WalRecord {
             4 => {
                 let page_id = read_u64(payload)?;
                 Ok(WalRecord::PageFree { page_id })
+            }
+            15 => {
+                if payload.len() < 4 + 4 {
+                    return Err(Error::WalProtocol("invalid CreateLabel payload length"));
+                }
+                let label_id = u32::from_le_bytes(payload[0..4].try_into().unwrap());
+                let name_len = u32::from_le_bytes(payload[4..8].try_into().unwrap()) as usize;
+                if payload.len() < 8 + name_len {
+                    return Err(Error::WalProtocol("invalid CreateLabel payload length"));
+                }
+                let name = String::from_utf8(payload[8..8 + name_len].to_vec())
+                    .map_err(|_| Error::WalProtocol("invalid UTF-8 in label name"))?;
+                Ok(WalRecord::CreateLabel { name, label_id })
             }
             5 => {
                 if payload.len() != 8 + 4 + 4 {
