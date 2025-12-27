@@ -1208,6 +1208,13 @@ name = "nervusdb-v2-api"
 version = "0.1.0"
 
 [[package]]
+name = "nervusdb-v2-query"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "nervusdb-v2-storage"
 version = "0.1.0"
 dependencies = [
