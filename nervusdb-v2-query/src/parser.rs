@@ -448,12 +448,27 @@ impl TokenParser {
     }
 
     fn parse_variable_length(&mut self) -> Result<VariableLength, Error> {
-        // This is intentionally minimal for the T50 compile gate.
-        // Full variable-length parsing exists in v1; T51/T52 decide what to enable for v2 M3.
-        Ok(VariableLength {
-            min: None,
-            max: None,
-        })
+        let mut min = None;
+        let mut max = None;
+        if matches!(self.peek().token_type, TokenType::Number(_)) {
+            let n = self.parse_integer("path length")?;
+            min = Some(n);
+            if self.match_token(&TokenType::RangeDots) {
+                if matches!(self.peek().token_type, TokenType::Number(_)) {
+                    max = Some(self.parse_integer("path length")?);
+                }
+            } else {
+                max = Some(n);
+            }
+            return Ok(VariableLength { min, max });
+        }
+        if self.match_token(&TokenType::RangeDots) {
+            if matches!(self.peek().token_type, TokenType::Number(_)) {
+                max = Some(self.parse_integer("path length")?);
+            }
+            return Ok(VariableLength { min, max });
+        }
+        Ok(VariableLength { min, max })
     }
 
     fn parse_property_map(&mut self) -> Result<PropertyMap, Error> {

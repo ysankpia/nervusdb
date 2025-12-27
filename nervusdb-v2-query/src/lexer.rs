@@ -315,8 +315,23 @@ impl<'a> Lexer<'a> {
     fn read_number(&mut self, first: char, line: usize, column: usize) -> Result<Token, String> {
         let mut value = String::new();
         value.push(first);
+        let mut has_dot = false;
         while let Some(&char) = self.chars.peek() {
-            if char.is_ascii_digit() || char == '.' {
+            if char.is_ascii_digit() {
+                value.push(char);
+                self.advance();
+            } else if char == '.' && !has_dot {
+                // Peek ahead to see if this is a range operator (..) or float (2.5)
+                let mut chars = self.chars.clone();
+                chars.next(); // consume the '.'
+                if let Some(&next_char) = chars.peek() {
+                    if next_char == '.' {
+                        // This is a range operator, not a float
+                        break;
+                    }
+                }
+                // It's a float
+                has_dot = true;
                 value.push(char);
                 self.advance();
             } else {

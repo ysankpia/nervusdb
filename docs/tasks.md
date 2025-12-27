@@ -57,4 +57,4 @@
 | T57 | v2.0.0 正式版发布（Spec 6.3 实现） | L3 | P0 | Done | feat/v2.0.0 | 稳定公开 Rust API；Cypher 基础读写闭环测试覆盖；数据一致性测试（tombstone/crash/compaction）；性能基准方法论；设计文档见 `docs/design/T57-v2.0.0-release.md` |
 | T58 | v2 Query Facade DX 优化（便捷查询 API） | L2 | P1 | Done | feat/v2.0.0 | 新增 `nervusdb_v2_query::query_collect()` 函数与 `QueryExt` trait；一站式查询 API（解析+执行），对标 SQLite 体验；设计文档见 `docs/design/T58-v2-query-facade.md` |
 | T59 | v2 Label Interning（标签字符串 ↔ u32 映射） | L3 | P1 | Done | feat/T59-v2-label-interning | 实现 String↔LabelId 映射；自动标签创建与查找；`GraphEngine::get_or_create_label()`；支持 `MATCH (n:User)` 语法；设计文档见 `docs/design/T59-v2-label-interning.md` |
-| T60 | v2 可变长度路径（Variable Length Paths） | L3 | P1 | WIP | feat/v2.0.0 | 实现 `MATCH (a)-[:TYPE*1..3]->(b)` 语法；DFS 遍历 + 跳数限制；基础设施就绪，待测试；设计文档见 `docs/design/T60-v2-variable-length-paths.md` |
+| T60 | v2 可变长度路径（Variable Length Paths） | L3 | P1 | Done | feat/T60-vlp-tests | 实现 `MATCH (a)-[:TYPE*1..3]->(b)` 语法；DFS 遍历 + 跳数限制；8个测试覆盖；设计文档见 `docs/design/T60-v2-variable-length-paths.md` |
