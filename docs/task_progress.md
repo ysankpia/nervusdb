@@ -48,3 +48,4 @@
 | T47 | v2 Query ↔ Storage 边界 | L3 | P0 | Done | feat/T47-v2-api-boundary | 新增 `nervusdb-v2-api` 定义 `GraphStore/GraphSnapshot` streaming 契约；`nervusdb-v2-storage::GraphEngine` 实现该 trait 并补测试 |
 | T48 | v2 Benchmarks & Perf Gate | L2 | P1 | Done | feat/T48-v2-bench-perf-gate | 新增 `bench_v2`（insert + neighbors hot/cold + M1/M2 对比）与 `docs/perf/V2_BENCH.md`；提供 `scripts/v2_bench.sh` 便捷落盘 |
 | T49 | v2 Crash Gate | L3 | P1 | Done | feat/T49-v2-crash-gate | 新增 `nervusdb-v2-crash-test`（driver/writer/verify）+ `crash-gate-v2.yml`（PR 小跑/定时大跑），验证 manifest/segment 与邻接一致性 |
+| T50 | v2 M3：Query Crate（复用 Parser/Planner 的落地） | L3 | P0 | Plan | docs/T50-v2-m3-query-crate | 新增 `nervusdb-v2-query`（独立于 v1）；务实策略：复制 v1 `query/{ast,lexer,parser,planner}`，先保证可编译与最小语法子集 |
