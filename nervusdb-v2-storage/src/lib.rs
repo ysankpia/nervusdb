@@ -5,6 +5,7 @@ mod error;
 pub mod idmap;
 pub mod memtable;
 pub mod pager;
+pub mod property;
 pub mod snapshot;
 pub mod wal;
 

@@ -1,5 +1,6 @@
 use crate::csr::CsrSegment;
 use crate::idmap::InternalNodeId;
+use crate::property::PropertyValue;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
@@ -18,6 +19,10 @@ pub struct L0Run {
     edges_by_src: BTreeMap<InternalNodeId, Vec<EdgeKey>>,
     tombstoned_nodes: BTreeSet<InternalNodeId>,
     tombstoned_edges: BTreeSet<EdgeKey>,
+    // Node properties: node_id -> { key -> value }
+    node_properties: BTreeMap<InternalNodeId, BTreeMap<String, PropertyValue>>,
+    // Edge properties: edge_key -> { key -> value }
+    edge_properties: BTreeMap<EdgeKey, BTreeMap<String, PropertyValue>>,
 }
 
 impl L0Run {
@@ -26,12 +31,16 @@ impl L0Run {
         edges_by_src: BTreeMap<InternalNodeId, Vec<EdgeKey>>,
         tombstoned_nodes: BTreeSet<InternalNodeId>,
         tombstoned_edges: BTreeSet<EdgeKey>,
+        node_properties: BTreeMap<InternalNodeId, BTreeMap<String, PropertyValue>>,
+        edge_properties: BTreeMap<EdgeKey, BTreeMap<String, PropertyValue>>,
     ) -> Self {
         Self {
             txid,
             edges_by_src,
             tombstoned_nodes,
             tombstoned_edges,
+            node_properties,
+            edge_properties,
         }
     }
 
@@ -50,6 +59,34 @@ impl L0Run {
         self.edges_by_src.is_empty()
             && self.tombstoned_nodes.is_empty()
             && self.tombstoned_edges.is_empty()
+            && self.node_properties.is_empty()
+            && self.edge_properties.is_empty()
+    }
+
+    pub(crate) fn node_property(&self, node: InternalNodeId, key: &str) -> Option<&PropertyValue> {
+        self.node_properties
+            .get(&node)
+            .and_then(|props| props.get(key))
+    }
+
+    pub(crate) fn edge_property(&self, edge: EdgeKey, key: &str) -> Option<&PropertyValue> {
+        self.edge_properties
+            .get(&edge)
+            .and_then(|props| props.get(key))
+    }
+
+    pub(crate) fn node_properties(
+        &self,
+        node: InternalNodeId,
+    ) -> Option<&BTreeMap<String, PropertyValue>> {
+        self.node_properties.get(&node)
+    }
+
+    pub(crate) fn edge_properties(
+        &self,
+        edge: EdgeKey,
+    ) -> Option<&BTreeMap<String, PropertyValue>> {
+        self.edge_properties.get(&edge)
     }
 
     pub(crate) fn iter_edges(&self) -> impl Iterator<Item = EdgeKey> + '_ {
