@@ -34,6 +34,7 @@ pub mod ast;
 pub mod error;
 pub mod evaluator;
 pub mod executor;
+pub mod facade;
 pub mod lexer;
 pub mod parser;
 pub mod planner;
@@ -41,6 +42,10 @@ pub mod query_api;
 
 pub use error::{Error, Result};
 pub use executor::{Row, Value, WriteableGraph};
+pub use facade::{
+    EdgeKey, ExternalId, GraphSnapshot, GraphStore, InternalNodeId, LabelId, PropertyValue,
+    QueryExt, RelTypeId, query_collect,
+};
 pub use query_api::{Params, PreparedQuery, prepare};
 
 /// Parses a Cypher query string into an AST.

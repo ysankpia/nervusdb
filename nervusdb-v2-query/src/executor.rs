@@ -78,6 +78,18 @@ pub enum Plan {
         project: Vec<String>,
         project_external: bool,
     },
+    /// `MATCH (a)-[:rel*min..max]->(b) RETURN ...` (variable length)
+    MatchOutVarLen {
+        src_alias: String,
+        rel: Option<RelTypeId>,
+        edge_alias: Option<String>,
+        dst_alias: String,
+        min_hops: u32,
+        max_hops: Option<u32>,
+        limit: Option<u32>,
+        project: Vec<String>,
+        project_external: bool,
+    },
     /// `MATCH ... WHERE ... RETURN ...` (with filter)
     Filter {
         input: Box<Plan>,
@@ -116,6 +128,33 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
         } => {
             let base =
                 MatchOutIter::new(snapshot, src_alias, *rel, edge_alias.as_deref(), dst_alias);
+            if let Some(n) = limit {
+                Box::new(base.take(*n as usize))
+            } else {
+                Box::new(base)
+            }
+        }
+        Plan::MatchOutVarLen {
+            src_alias,
+            rel,
+            edge_alias,
+            dst_alias,
+            min_hops,
+            max_hops,
+            limit,
+            project: _,
+            project_external: _,
+        } => {
+            let base = MatchOutVarLenIter::new(
+                snapshot,
+                src_alias,
+                *rel,
+                edge_alias.as_deref(),
+                dst_alias,
+                *min_hops,
+                *max_hops,
+                *limit,
+            );
             if let Some(n) = limit {
                 Box::new(base.take(*n as usize))
             } else {
@@ -381,22 +420,22 @@ fn execute_delete<S: GraphSnapshot>(
             match expr {
                 Expression::Variable(var_name) => {
                     // Try to get node ID from row
-                    if let Some(node_id) = row.get_node(var_name) {
-                        if !nodes_to_delete.contains(&node_id) {
-                            nodes_to_delete.push(node_id);
-                        }
+                    if let Some(node_id) = row.get_node(var_name)
+                        && !nodes_to_delete.contains(&node_id)
+                    {
+                        nodes_to_delete.push(node_id);
                     }
                     // Note: edge variables would be handled similarly if we had get_edge method
                 }
                 Expression::PropertyAccess(_pa) => {
                     // DELETE n.property - set to null (not implemented)
                     return Err(Error::NotImplemented(
-                        "DELETE property not implemented in v2 M3".into(),
+                        "DELETE property not implemented in v2 M3",
                     ));
                 }
                 _ => {
                     return Err(Error::Other(
-                        "DELETE only supports variable expressions in v2 M3".into(),
+                        "DELETE only supports variable expressions in v2 M3".to_string(),
                     ));
                 }
             }
@@ -456,7 +495,7 @@ fn evaluate_property_value(
             }
         }
         _ => Err(Error::NotImplemented(
-            "complex expressions in property values not supported in v2 M3".into(),
+            "complex expressions in property values not supported in v2 M3",
         )),
     }
 }
@@ -468,10 +507,10 @@ fn convert_executor_value_to_property(value: &Value) -> Result<PropertyValue> {
         Value::Int(i) => Ok(PropertyValue::Int(*i)),
         Value::String(s) => Ok(PropertyValue::String(s.clone())),
         Value::Float(_) => Err(Error::NotImplemented(
-            "float values in properties not supported in v2 M3".into(),
+            "float values in properties not supported in v2 M3",
         )),
         Value::NodeId(_) | Value::ExternalId(_) | Value::EdgeKey(_) => Err(Error::NotImplemented(
-            "node/edge values in properties not supported in v2 M3".into(),
+            "node/edge values in properties not supported in v2 M3",
         )),
     }
 }
@@ -544,6 +583,126 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutIter<'a, S> {
 
             self.cur_edges = None;
             self.cur_src = None;
+        }
+    }
+}
+
+/// Variable-length path iterator using DFS
+struct MatchOutVarLenIter<'a, S: GraphSnapshot + 'a> {
+    snapshot: &'a S,
+    src_alias: &'a str,
+    rel: Option<RelTypeId>,
+    edge_alias: Option<&'a str>,
+    dst_alias: &'a str,
+    min_hops: u32,
+    max_hops: Option<u32>,
+    limit: Option<u32>,
+    node_iter: Box<dyn Iterator<Item = InternalNodeId> + 'a>,
+    // DFS state: (current_node, current_depth, path_edges)
+    stack: Vec<(InternalNodeId, u32, Vec<EdgeKey>)>,
+    emitted: u32,
+}
+
+impl<'a, S: GraphSnapshot + 'a> MatchOutVarLenIter<'a, S> {
+    fn new(
+        snapshot: &'a S,
+        src_alias: &'a str,
+        rel: Option<RelTypeId>,
+        edge_alias: Option<&'a str>,
+        dst_alias: &'a str,
+        min_hops: u32,
+        max_hops: Option<u32>,
+        limit: Option<u32>,
+    ) -> Self {
+        Self {
+            snapshot,
+            src_alias,
+            rel,
+            edge_alias,
+            dst_alias,
+            min_hops,
+            max_hops,
+            limit,
+            node_iter: snapshot.nodes(),
+            stack: Vec::new(),
+            emitted: 0,
+        }
+    }
+
+    fn next_start_node(&mut self) -> Option<InternalNodeId> {
+        for src in self.node_iter.by_ref() {
+            if self.snapshot.is_tombstoned_node(src) {
+                continue;
+            }
+            return Some(src);
+        }
+        None
+    }
+
+    /// Start DFS from a node
+    fn start_dfs(&mut self, start_node: InternalNodeId) {
+        self.stack.push((start_node, 0, Vec::new()));
+    }
+}
+
+impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // Check limit
+        if let Some(limit) = self.limit
+            && self.emitted >= limit
+        {
+            return None;
+        }
+
+        loop {
+            // If stack is empty, get next start node
+            if self.stack.is_empty() {
+                let start_node = self.next_start_node()?;
+                self.start_dfs(start_node);
+            }
+
+            // Pop next path to explore
+            let (current_node, depth, path_edges) = match self.stack.pop() {
+                Some(state) => state,
+                None => continue,
+            };
+
+            // Get neighbors
+            let neighbors: Vec<_> = self.snapshot.neighbors(current_node, self.rel).collect();
+
+            // For each neighbor, check if we should emit this path
+            for edge in neighbors {
+                let next_node = edge.dst;
+                let next_depth = depth + 1;
+
+                // Check max hops constraint
+                if let Some(max) = self.max_hops
+                    && next_depth > max
+                {
+                    continue;
+                }
+
+                // Build new path
+                let mut new_path = path_edges.clone();
+                new_path.push(edge);
+
+                // Check min hops and emit
+                if next_depth >= self.min_hops {
+                    let mut row = Row::default().with(self.src_alias, Value::NodeId(edge.src));
+                    if let Some(edge_alias) = self.edge_alias {
+                        row = row.with(edge_alias, Value::EdgeKey(edge));
+                    }
+                    row = row.with(self.dst_alias, Value::NodeId(next_node));
+
+                    self.emitted += 1;
+                    return Some(Ok(row));
+                }
+
+                // Continue DFS
+                self.stack.push((next_node, next_depth, new_path));
+            }
         }
     }
 }

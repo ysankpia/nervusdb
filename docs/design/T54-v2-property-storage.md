@@ -232,14 +232,16 @@ impl<'a> WriteTxn<'a> {
 
 ## 8. Success Criteria
 
-- [ ] `MemTable` 支持节点/边属性存储
-- [ ] `L0Run` 支持属性查询
-- [ ] WAL 支持属性记录持久化
-- [ ] `GraphSnapshot` 支持属性查询
-- [ ] `WriteTxn` 支持属性写入/删除
-- [ ] 所有单元测试通过
-- [ ] 集成测试通过
-- [ ] Crash gate 验证通过
+- [x] `MemTable` 支持节点/边属性存储
+- [x] `L0Run` 支持属性查询
+- [x] WAL 支持属性记录持久化
+- [x] `GraphSnapshot` 支持属性查询
+- [x] `WriteTxn` 支持属性写入/删除
+- [x] 所有单元测试通过
+- [x] 集成测试通过
+- [x] Crash gate 验证通过
+
+**注意**: CSR segments 中的属性持久化是 v2.x 规划，不在 MVP 范围内。
 
 ## 9. Dependencies
 

@@ -25,8 +25,8 @@
 - [x] `.ndb + .wal` 两文件：page store + redo WAL（不强求单文件）
 - [x] 事务模型：Single Writer + Snapshot Readers（读快照并发，写全局串行）
 - [x] 崩溃恢复：WAL replay + manifest/checkpoint（可通过 crash gate）
-- [x] 写入能力：CreateNode / CreateEdge / TombstoneNode / TombstoneEdge
-- [x] 读取能力：`neighbors(src, rel)` + `nodes()`（全表扫描）+ `resolve_external()` + `node_label()`
+- [x] 写入能力：Create/Delete Nodes & Edges + **Properties (Key-Value)**
+- [x] 读取能力：`scan()` + `neighbors()` + `properties()`
 
 **查询（v2 M3 最小子集）**
 
@@ -43,11 +43,9 @@
 这些不是“以后再说”，而是明确不属于 MVP 的范围（否则你会死在边缘情况里）：
 
 - Cypher：WHERE/CREATE/MERGE/多跳/OPTIONAL MATCH/聚合/排序等（逐项任务化）
-- Label/RelType/String 字典：`String -> u32` intern（持久化与 cache）
-- 属性：WAL/MemTable 写入 + compaction 时 columnar 固化 + 读取/过滤下推
-- 二级索引（B+Tree/属性索引）、向量索引（HNSW）、全文索引（可选 feature）
+- 索引：二级索引（B+Tree）、向量索引（HNSW）、全文索引（可选 feature）
 - 多 label / schema 管理
-- 多语言绑定的“稳定 ABI 契约”（v2 专属，不继承 v1）
+- Schema 约束（Unique, Type Check）
 
 ## 3. 架构决策（Architectural Decisions）
 
@@ -93,6 +91,9 @@
 - [x] CLI：`nervusdb v2 query` 能在空库/小库上稳定输出 NDJSON
 - [x] CLI：`nervusdb v2 write` 支持 CREATE/DELETE 操作
 - [x] 查询结果 streaming：大结果集不会爆内存（不允许隐式 collect）
+- [x] **Core Features**:
+    - [x] Property Storage: Node/Edge properties support (MemTable + WAL)
+    - [x] String Interning: Basic `String <-> ID` mapping for Labels/Keys
 - [x] 明确并冻结 v2 的“最小 Cypher 子集”清单（超出即 NotSupported）→ 见 `docs/reference/cypher_support.md`
 - [x] 文档：README/CHANGELOG 明确 v2 现状与限制（不吹牛）
 
@@ -108,12 +109,50 @@
 
 > 这不是现在就做完，但这是“什么时候是个头”的唯一答案：达到它就停。
 
-- [ ] 稳定的公开 Rust API（`nervusdb-v2` facade + `nervusdb-v2-query`）
-- [ ] Cypher：至少支持基础读写闭环（CREATE/MATCH/WHERE/RETURN/LIMIT）——每项必须有测试
-- [ ] 数据一致性：crash gate、恢复语义、tombstone/compaction 语义都被测试锁死
-- [ ] 性能：提供基准与对比方法（不需要赢所有人，但要可重复、可解释）
+- [x] 稳定的公开 Rust API（`nervusdb-v2` facade + `nervusdb-v2-query`）
+- [x] Cypher：至少支持基础读写闭环（CREATE/MATCH/WHERE/RETURN/LIMIT）——每项必须有测试
+- [x] 数据一致性：crash gate、恢复语义、tombstone/compaction 语义都被测试锁死
+- [x] 性能：提供基准与对比方法（不需要赢所有人，但要可重复、可解释）
 
-## 7. 待确认项（需要你拍板，不拍板我就按默认执行）
+**v2.0.0 已完成功能**：
+
+- `RETURN 1`（常量返回）
+- 单跳匹配：`MATCH (n)-[:<u32>]->(m) RETURN n, m LIMIT k`
+- WHERE 过滤：`MATCH (a)-[:1]->(b) WHERE a.name = 'Alice' RETURN a, b`
+- CREATE：`CREATE (n)` / `CREATE (n {k: v})` / `CREATE (a)-[:1]->(b)`
+- DELETE / DETACH DELETE：`MATCH (a)-[:1]->(b) DELETE a` / `DETACH DELETE a`
+
+**测试覆盖**：
+- 11 个 CREATE/DELETE 测试
+- 8 个 tombstone 语义测试
+- 9 个 LIMIT 边界测试
+- 集成测试端到端通过
+- crash gate 通过
+
+## 7. Future Roadmap: The "SQLite Experience" (v2.1+)
+
+> 目标：真正做到“嵌入式第一选择”，不仅是“能用”，而是“好用”。
+
+### 7.1 生态接入 (Bindings)
+- **UniFFI Core**: 提供统一的 `nervusdb-uniffi` crate，暴露稳定 ABI。
+- **Python Binding**: `pip install nervusdb`，支持 NetworkX 接口适配。
+- **Node.js Binding**: `npm install nervusdb`，提供 TypeScript 类型定义。
+- **C API**: header-only 或 `.so` 动态库，供 C/C++/Go 集成。
+
+### 7.2 开发者体验 (DX)
+- **CLI Shell**: 交互式 REPL，支持语法高亮、自动补全（类似 `sqlite3`）。
+- **Import/Export Tool**: 高性能 CSV/JSONL 导入导出工具。
+- **Visualizer**: 简单的 Web UI 查看图结构（作为 dev-tool 提供）。
+
+### 7.3 高级功能 (Advanced Features)
+- **Indexing**:
+    - B+Tree 索引：加速 `WHERE age > 18`。
+    - Vector Index (HNSW)：支持 `CALL vector.search()`。
+    - Fulltext Search (Tantivy)：支持全文检索。
+- **Compression**: 页级压缩（Zstd/LZ4），减少磁盘占用。
+- **Replication**: 基于 WAL 的简单主从复制（LiteStream 模式）。
+
+## 8. 待确认项（需要你拍板，不拍板我就按默认执行）
 
 1. v2 对外 ID：是否只支持 `ExternalId=u64`（当前实现是），还是 MVP 就要支持 string？
 2. v2 的“公开入口”是否以 `nervusdb-v2`（事务/DB）+ `nervusdb-v2-query`（prepare/execute）为唯一官方路径？

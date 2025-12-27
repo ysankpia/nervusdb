@@ -52,11 +52,9 @@
 | T51 | v2 M3：Executor MVP（基于 GraphSnapshot 的流式算子） | L3 | P0 | Done | #53 | 定义最小算子集（Scan/Expand/Filter/Project/Limit），Pull-based streaming；扩展 `GraphSnapshot` 支持 nodes/label/external/tombstone，并在 v2 storage 实现；新增最小 executor scaffold |
 | T52 | v2 M3：Query API（prepare/execute_streaming + 参数） | L3 | P0 | Done | #55 | `nervusdb-v2-query` 提供 `prepare/PreparedQuery::execute_streaming/Params`；支持 `RETURN 1` 与单跳 `MATCH (n)-[:<u32>]->(m) RETURN ... LIMIT ...`；附测试覆盖 |
 | T53 | v2 M3：Query Tests + CLI 验收路径 | L2 | P0 | Done | #57 | 增加 v2 query 端到端集成测试（v2-storage + v2-query）；CLI 新增 `nervusdb v2 query`，流式 NDJSON 输出 |
-| T54 | v2 属性存储层（Property Storage Layer） | L3 | P0 | WIP | feat/T54-v2-property-storage | 实现节点/边属性存储（MemTable/L0Run/WAL/API）；为 Filter/Create 算子提供基础；设计文档见 `docs/design/T54-v2-property-storage.md` |
-| T57 | v2.0.0 正式版发布（Spec 6.3 实现） | L3 | P0 | Plan | feat/v2.0.0 | 稳定公开 Rust API；Cypher 基础读写闭环测试覆盖；数据一致性测试（tombstone/crash/compaction）；性能基准方法论；设计文档见 `docs/design/T57-v2.0.0-release.md` |
-
-## 阻塞任务
-
-| ID | Task | Dependency | Status |
-|:---|:-----|:----------:|:------:|
-| T54 | v2 属性存储层 | - | WIP |
+| T54 | v2 属性存储层（Property Storage Layer） | L3 | P0 | Done | feat/T54-v2-property-storage | 实现节点/边属性存储（MemTable/L0Run/WAL/API）；为 Filter/Create 算子提供基础；设计文档见 `docs/design/T54-v2-property-storage.md` |
+| T56 | v2 DELETE / DETACH DELETE 语句 | L3 | P0 | Done | feat/v2.0.0 | 实现 `MATCH (n) DELETE n` 与 `DETACH DELETE`；`execute_write` 返回删除计数；包含自环/多节点/级联删除测试；设计文档见 `docs/design/T56-v2-delete.md` |
+| T57 | v2.0.0 正式版发布（Spec 6.3 实现） | L3 | P0 | Done | feat/v2.0.0 | 稳定公开 Rust API；Cypher 基础读写闭环测试覆盖；数据一致性测试（tombstone/crash/compaction）；性能基准方法论；设计文档见 `docs/design/T57-v2.0.0-release.md` |
+| T58 | v2 Query Facade DX 优化（便捷查询 API） | L2 | P1 | Done | feat/v2.0.0 | 新增 `nervusdb_v2_query::query_collect()` 函数与 `QueryExt` trait；一站式查询 API（解析+执行），对标 SQLite 体验；设计文档见 `docs/design/T58-v2-query-facade.md` |
+| T59 | v2 Label Interning（标签字符串 ↔ u32 映射） | L3 | P1 | Done | feat/T59-v2-label-interning | 实现 String↔LabelId 映射；自动标签创建与查找；`GraphEngine::get_or_create_label()`；支持 `MATCH (n:User)` 语法；设计文档见 `docs/design/T59-v2-label-interning.md` |
+| T60 | v2 可变长度路径（Variable Length Paths） | L3 | P1 | WIP | feat/v2.0.0 | 实现 `MATCH (a)-[:TYPE*1..3]->(b)` 语法；DFS 遍历 + 跳数限制；基础设施就绪，待测试；设计文档见 `docs/design/T60-v2-variable-length-paths.md` |
