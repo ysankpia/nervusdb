@@ -11,6 +11,7 @@ v2 M3 是新一代查询引擎，支持通过 `nervusdb-v2-query` crate 或 CLI 
 ### 读取
 
 - `RETURN 1`（常量返回）
+- 单节点扫描：`MATCH (n) RETURN n`
 - 单跳模式：`MATCH (a)-[:<u32>]->(b) RETURN a, b`
 - 单跳可变长度：`MATCH (a)-[:<u32>*1..5]->(b) RETURN a, b`
 - `WHERE` 属性过滤：`MATCH (a)-[:1]->(b) WHERE a.name = 'Alice' RETURN a, b`
@@ -25,6 +26,7 @@ v2 M3 是新一代查询引擎，支持通过 `nervusdb-v2-query` crate 或 CLI 
   - 单节点：`CREATE (n)` / `CREATE (n {name: 'Alice', age: 30})`
   - 单跳关系：`CREATE (a)-[:1]->(b)` / `CREATE (a {name: 'A'})-[:1 {weight: 2.5}]->(b {name: 'B'})`
 - `DELETE` / `DETACH DELETE`：
+  - `MATCH (n) DELETE n`（删除节点）
   - `MATCH (a)-[:1]->(b) DELETE a`（删除节点）
   - `MATCH (a)-[:1]->(b) DETACH DELETE a`（先删除边，再删除节点）
 
@@ -34,6 +36,7 @@ v2 M3 是新一代查询引擎，支持通过 `nervusdb-v2-query` crate 或 CLI 
 - 关系类型必须是数字（`:1`, `:2` 等）
 - 不支持标签（`:Label`）
 - 不支持在 `MATCH` pattern 内写属性：`MATCH (a {name:'Alice'})-[:1]->(b)` 会 fail-fast（请用 WHERE）
+- `CREATE` 中也不支持标签：`CREATE (n:Person {...})` 会 fail-fast（防止“看起来支持但实际忽略”）
 - `CREATE` 不支持 MERGE
 - `DELETE` 不支持级联删除
 - `WITH` / `UNWIND` / `UNION` / `CALL` / `SET`：明确不支持（超出即 fail-fast）

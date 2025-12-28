@@ -31,6 +31,7 @@
 **查询（v2 M3 最小子集）**
 
 - [x] `RETURN 1`
+- [x] 单节点扫描：`MATCH (n) RETURN n`
 - [x] 单跳匹配：`MATCH (n)-[:<u32>]->(m) RETURN n, m LIMIT k`
 - [x] 结果必须是 streaming（iterator），禁止 `collect()` 成全量 Vec
 
@@ -157,4 +158,3 @@
 1. v2 对外 ID：是否只支持 `ExternalId=u64`（当前实现是），还是 MVP 就要支持 string？
 2. v2 的“公开入口”是否以 `nervusdb-v2`（事务/DB）+ `nervusdb-v2-query`（prepare/execute）为唯一官方路径？
 3. alpha1 的发布口径：你希望对外宣称“已经支持哪些 Cypher 子集”？（建议严格白名单）
-

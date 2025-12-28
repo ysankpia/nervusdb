@@ -160,110 +160,185 @@ fn compile_m3_plan(query: Query) -> Result<Plan> {
         return Err(Error::NotImplemented("OPTIONAL MATCH in v2 M3"));
     }
 
-    if m.pattern.elements.len() != 3 {
-        return Err(Error::NotImplemented("only single-hop patterns in v2 M3"));
-    }
+    let mut plan = match m.pattern.elements.len() {
+        1 => {
+            let node = match &m.pattern.elements[0] {
+                crate::ast::PathElement::Node(n) => n,
+                _ => return Err(Error::Other("pattern must be a node".into())),
+            };
+            if !node.labels.is_empty() {
+                return Err(Error::NotImplemented("labels in v2 M3"));
+            }
+            if node.properties.is_some() {
+                return Err(Error::NotImplemented(
+                    "node pattern properties in v2 M3 (use WHERE)",
+                ));
+            }
+            let alias = node
+                .variable
+                .as_deref()
+                .ok_or(Error::NotImplemented("anonymous node"))?
+                .to_string();
 
-    let src = match &m.pattern.elements[0] {
-        crate::ast::PathElement::Node(n) => n,
-        _ => return Err(Error::Other("pattern must start with node".into())),
+            Plan::NodeScan { alias }
+        }
+        3 => {
+            let src = match &m.pattern.elements[0] {
+                crate::ast::PathElement::Node(n) => n,
+                _ => return Err(Error::Other("pattern must start with node".into())),
+            };
+            let rel_pat = match &m.pattern.elements[1] {
+                crate::ast::PathElement::Relationship(r) => r,
+                _ => return Err(Error::Other("expected relationship in middle".into())),
+            };
+            let dst = match &m.pattern.elements[2] {
+                crate::ast::PathElement::Node(n) => n,
+                _ => return Err(Error::Other("pattern must end with node".into())),
+            };
+
+            if !src.labels.is_empty() || !dst.labels.is_empty() {
+                return Err(Error::NotImplemented("labels in v2 M3"));
+            }
+            if src.properties.is_some() || dst.properties.is_some() {
+                return Err(Error::NotImplemented(
+                    "node pattern properties in v2 M3 (use WHERE)",
+                ));
+            }
+            if rel_pat.properties.is_some() {
+                return Err(Error::NotImplemented(
+                    "relationship pattern properties in v2 M3 (use WHERE)",
+                ));
+            }
+
+            let src_alias = src
+                .variable
+                .as_deref()
+                .ok_or(Error::NotImplemented("anonymous node"))?
+                .to_string();
+            let dst_alias = dst
+                .variable
+                .as_deref()
+                .ok_or(Error::NotImplemented("anonymous node"))?
+                .to_string();
+
+            if !matches!(rel_pat.direction, RelationshipDirection::LeftToRight) {
+                return Err(Error::NotImplemented("only -> direction in v2 M3"));
+            }
+
+            let rel: Option<RelTypeId> = match rel_pat.types.as_slice() {
+                [] => None,
+                [t] => Some(parse_u32_identifier(t)?),
+                _ => return Err(Error::NotImplemented("multiple rel types in v2 M3")),
+            };
+
+            let edge_alias = rel_pat.variable.clone();
+
+            // Don't use embedded limit when we have RETURN limit - we'll use separate Limit node
+            let limit = if ret.limit.is_some() { None } else { ret.limit };
+
+            if let Some(var_len) = &rel_pat.variable_length {
+                let min_hops = var_len.min.unwrap_or(1);
+                let max_hops = var_len.max;
+                if min_hops == 0 {
+                    return Err(Error::NotImplemented(
+                        "0-length variable-length paths in v2 M3",
+                    ));
+                }
+                if let Some(max_hops) = max_hops
+                    && max_hops < min_hops
+                {
+                    return Err(Error::Other(
+                        "invalid variable-length range: max < min".into(),
+                    ));
+                }
+                Plan::MatchOutVarLen {
+                    src_alias,
+                    rel,
+                    edge_alias,
+                    dst_alias,
+                    min_hops,
+                    max_hops,
+                    limit,
+                    project: Vec::new(),
+                    project_external: false,
+                }
+            } else {
+                Plan::MatchOut {
+                    src_alias,
+                    rel,
+                    edge_alias,
+                    dst_alias,
+                    limit,
+                    project: Vec::new(),
+                    project_external: false,
+                }
+            }
+        }
+        _ => {
+            return Err(Error::NotImplemented(
+                "only single-node or single-hop patterns in v2 M3",
+            ));
+        }
     };
-    let rel_pat = match &m.pattern.elements[1] {
-        crate::ast::PathElement::Relationship(r) => r,
-        _ => return Err(Error::Other("expected relationship in middle".into())),
-    };
-    let dst = match &m.pattern.elements[2] {
-        crate::ast::PathElement::Node(n) => n,
-        _ => return Err(Error::Other("pattern must end with node".into())),
-    };
-
-    if !src.labels.is_empty() || !dst.labels.is_empty() {
-        return Err(Error::NotImplemented("labels in v2 M3"));
-    }
-    if src.properties.is_some() || dst.properties.is_some() {
-        return Err(Error::NotImplemented(
-            "node pattern properties in v2 M3 (use WHERE)",
-        ));
-    }
-    if rel_pat.properties.is_some() {
-        return Err(Error::NotImplemented(
-            "relationship pattern properties in v2 M3 (use WHERE)",
-        ));
-    }
-
-    let src_alias = src
-        .variable
-        .as_deref()
-        .ok_or(Error::NotImplemented("anonymous node"))?
-        .to_string();
-    let dst_alias = dst
-        .variable
-        .as_deref()
-        .ok_or(Error::NotImplemented("anonymous node"))?
-        .to_string();
-
-    if !matches!(rel_pat.direction, RelationshipDirection::LeftToRight) {
-        return Err(Error::NotImplemented("only -> direction in v2 M3"));
-    }
-
-    let rel: Option<RelTypeId> = match rel_pat.types.as_slice() {
-        [] => None,
-        [t] => Some(parse_u32_identifier(t)?),
-        _ => return Err(Error::NotImplemented("multiple rel types in v2 M3")),
-    };
-
-    let edge_alias = rel_pat.variable.clone();
 
     let mut project: Vec<String> = Vec::new();
     for item in &ret.items {
+        if item.alias.is_some() {
+            return Err(Error::NotImplemented("RETURN aliases in v2 M3"));
+        }
         let Expression::Variable(name) = &item.expression else {
             return Err(Error::NotImplemented(
                 "only variable projections in v2 M3 (use RETURN 1 or RETURN <var>...)",
             ));
         };
-        project.push(item.alias.clone().unwrap_or_else(|| name.clone()));
+        project.push(name.clone());
     }
 
-    // Don't use embedded limit when we have RETURN limit - we'll use separate Limit node
-    let limit = if ret.limit.is_some() { None } else { ret.limit };
+    match &mut plan {
+        Plan::MatchOut { project: p, .. } | Plan::MatchOutVarLen { project: p, .. } => {
+            *p = project.clone();
+        }
+        Plan::NodeScan { .. } => {}
+        Plan::ReturnOne
+        | Plan::Filter { .. }
+        | Plan::Project { .. }
+        | Plan::Aggregate { .. }
+        | Plan::OrderBy { .. }
+        | Plan::Skip { .. }
+        | Plan::Limit { .. }
+        | Plan::Distinct { .. }
+        | Plan::Create { .. }
+        | Plan::Delete { .. } => {}
+    }
 
-    let mut plan = if let Some(var_len) = &rel_pat.variable_length {
-        let min_hops = var_len.min.unwrap_or(1);
-        let max_hops = var_len.max;
-        if min_hops == 0 {
-            return Err(Error::NotImplemented(
-                "0-length variable-length paths in v2 M3",
-            ));
-        }
-        if let Some(max_hops) = max_hops
-            && max_hops < min_hops
-        {
-            return Err(Error::Other(
-                "invalid variable-length range: max < min".into(),
-            ));
-        }
-        Plan::MatchOutVarLen {
-            src_alias,
-            rel,
-            edge_alias,
-            dst_alias,
-            min_hops,
-            max_hops,
-            limit,
-            project: project.clone(),
-            project_external: false,
-        }
-    } else {
+    // Fail-fast: RETURN variables must exist in the row shape produced by the base plan.
+    let available: Vec<&str> = match &plan {
+        Plan::NodeScan { alias } => vec![alias.as_str()],
         Plan::MatchOut {
             src_alias,
-            rel,
             edge_alias,
             dst_alias,
-            limit,
-            project: project.clone(),
-            project_external: false,
+            ..
         }
+        | Plan::MatchOutVarLen {
+            src_alias,
+            edge_alias,
+            dst_alias,
+            ..
+        } => {
+            let mut out = vec![src_alias.as_str(), dst_alias.as_str()];
+            if let Some(edge_alias) = edge_alias.as_deref() {
+                out.push(edge_alias);
+            }
+            out
+        }
+        _ => Vec::new(),
     };
+    for col in &project {
+        if !available.iter().any(|v| v == &col.as_str()) {
+            return Err(Error::Other(format!("unknown variable in RETURN: {col}")));
+        }
+    }
 
     // Add WHERE filter if present
     if let Some(w) = where_clause {
@@ -341,6 +416,15 @@ fn compile_create_plan(create_clause: crate::ast::CreateClause) -> Result<Plan> 
         return Err(Error::Other("CREATE pattern cannot be empty".into()));
     }
 
+    // v2 M3: labels are not supported yet (fail-fast instead of silently ignoring)
+    for el in &create_clause.pattern.elements {
+        if let crate::ast::PathElement::Node(node) = el {
+            if !node.labels.is_empty() {
+                return Err(Error::NotImplemented("labels in CREATE in v2 M3"));
+            }
+        }
+    }
+
     // MVP: Only support up to 3 elements (node, rel, node)
     if create_clause.pattern.elements.len() > 3 {
         return Err(Error::NotImplemented(
@@ -371,10 +455,52 @@ fn compile_delete_plan(
         return Err(Error::NotImplemented("OPTIONAL MATCH with DELETE in v2 M3"));
     }
 
-    if m.pattern.elements.len() != 3 {
+    if m.pattern.elements.len() != 1 && m.pattern.elements.len() != 3 {
         return Err(Error::NotImplemented(
-            "only single-hop patterns with DELETE in v2 M3",
+            "only single-node or single-hop patterns with DELETE in v2 M3",
         ));
+    }
+
+    if m.pattern.elements.len() == 1 {
+        let node = match &m.pattern.elements[0] {
+            crate::ast::PathElement::Node(n) => n,
+            _ => return Err(Error::Other("pattern must be a node".into())),
+        };
+
+        if !node.labels.is_empty() {
+            return Err(Error::NotImplemented("labels with DELETE in v2 M3"));
+        }
+        if node.properties.is_some() {
+            return Err(Error::NotImplemented(
+                "node pattern properties with DELETE in v2 M3 (use WHERE)",
+            ));
+        }
+
+        let alias = node
+            .variable
+            .as_deref()
+            .ok_or(Error::NotImplemented("anonymous node in MATCH for DELETE"))?
+            .to_string();
+
+        let mut input_plan = Plan::NodeScan {
+            alias: alias.clone(),
+        };
+        if let Some(w) = where_clause {
+            input_plan = Plan::Filter {
+                input: Box::new(input_plan),
+                predicate: w.expression,
+            };
+        }
+        input_plan = Plan::Project {
+            input: Box::new(input_plan),
+            columns: vec![alias],
+        };
+
+        return Ok(Plan::Delete {
+            input: Box::new(input_plan),
+            detach: delete_clause.detach,
+            expressions: delete_clause.expressions,
+        });
     }
 
     let src = match &m.pattern.elements[0] {

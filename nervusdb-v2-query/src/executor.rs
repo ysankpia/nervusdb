@@ -88,6 +88,8 @@ impl Row {
 pub enum Plan {
     /// `RETURN 1`
     ReturnOne,
+    /// `MATCH (n) RETURN ...`
+    NodeScan { alias: String },
     /// `MATCH (a)-[:rel]->(b) RETURN ...`
     MatchOut {
         src_alias: String,
@@ -156,6 +158,15 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
 ) -> Box<dyn Iterator<Item = Result<Row>> + 'a> {
     match plan {
         Plan::ReturnOne => Box::new(std::iter::once(Ok(Row::default().with("1", Value::Int(1))))),
+        Plan::NodeScan { alias } => {
+            let alias = alias.clone();
+            Box::new(snapshot.nodes().filter_map(move |iid| {
+                if snapshot.is_tombstoned_node(iid) {
+                    return None;
+                }
+                Some(Ok(Row::default().with(alias.clone(), Value::NodeId(iid))))
+            }))
+        }
         Plan::MatchOut {
             src_alias,
             rel,
@@ -364,15 +375,16 @@ pub use nervusdb_v2_storage::property::PropertyValue;
 mod txn_adapter {
     use super::*;
     use nervusdb_v2::WriteTxn as DbWriteTxn;
+    use nervusdb_v2_storage::engine::WriteTxn as EngineWriteTxn;
 
     impl<'a> WriteableGraph for DbWriteTxn<'a> {
         fn create_node(
             &mut self,
             external_id: ExternalId,
-            _label_id: LabelId,
+            label_id: LabelId,
         ) -> Result<InternalNodeId> {
-            // MVP: ignore label_id, just create node
-            DbWriteTxn::create_node(self, external_id, 0).map_err(|e| Error::Other(e.to_string()))
+            DbWriteTxn::create_node(self, external_id, label_id)
+                .map_err(|e| Error::Other(e.to_string()))
         }
 
         fn create_edge(
@@ -391,7 +403,7 @@ mod txn_adapter {
             key: String,
             value: PropertyValue,
         ) -> Result<()> {
-            let value = convert_to_storage(value);
+            let value = convert_to_db(value);
             let _ = DbWriteTxn::set_node_property(self, node, key, value);
             Ok(())
         }
@@ -404,7 +416,7 @@ mod txn_adapter {
             key: String,
             value: PropertyValue,
         ) -> Result<()> {
-            let value = convert_to_storage(value);
+            let value = convert_to_db(value);
             let _ = DbWriteTxn::set_edge_property(self, src, rel, dst, key, value);
             Ok(())
         }
@@ -425,7 +437,65 @@ mod txn_adapter {
         }
     }
 
-    fn convert_to_storage(v: PropertyValue) -> nervusdb_v2::PropertyValue {
+    impl<'a> WriteableGraph for EngineWriteTxn<'a> {
+        fn create_node(
+            &mut self,
+            external_id: ExternalId,
+            label_id: LabelId,
+        ) -> Result<InternalNodeId> {
+            EngineWriteTxn::create_node(self, external_id, label_id)
+                .map_err(|e| Error::Other(e.to_string()))
+        }
+
+        fn create_edge(
+            &mut self,
+            src: InternalNodeId,
+            rel: RelTypeId,
+            dst: InternalNodeId,
+        ) -> Result<()> {
+            EngineWriteTxn::create_edge(self, src, rel, dst);
+            Ok(())
+        }
+
+        fn set_node_property(
+            &mut self,
+            node: InternalNodeId,
+            key: String,
+            value: PropertyValue,
+        ) -> Result<()> {
+            EngineWriteTxn::set_node_property(self, node, key, value);
+            Ok(())
+        }
+
+        fn set_edge_property(
+            &mut self,
+            src: InternalNodeId,
+            rel: RelTypeId,
+            dst: InternalNodeId,
+            key: String,
+            value: PropertyValue,
+        ) -> Result<()> {
+            EngineWriteTxn::set_edge_property(self, src, rel, dst, key, value);
+            Ok(())
+        }
+
+        fn tombstone_node(&mut self, node: InternalNodeId) -> Result<()> {
+            EngineWriteTxn::tombstone_node(self, node);
+            Ok(())
+        }
+
+        fn tombstone_edge(
+            &mut self,
+            src: InternalNodeId,
+            rel: RelTypeId,
+            dst: InternalNodeId,
+        ) -> Result<()> {
+            EngineWriteTxn::tombstone_edge(self, src, rel, dst);
+            Ok(())
+        }
+    }
+
+    fn convert_to_db(v: PropertyValue) -> nervusdb_v2::PropertyValue {
         match v {
             PropertyValue::Null => nervusdb_v2::PropertyValue::Null,
             PropertyValue::Bool(b) => nervusdb_v2::PropertyValue::Bool(b),
