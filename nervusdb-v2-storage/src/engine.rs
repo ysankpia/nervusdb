@@ -550,31 +550,26 @@ fn replay_label_transactions(
 ) -> Result<()> {
     for tx in committed {
         for op in &tx.ops {
-            match op {
-                WalRecord::CreateLabel { name, label_id } => {
-                    // Ensure the label exists at the expected ID
-                    let existing_id = interner.get_id(name);
-                    match existing_id {
-                        Some(id) => {
-                            if id != *label_id {
-                                return Err(Error::WalProtocol("label id mismatch"));
-                            }
-                        }
-                        None => {
-                            // Label doesn't exist, create it with correct ID
-                            // We need to insert at the correct position
-                            while interner.next_id() < *label_id {
-                                // Fill with dummy entries
-                                interner.get_or_create(&format!(
-                                    "__placeholder_{}",
-                                    interner.next_id()
-                                ));
-                            }
-                            interner.get_or_create(name);
+            if let WalRecord::CreateLabel { name, label_id } = op {
+                // Ensure the label exists at the expected ID
+                let existing_id = interner.get_id(name);
+                match existing_id {
+                    Some(id) => {
+                        if id != *label_id {
+                            return Err(Error::WalProtocol("label id mismatch"));
                         }
                     }
+                    None => {
+                        // Label doesn't exist, create it with correct ID
+                        // We need to insert at the correct position
+                        while interner.next_id() < *label_id {
+                            // Fill with dummy entries
+                            interner
+                                .get_or_create(&format!("__placeholder_{}", interner.next_id()));
+                        }
+                        interner.get_or_create(name);
+                    }
                 }
-                _ => {}
             }
         }
     }

@@ -702,6 +702,8 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutIter<'a, S> {
 }
 
 /// Variable-length path iterator using DFS
+const DEFAULT_MAX_VAR_LEN_HOPS: u32 = 5;
+
 struct MatchOutVarLenIter<'a, S: GraphSnapshot + 'a> {
     snapshot: &'a S,
     src_alias: &'a str,
@@ -712,8 +714,8 @@ struct MatchOutVarLenIter<'a, S: GraphSnapshot + 'a> {
     max_hops: Option<u32>,
     limit: Option<u32>,
     node_iter: Box<dyn Iterator<Item = InternalNodeId> + 'a>,
-    // DFS state: (current_node, current_depth, path_edges)
-    stack: Vec<(InternalNodeId, u32, Vec<EdgeKey>)>,
+    // DFS state: (start_node, current_node, current_depth)
+    stack: Vec<(InternalNodeId, InternalNodeId, u32)>,
     emitted: u32,
 }
 
@@ -755,7 +757,7 @@ impl<'a, S: GraphSnapshot + 'a> MatchOutVarLenIter<'a, S> {
 
     /// Start DFS from a node
     fn start_dfs(&mut self, start_node: InternalNodeId) {
-        self.stack.push((start_node, 0, Vec::new()));
+        self.stack.push((start_node, start_node, 0));
     }
 }
 
@@ -763,6 +765,8 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
     type Item = Result<Row>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let max_hops = Some(self.max_hops.unwrap_or(DEFAULT_MAX_VAR_LEN_HOPS));
+
         // Check limit
         if let Some(limit) = self.limit
             && self.emitted >= limit
@@ -778,7 +782,7 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
             }
 
             // Pop next path to explore
-            let (current_node, depth, path_edges) = match self.stack.pop() {
+            let (start_node, current_node, depth) = match self.stack.pop() {
                 Some(state) => state,
                 None => continue,
             };
@@ -792,19 +796,15 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
                 let next_depth = depth + 1;
 
                 // Check max hops constraint
-                if let Some(max) = self.max_hops
+                if let Some(max) = max_hops
                     && next_depth > max
                 {
                     continue;
                 }
 
-                // Build new path
-                let mut new_path = path_edges.clone();
-                new_path.push(edge);
-
                 // Check min hops and emit
                 if next_depth >= self.min_hops {
-                    let mut row = Row::default().with(self.src_alias, Value::NodeId(edge.src));
+                    let mut row = Row::default().with(self.src_alias, Value::NodeId(start_node));
                     if let Some(edge_alias) = self.edge_alias {
                         row = row.with(edge_alias, Value::EdgeKey(edge));
                     }
@@ -815,94 +815,9 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
                 }
 
                 // Continue DFS
-                self.stack.push((next_node, next_depth, new_path));
+                self.stack.push((start_node, next_node, next_depth));
             }
         }
-    }
-}
-
-/// Aggregation iterator: groups input rows and computes aggregates
-struct AggregateIter<I: Iterator<Item = Result<Row>>> {
-    input: I,
-    group_by: Vec<String>,
-    aggregates: Vec<(AggregateFunction, String)>,
-    // Groups: key = group values, value = accumulator
-    groups: std::collections::HashMap<Vec<Value>, GroupAccumulator>,
-    input_exhausted: bool,
-}
-
-struct GroupAccumulator {
-    count: usize,
-    sum: f64,
-    avg_count: usize,
-    // For evaluating expressions per group member
-    member_rows: Vec<Row>,
-}
-
-impl<I: Iterator<Item = Result<Row>>> AggregateIter<I> {
-    fn new(input: I, group_by: Vec<String>, aggregates: Vec<(AggregateFunction, String)>) -> Self {
-        Self {
-            input,
-            group_by,
-            aggregates,
-            groups: std::collections::HashMap::new(),
-            input_exhausted: false,
-        }
-    }
-
-    /// Collect all input and group rows
-    fn collect_groups(&mut self) {
-        if self.input_exhausted {
-            return;
-        }
-
-        let group_by = self.group_by.clone();
-        for item in self.input.by_ref() {
-            match item {
-                Ok(row) => {
-                    let key = Self::extract_group_key(&group_by, &row);
-                    self.groups
-                        .entry(key)
-                        .or_insert_with(|| GroupAccumulator {
-                            count: 0,
-                            sum: 0.0,
-                            avg_count: 0,
-                            member_rows: Vec::new(),
-                        })
-                        .member_rows
-                        .push(row);
-                }
-                Err(_) => {
-                    // Errors will be propagated in next()
-                }
-            }
-        }
-        self.input_exhausted = true;
-    }
-
-    fn extract_group_key(group_by: &[String], row: &Row) -> Vec<Value> {
-        group_by
-            .iter()
-            .filter_map(|var| {
-                row.cols
-                    .iter()
-                    .find(|(k, _)| k == var)
-                    .map(|(_, v)| v.clone())
-            })
-            .collect()
-    }
-}
-
-impl<I: Iterator<Item = Result<Row>>> Iterator for AggregateIter<I> {
-    type Item = Result<Row>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        // Phase 1: Collect all input rows and group them
-        if !self.input_exhausted {
-            self.collect_groups();
-        }
-        // Phase 2: We're done after first iteration (all groups computed)
-        None
     }
 }
 
@@ -932,7 +847,7 @@ fn execute_aggregate<'a>(
             })
             .collect();
 
-        groups.entry(key).or_insert_with(Vec::new).push(row);
+        groups.entry(key).or_default().push(row);
     }
 
     // Convert to result rows

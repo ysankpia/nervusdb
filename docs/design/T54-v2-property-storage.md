@@ -250,8 +250,7 @@ impl<'a> WriteTxn<'a> {
 ## 10. References
 
 - `docs/memos/v2-status-assessment.md` - 项目状态评估
-- `docs/product/spec.md` - v2 产品规格
+- `docs/spec.md` - v2 产品规格
 - `nervusdb-v2-storage/src/memtable.rs` - MemTable 实现
 - `nervusdb-v2-storage/src/wal.rs` - WAL 实现
 - `nervusdb-v2-storage/src/snapshot.rs` - Snapshot 实现
-

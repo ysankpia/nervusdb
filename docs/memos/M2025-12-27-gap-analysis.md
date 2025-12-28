@@ -4,11 +4,13 @@
 **Status:** Updated - v2.0.0 Released
 **Target:** Aligning NervusDB v2 development with the "SQLite" vision.
 
+> 注意：本文件是历史 gap analysis 备忘录。仓库已进入 **Scope Frozen** 收尾模式，当前单一真相来源是 `docs/spec.md` 与 `docs/memos/DONE.md`；本文件里关于“单文件/多语言绑定”等判断可能已过时。
+
 ## 1. Context: "SQLite of Graph DBs"
 
 The vision is to be the default embedded choice for graph data. "SQLite" implies:
-1.  **Zero Config**: Single file, no daemon. (✅ Achieved)
-2.  **Universal**: Bindings for every language. (⚠️ Partial - Rust/Node/UniFFI, Missing Python)
+1.  **Zero Config**: No daemon, open a local path. (✅ Achieved; v2 is `.ndb + .wal`)
+2.  **Universal**: Bindings for every language. (⚠️ Not in MVP; bindings are archived)
 3.  **Reliable**: ACID, crash-safe. (✅ Achieved)
 4.  **Feature Rich**: Enough Cypher to build real apps. (⚠️ MVP only, Missing advanced features)
 
@@ -40,7 +42,7 @@ The vision is to be the default embedded choice for graph data. "SQLite" implies
 
 ## 3. v2.0.0 Completed Features
 
-Per [spec.md 6.3](/Volumes/WorkDrive/Develop/github/nervusdb/nervusdb/docs/product/spec.md):
+Per `docs/spec.md` 6.3:
 
 | Feature | Cypher | Tests | Status |
 |:--------|:-------|:-----:|:------:|

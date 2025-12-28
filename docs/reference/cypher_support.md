@@ -2,6 +2,8 @@
 
 NervusDB 的 Cypher 是"够用就行"的子集实现：目标是 **嵌入式读写 + 低开销绑定**，不是复刻 Neo4j。
 
+> 注意：本仓库进入收尾模式，文档以“不骗人”为第一原则。请以本文件为准，不要只看 README 的旧片段。
+
 ## v2 M3 子集（当前开发版本）
 
 v2 M3 是新一代查询引擎，支持通过 `nervusdb-v2-query` crate 或 CLI `v2 write/query` 子命令使用。
@@ -10,7 +12,11 @@ v2 M3 是新一代查询引擎，支持通过 `nervusdb-v2-query` crate 或 CLI 
 
 - `RETURN 1`（常量返回）
 - 单跳模式：`MATCH (a)-[:<u32>]->(b) RETURN a, b`
+- 单跳可变长度：`MATCH (a)-[:<u32>*1..5]->(b) RETURN a, b`
 - `WHERE` 属性过滤：`MATCH (a)-[:1]->(b) WHERE a.name = 'Alice' RETURN a, b`
+- `ORDER BY <var> [ASC|DESC]`（限制：M3 仅支持对变量排序）
+- `SKIP n`
+- `RETURN DISTINCT`
 - `LIMIT n`（非负整数）
 
 ### 写入
@@ -24,71 +30,36 @@ v2 M3 是新一代查询引擎，支持通过 `nervusdb-v2-query` crate 或 CLI 
 
 ### 已知限制
 
-- 仅支持单跳模式（3 个 pattern elements）
+- 仅支持单跳模式（3 个 pattern elements）；可变长度仍然必须是这一个关系上的 `*min..max`
 - 关系类型必须是数字（`:1`, `:2` 等）
 - 不支持标签（`:Label`）
-- 不支持变量长度路径
+- 不支持在 `MATCH` pattern 内写属性：`MATCH (a {name:'Alice'})-[:1]->(b)` 会 fail-fast（请用 WHERE）
 - `CREATE` 不支持 MERGE
 - `DELETE` 不支持级联删除
+- `WITH` / `UNWIND` / `UNION` / `CALL` / `SET`：明确不支持（超出即 fail-fast）
+- `OPTIONAL MATCH`：明确不支持（超出即 fail-fast）
 
----
+## 可变长度的现实边界（别踩雷）
 
-### v1 子集（稳定版本）
+- `*` 的默认语义是 `*1..`（min 默认为 1）
+- **max 省略时不会无限遍历**：执行器会用默认上限（当前为 5 hops）做硬截断
+- `*0` / `*0..`：明确不支持（0 长度路径会把边界条件搞成屎）
+- `*max<min`：直接报错
 
-v1 通过 `nervusdb-core` crate 提供，是成熟的查询引擎。
+## 输出与类型（v2 CLI）
 
-#### v1 读取操作
+`nervusdb-cli v2 query` 输出 NDJSON，每行一条 JSON 记录；列名来自 `RETURN` 的变量名。
 
-- `MATCH (n)` / `MATCH (n:Label)`
-- 关系模式：`MATCH (a)-[r]->(b)`（支持链式多跳）
-- `WHERE`：
-  - 属性访问：`n.age` / `n.name`
-  - 比较：`=, >, >=, <, <=`
-  - 逻辑：`AND, OR`
-  - 算术：`+`（用于表达式）
-  - 参数绑定：`$param`
-- `RETURN`：
-  - 变量：`RETURN n`
-  - 属性：`RETURN n.name, n.age`
-  - 别名：`RETURN n AS x`
-- `LIMIT n`
+目前会出现的值类型：
 
-#### v1 写入操作
+- `null`
+- `bool`
+- `number`（整数/浮点）
+- `string`
+- `{"internal_node_id": <u32>}`（内部节点 ID）
+- `{"src": <u32>, "rel": <u32>, "dst": <u32>}`（边 key）
 
-- `CREATE`（单条语句）
-  - 节点：`CREATE (n:Person)`
-  - 节点属性：`CREATE (n:Person {name: "Alice", age: 25.0})`
-  - 关系：`CREATE (a)-[:KNOWS]->(b)` / `CREATE (a)-[r:KNOWS {since: 2020}]->(b)`
-- `SET`：
-  - `SET n.age = 30.0`
-  - `SET n.age = n.age + 5.0`
-  - 多字段：`SET n.age = 28.0, n.city = "NYC"`
-- `DELETE` / `DETACH DELETE`
-
-## 输出值类型
-
-Statement 的 `columnType()` / `column_*()` 对齐 C ABI：
-
-- `Null`
-- `Text`
-- `Float`
-- `Bool`
-- `Node`：节点 ID（`u64` / JS `bigint`）
-- `Relationship`：三元组 `{subjectId,predicateId,objectId}`
-
-## 列名与顺序规则
-
-- 有 `RETURN`：按 `RETURN` 的顺序输出列；如果出现重名列会报错（要求显式 alias）。
-- 无 `RETURN`：从结果集 key 集合推导，按字典序稳定排序。
-
-## 不支持 / 已知限制
+## fail-fast 规则
 
 - 这不是完整 Cypher：未承诺覆盖 Neo4j 的全部语法与优化器行为。
 - **白名单之外的语法会 fail-fast**：返回 `not implemented: <feature>`。
-- 明确不支持：
-  - `OPTIONAL MATCH`
-  - `WITH`
-  - `UNION`
-  - `ORDER BY`
-  - `SKIP`
-  - `RETURN DISTINCT`

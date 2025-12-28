@@ -192,7 +192,7 @@ fn test_variable_length_min_only() {
 
     // Should find at least the a->b->c path
     assert!(
-        rows.len() >= 1,
+        !rows.is_empty(),
         "Should find at least 1 path with min 2 hops"
     );
     println!("Variable length min only test: {} rows", rows.len());
@@ -231,7 +231,7 @@ fn test_variable_length_max_only() {
 
     // Should find at least the a->b path
     assert!(
-        rows.len() >= 1,
+        !rows.is_empty(),
         "Should find at least 1 path with max 2 hops"
     );
     println!("Variable length max only test: {} rows", rows.len());
@@ -269,7 +269,7 @@ fn test_variable_length_exact() {
     .unwrap();
 
     // Should find at least the a->b->c path
-    assert!(rows.len() >= 1, "Should find at least 1 path with 2 hops");
+    assert!(!rows.is_empty(), "Should find at least 1 path with 2 hops");
     println!("Variable length exact test: {} rows", rows.len());
 }
 
@@ -339,7 +339,7 @@ fn test_variable_length_no_path() {
     // Note: Due to DFS from all nodes, we might find paths, but verify none from b to a
     let has_b_to_a = rows.iter().any(|row| {
         let cols = row.columns();
-        if let Some((_, Value::NodeId(node_id))) = cols.get(0) {
+        if let Some((_, Value::NodeId(node_id))) = cols.first() {
             return *node_id == 1; // b is node with external_id 2 (internal_id 1)
         }
         false

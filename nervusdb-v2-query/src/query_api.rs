@@ -180,6 +180,16 @@ fn compile_m3_plan(query: Query) -> Result<Plan> {
     if !src.labels.is_empty() || !dst.labels.is_empty() {
         return Err(Error::NotImplemented("labels in v2 M3"));
     }
+    if src.properties.is_some() || dst.properties.is_some() {
+        return Err(Error::NotImplemented(
+            "node pattern properties in v2 M3 (use WHERE)",
+        ));
+    }
+    if rel_pat.properties.is_some() {
+        return Err(Error::NotImplemented(
+            "relationship pattern properties in v2 M3 (use WHERE)",
+        ));
+    }
 
     let src_alias = src
         .variable
@@ -206,33 +216,53 @@ fn compile_m3_plan(query: Query) -> Result<Plan> {
 
     let mut project: Vec<String> = Vec::new();
     for item in &ret.items {
-        let name = match &item.expression {
-            Expression::Variable(v) => v.clone(),
-            Expression::FunctionCall(_) | Expression::List(_) | Expression::Literal(_) => item
-                .alias
-                .clone()
-                .unwrap_or_else(|| match &item.expression {
-                    Expression::FunctionCall(fc) => fc.name.clone(),
-                    Expression::List(_) => "list".to_string(),
-                    Expression::Literal(l) => format!("{:?}", l),
-                    _ => "expr".to_string(),
-                }),
-            _ => return Err(Error::NotImplemented("expression projection in v2 M3")),
+        let Expression::Variable(name) = &item.expression else {
+            return Err(Error::NotImplemented(
+                "only variable projections in v2 M3 (use RETURN 1 or RETURN <var>...)",
+            ));
         };
-        project.push(item.alias.clone().unwrap_or(name));
+        project.push(item.alias.clone().unwrap_or_else(|| name.clone()));
     }
 
     // Don't use embedded limit when we have RETURN limit - we'll use separate Limit node
     let limit = if ret.limit.is_some() { None } else { ret.limit };
 
-    let mut plan = Plan::MatchOut {
-        src_alias,
-        rel,
-        edge_alias,
-        dst_alias,
-        limit,
-        project: project.clone(),
-        project_external: false,
+    let mut plan = if let Some(var_len) = &rel_pat.variable_length {
+        let min_hops = var_len.min.unwrap_or(1);
+        let max_hops = var_len.max;
+        if min_hops == 0 {
+            return Err(Error::NotImplemented(
+                "0-length variable-length paths in v2 M3",
+            ));
+        }
+        if let Some(max_hops) = max_hops
+            && max_hops < min_hops
+        {
+            return Err(Error::Other(
+                "invalid variable-length range: max < min".into(),
+            ));
+        }
+        Plan::MatchOutVarLen {
+            src_alias,
+            rel,
+            edge_alias,
+            dst_alias,
+            min_hops,
+            max_hops,
+            limit,
+            project: project.clone(),
+            project_external: false,
+        }
+    } else {
+        Plan::MatchOut {
+            src_alias,
+            rel,
+            edge_alias,
+            dst_alias,
+            limit,
+            project: project.clone(),
+            project_external: false,
+        }
     };
 
     // Add WHERE filter if present
@@ -277,7 +307,7 @@ fn compile_m3_plan(query: Query) -> Result<Plan> {
     if let Some(skip) = ret.skip {
         plan = Plan::Skip {
             input: Box::new(plan),
-            skip: skip as u32,
+            skip,
         };
     }
 
@@ -285,7 +315,7 @@ fn compile_m3_plan(query: Query) -> Result<Plan> {
     if let Some(limit) = ret.limit {
         plan = Plan::Limit {
             input: Box::new(plan),
-            limit: limit as u32,
+            limit,
         };
     }
 
@@ -362,6 +392,16 @@ fn compile_delete_plan(
 
     if !src.labels.is_empty() || !dst.labels.is_empty() {
         return Err(Error::NotImplemented("labels with DELETE in v2 M3"));
+    }
+    if src.properties.is_some() || dst.properties.is_some() {
+        return Err(Error::NotImplemented(
+            "node pattern properties with DELETE in v2 M3 (use WHERE)",
+        ));
+    }
+    if rel_pat.properties.is_some() {
+        return Err(Error::NotImplemented(
+            "relationship pattern properties with DELETE in v2 M3 (use WHERE)",
+        ));
     }
 
     let src_alias = src

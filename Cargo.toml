@@ -1,13 +1,9 @@
 [workspace]
 members = [
-    "nervusdb-core",
-    "nervusdb-temporal",
-    "bindings/node/native/nervusdb-node",
-    "bindings/uniffi/nervusdb-uniffi",
-    "nervusdb-cli"
-, "nervusdb-v2-storage"
-, "nervusdb-v2"
-, "nervusdb-v2-api"
-, "nervusdb-v2-query"
+    "nervusdb-cli",
+    "nervusdb-v2",
+    "nervusdb-v2-api",
+    "nervusdb-v2-query",
+    "nervusdb-v2-storage",
 ]
 resolver = "2"

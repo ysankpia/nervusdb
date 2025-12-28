@@ -1,8 +1,4 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use nervusdb_core::query::executor::Value as V1Value;
-use nervusdb_core::query::parser::Parser as CypherParser;
-use nervusdb_core::query::planner::QueryPlanner;
-use nervusdb_core::{Database, Options};
 use nervusdb_v2::Db;
 use nervusdb_v2_api::GraphStore;
 use nervusdb_v2_query::Value as V2Value;
@@ -11,7 +7,6 @@ use nervusdb_v2_storage::engine::GraphEngine;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(name = "nervusdb", version, arg_required_else_help = true)]
@@ -22,7 +17,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Query(QueryArgs),
     V2(V2Args),
 }
 
@@ -41,28 +35,6 @@ enum V2Commands {
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum OutputFormat {
     Ndjson,
-}
-
-#[derive(Parser)]
-struct QueryArgs {
-    /// Database base path (core will use `<path>.redb`)
-    #[arg(long)]
-    db: PathBuf,
-
-    /// Cypher query string
-    #[arg(long, conflicts_with = "file")]
-    cypher: Option<String>,
-
-    /// Read Cypher query from file
-    #[arg(long)]
-    file: Option<PathBuf>,
-
-    /// Parameters as a JSON object (e.g. '{\"name\":\"alice\"}')
-    #[arg(long)]
-    params_json: Option<String>,
-
-    #[arg(long, value_enum, default_value = "ndjson")]
-    format: OutputFormat,
 }
 
 #[derive(Parser)]
@@ -106,31 +78,6 @@ struct V2WriteArgs {
     params_json: Option<String>,
 }
 
-fn value_to_json_v1(value: &V1Value) -> serde_json::Value {
-    match value {
-        V1Value::String(s) => serde_json::Value::String(s.clone()),
-        V1Value::Float(f) => serde_json::json!(f),
-        V1Value::Boolean(b) => serde_json::Value::Bool(*b),
-        V1Value::Null => serde_json::Value::Null,
-        V1Value::Vector(items) => serde_json::Value::Array(
-            items
-                .iter()
-                .map(|f| {
-                    serde_json::Number::from_f64(*f as f64)
-                        .map(serde_json::Value::Number)
-                        .unwrap_or(serde_json::Value::Null)
-                })
-                .collect(),
-        ),
-        V1Value::Node(id) => serde_json::json!({ "node_id": id }),
-        V1Value::Relationship(triple) => serde_json::json!({
-            "subject_id": triple.subject_id,
-            "predicate_id": triple.predicate_id,
-            "object_id": triple.object_id,
-        }),
-    }
-}
-
 fn value_to_json_v2(value: &V2Value) -> serde_json::Value {
     match value {
         V2Value::NodeId(iid) => serde_json::json!({ "internal_node_id": iid }),
@@ -142,21 +89,6 @@ fn value_to_json_v2(value: &V2Value) -> serde_json::Value {
         V2Value::Bool(b) => serde_json::Value::Bool(*b),
         V2Value::Null => serde_json::Value::Null,
     }
-}
-
-fn parse_params_json_v1(raw: Option<String>) -> Result<HashMap<String, V1Value>, String> {
-    let Some(raw) = raw else {
-        return Ok(HashMap::new());
-    };
-    if raw.trim().is_empty() {
-        return Ok(HashMap::new());
-    }
-    let parsed: HashMap<String, serde_json::Value> = serde_json::from_str(&raw)
-        .map_err(|e| format!("params_json must be a JSON object: {e}"))?;
-    Ok(parsed
-        .into_iter()
-        .map(|(k, v)| (k, Database::serde_value_to_executor_value(v)))
-        .collect())
 }
 
 fn parse_params_json_v2(raw: Option<String>) -> Result<nervusdb_v2_query::Params, String> {
@@ -197,41 +129,6 @@ fn read_query(cypher: Option<&String>, file: Option<&PathBuf>) -> Result<String,
     };
     std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read query file {}: {e}", path.display()))
-}
-
-fn run_query(args: QueryArgs) -> Result<(), String> {
-    let query = read_query(args.cypher.as_ref(), args.file.as_ref())?;
-    let params = parse_params_json_v1(args.params_json)?;
-
-    #[allow(clippy::arc_with_non_send_sync)]
-    let db = Arc::new(Database::open(Options::new(&args.db)).map_err(|e| e.to_string())?);
-    let ast = CypherParser::parse(query.as_str()).map_err(|e| e.to_string())?;
-    let plan = QueryPlanner::new().plan(ast).map_err(|e| e.to_string())?;
-
-    #[allow(clippy::arc_with_non_send_sync)]
-    let ctx = Arc::new(nervusdb_core::query::executor::ArcExecutionContext::new(
-        Arc::clone(&db),
-        params,
-    ));
-    let mut stdout = std::io::stdout().lock();
-
-    match args.format {
-        OutputFormat::Ndjson => {
-            let iter = plan.execute_streaming(ctx).map_err(|e| e.to_string())?;
-            for item in iter {
-                let record = item.map_err(|e| e.to_string())?;
-                let mut map = serde_json::Map::with_capacity(record.values.len());
-                for (k, v) in &record.values {
-                    map.insert(k.clone(), value_to_json_v1(v));
-                }
-                serde_json::to_writer(&mut stdout, &serde_json::Value::Object(map))
-                    .map_err(|e| e.to_string())?;
-                stdout.write_all(b"\n").map_err(|e| e.to_string())?;
-            }
-        }
-    }
-
-    Ok(())
 }
 
 fn run_v2_query(args: V2QueryArgs) -> Result<(), String> {
@@ -288,7 +185,6 @@ fn run_v2_write(args: V2WriteArgs) -> Result<(), String> {
 fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
-        Commands::Query(args) => run_query(args),
         Commands::V2(args) => match args.command {
             V2Commands::Query(args) => run_v2_query(args),
             V2Commands::Write(args) => run_v2_write(args),

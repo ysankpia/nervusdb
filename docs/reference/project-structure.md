@@ -1,24 +1,18 @@
 # NervusDB 仓库结构
 
-这仓库已经完成“胖核心 / 薄绑定”的收敛：Rust 核心负责存储/查询/事务/FFI；各语言绑定只做参数转换与调用。
+这仓库收敛为 **v2 内核（Rust-first）**：存储/查询/CLI 都围绕 v2 的 `.ndb + .wal` 模型。
 
 ## 顶层目录
 
 ```
 nervusdb/
-├── nervusdb-core/                 # Rust 核心（redb 单文件存储、查询、算法、C FFI）
-│   ├── src/
-│   ├── include/nervusdb.h         # 公开 C 头文件（ABI 契约）
-│   └── examples/                  # core benchmark / FFI 示例
-├── bindings/
-│   ├── node/                      # Node 包（TS 外壳 + N-API crate）
-│   │   ├── src/                   # TS API（薄包装）
-│   │   └── native/nervusdb-node/  # Rust N-API 模块（生成 .node）
-│   └── python/                    # Python PyO3 绑定
-├── nervusdb-wasm/                 # WASM 模块（单独构建）
-├── examples/                      # 仓库级示例（含 C 示例）
+├── nervusdb-v2-storage/           # v2 存储内核（pager/WAL/segments/compaction）
+├── nervusdb-v2-query/             # v2 查询引擎（parser/planner/executor）
+├── nervusdb-v2-api/               # v2 查询↔存储边界 trait
+├── nervusdb-v2/                   # v2 facade（Db/ReadTxn/WriteTxn）
+├── nervusdb-cli/                  # CLI（v2 write/query，NDJSON 输出）
 ├── docs/                          # 设计/任务/性能报告
-├── _archive/                      # 旧世界代码与遗留文档（不进核心路径）
+├── _legacy_v1_archive/            # v1/redb 与旧绑定的归档（不参与 workspace/不再维护）
 └── .github/workflows/             # CI + crash gate
 ```
 
@@ -26,20 +20,15 @@ nervusdb/
 
 ```mermaid
 graph LR
-    core[nervusdb-core] --> cffi[nervusdb.h / ffi.rs]
-    core --> nodeNative[bindings/node/native/nervusdb-node]
-    core --> py[bindings/python/nervusdb-py]
-    nodeNative --> nodeTS[bindings/node/src]
+    v2s[nervusdb-v2-storage] --> v2[nervusdb-v2]
+    v2s --> api[nervusdb-v2-api]
+    api --> q[nervusdb-v2-query]
+    v2 --> cli[nervusdb-cli]
 ```
 
 ## 构建入口
 
 ```bash
-# Rust core
+# Rust (v2 workspace)
 cargo test --workspace
-
-# Node binding
-pnpm -C bindings/node install --frozen-lockfile
-pnpm -C bindings/node build:native
-pnpm -C bindings/node test:native
 ```
