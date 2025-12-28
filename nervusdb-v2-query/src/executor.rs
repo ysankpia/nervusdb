@@ -251,6 +251,7 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
         Plan::OrderBy { input, items } => {
             let input_iter = execute_plan(snapshot, input, params);
             let rows: Vec<Result<Row>> = input_iter.collect();
+            #[allow(clippy::type_complexity)]
             let mut sortable: Vec<(Result<Row>, Vec<(Value, Direction)>)> = rows
                 .into_iter()
                 .map(|row| {
@@ -781,6 +782,7 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutIter<'a, S> {
 /// Variable-length path iterator using DFS
 const DEFAULT_MAX_VAR_LEN_HOPS: u32 = 5;
 
+#[allow(clippy::too_many_arguments)]
 struct MatchOutVarLenIter<'a, S: GraphSnapshot + 'a> {
     snapshot: &'a S,
     src_alias: &'a str,
@@ -797,6 +799,7 @@ struct MatchOutVarLenIter<'a, S: GraphSnapshot + 'a> {
 }
 
 impl<'a, S: GraphSnapshot + 'a> MatchOutVarLenIter<'a, S> {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         snapshot: &'a S,
         src_alias: &'a str,

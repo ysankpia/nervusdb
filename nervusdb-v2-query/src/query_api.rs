@@ -418,10 +418,10 @@ fn compile_create_plan(create_clause: crate::ast::CreateClause) -> Result<Plan> 
 
     // v2 M3: labels are not supported yet (fail-fast instead of silently ignoring)
     for el in &create_clause.pattern.elements {
-        if let crate::ast::PathElement::Node(node) = el {
-            if !node.labels.is_empty() {
-                return Err(Error::NotImplemented("labels in CREATE in v2 M3"));
-            }
+        if let crate::ast::PathElement::Node(node) = el
+            && !node.labels.is_empty()
+        {
+            return Err(Error::NotImplemented("labels in CREATE in v2 M3"));
         }
     }
 

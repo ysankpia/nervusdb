@@ -1,8 +1,8 @@
-# NervusDB v2 代码审查报告（2025-12-28，工作区 commit 87997e40）
+# NervusDB v2 代码审查报告（2025-12-28，工作区 commit 084460a5）
 
 生成方式：
-- 使用 `repomix` 打包（outputId: `1ccfdcb0aac4c5f9`，排除 `_legacy_v1_archive/` 与 `target/`）做静态审查
-- 以 `git ls-files` 的真实文件清单为准（本次审查范围：139 个文件）
+- 使用 `repomix` 打包（outputId: `e9188a4686aaefbc`，排除 `_legacy_v1_archive/` 与 `target/`）做静态审查
+- 以 `git ls-files` 的真实文件清单为准（本次审查范围：v2 主线 + docs/scripts，共 126 个文件）
 
 ## 0) Linus 的三问（先别自嗨）
 
@@ -27,13 +27,16 @@
 ## 【Taste Rating】
 
 - 🟢 **v2-storage**：整体结构清晰，内核化思路正确（Pager/WAL/Manifest/Checkpoint 的边界能讲清）。  
-- 🟡 **v2-query**：可用，但有明显“未来功能残留”痕迹（planner/部分算子未被 v2 API 路径使用，容易让支持矩阵漂移）。  
+- 🟡 **v2-query**：可用，但需要持续保持“白名单 + fail-fast”纪律（否则支持矩阵会漂移）。  
 - 🟢 **CLI**：务实，NDJSON 输出很对路（可管道处理、可脚本化）。
 
 ## 【本次实际修正（防止“假支持”）】
 
+- v2 WHERE 现在支持边属性访问（`r.weight`），不再返回 `NULL` 造成静默过滤（P0 正确性修复）。
 - v2 可变长度路径真正落地到执行：`prepare()` 会为 `[:<u32>*min..max]` 生成 `MatchOutVarLen`，并对 `*` 缺省施加 hop 上限（避免无限遍历）。
 - v2 `MATCH` 模式属性 fail-fast：`MATCH (n {name:'Alice'})` 和 `MATCH ()-[:1 {k:v}]->()` 这类 **以前会被静默忽略**，现在直接 `not implemented`（强制用户用 `WHERE`）。
+- v2 DELETE 改为流式处理并加入硬上限（`100_000`），避免一次语句把内存炸穿（超限 fail-fast，逼用户分批）。
+- v2 CLI 节点输出补齐 `external_id`（可用时），不再只露 internal id。
 - 清理无用测试/代码：删除“看起来像支持聚合但其实不算”的测试，避免误导。
 - 文档对齐：`README.md`/`docs/spec.md`/`docs/reference/cypher_support.md` 与当前 v2-only 仓库事实一致；v1 发布/性能文档移入 `_legacy_v1_archive/`。
 
@@ -48,10 +51,16 @@
 
 1. **可变长度路径的“爆炸”风险（Medium）**  
    已通过默认 hop 上限缓解，但仍可能产生大量结果（尤其是高出度图）。如果你以后开放 `*..` 真无限，你就是在自杀。
-2. **Query API 与 Planner 并存（Low/Medium）**  
-   `nervusdb-v2-query/src/planner.rs` 不是当前 `prepare()` 的执行路径。要么删掉/归档，要么明确“planner 是未来，不属于 MVP”，否则文档必漂。
-3. **Clippy 警告（Low）**  
+2. **Clippy 警告（Low）**  
    目前主要是 `type_complexity`/`too_many_arguments` 这种“品味问题”，不影响正确性；但别让它演变成“没人敢改”。
+
+## 2.1 静态扫描结果（repomix grep，快速“找雷”）
+
+- `TODO/FIXME/XXX`：只剩 1 个 TODO（DELETE 暂不支持“按边变量删除”，需要 Row 暴露 edge binding 才能做）。
+- `unwrap/expect/panic`：大量出现在测试/文档示例里；生产路径主要集中在“WAL 解码/内部不变量”，属于可接受的“内核自信”（但前提是上层边界检查必须到位）。
+- `collect()`：测试里 `collect()` 正常；执行器里需要注意两个天然“全量物化屏障”：
+  - `ORDER BY`/`DISTINCT` 这类算子本质上无法保持严格 streaming（要排序/去重就得缓存），这不是 bug，是现实。
+  - 可变长度路径/邻居枚举里出现的局部 `collect()` 会放大高出度图的成本，默认 hop 上限是必要的刹车片。
 
 ## 3) 每个文件的作用（逐文件一行）
 
@@ -105,7 +114,6 @@
 - `docs/memos/M2025-12-27-gap-analysis.md`: 历史 gap analysis（已标注 scope frozen 后可能过时）。
 - `docs/memos/v2-next-steps.md`: v2 后续建议（可作为 backlog，但不属于 MVP）。
 - `docs/memos/v2-status-assessment.md`: v2 状态评估（历史视角，含与 v1 对比）。
-- `docs/memos/CODE_REVIEW_2025-12-27.md`: 旧的全仓库审查报告（包含 v1/绑定，现已过时）。
 - `docs/memos/CODE_REVIEW_2025-12-28.md`: 本文件（v2-only 审查报告）。
 
 #### 3.4.2 docs/design（设计文档）
@@ -228,14 +236,14 @@
 - `nervusdb-v2-query/src/evaluator.rs`: WHERE 表达式求值（对 Row/Params/GraphSnapshot）。
 - `nervusdb-v2-query/src/executor.rs`: Plan 执行器（pull-based iterator，包括 var-len DFS）。
 - `nervusdb-v2-query/src/facade.rs`: `query_collect()` 与 `QueryExt`（便利 API）。
-- `nervusdb-v2-query/src/planner.rs`: 规划器（当前不在 `prepare()` 执行路径，属于“未来/历史残留”）。
 - `nervusdb-v2-query/tests/create_test.rs`: CREATE/DELETE/DETACH DELETE 测试。
-- `nervusdb-v2-query/tests/filter_test.rs`: WHERE 过滤测试。
+- `nervusdb-v2-query/tests/filter_test.rs`: WHERE 过滤测试（含边属性过滤）。
 - `nervusdb-v2-query/tests/limit_boundary_test.rs`: LIMIT 边界测试（含 RETURN 1）。
 - `nervusdb-v2-query/tests/t52_query_api.rs`: Query API 冒烟测试。
 - `nervusdb-v2-query/tests/t53_integration_storage.rs`: v2-storage + v2-query 端到端测试。
 - `nervusdb-v2-query/tests/t60_variable_length_test.rs`: 可变长度路径测试（*、范围、limit 等）。
 - `nervusdb-v2-query/tests/t62_order_by_skip_test.rs`: ORDER BY/SKIP/DISTINCT/LIMIT 组合测试。
+- `nervusdb-v2-query/tests/t64_node_scan_test.rs`: 单节点扫描（MATCH (n)）与 DELETE 冒烟测试。
 
 #### 3.6.5 `nervusdb-cli/`
 

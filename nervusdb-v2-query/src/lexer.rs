@@ -324,11 +324,11 @@ impl<'a> Lexer<'a> {
                 // Peek ahead to see if this is a range operator (..) or float (2.5)
                 let mut chars = self.chars.clone();
                 chars.next(); // consume the '.'
-                if let Some(&next_char) = chars.peek() {
-                    if next_char == '.' {
-                        // This is a range operator, not a float
-                        break;
-                    }
+                if let Some(&next_char) = chars.peek()
+                    && next_char == '.'
+                {
+                    // This is a range operator, not a float
+                    break;
                 }
                 // It's a float
                 has_dot = true;
