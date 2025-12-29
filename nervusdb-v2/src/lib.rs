@@ -4,6 +4,7 @@ use nervusdb_v2_storage::engine::GraphEngine;
 use nervusdb_v2_storage::snapshot::{EdgeKey, RelTypeId, Snapshot};
 use std::path::{Path, PathBuf};
 
+pub use nervusdb_v2_query as query;
 pub use nervusdb_v2_storage::idmap::{ExternalId, InternalNodeId, LabelId};
 pub use nervusdb_v2_storage::{Error, Result};
 
@@ -284,5 +285,67 @@ fn derive_paths(path: &Path) -> (PathBuf, PathBuf) {
         Some("ndb") => (path.to_path_buf(), path.with_extension("wal")),
         Some("wal") => (path.with_extension("ndb"), path.to_path_buf()),
         _ => (path.with_extension("ndb"), path.with_extension("wal")),
+    }
+}
+
+// Implement WriteableGraph for Facade WriteTxn
+// This bridges the Facade (v2) with the Query Engine (v2-query)
+impl nervusdb_v2_query::WriteableGraph for WriteTxn<'_> {
+    fn create_node(
+        &mut self,
+        external_id: ExternalId,
+        label_id: LabelId,
+    ) -> nervusdb_v2_query::Result<InternalNodeId> {
+        self.inner
+            .create_node(external_id, label_id)
+            .map_err(|e| nervusdb_v2_query::Error::Other(e.to_string()))
+    }
+
+    fn create_edge(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+    ) -> nervusdb_v2_query::Result<()> {
+        self.inner.create_edge(src, rel, dst);
+        Ok(())
+    }
+
+    fn set_node_property(
+        &mut self,
+        node: InternalNodeId,
+        key: String,
+        value: nervusdb_v2_storage::property::PropertyValue,
+    ) -> nervusdb_v2_query::Result<()> {
+        // Query Engine uses storage PropertyValue directly now (from re-export)
+        self.inner.set_node_property(node, key, value);
+        Ok(())
+    }
+
+    fn set_edge_property(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+        key: String,
+        value: nervusdb_v2_storage::property::PropertyValue,
+    ) -> nervusdb_v2_query::Result<()> {
+        self.inner.set_edge_property(src, rel, dst, key, value);
+        Ok(())
+    }
+
+    fn tombstone_node(&mut self, node: InternalNodeId) -> nervusdb_v2_query::Result<()> {
+        self.inner.tombstone_node(node);
+        Ok(())
+    }
+
+    fn tombstone_edge(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+    ) -> nervusdb_v2_query::Result<()> {
+        self.inner.tombstone_edge(src, rel, dst);
+        Ok(())
     }
 }

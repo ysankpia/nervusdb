@@ -296,6 +296,7 @@ name = "nervusdb-v2"
 version = "0.1.0"
 dependencies = [
  "nervusdb-v2-api",
+ "nervusdb-v2-query",
  "nervusdb-v2-storage",
  "tempfile",
 ]

@@ -385,71 +385,11 @@ pub trait WriteableGraph {
 
 pub use nervusdb_v2_storage::property::PropertyValue;
 
-// Implement WriteableGraph for nervusdb-v2 WriteTxn
-mod txn_adapter {
+// Implement WriteableGraph for nervusdb-v2-storage::engine::WriteTxn
+// This is allowed because `nervusdb-v2-storage` is a dependency of `nervusdb-v2-query`
+mod txn_engine_impl {
     use super::*;
-    use nervusdb_v2::WriteTxn as DbWriteTxn;
     use nervusdb_v2_storage::engine::WriteTxn as EngineWriteTxn;
-
-    impl<'a> WriteableGraph for DbWriteTxn<'a> {
-        fn create_node(
-            &mut self,
-            external_id: ExternalId,
-            label_id: LabelId,
-        ) -> Result<InternalNodeId> {
-            DbWriteTxn::create_node(self, external_id, label_id)
-                .map_err(|e| Error::Other(e.to_string()))
-        }
-
-        fn create_edge(
-            &mut self,
-            src: InternalNodeId,
-            rel: RelTypeId,
-            dst: InternalNodeId,
-        ) -> Result<()> {
-            DbWriteTxn::create_edge(self, src, rel, dst);
-            Ok(())
-        }
-
-        fn set_node_property(
-            &mut self,
-            node: InternalNodeId,
-            key: String,
-            value: PropertyValue,
-        ) -> Result<()> {
-            let value = convert_to_db(value);
-            let _ = DbWriteTxn::set_node_property(self, node, key, value);
-            Ok(())
-        }
-
-        fn set_edge_property(
-            &mut self,
-            src: InternalNodeId,
-            rel: RelTypeId,
-            dst: InternalNodeId,
-            key: String,
-            value: PropertyValue,
-        ) -> Result<()> {
-            let value = convert_to_db(value);
-            let _ = DbWriteTxn::set_edge_property(self, src, rel, dst, key, value);
-            Ok(())
-        }
-
-        fn tombstone_node(&mut self, node: InternalNodeId) -> Result<()> {
-            DbWriteTxn::tombstone_node(self, node);
-            Ok(())
-        }
-
-        fn tombstone_edge(
-            &mut self,
-            src: InternalNodeId,
-            rel: RelTypeId,
-            dst: InternalNodeId,
-        ) -> Result<()> {
-            DbWriteTxn::tombstone_edge(self, src, rel, dst);
-            Ok(())
-        }
-    }
 
     impl<'a> WriteableGraph for EngineWriteTxn<'a> {
         fn create_node(
@@ -506,16 +446,6 @@ mod txn_adapter {
         ) -> Result<()> {
             EngineWriteTxn::tombstone_edge(self, src, rel, dst);
             Ok(())
-        }
-    }
-
-    fn convert_to_db(v: PropertyValue) -> nervusdb_v2::PropertyValue {
-        match v {
-            PropertyValue::Null => nervusdb_v2::PropertyValue::Null,
-            PropertyValue::Bool(b) => nervusdb_v2::PropertyValue::Bool(b),
-            PropertyValue::Int(i) => nervusdb_v2::PropertyValue::Int(i),
-            PropertyValue::Float(f) => nervusdb_v2::PropertyValue::Float(f),
-            PropertyValue::String(s) => nervusdb_v2::PropertyValue::String(s),
         }
     }
 }
