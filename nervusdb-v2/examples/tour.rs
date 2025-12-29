@@ -82,12 +82,9 @@ fn main() -> Result<()> {
     let cypher = "MATCH (p)-[r:1]->(m) WHERE m.title = 'The Matrix' RETURN p, r";
 
     let snapshot = db.snapshot();
-    let rows = snapshot.query(cypher, &Params::default()).map_err(|e| {
-        nervusdb_v2::Error::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            e.to_string(),
-        ))
-    })?;
+    let rows = snapshot
+        .query(cypher, &Params::default())
+        .map_err(|e| nervusdb_v2::Error::Io(std::io::Error::other(e.to_string())))?;
 
     println!("Found {} row(s):", rows.len());
     for (i, row) in rows.iter().enumerate() {
