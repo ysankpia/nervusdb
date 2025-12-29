@@ -1,53 +1,38 @@
-# NervusDB 1.0 落地路线图 (Rust-First Edition)
+# NervusDB 1.0 Roadmap (Revised: Post-MVP Pivot)
 
-> **目标**：打造 Rust 生态中最优秀的嵌入式图数据库 ("The SQLite of Graph DBs for Rust")。
-> **策略**：暂缓多语言绑定，集中火力打磨 Rust Native 体验 (API, Docs, CLI)。
+> **Goal**: Transform from "Skeleton MVP" to "Usage Ready".
+> **Strategy**: Defer v1.0 release. Focus on core usability (String Labels) and foundation (Indexing) to bridge the gap between "toy" and "tool".
 
-## 1. 核心理念：什么是 Rust 界的 "SQLite 体验"？
+## Phase 1: Usability (v0.2.0 - The "Human" Update)
+**Goal**: Users write Cypher with names, not internal IDs.
 
-1.  **极简集成**: `cargo add nervusdb` → `use nervusdb::prelude::*;` → `Db::open("graph.ndb")`。
-2.  **零配置**: 默认合理的参数，不需要调优即可用于生产。
-3.  **可调试性**: 必须有一个强大的 CLI 工具 (`nervusdb-cli`) 用于查看数据、执行 Ad-hoc 查询。
-4.  **类型安全**: 充分利用 Rust 类型系统 (Serde 支持, 强类型参数)。
+- [ ] **Must-Have**: String Label & Type Support in Cypher
+    - `MATCH (n:Person)` instead of `MATCH (n)-[:1]->(m)`.
+    - Auto-interning integration in Parser/Planner.
+- [ ] **Must-Have**: Resilience Testing (Chaos Engineering)
+    - "Kill-Verify-Restart" loop. Ensure `LabelInterner` metadata is perfectly durable.
+- [ ] **Nice-to-Have**: Error Codes
+    - Replace generic strings with `Error::Syntax`, `Error::Storage` etc.
 
-## 2. 1.0 落地行动计划 (Action Roadmap)
+## Phase 2: Performance (v0.3.0 - The "Index" Update)
+**Goal**: Solve the "Full Scan" bottleneck.
 
-### 🚀 Phase 1: API 与 开发者体验 (The Rust DX)
-**目标**：让 Rust 开发者用得爽。
+- [ ] **Must-Have**: Secondary Indexes
+    - `CREATE INDEX ON :Person(name)`.
+    - In-memory B-Tree (MVP) or Disk-based B-Tree (Ideal).
+    - Query Optimizer support for `Plan::IndexScan`.
+- [ ] **Must-Have**: Disk-based IdMap
+    - Move `HashMap<ExternalId, InternalId>` to `redb` or on-disk hash table to cap memory usage.
 
-- [ ] **R1. Facade API 清洗**:
-    - 审查 `nervusdb-v2` 的 `pub` 导出。确保没有内部类型泄露。
-    - 确保 `Db`, `Txn`, `Query` 的命名和用法符合 Rust 惯例（类似 `rusqlite` 或 `sled`）。
-    - 增加 Feature Flags (`async`, `serde`, `full`) 管理。
-- [ ] **R2. 示例工程 (Examples)**:
-    - `examples/hello_world.rs`: 基础增删改查。
-    - `examples/social_network.rs`: 复杂图查询演示。
-    - `examples/axum_integration.rs`: Web 服务集成演示。
-- [ ] **R3. CLI 增强**:
-    - 让 `nervusdb-cli` 支持 REPL (Read-Eval-Print Loop)。
-    - 支持 `.schema` 查看元数据。
+## Phase 3: Advanced (v1.0.0 - Production Ready)
+**Goal**: Optimization and Concurrency.
 
-### � Phase 2: 文档与生态 (Docs & Ecosystem)
-**目标**：消除上手门槛。
+- [ ] **Optimizer**: Join reordering based on statistics.
+- [ ] **Advanced Traversal**: Bi-directional search / BFS for variable length paths.
+- [ ] **Concurrency**: MVCC for non-blocking reads during high writes.
 
-- [ ] **R4. RustDoc 覆盖**:
-    - 所有 `pub` item 必须有文档。
-    - 顶层 crate 文档必须包含 Quickstart。
-- [ ] **R5. The NervusDB Book**:
-    - 类似 `mdBook` 的简明教程（原理、最佳实践、Cypher 语法速查）。
-- [ ] **R6. Crates.io 发布准备**:
-    - 清理 `Cargo.toml` 元数据 (License, Keywords, Repository)。
-    - 确保 `cargo publish --dry-run` 通过。
+## Immediate Action Plan (Sprint 1)
 
-### �️ Phase 3: 质量与发布 (Quality & Release)
-**目标**：建立信任。
-
-- [ ] **R7. 模糊测试 (Fuzzing)**:
-    - 集成 `arbitrary` 和 `libfuzzer`，对 `nervusdb-v2-query` 进行语法树变异攻击。
-- [ ] **R8. 性能基准 (Benchmarks)**:
-    - 在 README 中展示真实场景下的 RPS (Reads/Writes Per Second)。
-
-## 3. 立即执行 (Next Steps)
-
-1.  **重置任务板**: 生成新的 `docs/tasks.md`，聚焦于 Rust API 和 CLI。
-2.  **Demo 驱动开发**: 写一个 `examples/tour.rs`，模拟用户第一次使用的全过程，发现 API 的痛点。
+1.  **T65**: Query Engine Upgrade - Support String Labels/Types.
+2.  **T66**: Persistence Verification - "Kill -9" tests for metadata.
+3.  **T67**: API Cleanup - Hide `InternalId`, finalize public facade.
