@@ -1,6 +1,12 @@
 [package]
 name = "nervusdb-v2"
 version = "0.1.0"
+license = "AGPL-3.0-only"
+description = "NervusDB: The SQLite of Graph Databases for Rust. (Facade)"
+readme = "../README.md"
+keywords = ["graph", "database", "embedded", "cypher", "sqlite"]
+categories = ["database", "embedded", "data-structures"]
+repository = "https://github.com/LuQing-Studio/nervusdb"
 edition = "2021"
 
 [dependencies]

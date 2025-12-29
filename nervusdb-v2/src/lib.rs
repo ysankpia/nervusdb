@@ -1,3 +1,50 @@
+//! # NervusDB v2 (Rust-First Edition)
+//!
+//! **The "SQLite" of Graph Databases for Rust.**
+//!
+//! NervusDB is an embedded graph database designed for local-first applications.
+//! It provides a unified, zero-config experience for managing persistent graph data
+//! with strong consistency and safety guarantees.
+//!
+//! ## 🚀 Quickstart
+//!
+//! Add `nervusdb` to your `Cargo.toml`. Then, you can start building your graph:
+//!
+//! ```rust,no_run
+//! use nervusdb_v2::{Db, Result};
+//!
+//! fn main() -> Result<()> {
+//!     // 1. Open the database (creates .ndb and .wal files)
+//!     let db = Db::open("my_graph.ndb")?;
+//!
+//!     // 2. Write Data
+//!     let mut txn = db.begin_write();
+//!     // (APIs for node creation in progress, see examples/tour.rs)
+//!     txn.commit()?;
+//!
+//!     // 3. Query Data (Cypher)
+//!     let snapshot = db.snapshot();
+//!     // snapshot.query("MATCH (n) RETURN n", ...);
+//!
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## 💡 Core Concepts
+//!
+//! - **[`Db`]**: The entry point. Handles file management, locking, and engine initialization.
+//!   Safe to share across threads (it uses internal locking).
+//! - **[`WriteTxn`]**: Exclusive access for modifying the graph. ACID compliant.
+//! - **[`ReadTxn`] / [`Snapshot`]**: Consistent view of the graph for querying. Non-blocking.
+//! - **[`query`]**: The Cypher execution engine (re-exported from `nervusdb-v2-query`).
+//!
+//! ## 📦 Feature Flags
+//!
+//! | Flag | Description | Default |
+//! |------|-------------|---------|
+//! | `async` | (Planned) Enable async `Db` and `Txn` wrappers | `false` |
+//! | `serde` | (Implicit) Serde support for property values | `true` |
+
 use nervusdb_v2_api::GraphStore;
 use nervusdb_v2_storage::api::StorageSnapshot;
 use nervusdb_v2_storage::engine::GraphEngine;
