@@ -26,10 +26,20 @@ struct V2Args {
     command: V2Commands,
 }
 
+mod repl;
+
 #[derive(Subcommand)]
 enum V2Commands {
     Query(V2QueryArgs),
     Write(V2WriteArgs),
+    Repl(V2ReplArgs),
+}
+
+#[derive(Parser)]
+struct V2ReplArgs {
+    /// Database base path
+    #[arg(long)]
+    db: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -194,6 +204,7 @@ fn main() {
         Commands::V2(args) => match args.command {
             V2Commands::Query(args) => run_v2_query(args),
             V2Commands::Write(args) => run_v2_write(args),
+            V2Commands::Repl(args) => repl::run_repl(&args.db),
         },
     };
 

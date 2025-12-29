@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
+rustyline = "14.0"
 nervusdb-v2 = { path = "../nervusdb-v2" }
 nervusdb-v2-api = { path = "../nervusdb-v2-api" }
 nervusdb-v2-query = { path = "../nervusdb-v2-query" }
