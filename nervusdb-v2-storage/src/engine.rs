@@ -232,6 +232,8 @@ impl GraphEngine {
             return Ok(());
         }
 
+        let has_properties = runs.iter().any(|r| r.has_properties());
+
         let seg_id = SegmentId(self.next_segment_id.fetch_add(1, Ordering::Relaxed));
         let mut seg = build_segment_from_runs(seg_id, &runs);
 
@@ -268,12 +270,14 @@ impl GraphEngine {
                 epoch,
                 segments: pointers,
             })?;
-            wal.append(&WalRecord::Checkpoint { up_to_txid, epoch })?;
+            if !has_properties {
+                wal.append(&WalRecord::Checkpoint { up_to_txid, epoch })?;
+            }
             wal.append(&WalRecord::CommitTx { txid: system_txid })?;
             wal.fsync()?;
         }
 
-        {
+        if !has_properties {
             let mut cur_runs = self.published_runs.write().unwrap();
             *cur_runs = Arc::new(Vec::new());
         }
@@ -283,7 +287,9 @@ impl GraphEngine {
         }
 
         self.manifest_epoch.store(epoch, Ordering::Relaxed);
-        self.checkpoint_txid.store(up_to_txid, Ordering::Relaxed);
+        if !has_properties {
+            self.checkpoint_txid.store(up_to_txid, Ordering::Relaxed);
+        }
         Ok(())
     }
 }
@@ -711,5 +717,37 @@ mod tests {
         let snap = engine.begin_read();
         let a = engine.lookup_internal_id(10).unwrap();
         assert_eq!(snap.neighbors(a, Some(7)).count(), 2);
+    }
+
+    #[test]
+    fn t103_compaction_does_not_checkpoint_when_properties_present() {
+        let dir = tempdir().unwrap();
+        let ndb = dir.path().join("graph_props.ndb");
+        let wal = dir.path().join("graph_props.wal");
+
+        let internal_id;
+        {
+            let engine = GraphEngine::open(&ndb, &wal).unwrap();
+            let mut tx = engine.begin_write();
+            let node = tx.create_node(10, 1).unwrap();
+            tx.set_node_property(
+                node,
+                "age".to_string(),
+                crate::property::PropertyValue::Int(30),
+            );
+            tx.commit().unwrap();
+            internal_id = node;
+
+            engine.compact().unwrap();
+            // Runs must remain because properties are not persisted into .ndb yet.
+            assert!(!engine.published_runs.read().unwrap().is_empty());
+        }
+
+        let engine = GraphEngine::open(&ndb, &wal).unwrap();
+        let snap = engine.begin_read();
+        let age = snap.node_property(internal_id, "age").unwrap();
+        assert_eq!(age, crate::property::PropertyValue::Int(30));
+        // And we must have runs after restart, because recovery can't skip replay.
+        assert!(!engine.published_runs.read().unwrap().is_empty());
     }
 }

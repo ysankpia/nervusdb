@@ -63,6 +63,10 @@ impl L0Run {
             && self.edge_properties.is_empty()
     }
 
+    pub(crate) fn has_properties(&self) -> bool {
+        !self.node_properties.is_empty() || !self.edge_properties.is_empty()
+    }
+
     pub(crate) fn node_property(&self, node: InternalNodeId, key: &str) -> Option<&PropertyValue> {
         self.node_properties
             .get(&node)
