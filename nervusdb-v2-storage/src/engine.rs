@@ -292,6 +292,82 @@ impl GraphEngine {
         }
         Ok(())
     }
+
+    /// T106: Checkpoint-on-Close (WAL compaction).
+    ///
+    /// Safety rule:
+    /// - Only allowed when there are no published L0 runs (otherwise we'd lose data that only exists in WAL).
+    ///
+    /// The resulting WAL contains a single committed tx that replays:
+    /// - label mappings (`CreateLabel`) and
+    /// - the current manifest (`ManifestSwitch`) plus
+    /// - a `Checkpoint` that allows recovery to skip older graph tx.
+    pub fn checkpoint_on_close(&self) -> Result<()> {
+        let _guard = self.write_lock.lock().unwrap();
+
+        let runs = self.published_runs.read().unwrap().clone();
+        if !runs.is_empty() {
+            // Cannot compact WAL safely while L0 runs (esp. properties) are WAL-only.
+            // Best-effort durability: flush NDB + WAL.
+            {
+                let mut pager = self.pager.lock().unwrap();
+                pager.sync()?;
+            }
+            {
+                let mut wal = self.wal.lock().unwrap();
+                wal.fsync()?;
+            }
+            return Ok(());
+        }
+
+        // Ensure idmap/pages are durable before allowing recovery to skip old WAL.
+        {
+            let mut pager = self.pager.lock().unwrap();
+            pager.sync()?;
+        }
+
+        let labels = {
+            let interner = self.label_interner.lock().unwrap();
+            interner.snapshot()
+        };
+
+        let segments = self.published_segments.read().unwrap().clone();
+        let pointers: Vec<SegmentPointer> = segments
+            .iter()
+            .map(|s| SegmentPointer {
+                id: s.id.0,
+                meta_page_id: s.meta_page_id,
+            })
+            .collect();
+
+        let up_to_txid = self.next_txid.load(Ordering::Relaxed).saturating_sub(1);
+        let epoch = self.manifest_epoch.load(Ordering::Relaxed);
+        let system_txid = self.next_txid.fetch_add(1, Ordering::Relaxed);
+
+        let mut ops: Vec<WalRecord> = Vec::new();
+        for id in labels.iter_ids() {
+            if let Some(name) = labels.get_name(id) {
+                ops.push(WalRecord::CreateLabel {
+                    name: name.to_string(),
+                    label_id: id,
+                });
+            }
+        }
+
+        ops.push(WalRecord::ManifestSwitch {
+            epoch,
+            segments: pointers,
+        });
+        ops.push(WalRecord::Checkpoint { up_to_txid, epoch });
+
+        {
+            let mut wal = self.wal.lock().unwrap();
+            wal.rewrite_as_snapshot(system_txid, ops)?;
+            wal.fsync()?;
+        }
+
+        Ok(())
+    }
 }
 
 fn build_segment_from_runs(seg_id: SegmentId, runs: &Arc<Vec<Arc<L0Run>>>) -> CsrSegment {

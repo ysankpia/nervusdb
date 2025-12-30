@@ -11,7 +11,7 @@
 | T103 | [Storage] Compaction Integration (Merge to Index) | High | Done | - | Prevent property loss on checkpoint |
 | T104 | [Query] Implement `EXPLAIN` Clause | Low | Done | - | Show Plan visualization |
 | T105 | [Query] Implement `MERGE` Clause | Medium | Done | - | Idempotent Create |
-| T106 | [Lifecycle] Implement Checkpoint-on-Close | Medium | Plan | - | Merge WAL to NDB on shutdown |
+| T106 | [Lifecycle] Implement Checkpoint-on-Close | Medium | WIP | feat/T106-checkpoint-on-close | Merge WAL to NDB on shutdown |
 | **Phase 2** | **Ecosystem & AI** | | | | |
 | T201 | [Binding] UniFFI Setup & Python Binding | Medium | Plan | - | `pip install nervusdb` |
 | T202 | [Tool] Bulk Import Tool (CSV/JSONL) | Medium | Plan | - | Bypass WAL for speed |

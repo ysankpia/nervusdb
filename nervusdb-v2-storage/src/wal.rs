@@ -406,7 +406,7 @@ impl WalRecord {
 #[derive(Debug)]
 pub struct Wal {
     path: PathBuf,
-    file: File,
+    file: Option<File>,
 }
 
 impl Wal {
@@ -418,7 +418,10 @@ impl Wal {
             .create(true)
             .truncate(false)
             .open(&path)?;
-        Ok(Self { path, file })
+        Ok(Self {
+            path,
+            file: Some(file),
+        })
     }
 
     #[inline]
@@ -427,21 +430,81 @@ impl Wal {
     }
 
     pub fn append(&mut self, record: &WalRecord) -> Result<u64> {
+        let Some(file) = self.file.as_mut() else {
+            return Err(Error::WalProtocol("wal file is closed"));
+        };
         let body = record.encode_body();
         let len = u32::try_from(body.len()).map_err(|_| Error::WalRecordTooLarge(u32::MAX))?;
         let crc = crc32(&body);
 
-        let offset = self.file.metadata()?.len();
-        self.file.seek(SeekFrom::End(0))?;
-        self.file.write_all(&len.to_le_bytes())?;
-        self.file.write_all(&crc.to_le_bytes())?;
-        self.file.write_all(&body)?;
-        self.file.flush()?;
+        let offset = file.metadata()?.len();
+        file.seek(SeekFrom::End(0))?;
+        file.write_all(&len.to_le_bytes())?;
+        file.write_all(&crc.to_le_bytes())?;
+        file.write_all(&body)?;
+        file.flush()?;
         Ok(offset)
     }
 
     pub fn fsync(&mut self) -> Result<()> {
-        self.file.sync_data()?;
+        let Some(file) = self.file.as_mut() else {
+            return Err(Error::WalProtocol("wal file is closed"));
+        };
+        file.sync_data()?;
+        Ok(())
+    }
+
+    pub fn rewrite_as_snapshot(&mut self, txid: u64, ops: Vec<WalRecord>) -> Result<()> {
+        // Close the current file handle so we can replace it safely.
+        let _ = self.file.take();
+
+        let tmp = {
+            let pid = std::process::id();
+            self.path.with_extension(format!("wal.tmp.{pid}.{txid}"))
+        };
+
+        {
+            let mut tmp_file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .truncate(false)
+                .open(&tmp)?;
+
+            fn append_to(file: &mut File, record: &WalRecord) -> Result<()> {
+                let body = record.encode_body();
+                let len =
+                    u32::try_from(body.len()).map_err(|_| Error::WalRecordTooLarge(u32::MAX))?;
+                let crc = crc32(&body);
+                file.write_all(&len.to_le_bytes())?;
+                file.write_all(&crc.to_le_bytes())?;
+                file.write_all(&body)?;
+                Ok(())
+            }
+
+            append_to(&mut tmp_file, &WalRecord::BeginTx { txid })?;
+            for op in ops {
+                append_to(&mut tmp_file, &op)?;
+            }
+            append_to(&mut tmp_file, &WalRecord::CommitTx { txid })?;
+            tmp_file.flush()?;
+            tmp_file.sync_data()?;
+        }
+
+        // Best-effort replace (POSIX: rename overwrites; Windows: needs remove first).
+        if std::fs::rename(&tmp, &self.path).is_err() {
+            if self.path.exists() {
+                std::fs::remove_file(&self.path)?;
+            }
+            std::fs::rename(&tmp, &self.path)?;
+        }
+
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&self.path)?;
+        self.file = Some(file);
         Ok(())
     }
 

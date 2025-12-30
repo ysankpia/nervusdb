@@ -175,6 +175,14 @@ impl Db {
         // MVP: checkpoint == explicit compaction boundary + durability manifest.
         self.engine.compact().map_err(Error::from)
     }
+
+    /// Explicitly closes the DB and performs a best-effort checkpoint-on-close (T106).
+    ///
+    /// This is intentionally not implemented in `Drop` to avoid hiding expensive IO.
+    pub fn close(self) -> Result<()> {
+        self.engine.checkpoint_on_close().map_err(Error::from)?;
+        Ok(())
+    }
 }
 
 /// A wrapper around the storage snapshot to hide internal types.
