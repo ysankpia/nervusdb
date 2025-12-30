@@ -1,5 +1,8 @@
 use crate::csr::{CsrSegment, EdgeRecord, SegmentId};
 use crate::idmap::{ExternalId, I2eRecord, IdMap, InternalNodeId, LabelId};
+use crate::index::btree::BTree;
+use crate::index::catalog::IndexCatalog;
+use crate::index::ordered_key::encode_index_key;
 use crate::label_interner::{LabelInterner, LabelSnapshot};
 use crate::memtable::MemTable;
 use crate::pager::Pager;
@@ -15,10 +18,11 @@ pub struct GraphEngine {
     ndb_path: PathBuf,
     wal_path: PathBuf,
 
-    pager: Mutex<Pager>,
+    pager: Arc<Mutex<Pager>>,
     wal: Mutex<Wal>,
     idmap: Mutex<IdMap>,
     label_interner: Mutex<LabelInterner>,
+    index_catalog: Arc<Mutex<IndexCatalog>>,
 
     published_runs: RwLock<Arc<Vec<Arc<L0Run>>>>,
     published_segments: RwLock<Arc<Vec<Arc<CsrSegment>>>>,
@@ -40,6 +44,7 @@ impl GraphEngine {
         let wal = Wal::open(&wal_path)?;
 
         let mut idmap = IdMap::load(&mut pager)?;
+        let index_catalog = IndexCatalog::open_or_create(&mut pager)?;
 
         let committed = wal.replay_committed()?;
         let state = scan_recovery_state(&committed);
@@ -78,10 +83,11 @@ impl GraphEngine {
         Ok(Self {
             ndb_path,
             wal_path,
-            pager: Mutex::new(pager),
+            pager: Arc::new(Mutex::new(pager)),
             wal: Mutex::new(wal),
             idmap: Mutex::new(idmap),
             label_interner: Mutex::new(label_interner),
+            index_catalog: Arc::new(Mutex::new(index_catalog)),
             published_runs: RwLock::new(Arc::new(runs)),
             published_segments: RwLock::new(Arc::new(segments)),
             published_labels: RwLock::new(Arc::new(label_snapshot)),
@@ -102,6 +108,32 @@ impl GraphEngine {
     #[inline]
     pub fn wal_path(&self) -> &Path {
         &self.wal_path
+    }
+
+    pub(crate) fn get_pager(&self) -> Arc<Mutex<Pager>> {
+        self.pager.clone()
+    }
+
+    pub(crate) fn get_index_catalog(&self) -> Arc<Mutex<IndexCatalog>> {
+        self.index_catalog.clone()
+    }
+
+    /// Creates a B-Tree index for the given label and property.
+    ///
+    /// If the index already exists, this is a no-op.
+    /// Note: This MVP does not backfill existing data. The index will only track
+    /// valid data inserted *after* index creation.
+    pub fn create_index(&self, label: &str, field: &str) -> Result<()> {
+        let mut catalog = self.index_catalog.lock().unwrap();
+        let name = format!("{}.{}", label, field);
+        if catalog.get(&name).is_some() {
+            return Ok(());
+        }
+
+        let mut pager = self.pager.lock().unwrap();
+        catalog.get_or_create(&mut pager, &name)?;
+        catalog.flush(&mut pager)?;
+        Ok(())
     }
 
     pub fn begin_read(&self) -> Snapshot {
@@ -575,8 +607,13 @@ impl<'a> WriteTxn<'a> {
             }
 
             // Write property operations
-            for (node, key, value) in node_properties {
-                wal.append(&WalRecord::SetNodeProperty { node, key, value })?;
+            // Write property operations
+            for (node, key, value) in &node_properties {
+                wal.append(&WalRecord::SetNodeProperty {
+                    node: *node,
+                    key: key.clone(),
+                    value: value.clone(),
+                })?;
             }
             for (src, rel, dst, key, value) in edge_properties {
                 wal.append(&WalRecord::SetEdgeProperty {
@@ -588,6 +625,55 @@ impl<'a> WriteTxn<'a> {
                 })?;
             }
 
+            // T107: Update Indexes for newly created nodes
+            let mut index_updates = Vec::new();
+            for (node, key, value) in &node_properties {
+                // Check if this property belongs to a newly created node
+                if let Some((_, label_id, _)) =
+                    self.created_nodes.iter().find(|(_, _, iid)| iid == node)
+                {
+                    // Resolve Label Name
+                    // Note: We need a temporary scope to lock interner
+                    let label_name = self
+                        .engine
+                        .label_interner
+                        .lock()
+                        .unwrap()
+                        .get_name(*label_id)
+                        .map(|s| s.to_string());
+
+                    if let Some(lbl) = label_name {
+                        index_updates.push((lbl, key.clone(), value.clone(), *node));
+                    }
+                }
+            }
+
+            if !index_updates.is_empty() {
+                let mut catalog = self.engine.index_catalog.lock().unwrap();
+                // Catalog updates might change root, so we need write access to catalog
+                // But GraphEngine::index_catalog is Mutex<IndexCatalog>.
+                // IndexCatalog::get_mut is needed.
+
+                let mut pager = self.engine.pager.lock().unwrap();
+
+                for (lbl, key, val, iid) in index_updates {
+                    let idx_name = format!("{}.{}", lbl, key);
+                    // Use entries directly (internal access)
+                    if let Some(def) = catalog.entries.get_mut(&idx_name) {
+                        let mut tree = BTree::load(def.root);
+                        // Key = [IndexID][Value][NodeID]
+                        // Internal lookup uses same prefix construction
+                        let k = encode_index_key(def.id, &val, iid as u64);
+                        tree.insert(&mut pager, &k, iid as u64)?;
+                        def.root = tree.root();
+                    }
+                }
+                // Flush catalog changes (roots) to catalog page
+                catalog.flush(&mut pager)?;
+            }
+
+            // Flush WAL
+            // wal.append calls flush internally, we just need fsync at end of commit
             wal.append(&WalRecord::CommitTx { txid: self.txid })?;
             wal.fsync()?;
         }

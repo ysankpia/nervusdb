@@ -183,6 +183,18 @@ impl Db {
         self.engine.checkpoint_on_close().map_err(Error::from)?;
         Ok(())
     }
+
+    /// Creates an index on the specified label and property.
+    ///
+    /// # Example
+    /// ```ignore
+    /// db.create_index("User", "email")?;
+    /// ```
+    pub fn create_index(&self, label: &str, property: &str) -> Result<()> {
+        self.engine
+            .create_index(label, property)
+            .map_err(Error::from)
+    }
 }
 
 /// A wrapper around the storage snapshot to hide internal types.
@@ -242,6 +254,15 @@ impl GraphSnapshot for DbSnapshot {
     fn resolve_rel_type_name(&self, id: RelTypeId) -> Option<String> {
         self.0.resolve_rel_type_name(id)
     }
+
+    fn lookup_index(
+        &self,
+        label: &str,
+        field: &str,
+        value: &PropertyValue,
+    ) -> Option<Vec<InternalNodeId>> {
+        self.0.lookup_index(label, field, value)
+    }
 }
 
 /// A read-only transaction.
@@ -290,6 +311,11 @@ impl<'a> WriteTxn<'a> {
         self.inner
             .create_node(external_id, label_id)
             .map_err(Error::from)
+    }
+
+    /// Gets or creates a label ID for the given name.
+    pub fn get_or_create_label(&mut self, name: &str) -> Result<LabelId> {
+        self.inner.get_or_create_label(name).map_err(Error::from)
     }
 
     /// Creates a directed edge from source to destination.

@@ -19,7 +19,7 @@ pub struct IndexDef {
 #[derive(Debug)]
 pub struct IndexCatalog {
     page: PageId,
-    entries: BTreeMap<String, IndexDef>,
+    pub(crate) entries: BTreeMap<String, IndexDef>,
 }
 
 impl IndexCatalog {

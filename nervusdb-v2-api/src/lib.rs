@@ -89,6 +89,24 @@ pub trait GraphSnapshot {
         Box::new(std::iter::empty())
     }
 
+    /// Lookup nodes using an index.
+    ///
+    /// Returns `Some(Vec<InternalNodeId>)` if the index exists and the lookup succeeds.
+    /// Returns `None` if the index does not exist.
+    ///
+    /// # Arguments
+    /// * `label` - The label name (e.g., "Person")
+    /// * `field` - The property field name (e.g., "name")
+    /// * `value` - The value to match
+    fn lookup_index(
+        &self,
+        _label: &str,
+        _field: &str,
+        _value: &PropertyValue,
+    ) -> Option<Vec<InternalNodeId>> {
+        None
+    }
+
     /// Resolve an internal node ID to its external ID.
     ///
     /// Returns `Some(external_id)` if the node exists and has an external ID,

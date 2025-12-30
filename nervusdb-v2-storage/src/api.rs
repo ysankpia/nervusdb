@@ -1,18 +1,24 @@
 use crate::engine::GraphEngine;
 use crate::idmap::I2eRecord;
+use crate::index::btree::BTree;
+use crate::index::catalog::IndexCatalog;
+use crate::index::ordered_key::encode_ordered_value;
+use crate::pager::Pager;
 use crate::snapshot;
 use nervusdb_v2_api::{
     EdgeKey, ExternalId, GraphSnapshot, GraphStore, InternalNodeId, LabelId, PropertyValue,
     RelTypeId,
 };
 use std::collections::{BTreeMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone)]
 pub struct StorageSnapshot {
     inner: snapshot::Snapshot,
     i2e: Arc<Vec<I2eRecord>>,
     tombstoned_nodes: Arc<HashSet<InternalNodeId>>,
+    pager: Arc<Mutex<Pager>>,
+    index_catalog: Arc<Mutex<IndexCatalog>>,
 }
 
 impl GraphStore for GraphEngine {
@@ -33,6 +39,8 @@ impl GraphStore for GraphEngine {
             inner,
             i2e,
             tombstoned_nodes: Arc::new(tombstoned_nodes),
+            pager: self.get_pager(),
+            index_catalog: self.get_index_catalog(),
         }
     }
 }
@@ -54,6 +62,60 @@ impl GraphSnapshot for StorageSnapshot {
         self.inner
             .neighbors(src, rel)
             .map(conv as fn(snapshot::EdgeKey) -> EdgeKey)
+    }
+
+    fn lookup_index(
+        &self,
+        label: &str,
+        field: &str,
+        value: &PropertyValue,
+    ) -> Option<Vec<InternalNodeId>> {
+        let catalog = self.index_catalog.lock().unwrap();
+        // MVP Convention: Index name = "Label.Property"
+        let index_name = format!("{}.{}", label, field);
+
+        let def = catalog.get(&index_name)?;
+        let tree = BTree::load(def.root);
+
+        // Use storage-level PropertyValue for encoding
+        let storage_value = match value {
+            PropertyValue::Null => crate::property::PropertyValue::Null,
+            PropertyValue::Bool(b) => crate::property::PropertyValue::Bool(*b),
+            PropertyValue::Int(i) => crate::property::PropertyValue::Int(*i),
+            PropertyValue::Float(f) => crate::property::PropertyValue::Float(*f),
+            PropertyValue::String(s) => crate::property::PropertyValue::String(s.clone()),
+        };
+
+        // Construct prefix: [index_id (4B)] [encoded_value]
+        let mut prefix = Vec::new();
+        prefix.extend_from_slice(&def.id.to_be_bytes());
+        prefix.extend_from_slice(&encode_ordered_value(&storage_value));
+
+        let mut pager = self.pager.lock().unwrap();
+        let mut cursor = tree.cursor_lower_bound(&mut pager, &prefix).ok()?;
+
+        let mut results = Vec::new();
+        while let Ok(valid) = cursor.is_valid() {
+            if !valid {
+                break;
+            }
+            let key = cursor.key().ok()?;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            if let Ok(payload) = cursor.payload() {
+                results.push(payload as u32);
+                if !cursor.advance().ok()? {
+                    break;
+                }
+            }
+        }
+
+        if results.is_empty() {
+            None
+        } else {
+            Some(results)
+        }
     }
 
     fn nodes(&self) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {

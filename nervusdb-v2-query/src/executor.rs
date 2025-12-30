@@ -1,5 +1,6 @@
 use crate::ast::{AggregateFunction, Direction, Expression, Literal, PathElement, Pattern};
 use crate::error::{Error, Result};
+use crate::evaluator::evaluate_expression_value;
 pub use nervusdb_v2_api::LabelId;
 use nervusdb_v2_api::{EdgeKey, ExternalId, GraphSnapshot, InternalNodeId, RelTypeId};
 use std::hash::{Hash, Hasher};
@@ -164,6 +165,14 @@ pub enum Plan {
         input: Box<Plan>,
         detach: bool,
         expressions: Vec<Expression>,
+    },
+    /// `IndexSeek` - optimize scan using index if available, else fallback
+    IndexSeek {
+        alias: String,
+        label: String,
+        field: String,
+        value_expr: Expression,
+        fallback: Box<Plan>,
     },
 }
 
@@ -368,6 +377,48 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
             Box::new(std::iter::once(Err(Error::Other(
                 "DELETE must be executed via execute_write".into(),
             ))))
+        }
+        Plan::IndexSeek {
+            alias,
+            label,
+            field,
+            value_expr,
+            fallback,
+        } => {
+            // 1. Evaluate key value
+            let val = evaluate_expression_value(value_expr, &Row::default(), snapshot, params);
+            // evaluate_expression_value does not return Result, it returns Value directly.
+            // But we need to handle errors? evaluate_expression_value swallows errors (returns Null).
+            // That's MVP logic in evaluator.rs.
+
+            // 2. Convert to PropertyValue
+            let prop_val = match val {
+                Value::Null => nervusdb_v2_api::PropertyValue::Null,
+                Value::Bool(b) => nervusdb_v2_api::PropertyValue::Bool(b),
+                Value::Int(i) => nervusdb_v2_api::PropertyValue::Int(i),
+                Value::Float(f) => nervusdb_v2_api::PropertyValue::Float(f),
+                Value::String(s) => nervusdb_v2_api::PropertyValue::String(s),
+                _ => {
+                    // Index does not support NodeId/ExternalId/EdgeKey values
+                    // Fallback to scan
+                    return execute_plan(snapshot, fallback, params);
+                }
+            };
+
+            // 3. Try Index Lookup
+            if let Some(mut node_ids) = snapshot.lookup_index(label, field, &prop_val) {
+                // Sort IDs for consistent output (optional but good)
+                node_ids.sort();
+                let alias = alias.clone();
+                Box::new(
+                    node_ids
+                        .into_iter()
+                        .map(move |iid| Ok(Row::default().with(alias.clone(), Value::NodeId(iid)))),
+                )
+            } else {
+                // 4. Fallback if index missing
+                execute_plan(snapshot, fallback, params)
+            }
         }
     }
 }

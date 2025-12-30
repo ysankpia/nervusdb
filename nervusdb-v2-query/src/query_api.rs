@@ -119,6 +119,11 @@ impl PreparedQuery {
     pub fn is_explain(&self) -> bool {
         self.explain.is_some()
     }
+
+    /// Returns the explained plan string if this query was an EXPLAIN query.
+    pub fn explain_string(&self) -> Option<&str> {
+        self.explain.as_deref()
+    }
 }
 
 /// Parses and prepares a Cypher query for execution.
@@ -268,6 +273,19 @@ fn render_plan(plan: &Plan) -> String {
                     "{pad}Delete(detach={detach}, expressions={expressions:?})"
                 );
                 go(out, input, depth + 1);
+            }
+            Plan::IndexSeek {
+                alias,
+                label,
+                field,
+                value_expr,
+                fallback: _fallback,
+            } => {
+                let _ = writeln!(
+                    out,
+                    "{pad}IndexSeek(alias={alias}, label={label}, field={field}, value={value_expr:?})"
+                );
+                // We don't render fallback to avoid noise, as it's just the unoptimized plan
             }
         }
     }
@@ -493,7 +511,8 @@ fn compile_m3_plan(query: Query) -> Result<CompiledQuery> {
         | Plan::Limit { .. }
         | Plan::Distinct { .. }
         | Plan::Create { .. }
-        | Plan::Delete { .. } => {}
+        | Plan::Delete { .. }
+        | Plan::IndexSeek { .. } => {}
     }
 
     // Fail-fast: RETURN variables must exist in the row shape produced by the base plan.
@@ -527,10 +546,11 @@ fn compile_m3_plan(query: Query) -> Result<CompiledQuery> {
 
     // Add WHERE filter if present
     if let Some(w) = where_clause {
-        plan = Plan::Filter {
+        let filter_plan = Plan::Filter {
             input: Box::new(plan),
-            predicate: w.expression,
+            predicate: w.expression.clone(),
         };
+        plan = try_optimize_nodescan_filter(filter_plan, w.expression);
     }
 
     // Add projection after filtering (to preserve columns for WHERE evaluation)
@@ -616,6 +636,72 @@ fn compile_create_plan(create_clause: crate::ast::CreateClause) -> Result<Plan> 
     Ok(Plan::Create {
         pattern: create_clause.pattern,
     })
+}
+
+fn try_optimize_nodescan_filter(plan: Plan, _predicate: Expression) -> Plan {
+    // 1. Unwrap input logic - needs to be a NodeScan
+    // The input to Filter is boxed, so we need to inspect the structure we just created
+    // But here we passed 'plan' which is Filter{NodeScan...}
+    let (input, predicate) = match &plan {
+        Plan::Filter { input, predicate } => (input, predicate),
+        _ => return plan,
+    };
+
+    let Plan::NodeScan { alias, label } = input.as_ref() else {
+        return plan;
+    };
+
+    // 2. Must have label to use index
+    let Some(label) = label else {
+        return plan;
+    };
+
+    // 3. Check predicate
+    // Helper to check for equality with a property
+    let check_eq =
+        |left: &Expression, right: &Expression| -> Option<(String, String, Expression)> {
+            // Return (variable, property, value_expr)
+            if let Expression::PropertyAccess(pa) = left {
+                if &pa.variable == alias {
+                    // Check if right is literal or parameter
+                    match right {
+                        Expression::Literal(_) | Expression::Parameter(_) => {
+                            return Some((pa.variable.clone(), pa.property.clone(), right.clone()));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            None
+        };
+
+    if let Expression::Binary(bin) = &predicate {
+        // Access fields of BinaryExpression (box)
+        if matches!(bin.operator, crate::ast::BinaryOperator::Equals) {
+            // Check left = right
+            if let Some((v, p, val)) = check_eq(&bin.left, &bin.right) {
+                return Plan::IndexSeek {
+                    alias: v,
+                    label: label.clone(),
+                    field: p,
+                    value_expr: val,
+                    fallback: Box::new(plan.clone()),
+                };
+            }
+            // Check right = left
+            if let Some((v, p, val)) = check_eq(&bin.right, &bin.left) {
+                return Plan::IndexSeek {
+                    alias: v,
+                    label: label.clone(),
+                    field: p,
+                    value_expr: val,
+                    fallback: Box::new(plan.clone()),
+                };
+            }
+        }
+    }
+
+    plan
 }
 
 fn compile_merge_plan(merge_clause: crate::ast::MergeClause) -> Result<Plan> {
