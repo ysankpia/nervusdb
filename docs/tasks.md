@@ -10,7 +10,7 @@
 | T102 | [Storage] Implement `IndexCatalog` & B-Tree Logic | High | Done | - | Insert/Search/Delete on Pager |
 | T103 | [Storage] Compaction Integration (Merge to Index) | High | Done | - | Prevent property loss on checkpoint |
 | T104 | [Query] Implement `EXPLAIN` Clause | Low | Done | - | Show Plan visualization |
-| T105 | [Query] Implement `MERGE` Clause | Medium | WIP | feat/T105-merge | Idempotent Create |
+| T105 | [Query] Implement `MERGE` Clause | Medium | Done | - | Idempotent Create |
 | T106 | [Lifecycle] Implement Checkpoint-on-Close | Medium | Plan | - | Merge WAL to NDB on shutdown |
 | **Phase 2** | **Ecosystem & AI** | | | | |
 | T201 | [Binding] UniFFI Setup & Python Binding | Medium | Plan | - | `pip install nervusdb` |
