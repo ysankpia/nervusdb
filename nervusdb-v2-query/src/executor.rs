@@ -109,6 +109,7 @@ pub enum Plan {
     },
     /// `MATCH (a)-[:rel]->(b) RETURN ...`
     MatchOut {
+        input: Option<Box<Plan>>,
         src_alias: String,
         rel: Option<String>,
         edge_alias: Option<String>,
@@ -118,9 +119,11 @@ pub enum Plan {
         // should happen after filtering (see Plan::Project)
         project: Vec<String>,
         project_external: bool,
+        optional: bool,
     },
     /// `MATCH (a)-[:rel*min..max]->(b) RETURN ...` (variable length)
     MatchOutVarLen {
+        input: Option<Box<Plan>>,
         src_alias: String,
         rel: Option<String>,
         edge_alias: Option<String>,
@@ -130,6 +133,7 @@ pub enum Plan {
         limit: Option<u32>,
         project: Vec<String>,
         project_external: bool,
+        optional: bool,
     },
     /// `MATCH ... WHERE ... RETURN ...` (with filter)
     Filter {
@@ -213,6 +217,7 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
             }))
         }
         Plan::MatchOut {
+            input,
             src_alias,
             rel,
             edge_alias,
@@ -220,6 +225,7 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
             limit,
             project: _,
             project_external: _,
+            optional,
         } => {
             let rel_id = if let Some(r) = rel {
                 match snapshot.resolve_rel_type_id(r) {
@@ -230,20 +236,42 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                 None
             };
 
-            let base = MatchOutIter::new(
-                snapshot,
-                src_alias,
-                rel_id,
-                edge_alias.as_deref(),
-                dst_alias,
-            );
-            if let Some(n) = limit {
-                Box::new(base.take(*n as usize))
+            if let Some(input_plan) = input {
+                let input_iter = execute_plan(snapshot, input_plan, params);
+                let expand = ExpandIter {
+                    snapshot,
+                    input: input_iter,
+                    src_alias,
+                    rel: rel_id,
+                    edge_alias: edge_alias.as_deref(),
+                    dst_alias,
+                    optional: *optional,
+                    cur_row: None,
+                    cur_edges: None,
+                    yielded_any: false,
+                };
+                if let Some(n) = limit {
+                    Box::new(expand.take(*n as usize))
+                } else {
+                    Box::new(expand)
+                }
             } else {
-                Box::new(base)
+                let base = MatchOutIter::new(
+                    snapshot,
+                    src_alias,
+                    rel_id,
+                    edge_alias.as_deref(),
+                    dst_alias,
+                );
+                if let Some(n) = limit {
+                    Box::new(base.take(*n as usize))
+                } else {
+                    Box::new(base)
+                }
             }
         }
         Plan::MatchOutVarLen {
+            input,
             src_alias,
             rel,
             edge_alias,
@@ -253,7 +281,16 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
             limit,
             project: _,
             project_external: _,
+            optional,
         } => {
+            if input.is_some() || *optional {
+                // TODO: Implement chaining for VarLen
+                // For now, if input is present, we panic or ignore?
+                // Ignoring is dangerous. Panic for now as it's dev phase.
+                // Or return Error? execute_plan returns Iterator, can't easily error.
+                // We'll panic since T151 focuses on MatchOut.
+                todo!("OPTIONAL MATCH / VarLen Chaining not implemented yet");
+            }
             let rel_id = if let Some(r) = rel {
                 match snapshot.resolve_rel_type_id(r) {
                     Some(id) => Some(id),
@@ -1327,4 +1364,98 @@ fn evaluate_expression(expr: &Expression, row: &Row) -> Value {
 pub fn parse_u32_identifier(name: &str) -> Result<u32> {
     name.parse::<u32>()
         .map_err(|_| Error::NotImplemented("non-numeric label/rel identifiers in M3"))
+}
+
+struct ExpandIter<'a, S: GraphSnapshot + 'a> {
+    snapshot: &'a S,
+    input: Box<dyn Iterator<Item = Result<Row>> + 'a>,
+    src_alias: &'a str,
+    rel: Option<RelTypeId>,
+    edge_alias: Option<&'a str>,
+    dst_alias: &'a str,
+    optional: bool,
+    cur_row: Option<Row>,
+    cur_edges: Option<S::Neighbors<'a>>,
+    yielded_any: bool,
+}
+
+impl<'a, S: GraphSnapshot + 'a> Iterator for ExpandIter<'a, S> {
+    type Item = Result<Row>;
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.cur_edges.is_none() {
+                match self.input.next() {
+                    Some(Ok(row)) => {
+                        self.cur_row = Some(row.clone());
+                        let src_val = row
+                            .cols
+                            .iter()
+                            .find(|(k, _)| k == self.src_alias)
+                            .map(|(_, v)| v);
+                        match src_val {
+                            Some(Value::NodeId(id)) => {
+                                self.cur_edges = Some(self.snapshot.neighbors(*id, self.rel));
+                                self.yielded_any = false;
+                            }
+                            Some(Value::Null) => {
+                                // Source is Null (e.g. from previous optional match)
+                                if self.optional {
+                                    // Propagate Nulls
+                                    let mut row = row.clone();
+                                    if let Some(ea) = self.edge_alias {
+                                        row = row.with(ea, Value::Null);
+                                    }
+                                    row = row.with(self.dst_alias, Value::Null);
+                                    self.cur_row = None; // Done with this row
+                                    return Some(Ok(row));
+                                } else {
+                                    // Not optional: Filter out this row
+                                    self.cur_row = None;
+                                    continue;
+                                }
+                            }
+                            Some(_) => {
+                                return Some(Err(Error::Other(format!(
+                                    "Variable {} is not a node",
+                                    self.src_alias
+                                ))));
+                            }
+                            None => {
+                                return Some(Err(Error::Other(format!(
+                                    "Variable {} not found",
+                                    self.src_alias
+                                ))));
+                            }
+                        }
+                    }
+                    Some(Err(e)) => return Some(Err(e)),
+                    None => return None,
+                }
+            }
+
+            let edges = self.cur_edges.as_mut().unwrap();
+            if let Some(edge) = edges.next() {
+                self.yielded_any = true;
+                let mut row = self.cur_row.as_ref().unwrap().clone();
+                if let Some(ea) = self.edge_alias {
+                    row = row.with(ea, Value::EdgeKey(edge));
+                }
+                row = row.with(self.dst_alias, Value::NodeId(edge.dst));
+                return Some(Ok(row));
+            } else {
+                if self.optional && !self.yielded_any {
+                    self.yielded_any = true;
+                    let mut row = self.cur_row.take().unwrap();
+                    if let Some(ea) = self.edge_alias {
+                        row = row.with(ea, Value::Null);
+                    }
+                    row = row.with(self.dst_alias, Value::Null);
+                    self.cur_edges = None;
+                    return Some(Ok(row));
+                }
+                self.cur_edges = None;
+                self.cur_row = None;
+            }
+        }
+    }
 }
