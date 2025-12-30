@@ -3,6 +3,7 @@
 > 这份 spec 是 v2 的“宪法”：写清楚约束和边界，避免靠幻想写代码。
 >
 > **范围声明**：
+>
 > - 本 spec 约束 NervusDB v2（新 crate / 新磁盘格式 / 不兼容 v1）
 > - 路线图（愿景/规划）在 `docs/ROADMAP_2.0.md`，不要把“计划”当“已实现”
 
@@ -56,3 +57,9 @@
 - 单元测试：pager/wal/idmap/memtable/index page layout（T101 相关）
 - 集成测试：storage + query 端到端（最小子集）
 - 崩溃门禁：CI crash-gate（PR 小跑 + 定时大跑）
+
+## 6. 已知技术债与折衷（Technical Debt & Trade-offs）
+
+- **B-Tree 删除**：当前版本的 `delete_exact_rebuild` 会重建整棵树。这在小型索引上可行，但在大规模删除时会产生严重的 I/O 抖动。
+- **查询执行器开销**：`executor.rs` 基于 `Box<dyn Iterator>` 的动态分发，对于极高性能要求的场景存在虚函数调用开销。
+- **并发粒度**：`Pager` 使用全局 `Arc<Mutex<Pager>>`，高并发读取且 Cache 未命中时可能锁定整个引擎。

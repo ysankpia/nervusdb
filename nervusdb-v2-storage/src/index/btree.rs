@@ -501,6 +501,12 @@ impl BTree {
         key: &[u8],
         payload: u64,
     ) -> Result<bool> {
+        if self.root.as_u64() != 0 {
+            eprintln!(
+                "WARN: B-Tree delete_exact_rebuild triggered. This causes a full rewrite of the index tree (ID: {:?}).",
+                self.root
+            );
+        }
         let mut entries = self.scan_all(pager)?;
         let pos = entries
             .binary_search_by(|(k, v)| (k.as_slice(), *v).cmp(&(key, payload)))

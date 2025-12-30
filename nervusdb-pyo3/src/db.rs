@@ -24,6 +24,7 @@ impl Db {
     ///
     /// Returns an error if the database cannot be opened.
     #[new]
+    #[pyo3(name = "open")]
     pub(crate) fn new(path: &str) -> PyResult<Self> {
         let inner = RustDb::open(path)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
