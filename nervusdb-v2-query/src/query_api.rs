@@ -404,30 +404,39 @@ fn compile_m3_plan(query: Query) -> Result<CompiledQuery> {
     };
 
     // Calculate projection
+    // Calculate projection or aggregation
+    let mut group_by: Vec<String> = Vec::new();
+    let mut aggregates: Vec<(crate::ast::AggregateFunction, String)> = Vec::new(); // (Func, Alias)
     let mut project: Vec<String> = Vec::new();
-    for item in &ret.items {
-        if item.alias.is_some() {
-            return Err(Error::NotImplemented("RETURN aliases in v2 M3"));
-        }
-        let Expression::Variable(name) = &item.expression else {
-            return Err(Error::NotImplemented(
-                "only variable projections in v2 M3 (use RETURN 1 or RETURN <var>...)",
-            ));
-        };
-        project.push(name.clone());
-    }
+    let mut is_aggregation = false;
 
-    // Update Project fields in top-level MatchOut (Legacy)
-    // This is optional since we add Project plan later, but keeping for compatibility
-    match &mut plan {
-        Plan::MatchOut { project: p, .. } | Plan::MatchOutVarLen { project: p, .. } => {
-            *p = project.clone();
+    for (i, item) in ret.items.iter().enumerate() {
+        match &item.expression {
+            Expression::Variable(name) => {
+                group_by.push(name.clone());
+                project.push(name.clone());
+            }
+            Expression::FunctionCall(call) => {
+                // Check if it is an aggregate function
+                if let Some(agg) = parse_aggregate_function(call)? {
+                    is_aggregation = true;
+                    // Generate alias if missing
+                    let alias = item.alias.clone().unwrap_or_else(|| format!("agg_{}", i));
+                    aggregates.push((agg, alias.clone()));
+                    project.push(alias);
+                } else {
+                    return Err(Error::NotImplemented(
+                        "non-aggregate function calls in RETURN",
+                    ));
+                }
+            }
+            _ => {
+                return Err(Error::NotImplemented(
+                    "only variables or aggregates in RETURN clause in v2 M3",
+                ));
+            }
         }
-        _ => {}
     }
-
-    // Fail-fast verification (Optional, can be removed if strictness not needed)
-    // ... Skipping complex verification for now to avoid complexity in refactor ...
 
     // Add WHERE filter if present
     if let Some(w) = where_clause {
@@ -438,11 +447,34 @@ fn compile_m3_plan(query: Query) -> Result<CompiledQuery> {
         plan = try_optimize_nodescan_filter(filter_plan, w.expression);
     }
 
-    // Add projection
-    plan = Plan::Project {
-        input: Box::new(plan),
-        columns: project,
-    };
+    if is_aggregation {
+        plan = Plan::Aggregate {
+            input: Box::new(plan),
+            group_by,
+            aggregates,
+        };
+        // Aggregate produces the final columns, so we don't need a separate Project
+        // UNLESS we want to reorder/rename. But implicit project from Aggregate is effectively the output row.
+        // The Aggregate executor builds rows with [group_by_cols..., aggregate_cols...]
+        // We might need to map them to the requested order?
+        // For MVP, checking order might be complex. Let's assume Aggregate returns all keys + aggregates.
+        // But the user expect explicit minimal columns.
+        // Let's wrap in Project to ensure correct order/selection if needed?
+        // Actually, execute_aggregate returns rows with specific columns.
+        // We should ensure it returns ONLY the requested columns in usage?
+        // But execute_aggregate constructs rows with aliased values.
+        // Ideally we project the final result to match `project` list order.
+        plan = Plan::Project {
+            input: Box::new(plan),
+            columns: project,
+        };
+    } else {
+        // Standard Projection
+        plan = Plan::Project {
+            input: Box::new(plan),
+            columns: project,
+        };
+    }
 
     // Add ORDER BY
     if let Some(order_by) = &ret.order_by {
@@ -990,5 +1022,70 @@ fn compile_match_plan(input: Option<Plan>, m: crate::ast::MatchClause) -> Result
         _ => Err(Error::NotImplemented(
             "pattern length must be 1 or 3 in v2 M3",
         )),
+    }
+}
+
+fn parse_aggregate_function(
+    call: &crate::ast::FunctionCall,
+) -> Result<Option<crate::ast::AggregateFunction>> {
+    let name = call.name.to_lowercase();
+    match name.as_str() {
+        "count" => {
+            if call.args.is_empty() {
+                Ok(Some(crate::ast::AggregateFunction::Count(None)))
+            } else if call.args.len() == 1 {
+                if let Expression::Literal(Literal::String(s)) = &call.args[0] {
+                    if s == "*" {
+                        return Ok(Some(crate::ast::AggregateFunction::Count(None)));
+                    }
+                }
+                Ok(Some(crate::ast::AggregateFunction::Count(Some(
+                    call.args[0].clone(),
+                ))))
+            } else {
+                Err(Error::Other("COUNT takes 0 or 1 argument".into()))
+            }
+        }
+        "sum" => {
+            if call.args.len() != 1 {
+                return Err(Error::Other("SUM takes exactly 1 argument".into()));
+            }
+            Ok(Some(crate::ast::AggregateFunction::Sum(
+                call.args[0].clone(),
+            )))
+        }
+        "avg" => {
+            if call.args.len() != 1 {
+                return Err(Error::Other("AVG takes exactly 1 argument".into()));
+            }
+            Ok(Some(crate::ast::AggregateFunction::Avg(
+                call.args[0].clone(),
+            )))
+        }
+        "min" => {
+            if call.args.len() != 1 {
+                return Err(Error::Other("MIN takes exactly 1 argument".into()));
+            }
+            Ok(Some(crate::ast::AggregateFunction::Min(
+                call.args[0].clone(),
+            )))
+        }
+        "max" => {
+            if call.args.len() != 1 {
+                return Err(Error::Other("MAX takes exactly 1 argument".into()));
+            }
+            Ok(Some(crate::ast::AggregateFunction::Max(
+                call.args[0].clone(),
+            )))
+        }
+        "collect" => {
+            if call.args.len() != 1 {
+                return Err(Error::Other("COLLECT takes exactly 1 argument".into()));
+            }
+            Ok(Some(crate::ast::AggregateFunction::Collect(
+                call.args[0].clone(),
+            )))
+        }
+        _ => Ok(None),
     }
 }

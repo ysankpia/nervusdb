@@ -16,7 +16,7 @@
 | T108          | [Query] Implement `SET` Clause (Updates)              | High   | Done   | feat/T108-set-clause        | Enable property updates (WAL+Index)   |
 | **Phase 1.5** | **Production Hardening (Gap Filling)**                |        |        |                             |                                       |
 | T151          | [Query] Implement `OPTIONAL MATCH` (Left Join)        | High   | Done   | feat/T151-optional-match    | Core graph pattern support            |
-| T152          | [Query] Implement Aggregation Functions (COLLECT/MIN) | Medium | Plan   | -                           | Extended executor capabilities        |
+| T152          | [Query] Implement Aggregation Functions (COLLECT/MIN) | Medium | WIP    | feat/T152-aggregation       | Extended executor capabilities        |
 | T153          | [Storage] Implement Vacuum/Reclaim Mechanism          | High   | Plan   | -                           | Storage reclamation & defrag          |
 | T154          | [Storage] Support Complex Types (Date/Map/List)       | High   | Plan   | -                           | Extend PropertyValue & Serialization  |
 | T155          | [Storage] Implement Overflow Pages (Large Blobs)      | High   | Plan   | -                           | Support properties > 8KB              |

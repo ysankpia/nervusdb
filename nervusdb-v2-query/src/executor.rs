@@ -15,6 +15,7 @@ pub enum Value {
     String(String),
     Bool(bool),
     Null,
+    List(Vec<Value>),
 }
 
 // Custom Hash implementation for Value (since Float doesn't implement Hash)
@@ -32,6 +33,7 @@ impl Hash for Value {
             Value::String(s) => s.hash(state),
             Value::Bool(b) => b.hash(state),
             Value::Null => 0u8.hash(state),
+            Value::List(l) => l.hash(state),
         }
     }
 }
@@ -45,6 +47,10 @@ pub struct Row {
 }
 
 impl Row {
+    pub fn get(&self, name: &str) -> Option<&Value> {
+        self.cols.iter().find(|(k, _)| k == name).map(|(_, v)| v)
+    }
+
     pub fn with(mut self, name: impl Into<String>, value: Value) -> Self {
         let name = name.into();
         if let Some((_k, v)) = self.cols.iter_mut().find(|(k, _)| *k == name) {
@@ -338,7 +344,13 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
             aggregates,
         } => {
             let input_iter = execute_plan(snapshot, input, params);
-            execute_aggregate(input_iter, group_by.clone(), aggregates.clone())
+            execute_aggregate(
+                snapshot,
+                input_iter,
+                group_by.clone(),
+                aggregates.clone(),
+                params,
+            )
         }
         Plan::OrderBy { input, items } => {
             let input_iter = execute_plan(snapshot, input, params);
@@ -447,7 +459,7 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                 Value::Float(f) => nervusdb_v2_api::PropertyValue::Float(f),
                 Value::String(s) => nervusdb_v2_api::PropertyValue::String(s),
                 _ => {
-                    // Index does not support NodeId/ExternalId/EdgeKey values
+                    // Index does not support NodeId/ExternalId/EdgeKey/List values
                     // Fallback to scan
                     return execute_plan(snapshot, fallback, params);
                 }
@@ -1041,9 +1053,11 @@ fn convert_executor_value_to_property(value: &Value) -> Result<PropertyValue> {
         Value::Int(i) => Ok(PropertyValue::Int(*i)),
         Value::String(s) => Ok(PropertyValue::String(s.clone())),
         Value::Float(f) => Ok(PropertyValue::Float(*f)),
-        Value::NodeId(_) | Value::ExternalId(_) | Value::EdgeKey(_) => Err(Error::NotImplemented(
-            "node/edge values in properties not supported in v2 M3".into(),
-        )),
+        Value::NodeId(_) | Value::ExternalId(_) | Value::EdgeKey(_) | Value::List(_) => {
+            Err(Error::NotImplemented(
+                "node/edge/list values in properties not supported in v2 M3".into(),
+            ))
+        }
     }
 }
 
@@ -1242,10 +1256,13 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
 }
 
 /// Simple aggregation executor that collects all input, groups, and computes aggregates
-fn execute_aggregate<'a>(
+/// Simple aggregation executor that collects all input, groups, and computes aggregates
+fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
+    snapshot: &'a S,
     input: Box<dyn Iterator<Item = Result<Row>> + 'a>,
     group_by: Vec<String>,
     aggregates: Vec<(AggregateFunction, String)>,
+    params: &'a crate::query_api::Params,
 ) -> Box<dyn Iterator<Item = Result<Row>> + 'a> {
     // Collect all rows and group them
     let mut groups: std::collections::HashMap<Vec<Value>, Vec<Row>> =
@@ -1293,7 +1310,12 @@ fn execute_aggregate<'a>(
                         // COUNT(expr) - count non-null values
                         let count = rows
                             .iter()
-                            .filter(|r| !matches!(evaluate_expression(expr, r), Value::Null))
+                            .filter(|r| {
+                                !matches!(
+                                    evaluate_expression_value(expr, r, snapshot, params),
+                                    Value::Null
+                                )
+                            })
                             .count();
                         Value::Float(count as f64)
                     }
@@ -1301,7 +1323,9 @@ fn execute_aggregate<'a>(
                         let sum: f64 = rows
                             .iter()
                             .filter_map(|r| {
-                                if let Value::Float(f) = evaluate_expression(expr, r) {
+                                if let Value::Float(f) =
+                                    evaluate_expression_value(expr, r, snapshot, params)
+                                {
                                     Some(f)
                                 } else {
                                     None
@@ -1314,7 +1338,9 @@ fn execute_aggregate<'a>(
                         let values: Vec<f64> = rows
                             .iter()
                             .filter_map(|r| {
-                                if let Value::Float(f) = evaluate_expression(expr, r) {
+                                if let Value::Float(f) =
+                                    evaluate_expression_value(expr, r, snapshot, params)
+                                {
                                     Some(f)
                                 } else {
                                     None
@@ -1327,6 +1353,34 @@ fn execute_aggregate<'a>(
                             Value::Float(values.iter().sum::<f64>() / values.len() as f64)
                         }
                     }
+                    AggregateFunction::Min(expr) => {
+                        let min_val = rows
+                            .iter()
+                            .filter_map(|r| {
+                                let v = evaluate_expression_value(expr, r, snapshot, params);
+                                if v == Value::Null { None } else { Some(v) }
+                            })
+                            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                        min_val.unwrap_or(Value::Null)
+                    }
+                    AggregateFunction::Max(expr) => {
+                        let max_val = rows
+                            .iter()
+                            .filter_map(|r| {
+                                let v = evaluate_expression_value(expr, r, snapshot, params);
+                                if v == Value::Null { None } else { Some(v) }
+                            })
+                            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                        max_val.unwrap_or(Value::Null)
+                    }
+                    AggregateFunction::Collect(expr) => {
+                        let values: Vec<Value> = rows
+                            .iter()
+                            .map(|r| evaluate_expression_value(expr, r, snapshot, params))
+                            .filter(|v| *v != Value::Null)
+                            .collect();
+                        Value::List(values)
+                    }
                 };
                 result = result.with(alias, value);
             }
@@ -1336,29 +1390,6 @@ fn execute_aggregate<'a>(
         .collect();
 
     Box::new(results.into_iter())
-}
-
-/// Simple expression evaluator for aggregate functions
-fn evaluate_expression(expr: &Expression, row: &Row) -> Value {
-    match expr {
-        Expression::Variable(name) => row
-            .cols
-            .iter()
-            .find(|(k, _)| k == name)
-            .map(|(_, v)| v.clone())
-            .unwrap_or(Value::Null),
-        Expression::PropertyAccess(prop) => {
-            // For now, just return the node value (property access not fully implemented)
-            row.cols
-                .iter()
-                .find(|(k, _)| k == &prop.variable)
-                .map(|(_, v)| v.clone())
-                .unwrap_or(Value::Null)
-        }
-        Expression::Literal(Literal::Number(n)) => Value::Float(*n),
-        Expression::Literal(Literal::String(s)) => Value::String(s.clone()),
-        _ => Value::Null,
-    }
 }
 
 pub fn parse_u32_identifier(name: &str) -> Result<u32> {

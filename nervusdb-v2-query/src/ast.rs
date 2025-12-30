@@ -259,6 +259,9 @@ pub enum AggregateFunction {
     Count(Option<Expression>), // None for COUNT(*)
     Sum(Expression),
     Avg(Expression),
+    Min(Expression),
+    Max(Expression),
+    Collect(Expression),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
