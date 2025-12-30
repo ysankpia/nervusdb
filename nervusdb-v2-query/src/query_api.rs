@@ -5,6 +5,12 @@ use nervusdb_v2_api::GraphSnapshot;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriteSemantics {
+    Default,
+    Merge,
+}
+
 /// Query parameters for parameterized Cypher queries.
 ///
 /// # Example
@@ -46,6 +52,7 @@ impl Params {
 pub struct PreparedQuery {
     plan: Plan,
     explain: Option<String>,
+    write: WriteSemantics,
 }
 
 impl PreparedQuery {
@@ -101,7 +108,12 @@ impl PreparedQuery {
                 "EXPLAIN cannot be executed as a write query".into(),
             ));
         }
-        execute_write(&self.plan, snapshot, txn, params)
+        match self.write {
+            WriteSemantics::Default => execute_write(&self.plan, snapshot, txn, params),
+            WriteSemantics::Merge => {
+                crate::executor::execute_merge(&self.plan, snapshot, txn, params)
+            }
+        }
     }
 
     pub fn is_explain(&self) -> bool {
@@ -128,16 +140,21 @@ pub fn prepare(cypher: &str) -> Result<PreparedQuery> {
             return Err(Error::Other("EXPLAIN requires a query".into()));
         }
         let query = crate::parser::Parser::parse(inner)?;
-        let plan = compile_m3_plan(query)?;
-        let explain = Some(render_plan(&plan));
-        return Ok(PreparedQuery { plan, explain });
+        let compiled = compile_m3_plan(query)?;
+        let explain = Some(render_plan(&compiled.plan));
+        return Ok(PreparedQuery {
+            plan: compiled.plan,
+            explain,
+            write: compiled.write,
+        });
     }
 
     let query = crate::parser::Parser::parse(cypher)?;
-    let plan = compile_m3_plan(query)?;
+    let compiled = compile_m3_plan(query)?;
     Ok(PreparedQuery {
-        plan,
+        plan: compiled.plan,
         explain: None,
+        write: compiled.write,
     })
 }
 
@@ -260,7 +277,12 @@ fn render_plan(plan: &Plan) -> String {
     out.trim_end().to_string()
 }
 
-fn compile_m3_plan(query: Query) -> Result<Plan> {
+struct CompiledQuery {
+    plan: Plan,
+    write: WriteSemantics,
+}
+
+fn compile_m3_plan(query: Query) -> Result<CompiledQuery> {
     // Supported shapes (M3):
     // - RETURN 1
     // - MATCH (n)-[:<u32>]->(m) [WHERE ...] RETURN n,m [LIMIT k]
@@ -276,8 +298,20 @@ fn compile_m3_plan(query: Query) -> Result<Plan> {
             Clause::Where(w) => where_clause = Some(w),
             Clause::Return(r) => return_clause = Some(r),
             Clause::With(_) => return Err(Error::NotImplemented("WITH in v2 M3")),
-            Clause::Create(c) => return compile_create_plan(c),
-            Clause::Merge(_) => return Err(Error::NotImplemented("MERGE in v2 M3")),
+            Clause::Create(c) => {
+                let plan = compile_create_plan(c)?;
+                return Ok(CompiledQuery {
+                    plan,
+                    write: WriteSemantics::Default,
+                });
+            }
+            Clause::Merge(m) => {
+                let plan = compile_merge_plan(m)?;
+                return Ok(CompiledQuery {
+                    plan,
+                    write: WriteSemantics::Merge,
+                });
+            }
             Clause::Unwind(_) => return Err(Error::NotImplemented("UNWIND in v2 M3")),
             Clause::Call(_) => return Err(Error::NotImplemented("CALL in v2 M3")),
             Clause::Set(_) => return Err(Error::NotImplemented("SET in v2 M3")),
@@ -288,7 +322,11 @@ fn compile_m3_plan(query: Query) -> Result<Plan> {
 
     // Handle DELETE clause
     if let Some(delete) = delete_clause {
-        return compile_delete_plan(match_clause, where_clause, delete);
+        let plan = compile_delete_plan(match_clause, where_clause, delete)?;
+        return Ok(CompiledQuery {
+            plan,
+            write: WriteSemantics::Default,
+        });
     }
 
     let Some(ret) = return_clause else {
@@ -300,7 +338,10 @@ fn compile_m3_plan(query: Query) -> Result<Plan> {
             && let Expression::Literal(Literal::Number(n)) = &ret.items[0].expression
             && (*n - 1.0).abs() < f64::EPSILON
         {
-            return Ok(Plan::ReturnOne);
+            return Ok(CompiledQuery {
+                plan: Plan::ReturnOne,
+                write: WriteSemantics::Default,
+            });
         }
         return Err(Error::NotImplemented("RETURN-only query (except RETURN 1)"));
     }
@@ -545,7 +586,10 @@ fn compile_m3_plan(query: Query) -> Result<Plan> {
         };
     }
 
-    Ok(plan)
+    Ok(CompiledQuery {
+        plan,
+        write: WriteSemantics::Default,
+    })
 }
 
 /// Compile a CREATE clause into a Plan
@@ -572,6 +616,78 @@ fn compile_create_plan(create_clause: crate::ast::CreateClause) -> Result<Plan> 
     Ok(Plan::Create {
         pattern: create_clause.pattern,
     })
+}
+
+fn compile_merge_plan(merge_clause: crate::ast::MergeClause) -> Result<Plan> {
+    let pattern = merge_clause.pattern;
+    if pattern.elements.is_empty() {
+        return Err(Error::Other("MERGE pattern cannot be empty".into()));
+    }
+    if pattern.elements.len() != 1 && pattern.elements.len() != 3 {
+        return Err(Error::NotImplemented(
+            "MERGE supports only single-node or single-hop patterns in v2 M3",
+        ));
+    }
+
+    // For MVP, MERGE needs stable identity -> require property maps on nodes.
+    for el in &pattern.elements {
+        if let crate::ast::PathElement::Node(n) = el {
+            let Some(props) = &n.properties else {
+                return Err(Error::NotImplemented(
+                    "MERGE requires a non-empty node property map in v2 M3",
+                ));
+            };
+            if props.properties.is_empty() {
+                return Err(Error::NotImplemented(
+                    "MERGE requires a non-empty node property map in v2 M3",
+                ));
+            }
+            if n.labels.len() > 1 {
+                return Err(Error::NotImplemented("MERGE with multiple labels in v2 M3"));
+            }
+        }
+    }
+
+    if pattern.elements.len() == 3 {
+        let rel_pat = match &pattern.elements[1] {
+            crate::ast::PathElement::Relationship(r) => r,
+            _ => {
+                return Err(Error::Other(
+                    "MERGE pattern must have relationship in middle".into(),
+                ));
+            }
+        };
+        if !matches!(
+            rel_pat.direction,
+            crate::ast::RelationshipDirection::LeftToRight
+        ) {
+            return Err(Error::NotImplemented(
+                "MERGE supports only -> direction in v2 M3",
+            ));
+        }
+        if rel_pat.types.is_empty() {
+            return Err(Error::Other("MERGE relationship requires a type".into()));
+        }
+        if rel_pat.types.len() > 1 {
+            return Err(Error::NotImplemented(
+                "MERGE with multiple rel types in v2 M3",
+            ));
+        }
+        if rel_pat.variable_length.is_some() {
+            return Err(Error::NotImplemented(
+                "MERGE does not support variable-length relationships in v2 M3",
+            ));
+        }
+        if let Some(props) = &rel_pat.properties
+            && !props.properties.is_empty()
+        {
+            return Err(Error::NotImplemented(
+                "MERGE relationship properties not supported in v2 M3",
+            ));
+        }
+    }
+
+    Ok(Plan::Create { pattern })
 }
 
 /// Compile a DELETE clause into a Plan

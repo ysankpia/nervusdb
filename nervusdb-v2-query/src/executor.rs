@@ -392,6 +392,224 @@ pub fn execute_write<S: GraphSnapshot>(
     }
 }
 
+pub(crate) fn execute_merge<S: GraphSnapshot>(
+    plan: &Plan,
+    snapshot: &S,
+    txn: &mut dyn WriteableGraph,
+    params: &crate::query_api::Params,
+) -> Result<u32> {
+    let Plan::Create { pattern } = plan else {
+        return Err(Error::Other(
+            "MERGE must compile to a CREATE plan in v2 M3".into(),
+        ));
+    };
+
+    #[derive(Clone)]
+    struct OverlayNode {
+        label: Option<String>,
+        props: Vec<(String, PropertyValue)>,
+        iid: InternalNodeId,
+    }
+
+    fn eval_non_null_props(
+        props: &crate::ast::PropertyMap,
+        params: &crate::query_api::Params,
+    ) -> Result<Vec<(String, PropertyValue)>> {
+        let mut out = Vec::with_capacity(props.properties.len());
+        for prop in &props.properties {
+            let v = evaluate_property_value(&prop.value, params)?;
+            if v == PropertyValue::Null {
+                return Err(Error::NotImplemented(
+                    "MERGE with null property values not supported in v2 M3",
+                ));
+            }
+            out.push((prop.key.clone(), v));
+        }
+        Ok(out)
+    }
+
+    fn overlay_lookup(
+        overlay: &[OverlayNode],
+        label: &Option<String>,
+        expected: &[(String, PropertyValue)],
+    ) -> Option<InternalNodeId> {
+        overlay.iter().find_map(|n| {
+            if &n.label != label {
+                return None;
+            }
+            for (k, v) in expected {
+                if n.props.iter().find(|(kk, _)| kk == k).map(|(_, vv)| vv) != Some(v) {
+                    return None;
+                }
+            }
+            Some(n.iid)
+        })
+    }
+
+    fn find_existing_node<S: GraphSnapshot>(
+        snapshot: &S,
+        label: &Option<String>,
+        expected: &[(String, PropertyValue)],
+    ) -> Option<InternalNodeId> {
+        fn to_api(v: &PropertyValue) -> nervusdb_v2_api::PropertyValue {
+            match v {
+                PropertyValue::Null => nervusdb_v2_api::PropertyValue::Null,
+                PropertyValue::Bool(b) => nervusdb_v2_api::PropertyValue::Bool(*b),
+                PropertyValue::Int(i) => nervusdb_v2_api::PropertyValue::Int(*i),
+                PropertyValue::Float(f) => nervusdb_v2_api::PropertyValue::Float(*f),
+                PropertyValue::String(s) => nervusdb_v2_api::PropertyValue::String(s.clone()),
+            }
+        }
+
+        let label_id = match label {
+            None => None,
+            Some(name) => match snapshot.resolve_label_id(name) {
+                Some(id) => Some(id),
+                None => return None,
+            },
+        };
+
+        for iid in snapshot.nodes() {
+            if snapshot.is_tombstoned_node(iid) {
+                continue;
+            }
+            if let Some(lid) = label_id
+                && snapshot.node_label(iid) != Some(lid)
+            {
+                continue;
+            }
+            let mut ok = true;
+            for (k, v) in expected {
+                if snapshot.node_property(iid, k) != Some(to_api(v)) {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                return Some(iid);
+            }
+        }
+        None
+    }
+
+    fn create_node(
+        txn: &mut dyn WriteableGraph,
+        label: &Option<String>,
+        props: &[(String, PropertyValue)],
+        created_count: &mut u32,
+    ) -> Result<InternalNodeId> {
+        let external_id = ExternalId::from(
+            *created_count as u64 + chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64,
+        );
+        let label_id = if let Some(l) = label {
+            txn.get_or_create_label_id(l)?
+        } else {
+            0
+        };
+
+        let iid = txn.create_node(external_id, label_id)?;
+        *created_count += 1;
+        for (k, v) in props {
+            txn.set_node_property(iid, k.clone(), v.clone())?;
+        }
+        Ok(iid)
+    }
+
+    fn find_or_create_node<S: GraphSnapshot>(
+        snapshot: &S,
+        txn: &mut dyn WriteableGraph,
+        node: &crate::ast::NodePattern,
+        overlay: &mut Vec<OverlayNode>,
+        params: &crate::query_api::Params,
+        created_count: &mut u32,
+    ) -> Result<InternalNodeId> {
+        let label = node.labels.first().cloned();
+        let props = node.properties.as_ref().ok_or(Error::NotImplemented(
+            "MERGE requires a non-empty node property map in v2 M3",
+        ))?;
+        if props.properties.is_empty() {
+            return Err(Error::NotImplemented(
+                "MERGE requires a non-empty node property map in v2 M3",
+            ));
+        }
+        let expected = eval_non_null_props(props, params)?;
+
+        if let Some(iid) = overlay_lookup(overlay, &label, &expected) {
+            return Ok(iid);
+        }
+        if let Some(iid) = find_existing_node(snapshot, &label, &expected) {
+            return Ok(iid);
+        }
+
+        let iid = create_node(txn, &label, &expected, created_count)?;
+        overlay.push(OverlayNode {
+            label,
+            props: expected,
+            iid,
+        });
+        Ok(iid)
+    }
+
+    let mut created_count = 0u32;
+    let mut overlay: Vec<OverlayNode> = Vec::new();
+
+    match pattern.elements.as_slice() {
+        [PathElement::Node(n)] => {
+            let _ =
+                find_or_create_node(snapshot, txn, n, &mut overlay, params, &mut created_count)?;
+            Ok(created_count)
+        }
+        [
+            PathElement::Node(src),
+            PathElement::Relationship(rel),
+            PathElement::Node(dst),
+        ] => {
+            if !matches!(
+                rel.direction,
+                crate::ast::RelationshipDirection::LeftToRight
+            ) {
+                return Err(Error::NotImplemented(
+                    "MERGE supports only -> direction in v2 M3",
+                ));
+            }
+            if rel.variable_length.is_some() {
+                return Err(Error::NotImplemented(
+                    "MERGE does not support variable-length relationships in v2 M3",
+                ));
+            }
+            let rel_name = rel
+                .types
+                .first()
+                .ok_or_else(|| Error::Other("MERGE relationship requires a type".into()))?
+                .clone();
+            let rel_type = txn.get_or_create_rel_type_id(&rel_name)?;
+
+            let src_iid =
+                find_or_create_node(snapshot, txn, src, &mut overlay, params, &mut created_count)?;
+            let dst_iid =
+                find_or_create_node(snapshot, txn, dst, &mut overlay, params, &mut created_count)?;
+
+            let mut exists = false;
+            for edge in snapshot.neighbors(src_iid, Some(rel_type)) {
+                if edge.dst == dst_iid {
+                    exists = true;
+                    break;
+                }
+            }
+
+            if !exists {
+                txn.create_edge(src_iid, rel_type, dst_iid)?;
+                created_count += 1;
+            }
+
+            Ok(created_count)
+        }
+        _ => Err(Error::NotImplemented(
+            "MERGE supports only single-node or single-hop patterns in v2 M3",
+        )),
+    }
+}
+
 pub trait WriteableGraph {
     fn create_node(&mut self, external_id: ExternalId, label_id: LabelId)
     -> Result<InternalNodeId>;
