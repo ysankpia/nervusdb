@@ -1,4 +1,5 @@
 pub mod api;
+pub mod backup;
 pub mod blob_store;
 pub mod bulkload;
 pub mod csr;

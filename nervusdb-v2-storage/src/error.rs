@@ -30,4 +30,10 @@ pub enum Error {
 
     #[error("storage corrupted: {0}")]
     StorageCorrupted(&'static str),
+
+    #[error("backup protocol error: {0}")]
+    BackupProtocol(String),
+
+    #[error("serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
 }
