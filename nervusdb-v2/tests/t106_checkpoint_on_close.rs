@@ -1,5 +1,5 @@
 use nervusdb_v2::Db;
-use nervusdb_v2_query::{prepare, Params, Result};
+use nervusdb_v2_query::{Params, Result, prepare};
 use tempfile::tempdir;
 
 #[test]

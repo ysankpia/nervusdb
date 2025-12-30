@@ -1,6 +1,10 @@
 [package]
 name = "nervusdb-v2-query"
-version = "0.1.0"
+version = "2.0.0"
+license = "AGPL-3.0-only"
+description = "NervusDB v2 query engine – Cypher parser, planner, and executor"
+repository = "https://github.com/LuQing-Studio/nervusdb"
+documentation = "https://docs.rs/nervusdb-v2-query"
 edition = "2024"
 
 [dependencies]
