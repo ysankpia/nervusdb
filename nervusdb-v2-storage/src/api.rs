@@ -87,7 +87,7 @@ impl GraphSnapshot for StorageSnapshot {
         prefix.extend_from_slice(&encode_ordered_value(&storage_value));
 
         let pager = self.pager.read().unwrap();
-        let mut cursor = tree.cursor_lower_bound(&*pager, &prefix).ok()?;
+        let mut cursor = tree.cursor_lower_bound(&pager, &prefix).ok()?;
 
         let mut results = Vec::new();
         while let Ok(valid) = cursor.is_valid() {
@@ -162,7 +162,7 @@ impl GraphSnapshot for StorageSnapshot {
         btree_key.extend_from_slice(key.as_bytes());
 
         let blob_id = {
-            let mut cursor = tree.cursor_lower_bound(&*pager, &btree_key).ok()?;
+            let mut cursor = tree.cursor_lower_bound(&pager, &btree_key).ok()?;
             if cursor.is_valid().ok()? {
                 let got_key = cursor.key().ok()?;
                 if got_key == btree_key {
@@ -176,7 +176,7 @@ impl GraphSnapshot for StorageSnapshot {
         };
 
         if let Some(blob_id) = blob_id {
-            let bytes = crate::blob_store::BlobStore::read(&*pager, blob_id).ok()?;
+            let bytes = crate::blob_store::BlobStore::read(&pager, blob_id).ok()?;
             let storage_val = crate::property::PropertyValue::decode(&bytes).ok()?;
             return Some(convert_property_value(&storage_val));
         }
@@ -210,7 +210,7 @@ impl GraphSnapshot for StorageSnapshot {
         btree_key.extend_from_slice(key.as_bytes());
 
         let blob_id = {
-            let mut cursor = tree.cursor_lower_bound(&*pager, &btree_key).ok()?;
+            let mut cursor = tree.cursor_lower_bound(&pager, &btree_key).ok()?;
             if cursor.is_valid().ok()? {
                 let got_key = cursor.key().ok()?;
                 if got_key == btree_key {
@@ -224,7 +224,7 @@ impl GraphSnapshot for StorageSnapshot {
         };
 
         if let Some(blob_id) = blob_id {
-            let bytes = crate::blob_store::BlobStore::read(&*pager, blob_id).ok()?;
+            let bytes = crate::blob_store::BlobStore::read(&pager, blob_id).ok()?;
             let storage_val = crate::property::PropertyValue::decode(&bytes).ok()?;
             return Some(convert_property_value(&storage_val));
         }
@@ -247,7 +247,7 @@ impl GraphSnapshot for StorageSnapshot {
 
             let mut to_fetch = Vec::new();
             {
-                let mut cursor = tree.cursor_lower_bound(&*pager, &prefix).ok()?;
+                let mut cursor = tree.cursor_lower_bound(&pager, &prefix).ok()?;
                 while cursor.is_valid().ok()? {
                     let key = cursor.key().ok()?;
                     if !key.starts_with(&prefix) {
@@ -272,7 +272,7 @@ impl GraphSnapshot for StorageSnapshot {
             }
 
             for (key_name, blob_id) in to_fetch {
-                let bytes = crate::blob_store::BlobStore::read(&*pager, blob_id).ok()?;
+                let bytes = crate::blob_store::BlobStore::read(&pager, blob_id).ok()?;
                 let storage_val = crate::property::PropertyValue::decode(&bytes).ok()?;
                 props.insert(key_name, storage_val);
             }
@@ -316,7 +316,7 @@ impl GraphSnapshot for StorageSnapshot {
 
             let mut to_fetch = Vec::new();
             {
-                let mut cursor = tree.cursor_lower_bound(&*pager, &prefix).ok()?;
+                let mut cursor = tree.cursor_lower_bound(&pager, &prefix).ok()?;
                 while cursor.is_valid().ok()? {
                     let key = cursor.key().ok()?;
                     if !key.starts_with(&prefix) {
@@ -341,7 +341,7 @@ impl GraphSnapshot for StorageSnapshot {
             }
 
             for (key_name, blob_id) in to_fetch {
-                let bytes = crate::blob_store::BlobStore::read(&*pager, blob_id).ok()?;
+                let bytes = crate::blob_store::BlobStore::read(&pager, blob_id).ok()?;
                 let storage_val = crate::property::PropertyValue::decode(&bytes).ok()?;
                 props.insert(key_name, storage_val);
             }
@@ -379,7 +379,7 @@ impl GraphSnapshot for StorageSnapshot {
         let mut cache = self.stats_cache.lock().unwrap();
         if cache.is_none() {
             let pager = self.pager.read().unwrap();
-            if let Ok(stats) = self.inner.get_statistics(&*pager) {
+            if let Ok(stats) = self.inner.get_statistics(&pager) {
                 *cache = Some(stats);
             }
         }
@@ -399,7 +399,7 @@ impl GraphSnapshot for StorageSnapshot {
         let mut cache = self.stats_cache.lock().unwrap();
         if cache.is_none() {
             let pager = self.pager.read().unwrap();
-            if let Ok(stats) = self.inner.get_statistics(&*pager) {
+            if let Ok(stats) = self.inner.get_statistics(&pager) {
                 *cache = Some(stats);
             }
         }
