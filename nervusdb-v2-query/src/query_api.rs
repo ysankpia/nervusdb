@@ -3,6 +3,7 @@ use crate::error::{Error, Result};
 use crate::executor::{Plan, Row, Value, execute_plan, execute_write};
 use nervusdb_v2_api::GraphSnapshot;
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 /// Query parameters for parameterized Cypher queries.
 ///
@@ -44,6 +45,7 @@ impl Params {
 #[derive(Debug, Clone)]
 pub struct PreparedQuery {
     plan: Plan,
+    explain: Option<String>,
 }
 
 impl PreparedQuery {
@@ -67,6 +69,12 @@ impl PreparedQuery {
         snapshot: &'a S,
         params: &'a Params,
     ) -> impl Iterator<Item = Result<Row>> + 'a {
+        if let Some(plan) = &self.explain {
+            let it: Box<dyn Iterator<Item = Result<Row>> + 'a> = Box::new(std::iter::once(Ok(
+                Row::default().with("plan", Value::String(plan.clone())),
+            )));
+            return it;
+        }
         execute_plan(snapshot, &self.plan, params)
     }
 
@@ -88,7 +96,16 @@ impl PreparedQuery {
         txn: &mut impl crate::executor::WriteableGraph,
         params: &Params,
     ) -> Result<u32> {
+        if self.explain.is_some() {
+            return Err(Error::Other(
+                "EXPLAIN cannot be executed as a write query".into(),
+            ));
+        }
         execute_write(&self.plan, snapshot, txn, params)
+    }
+
+    pub fn is_explain(&self) -> bool {
+        self.explain.is_some()
     }
 }
 
@@ -102,12 +119,145 @@ impl PreparedQuery {
 /// - `CREATE (n)` / `CREATE (n {k: v})` - Create nodes
 /// - `CREATE (a)-[:1]->(b)` - Create edges
 /// - `MATCH (n)-[:1]->(m) DELETE n` / `DETACH DELETE n` - Delete nodes/edges
+/// - `EXPLAIN <query>` - Show compiled plan (no execution)
 ///
 /// Returns an error for unsupported Cypher constructs.
 pub fn prepare(cypher: &str) -> Result<PreparedQuery> {
+    if let Some(inner) = strip_explain_prefix(cypher) {
+        if inner.is_empty() {
+            return Err(Error::Other("EXPLAIN requires a query".into()));
+        }
+        let query = crate::parser::Parser::parse(inner)?;
+        let plan = compile_m3_plan(query)?;
+        let explain = Some(render_plan(&plan));
+        return Ok(PreparedQuery { plan, explain });
+    }
+
     let query = crate::parser::Parser::parse(cypher)?;
     let plan = compile_m3_plan(query)?;
-    Ok(PreparedQuery { plan })
+    Ok(PreparedQuery {
+        plan,
+        explain: None,
+    })
+}
+
+fn strip_explain_prefix(input: &str) -> Option<&str> {
+    let trimmed = input.trim_start();
+    if trimmed.len() < "EXPLAIN".len() {
+        return None;
+    }
+    let (head, tail) = trimmed.split_at("EXPLAIN".len());
+    if !head.eq_ignore_ascii_case("EXPLAIN") {
+        return None;
+    }
+    if let Some(next) = tail.chars().next()
+        && !next.is_whitespace()
+    {
+        // Avoid matching `EXPLAINED`, etc.
+        return None;
+    }
+    Some(tail.trim_start())
+}
+
+fn render_plan(plan: &Plan) -> String {
+    fn indent(n: usize) -> String {
+        "  ".repeat(n)
+    }
+
+    fn go(out: &mut String, plan: &Plan, depth: usize) {
+        let pad = indent(depth);
+        match plan {
+            Plan::ReturnOne => {
+                let _ = writeln!(out, "{pad}ReturnOne");
+            }
+            Plan::NodeScan { alias, label } => {
+                let _ = writeln!(out, "{pad}NodeScan(alias={alias}, label={label:?})");
+            }
+            Plan::MatchOut {
+                src_alias,
+                rel,
+                edge_alias,
+                dst_alias,
+                limit,
+                project: _,
+                project_external: _,
+            } => {
+                let _ = writeln!(
+                    out,
+                    "{pad}MatchOut(src={src_alias}, rel={rel:?}, edge={edge_alias:?}, dst={dst_alias}, limit={limit:?})"
+                );
+            }
+            Plan::MatchOutVarLen {
+                src_alias,
+                rel,
+                edge_alias,
+                dst_alias,
+                min_hops,
+                max_hops,
+                limit,
+                project: _,
+                project_external: _,
+            } => {
+                let _ = writeln!(
+                    out,
+                    "{pad}MatchOutVarLen(src={src_alias}, rel={rel:?}, edge={edge_alias:?}, dst={dst_alias}, min={min_hops}, max={max_hops:?}, limit={limit:?})"
+                );
+            }
+            Plan::Filter { input, predicate } => {
+                let _ = writeln!(out, "{pad}Filter(predicate={predicate:?})");
+                go(out, input, depth + 1);
+            }
+            Plan::Project { input, columns } => {
+                let _ = writeln!(out, "{pad}Project(columns={columns:?})");
+                go(out, input, depth + 1);
+            }
+            Plan::Aggregate {
+                input,
+                group_by,
+                aggregates,
+            } => {
+                let _ = writeln!(
+                    out,
+                    "{pad}Aggregate(group_by={group_by:?}, aggregates={aggregates:?})"
+                );
+                go(out, input, depth + 1);
+            }
+            Plan::OrderBy { input, items } => {
+                let _ = writeln!(out, "{pad}OrderBy(items={items:?})");
+                go(out, input, depth + 1);
+            }
+            Plan::Skip { input, skip } => {
+                let _ = writeln!(out, "{pad}Skip(skip={skip})");
+                go(out, input, depth + 1);
+            }
+            Plan::Limit { input, limit } => {
+                let _ = writeln!(out, "{pad}Limit(limit={limit})");
+                go(out, input, depth + 1);
+            }
+            Plan::Distinct { input } => {
+                let _ = writeln!(out, "{pad}Distinct");
+                go(out, input, depth + 1);
+            }
+            Plan::Create { pattern } => {
+                let _ = writeln!(out, "{pad}Create(pattern={pattern:?})");
+            }
+            Plan::Delete {
+                input,
+                detach,
+                expressions,
+            } => {
+                let _ = writeln!(
+                    out,
+                    "{pad}Delete(detach={detach}, expressions={expressions:?})"
+                );
+                go(out, input, depth + 1);
+            }
+        }
+    }
+
+    let mut out = String::new();
+    go(&mut out, plan, 0);
+    out.trim_end().to_string()
 }
 
 fn compile_m3_plan(query: Query) -> Result<Plan> {

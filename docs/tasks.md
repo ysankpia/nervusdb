@@ -8,8 +8,8 @@
 | **Phase 1** | **Core Architecture** | | | | |
 | T101 | [Storage] Implement `PageCursor` & B-Tree Page Layout | High | Done | - | Slotted pages + ordered keys + cursor |
 | T102 | [Storage] Implement `IndexCatalog` & B-Tree Logic | High | Done | - | Insert/Search/Delete on Pager |
-| T103 | [Storage] Compaction Integration (Merge to Index) | High | WIP | feat/T103-compaction-index | Prevent property loss on checkpoint |
-| T104 | [Query] Implement `EXPLAIN` Clause | Low | Plan | - | Show Plan visualization |
+| T103 | [Storage] Compaction Integration (Merge to Index) | High | Done | - | Prevent property loss on checkpoint |
+| T104 | [Query] Implement `EXPLAIN` Clause | Low | WIP | feat/T104-explain | Show Plan visualization |
 | T105 | [Query] Implement `MERGE` Clause | Medium | Plan | - | Idempotent Create |
 | T106 | [Lifecycle] Implement Checkpoint-on-Close | Medium | Plan | - | Merge WAL to NDB on shutdown |
 | **Phase 2** | **Ecosystem & AI** | | | | |

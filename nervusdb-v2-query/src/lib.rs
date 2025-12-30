@@ -22,6 +22,7 @@
 //! - `CREATE (n)` / `CREATE (n {k: v})` - Create nodes
 //! - `CREATE (a)-[:1]->(b)` - Create edges
 //! - `MATCH (n)-[:1]->(m) DELETE n` / `DETACH DELETE n` - Delete nodes/edges
+//! - `EXPLAIN <query>` - Show compiled plan (no execution)
 //!
 //! # Architecture
 //!
