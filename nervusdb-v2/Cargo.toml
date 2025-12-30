@@ -11,9 +11,9 @@ documentation = "https://docs.rs/nervusdb-v2"
 edition = "2024"
 
 [dependencies]
-nervusdb-v2-api = { path = "../nervusdb-v2-api" }
-nervusdb-v2-storage = { path = "../nervusdb-v2-storage" }
-nervusdb-v2-query = { path = "../nervusdb-v2-query" }
+nervusdb-v2-api = "=2.0.0"
+nervusdb-v2-storage = "=2.0.0"
+nervusdb-v2-query = "=2.0.0"
 
 [dev-dependencies]
 tempfile = "3"
