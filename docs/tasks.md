@@ -21,8 +21,8 @@
 | T154          | [Storage] Support Complex Types (Date/Map/List)       | High   | Plan   | -                           | Extend PropertyValue & Serialization  |
 | T155          | [Storage] Implement Overflow Pages (Large Blobs)      | High   | Plan   | -                           | Support properties > 8KB              |
 | T156          | [Query] Optimizer V2 (Statistics & CBO Basics)        | High   | Plan   | -                           | Histogram-based index selection       |
-| T157          | [Tool] Implement Offline Bulk Loader                  | High   | Plan   | -                           | Direct SST/Page generation            |
-| T158          | [Lifecycle] Online Backup API                         | Medium | Plan   | -                           | Hot snapshot capability               |
+| T157          | [Tool] Implement Offline Bulk Loader                  | High   | Done   | -                           | Direct SST/Page generation            |
+| T158          | [Lifecycle] Online Backup API                         | Medium | WIP    | feat/T158-online-backup     | Hot snapshot capability               |
 | **Phase 2**   | **Ecosystem & AI**                                    |        |        |                             |                                       |
 | T201          | [Binding] UniFFI Setup & Python Binding               | Medium | Plan   | -                           | `pip install nervusdb`                |
 | T202          | [Tool] Bulk Import Tool (CSV/JSONL)                   | Medium | Plan   | -                           | Bypass WAL for speed                  |
