@@ -1,4 +1,4 @@
-use crate::ast::{Clause, Expression, Literal, Query, RelationshipDirection};
+use crate::ast::{BinaryOperator, Clause, Expression, Literal, Query, RelationshipDirection};
 use crate::error::{Error, Result};
 use crate::executor::{Plan, Row, Value, execute_plan, execute_write};
 use nervusdb_v2_api::GraphSnapshot;
@@ -372,10 +372,16 @@ fn compile_m3_plan(query: Query) -> Result<CompiledQuery> {
         });
     }
 
+    // Predicate extraction for optimization
+    let mut predicates = BTreeMap::new();
+    if let Some(w) = &where_clause {
+        extract_predicates(&w.expression, &mut predicates);
+    }
+
     // Build Match Chain
     let mut plan: Option<Plan> = None;
     for m in matches {
-        plan = Some(compile_match_plan(plan, m)?);
+        plan = Some(compile_match_plan(plan, m, &predicates)?);
     }
 
     // Check if we have a plan, or handle RETURN 1
@@ -904,7 +910,11 @@ fn compile_set_plan(
     })
 }
 
-fn compile_match_plan(input: Option<Plan>, m: crate::ast::MatchClause) -> Result<Plan> {
+fn compile_match_plan(
+    input: Option<Plan>,
+    m: crate::ast::MatchClause,
+    predicates: &BTreeMap<String, BTreeMap<String, Expression>>,
+) -> Result<Plan> {
     match m.pattern.elements.len() {
         1 => {
             if input.is_some() {
@@ -928,10 +938,32 @@ fn compile_match_plan(input: Option<Plan>, m: crate::ast::MatchClause) -> Result
                 .ok_or(Error::NotImplemented("anonymous node"))?
                 .to_string();
 
-            Ok(Plan::NodeScan {
-                alias,
-                label: node.labels.first().cloned(),
-            })
+            let label = node.labels.first().cloned();
+
+            // Optimizer: Try IndexSeek if there is a predicate.
+            if let Some(label_name) = &label {
+                if let Some(var_preds) = predicates.get(&alias) {
+                    if let Some((field, val_expr)) = var_preds.iter().next() {
+                        // For MVP, we return IndexSeek with fallback.
+                        // It will try index at runtime, and if not found, use fallback scan.
+                        return Ok(Plan::IndexSeek {
+                            alias: alias.clone(),
+                            label: label_name.clone(),
+                            field: field.clone(),
+                            value_expr: val_expr.clone(),
+                            fallback: Box::new(Plan::NodeScan {
+                                alias: alias.clone(),
+                                label: label.clone(),
+                            }),
+                        });
+                    }
+                }
+            }
+
+            // Selection: Choose smallest label if multiple options (future)
+            // or just use stats to warn or adjust (T156).
+
+            Ok(Plan::NodeScan { alias, label })
         }
         3 => {
             let src = match &m.pattern.elements[0] {
@@ -1087,5 +1119,32 @@ fn parse_aggregate_function(
             )))
         }
         _ => Ok(None),
+    }
+}
+
+fn extract_predicates(expr: &Expression, map: &mut BTreeMap<String, BTreeMap<String, Expression>>) {
+    match expr {
+        Expression::Binary(bin) => {
+            if matches!(bin.operator, BinaryOperator::And) {
+                extract_predicates(&bin.left, map);
+                extract_predicates(&bin.right, map);
+            } else if matches!(bin.operator, BinaryOperator::Equals) {
+                let mut check_eq = |left: &Expression, right: &Expression| {
+                    if let Expression::PropertyAccess(pa) = left {
+                        match right {
+                            Expression::Literal(_) | Expression::Parameter(_) => {
+                                map.entry(pa.variable.clone())
+                                    .or_default()
+                                    .insert(pa.property.clone(), right.clone());
+                            }
+                            _ => {}
+                        }
+                    }
+                };
+                check_eq(&bin.left, &bin.right);
+                check_eq(&bin.right, &bin.left);
+            }
+        }
+        _ => {}
     }
 }

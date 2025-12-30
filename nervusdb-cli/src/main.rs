@@ -104,6 +104,15 @@ fn value_to_json_v2<S: GraphSnapshot>(snapshot: &S, value: &V2Value) -> serde_js
         V2Value::String(s) => serde_json::Value::String(s.clone()),
         V2Value::Bool(b) => serde_json::Value::Bool(*b),
         V2Value::Null => serde_json::Value::Null,
+        V2Value::DateTime(i) => serde_json::json!({ "datetime": i }),
+        V2Value::Blob(_) => serde_json::json!({ "blob": "<binary data>" }),
+        V2Value::Map(m) => {
+            let obj = m
+                .iter()
+                .map(|(k, v)| (k.clone(), value_to_json_v2(snapshot, v)))
+                .collect();
+            serde_json::Value::Object(obj)
+        }
         V2Value::List(list) => {
             let arr: Vec<serde_json::Value> =
                 list.iter().map(|v| value_to_json_v2(snapshot, v)).collect();

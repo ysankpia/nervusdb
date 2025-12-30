@@ -12,13 +12,14 @@ use nervusdb_v2_api::{
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct StorageSnapshot {
     inner: snapshot::Snapshot,
     i2e: Arc<Vec<I2eRecord>>,
     tombstoned_nodes: Arc<HashSet<InternalNodeId>>,
     pager: Arc<Mutex<Pager>>,
     index_catalog: Arc<Mutex<IndexCatalog>>,
+    stats_cache: Mutex<Option<crate::stats::GraphStatistics>>,
 }
 
 impl GraphStore for GraphEngine {
@@ -41,6 +42,7 @@ impl GraphStore for GraphEngine {
             tombstoned_nodes: Arc::new(tombstoned_nodes),
             pager: self.get_pager(),
             index_catalog: self.get_index_catalog(),
+            stats_cache: Mutex::new(None),
         }
     }
 }
@@ -78,13 +80,7 @@ impl GraphSnapshot for StorageSnapshot {
         let tree = BTree::load(def.root);
 
         // Use storage-level PropertyValue for encoding
-        let storage_value = match value {
-            PropertyValue::Null => crate::property::PropertyValue::Null,
-            PropertyValue::Bool(b) => crate::property::PropertyValue::Bool(*b),
-            PropertyValue::Int(i) => crate::property::PropertyValue::Int(*i),
-            PropertyValue::Float(f) => crate::property::PropertyValue::Float(*f),
-            PropertyValue::String(s) => crate::property::PropertyValue::String(s.clone()),
-        };
+        let storage_value = to_storage(value.clone());
 
         // Construct prefix: [index_id (4B)] [encoded_value]
         let mut prefix = Vec::new();
@@ -148,9 +144,44 @@ impl GraphSnapshot for StorageSnapshot {
     }
 
     fn node_property(&self, iid: InternalNodeId, key: &str) -> Option<PropertyValue> {
-        self.inner
-            .node_property(iid, key)
-            .map(|v| convert_property_value(&v))
+        if let Some(v) = self.inner.node_property(iid, key) {
+            return Some(convert_property_value(&v));
+        }
+
+        if self.inner.properties_root == 0 {
+            return None;
+        }
+
+        let mut pager = self.pager.lock().unwrap();
+        let tree =
+            crate::index::btree::BTree::load(crate::pager::PageId::new(self.inner.properties_root));
+
+        let mut btree_key = Vec::with_capacity(1 + 4 + 4 + key.len());
+        btree_key.push(0u8); // Tag 0: Node Property
+        btree_key.extend_from_slice(&iid.to_be_bytes());
+        btree_key.extend_from_slice(&(key.len() as u32).to_be_bytes());
+        btree_key.extend_from_slice(key.as_bytes());
+
+        let blob_id = {
+            let mut cursor = tree.cursor_lower_bound(&mut pager, &btree_key).ok()?;
+            if cursor.is_valid().ok()? {
+                let got_key = cursor.key().ok()?;
+                if got_key == btree_key {
+                    cursor.payload().ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        if let Some(blob_id) = blob_id {
+            let bytes = crate::blob_store::BlobStore::read(&mut pager, blob_id).ok()?;
+            let storage_val = crate::property::PropertyValue::decode(&bytes).ok()?;
+            return Some(convert_property_value(&storage_val));
+        }
+        None
     }
 
     fn edge_property(&self, edge: EdgeKey, key: &str) -> Option<PropertyValue> {
@@ -159,18 +190,105 @@ impl GraphSnapshot for StorageSnapshot {
             rel: edge.rel,
             dst: edge.dst,
         };
-        self.inner
-            .edge_property(snapshot_edge, key)
-            .map(|v| convert_property_value(&v))
+        if let Some(v) = self.inner.edge_property(snapshot_edge, key) {
+            return Some(convert_property_value(&v));
+        }
+
+        if self.inner.properties_root == 0 {
+            return None;
+        }
+
+        let mut pager = self.pager.lock().unwrap();
+        let tree =
+            crate::index::btree::BTree::load(crate::pager::PageId::new(self.inner.properties_root));
+
+        let mut btree_key = Vec::with_capacity(1 + 4 + 4 + 4 + 4 + key.len());
+        btree_key.push(1u8); // Tag 1: Edge Property
+        btree_key.extend_from_slice(&edge.src.to_be_bytes());
+        btree_key.extend_from_slice(&edge.rel.to_be_bytes());
+        btree_key.extend_from_slice(&edge.dst.to_be_bytes());
+        btree_key.extend_from_slice(&(key.len() as u32).to_be_bytes());
+        btree_key.extend_from_slice(key.as_bytes());
+
+        let blob_id = {
+            let mut cursor = tree.cursor_lower_bound(&mut pager, &btree_key).ok()?;
+            if cursor.is_valid().ok()? {
+                let got_key = cursor.key().ok()?;
+                if got_key == btree_key {
+                    cursor.payload().ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        if let Some(blob_id) = blob_id {
+            let bytes = crate::blob_store::BlobStore::read(&mut pager, blob_id).ok()?;
+            let storage_val = crate::property::PropertyValue::decode(&bytes).ok()?;
+            return Some(convert_property_value(&storage_val));
+        }
+        None
     }
 
     fn node_properties(&self, iid: InternalNodeId) -> Option<BTreeMap<String, PropertyValue>> {
-        self.inner.node_properties(iid).map(|props| {
-            props
-                .into_iter()
-                .map(|(k, v)| (k, convert_property_value(&v)))
-                .collect()
-        })
+        let mut props = self.inner.node_properties(iid).unwrap_or_default();
+
+        if self.inner.properties_root != 0 {
+            let mut pager = self.pager.lock().unwrap();
+            let tree = crate::index::btree::BTree::load(crate::pager::PageId::new(
+                self.inner.properties_root,
+            ));
+
+            // Prefix search for [tag=0: 1B][node: u32 BE]
+            let mut prefix = Vec::with_capacity(5);
+            prefix.push(0u8);
+            prefix.extend_from_slice(&iid.to_be_bytes());
+
+            let mut to_fetch = Vec::new();
+            {
+                let mut cursor = tree.cursor_lower_bound(&mut pager, &prefix).ok()?;
+                while cursor.is_valid().ok()? {
+                    let key = cursor.key().ok()?;
+                    if !key.starts_with(&prefix) {
+                        break;
+                    }
+
+                    // Key format: [tag: 1B][node: 4B][key_len: 4B][key_bytes]
+                    if key.len() < 9 {
+                        break;
+                    }
+                    let key_len = u32::from_be_bytes(key[5..9].try_into().unwrap()) as usize;
+                    let key_name = String::from_utf8(key[9..9 + key_len].to_vec()).ok()?;
+
+                    if !props.contains_key(&key_name) {
+                        to_fetch.push((key_name, cursor.payload().ok()?));
+                    }
+
+                    if !cursor.advance().ok()? {
+                        break;
+                    }
+                }
+            }
+
+            for (key_name, blob_id) in to_fetch {
+                let bytes = crate::blob_store::BlobStore::read(&mut pager, blob_id).ok()?;
+                let storage_val = crate::property::PropertyValue::decode(&bytes).ok()?;
+                props.insert(key_name, storage_val);
+            }
+        }
+
+        if props.is_empty() {
+            None
+        } else {
+            Some(
+                props
+                    .into_iter()
+                    .map(|(k, v)| (k, convert_property_value(&v)))
+                    .collect(),
+            )
+        }
     }
 
     fn edge_properties(&self, edge: EdgeKey) -> Option<BTreeMap<String, PropertyValue>> {
@@ -179,12 +297,67 @@ impl GraphSnapshot for StorageSnapshot {
             rel: edge.rel,
             dst: edge.dst,
         };
-        self.inner.edge_properties(snapshot_edge).map(|props| {
-            props
-                .into_iter()
-                .map(|(k, v)| (k, convert_property_value(&v)))
-                .collect()
-        })
+        let mut props = self
+            .inner
+            .edge_properties(snapshot_edge)
+            .unwrap_or_default();
+
+        if self.inner.properties_root != 0 {
+            let mut pager = self.pager.lock().unwrap();
+            let tree = crate::index::btree::BTree::load(crate::pager::PageId::new(
+                self.inner.properties_root,
+            ));
+
+            // Prefix search for [tag=1: 1B][src: 4B][rel: 4B][dst: 4B]
+            let mut prefix = Vec::with_capacity(13);
+            prefix.push(1u8);
+            prefix.extend_from_slice(&edge.src.to_be_bytes());
+            prefix.extend_from_slice(&edge.rel.to_be_bytes());
+            prefix.extend_from_slice(&edge.dst.to_be_bytes());
+
+            let mut to_fetch = Vec::new();
+            {
+                let mut cursor = tree.cursor_lower_bound(&mut pager, &prefix).ok()?;
+                while cursor.is_valid().ok()? {
+                    let key = cursor.key().ok()?;
+                    if !key.starts_with(&prefix) {
+                        break;
+                    }
+
+                    // Key format: [tag: 1B][src: 4B][rel: 4B][dst: 4B][key_len: 4B][key_bytes]
+                    if key.len() < 17 {
+                        break;
+                    }
+                    let key_len = u32::from_be_bytes(key[13..17].try_into().unwrap()) as usize;
+                    let key_name = String::from_utf8(key[17..17 + key_len].to_vec()).ok()?;
+
+                    if !props.contains_key(&key_name) {
+                        to_fetch.push((key_name, cursor.payload().ok()?));
+                    }
+
+                    if !cursor.advance().ok()? {
+                        break;
+                    }
+                }
+            }
+
+            for (key_name, blob_id) in to_fetch {
+                let bytes = crate::blob_store::BlobStore::read(&mut pager, blob_id).ok()?;
+                let storage_val = crate::property::PropertyValue::decode(&bytes).ok()?;
+                props.insert(key_name, storage_val);
+            }
+        }
+
+        if props.is_empty() {
+            None
+        } else {
+            Some(
+                props
+                    .into_iter()
+                    .map(|(k, v)| (k, convert_property_value(&v)))
+                    .collect(),
+            )
+        }
     }
 
     fn resolve_label_id(&self, name: &str) -> Option<LabelId> {
@@ -202,6 +375,46 @@ impl GraphSnapshot for StorageSnapshot {
     fn resolve_rel_type_name(&self, id: RelTypeId) -> Option<String> {
         self.inner.resolve_rel_type_name(id)
     }
+
+    fn node_count(&self, label: Option<LabelId>) -> u64 {
+        let mut cache = self.stats_cache.lock().unwrap();
+        if cache.is_none() {
+            let mut pager = self.pager.lock().unwrap();
+            if let Ok(stats) = self.inner.get_statistics(&mut pager) {
+                *cache = Some(stats);
+            }
+        }
+
+        if let Some(stats) = cache.as_ref() {
+            if let Some(lid) = label {
+                stats.node_counts_by_label.get(&lid).copied().unwrap_or(0)
+            } else {
+                stats.total_nodes
+            }
+        } else {
+            0
+        }
+    }
+
+    fn edge_count(&self, rel: Option<RelTypeId>) -> u64 {
+        let mut cache = self.stats_cache.lock().unwrap();
+        if cache.is_none() {
+            let mut pager = self.pager.lock().unwrap();
+            if let Ok(stats) = self.inner.get_statistics(&mut pager) {
+                *cache = Some(stats);
+            }
+        }
+
+        if let Some(stats) = cache.as_ref() {
+            if let Some(rid) = rel {
+                stats.edge_counts_by_type.get(&rid).copied().unwrap_or(0)
+            } else {
+                stats.total_edges
+            }
+        } else {
+            0
+        }
+    }
 }
 
 fn convert_property_value(v: &crate::property::PropertyValue) -> PropertyValue {
@@ -211,5 +424,33 @@ fn convert_property_value(v: &crate::property::PropertyValue) -> PropertyValue {
         crate::property::PropertyValue::Int(i) => PropertyValue::Int(*i),
         crate::property::PropertyValue::Float(f) => PropertyValue::Float(*f),
         crate::property::PropertyValue::String(s) => PropertyValue::String(s.clone()),
+        crate::property::PropertyValue::DateTime(i) => PropertyValue::DateTime(*i),
+        crate::property::PropertyValue::Blob(b) => PropertyValue::Blob(b.clone()),
+        crate::property::PropertyValue::List(l) => {
+            PropertyValue::List(l.iter().map(convert_property_value).collect())
+        }
+        crate::property::PropertyValue::Map(m) => PropertyValue::Map(
+            m.iter()
+                .map(|(k, v)| (k.clone(), convert_property_value(v)))
+                .collect(),
+        ),
+    }
+}
+
+pub(crate) fn to_storage(v: PropertyValue) -> crate::property::PropertyValue {
+    match v {
+        PropertyValue::Null => crate::property::PropertyValue::Null,
+        PropertyValue::Bool(b) => crate::property::PropertyValue::Bool(b),
+        PropertyValue::Int(i) => crate::property::PropertyValue::Int(i),
+        PropertyValue::Float(f) => crate::property::PropertyValue::Float(f),
+        PropertyValue::String(s) => crate::property::PropertyValue::String(s),
+        PropertyValue::DateTime(i) => crate::property::PropertyValue::DateTime(i),
+        PropertyValue::Blob(b) => crate::property::PropertyValue::Blob(b),
+        PropertyValue::List(l) => {
+            crate::property::PropertyValue::List(l.into_iter().map(to_storage).collect())
+        }
+        PropertyValue::Map(m) => crate::property::PropertyValue::Map(
+            m.into_iter().map(|(k, v)| (k, to_storage(v))).collect(),
+        ),
     }
 }

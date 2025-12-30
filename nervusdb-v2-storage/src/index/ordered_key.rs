@@ -51,6 +51,36 @@ pub fn encode_ordered_value(v: &PropertyValue) -> Vec<u8> {
             out.push(0x00);
             out
         }
+        PropertyValue::DateTime(i) => {
+            let mut out = Vec::with_capacity(1 + 8);
+            out.push(0x05);
+            let u = (*i as u64) ^ 0x8000_0000_0000_0000;
+            out.extend_from_slice(&u.to_be_bytes());
+            out
+        }
+        PropertyValue::Blob(b) => {
+            let mut out = Vec::with_capacity(1 + b.len() + 2);
+            out.push(0x06);
+            for &byte in b {
+                if byte == 0x00 {
+                    out.push(0x00);
+                    out.push(0xFF);
+                } else {
+                    out.push(byte);
+                }
+            }
+            out.push(0x00);
+            out.push(0x00);
+            out
+        }
+        PropertyValue::List(_) => {
+            // For MVP: Lists only sort by tag. Full sorting is complex.
+            vec![0x07]
+        }
+        PropertyValue::Map(_) => {
+            // For MVP: Maps only sort by tag.
+            vec![0x08]
+        }
     }
 }
 

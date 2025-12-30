@@ -263,6 +263,14 @@ impl GraphSnapshot for DbSnapshot {
     ) -> Option<Vec<InternalNodeId>> {
         self.0.lookup_index(label, field, value)
     }
+
+    fn node_count(&self, label: Option<LabelId>) -> u64 {
+        self.0.node_count(label)
+    }
+
+    fn edge_count(&self, rel: Option<RelTypeId>) -> u64 {
+        self.0.edge_count(rel)
+    }
 }
 
 /// A read-only transaction.
@@ -409,12 +417,25 @@ impl<'a> WriteTxn<'a> {
 fn convert_to_storage_property_value(
     v: PropertyValue,
 ) -> nervusdb_v2_storage::property::PropertyValue {
+    use nervusdb_v2_storage::property::PropertyValue as StoragePropertyValue;
     match v {
-        PropertyValue::Null => nervusdb_v2_storage::property::PropertyValue::Null,
-        PropertyValue::Bool(b) => nervusdb_v2_storage::property::PropertyValue::Bool(b),
-        PropertyValue::Int(i) => nervusdb_v2_storage::property::PropertyValue::Int(i),
-        PropertyValue::Float(f) => nervusdb_v2_storage::property::PropertyValue::Float(f),
-        PropertyValue::String(s) => nervusdb_v2_storage::property::PropertyValue::String(s),
+        PropertyValue::Null => StoragePropertyValue::Null,
+        PropertyValue::Bool(b) => StoragePropertyValue::Bool(b),
+        PropertyValue::Int(i) => StoragePropertyValue::Int(i),
+        PropertyValue::Float(f) => StoragePropertyValue::Float(f),
+        PropertyValue::String(s) => StoragePropertyValue::String(s),
+        PropertyValue::DateTime(i) => StoragePropertyValue::DateTime(i),
+        PropertyValue::Blob(b) => StoragePropertyValue::Blob(b),
+        PropertyValue::List(l) => StoragePropertyValue::List(
+            l.into_iter()
+                .map(convert_to_storage_property_value)
+                .collect(),
+        ),
+        PropertyValue::Map(m) => StoragePropertyValue::Map(
+            m.into_iter()
+                .map(|(k, v)| (k, convert_to_storage_property_value(v)))
+                .collect(),
+        ),
     }
 }
 

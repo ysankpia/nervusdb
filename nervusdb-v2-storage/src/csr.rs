@@ -14,7 +14,7 @@ pub struct EdgeRecord {
     pub dst: InternalNodeId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CsrSegment {
     pub id: SegmentId,
     pub meta_page_id: u64,

@@ -427,7 +427,10 @@ fn verify(args: VerifyArgs) -> Result<(), String> {
     let (mut last_epoch, mut last_segments) = (0u64, Vec::<SegmentPointer>::new());
     for tx in &committed {
         for op in &tx.ops {
-            if let WalRecord::ManifestSwitch { epoch, segments } = op {
+            if let WalRecord::ManifestSwitch {
+                epoch, segments, ..
+            } = op
+            {
                 if *epoch < last_epoch {
                     return Err("manifest epoch decreased".to_string());
                 }

@@ -16,6 +16,9 @@ pub enum Value {
     Bool(bool),
     Null,
     List(Vec<Value>),
+    DateTime(i64),
+    Blob(Vec<u8>),
+    Map(std::collections::BTreeMap<String, Value>),
 }
 
 // Custom Hash implementation for Value (since Float doesn't implement Hash)
@@ -34,6 +37,9 @@ impl Hash for Value {
             Value::Bool(b) => b.hash(state),
             Value::Null => 0u8.hash(state),
             Value::List(l) => l.hash(state),
+            Value::DateTime(i) => i.hash(state),
+            Value::Blob(b) => b.hash(state),
+            Value::Map(m) => m.hash(state),
         }
     }
 }
@@ -47,6 +53,10 @@ pub struct Row {
 }
 
 impl Row {
+    pub fn new(cols: Vec<(String, Value)>) -> Self {
+        Self { cols }
+    }
+
     pub fn get(&self, name: &str) -> Option<&Value> {
         self.cols.iter().find(|(k, _)| k == name).map(|(_, v)| v)
     }
@@ -289,14 +299,8 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
             project_external: _,
             optional,
         } => {
-            if input.is_some() || *optional {
-                // TODO: Implement chaining for VarLen
-                // For now, if input is present, we panic or ignore?
-                // Ignoring is dangerous. Panic for now as it's dev phase.
-                // Or return Error? execute_plan returns Iterator, can't easily error.
-                // We'll panic since T151 focuses on MatchOut.
-                todo!("OPTIONAL MATCH / VarLen Chaining not implemented yet");
-            }
+            let input_iter = input.as_ref().map(|p| execute_plan(snapshot, p, params));
+
             let rel_id = if let Some(r) = rel {
                 match snapshot.resolve_rel_type_id(r) {
                     Some(id) => Some(id),
@@ -308,6 +312,7 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
 
             let base = MatchOutVarLenIter::new(
                 snapshot,
+                input_iter,
                 src_alias,
                 rel_id,
                 edge_alias.as_deref(),
@@ -315,6 +320,7 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                 *min_hops,
                 *max_hops,
                 *limit,
+                *optional,
             );
             if let Some(n) = limit {
                 Box::new(base.take(*n as usize))
@@ -570,6 +576,14 @@ pub(crate) fn execute_merge<S: GraphSnapshot>(
                 PropertyValue::Int(i) => nervusdb_v2_api::PropertyValue::Int(*i),
                 PropertyValue::Float(f) => nervusdb_v2_api::PropertyValue::Float(*f),
                 PropertyValue::String(s) => nervusdb_v2_api::PropertyValue::String(s.clone()),
+                PropertyValue::DateTime(i) => nervusdb_v2_api::PropertyValue::DateTime(*i),
+                PropertyValue::Blob(b) => nervusdb_v2_api::PropertyValue::Blob(b.clone()),
+                PropertyValue::List(l) => {
+                    nervusdb_v2_api::PropertyValue::List(l.iter().map(to_api).collect())
+                }
+                PropertyValue::Map(m) => nervusdb_v2_api::PropertyValue::Map(
+                    m.iter().map(|(k, v)| (k.clone(), to_api(v))).collect(),
+                ),
             }
         }
 
@@ -1053,11 +1067,25 @@ fn convert_executor_value_to_property(value: &Value) -> Result<PropertyValue> {
         Value::Int(i) => Ok(PropertyValue::Int(*i)),
         Value::String(s) => Ok(PropertyValue::String(s.clone())),
         Value::Float(f) => Ok(PropertyValue::Float(*f)),
-        Value::NodeId(_) | Value::ExternalId(_) | Value::EdgeKey(_) | Value::List(_) => {
-            Err(Error::NotImplemented(
-                "node/edge/list values in properties not supported in v2 M3".into(),
-            ))
+        Value::DateTime(i) => Ok(PropertyValue::DateTime(*i)),
+        Value::Blob(b) => Ok(PropertyValue::Blob(b.clone())),
+        Value::List(l) => {
+            let mut list = Vec::with_capacity(l.len());
+            for v in l {
+                list.push(convert_executor_value_to_property(v)?);
+            }
+            Ok(PropertyValue::List(list))
         }
+        Value::Map(m) => {
+            let mut map = std::collections::BTreeMap::new();
+            for (k, v) in m {
+                map.insert(k.clone(), convert_executor_value_to_property(v)?);
+            }
+            Ok(PropertyValue::Map(map))
+        }
+        Value::NodeId(_) | Value::ExternalId(_) | Value::EdgeKey(_) => Err(Error::NotImplemented(
+            "node/edge identifiers as property values are not supported".into(),
+        )),
     }
 }
 
@@ -1139,6 +1167,8 @@ const DEFAULT_MAX_VAR_LEN_HOPS: u32 = 5;
 #[allow(clippy::too_many_arguments)]
 struct MatchOutVarLenIter<'a, S: GraphSnapshot + 'a> {
     snapshot: &'a S,
+    input: Option<Box<dyn Iterator<Item = Result<Row>> + 'a>>,
+    cur_row: Option<Row>,
     src_alias: &'a str,
     rel: Option<RelTypeId>,
     edge_alias: Option<&'a str>,
@@ -1146,16 +1176,19 @@ struct MatchOutVarLenIter<'a, S: GraphSnapshot + 'a> {
     min_hops: u32,
     max_hops: Option<u32>,
     limit: Option<u32>,
-    node_iter: Box<dyn Iterator<Item = InternalNodeId> + 'a>,
-    // DFS state: (start_node, current_node, current_depth)
-    stack: Vec<(InternalNodeId, InternalNodeId, u32)>,
+    node_iter: Option<Box<dyn Iterator<Item = InternalNodeId> + 'a>>,
+    // DFS state: (start_node, current_node, current_depth, incoming_edge)
+    stack: Vec<(InternalNodeId, InternalNodeId, u32, Option<EdgeKey>)>,
     emitted: u32,
+    yielded_any: bool,
+    optional: bool,
 }
 
 impl<'a, S: GraphSnapshot + 'a> MatchOutVarLenIter<'a, S> {
     #[allow(clippy::too_many_arguments)]
     fn new(
         snapshot: &'a S,
+        input: Option<Box<dyn Iterator<Item = Result<Row>> + 'a>>,
         src_alias: &'a str,
         rel: Option<RelTypeId>,
         edge_alias: Option<&'a str>,
@@ -1163,9 +1196,18 @@ impl<'a, S: GraphSnapshot + 'a> MatchOutVarLenIter<'a, S> {
         min_hops: u32,
         max_hops: Option<u32>,
         limit: Option<u32>,
+        optional: bool,
     ) -> Self {
+        let node_iter = if input.is_none() {
+            Some(snapshot.nodes())
+        } else {
+            None
+        };
+
         Self {
             snapshot,
+            input,
+            cur_row: None,
             src_alias,
             rel,
             edge_alias,
@@ -1173,25 +1215,17 @@ impl<'a, S: GraphSnapshot + 'a> MatchOutVarLenIter<'a, S> {
             min_hops,
             max_hops,
             limit,
-            node_iter: snapshot.nodes(),
+            node_iter,
             stack: Vec::new(),
             emitted: 0,
+            yielded_any: false,
+            optional,
         }
-    }
-
-    fn next_start_node(&mut self) -> Option<InternalNodeId> {
-        for src in self.node_iter.by_ref() {
-            if self.snapshot.is_tombstoned_node(src) {
-                continue;
-            }
-            return Some(src);
-        }
-        None
     }
 
     /// Start DFS from a node
     fn start_dfs(&mut self, start_node: InternalNodeId) {
-        self.stack.push((start_node, start_node, 0));
+        self.stack.push((start_node, start_node, 0, None));
     }
 }
 
@@ -1199,57 +1233,100 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
     type Item = Result<Row>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let max_hops = Some(self.max_hops.unwrap_or(DEFAULT_MAX_VAR_LEN_HOPS));
+        let max_hops = self.max_hops.unwrap_or(DEFAULT_MAX_VAR_LEN_HOPS);
 
         // Check limit
-        if let Some(limit) = self.limit
-            && self.emitted >= limit
-        {
-            return None;
+        if let Some(limit) = self.limit {
+            if self.emitted >= limit {
+                return None;
+            }
         }
 
         loop {
-            // If stack is empty, get next start node
-            if self.stack.is_empty() {
-                let start_node = self.next_start_node()?;
-                self.start_dfs(start_node);
-            }
-
-            // Pop next path to explore
-            let (start_node, current_node, depth) = match self.stack.pop() {
-                Some(state) => state,
-                None => continue,
-            };
-
-            // Get neighbors
-            let neighbors: Vec<_> = self.snapshot.neighbors(current_node, self.rel).collect();
-
-            // For each neighbor, check if we should emit this path
-            for edge in neighbors {
-                let next_node = edge.dst;
-                let next_depth = depth + 1;
-
-                // Check max hops constraint
-                if let Some(max) = max_hops
-                    && next_depth > max
-                {
-                    continue;
+            // 1. Process Stack (DFS)
+            if let Some((start_node, current_node, depth, incoming_edge)) = self.stack.pop() {
+                // Expand
+                if depth < max_hops {
+                    for edge in self.snapshot.neighbors(current_node, self.rel) {
+                        self.stack
+                            .push((start_node, edge.dst, depth + 1, Some(edge)));
+                    }
                 }
 
-                // Check min hops and emit
-                if next_depth >= self.min_hops {
-                    let mut row = Row::default().with(self.src_alias, Value::NodeId(start_node));
+                // Emit check
+                if depth >= self.min_hops {
+                    let mut row = self.cur_row.clone().unwrap_or_default();
+                    row = row.with(self.src_alias, Value::NodeId(start_node));
+
                     if let Some(edge_alias) = self.edge_alias {
-                        row = row.with(edge_alias, Value::EdgeKey(edge));
+                        if let Some(e) = incoming_edge {
+                            row = row.with(edge_alias, Value::EdgeKey(e));
+                        } else {
+                            row = row.with(edge_alias, Value::Null);
+                        }
                     }
-                    row = row.with(self.dst_alias, Value::NodeId(next_node));
+                    row = row.with(self.dst_alias, Value::NodeId(current_node));
 
                     self.emitted += 1;
+                    self.yielded_any = true;
                     return Some(Ok(row));
                 }
+                continue;
+            }
 
-                // Continue DFS
-                self.stack.push((start_node, next_node, next_depth));
+            // 2. Stack Empty: Check Optional Null emission
+            if let Some(row) = &self.cur_row {
+                if self.optional && !self.yielded_any && self.input.is_some() {
+                    self.yielded_any = true;
+                    let mut null_row = row.clone();
+                    null_row = null_row.with(self.dst_alias, Value::Null);
+                    if let Some(ea) = self.edge_alias {
+                        null_row = null_row.with(ea, Value::Null);
+                    }
+                    self.emitted += 1;
+                    return Some(Ok(null_row));
+                }
+            }
+
+            // 3. Get Next Start Node
+            if let Some(input) = &mut self.input {
+                match input.next() {
+                    Some(Ok(row)) => {
+                        self.cur_row = Some(row.clone());
+                        self.yielded_any = false;
+
+                        let src_val = row.get(self.src_alias);
+                        match src_val {
+                            Some(Value::NodeId(id)) => self.start_dfs(*id),
+                            Some(Value::Null) => {
+                                // Optional null source handled next iteration
+                            }
+                            _ => {} // Invalid, skip
+                        }
+                    }
+                    Some(Err(e)) => return Some(Err(e)),
+                    None => return None, // Input exhausted
+                }
+            } else {
+                // Scan mode
+                if let Some(node_iter) = &mut self.node_iter {
+                    match node_iter.next() {
+                        Some(id) => {
+                            if self.snapshot.is_tombstoned_node(id) {
+                                continue;
+                            }
+                            self.cur_row = Some(Row::new(vec![(
+                                self.src_alias.to_string(),
+                                Value::NodeId(id),
+                            )]));
+                            self.yielded_any = false;
+                            self.start_dfs(id);
+                        }
+                        None => return None,
+                    }
+                } else {
+                    return None;
+                }
             }
         }
     }

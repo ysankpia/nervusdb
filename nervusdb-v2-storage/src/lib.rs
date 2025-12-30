@@ -1,4 +1,6 @@
 pub mod api;
+pub mod blob_store;
+pub mod bulkload;
 pub mod csr;
 pub mod engine;
 mod error;
@@ -9,6 +11,7 @@ pub mod memtable;
 pub mod pager;
 pub mod property;
 pub mod snapshot;
+pub mod stats;
 pub mod wal;
 
 pub use crate::error::{Error, Result};

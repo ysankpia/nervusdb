@@ -18,11 +18,11 @@ pub struct L0Run {
     txid: u64,
     edges_by_src: BTreeMap<InternalNodeId, Vec<EdgeKey>>,
     tombstoned_nodes: BTreeSet<InternalNodeId>,
-    tombstoned_edges: BTreeSet<EdgeKey>,
+    pub(crate) tombstoned_edges: BTreeSet<EdgeKey>,
     // Node properties: node_id -> { key -> value }
-    node_properties: BTreeMap<InternalNodeId, BTreeMap<String, PropertyValue>>,
+    pub(crate) node_properties: BTreeMap<InternalNodeId, BTreeMap<String, PropertyValue>>,
     // Edge properties: edge_key -> { key -> value }
-    edge_properties: BTreeMap<EdgeKey, BTreeMap<String, PropertyValue>>,
+    pub(crate) edge_properties: BTreeMap<EdgeKey, BTreeMap<String, PropertyValue>>,
 }
 
 impl L0Run {
@@ -112,6 +112,8 @@ pub struct Snapshot {
     segments: Arc<Vec<Arc<CsrSegment>>>,
     labels: Arc<crate::label_interner::LabelSnapshot>,
     node_labels: Arc<Vec<crate::idmap::LabelId>>,
+    pub(crate) properties_root: u64,
+    pub(crate) stats_root: u64,
 }
 
 impl Snapshot {
@@ -120,12 +122,16 @@ impl Snapshot {
         segments: Arc<Vec<Arc<CsrSegment>>>,
         labels: Arc<crate::label_interner::LabelSnapshot>,
         node_labels: Arc<Vec<crate::idmap::LabelId>>,
+        properties_root: u64,
+        stats_root: u64,
     ) -> Self {
         Self {
             runs,
             segments,
             labels,
             node_labels,
+            properties_root,
+            stats_root,
         }
     }
 
@@ -135,6 +141,18 @@ impl Snapshot {
 
     pub(crate) fn runs(&self) -> &Arc<Vec<Arc<L0Run>>> {
         &self.runs
+    }
+
+    pub fn get_statistics(
+        &self,
+        pager: &mut std::sync::MutexGuard<'_, crate::pager::Pager>,
+    ) -> crate::Result<crate::stats::GraphStatistics> {
+        if self.stats_root == 0 {
+            return Ok(crate::stats::GraphStatistics::default());
+        }
+        let bytes = crate::blob_store::BlobStore::read(pager, self.stats_root)?;
+        crate::stats::GraphStatistics::decode(&bytes)
+            .ok_or_else(|| crate::Error::StorageCorrupted("failed to decode statistics"))
     }
 
     /// Get the label ID for a node.

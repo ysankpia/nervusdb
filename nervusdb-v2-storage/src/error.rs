@@ -27,4 +27,7 @@ pub enum Error {
 
     #[error("wal protocol error: {0}")]
     WalProtocol(&'static str),
+
+    #[error("storage corrupted: {0}")]
+    StorageCorrupted(&'static str),
 }

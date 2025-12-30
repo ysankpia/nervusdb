@@ -1,14 +1,16 @@
 use crate::csr::{CsrSegment, EdgeRecord, SegmentId};
 use crate::idmap::{ExternalId, I2eRecord, IdMap, InternalNodeId, LabelId};
+use crate::index::btree::BTree;
 use crate::index::catalog::IndexCatalog;
 use crate::index::ordered_key::encode_ordered_value;
 use crate::label_interner::{LabelInterner, LabelSnapshot};
 use crate::memtable::MemTable;
-use crate::pager::Pager;
+use crate::pager::{PageId, Pager};
 use crate::snapshot::{L0Run, RelTypeId, Snapshot};
 use crate::wal::{CommittedTx, SegmentPointer, Wal, WalRecord};
 use crate::{Error, Result};
 use nervusdb_v2_api::{GraphSnapshot, GraphStore};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -33,6 +35,8 @@ pub struct GraphEngine {
     next_segment_id: AtomicU64,
     manifest_epoch: AtomicU64,
     checkpoint_txid: AtomicU64,
+    properties_root: AtomicU64,
+    stats_root: AtomicU64,
 }
 
 impl GraphEngine {
@@ -75,8 +79,6 @@ impl GraphEngine {
 
         runs.reverse(); // newest first for read path
 
-        runs.reverse(); // newest first for read path
-
         let label_snapshot = label_interner.snapshot();
         let node_labels_snapshot = idmap.get_i2l_snapshot();
 
@@ -97,6 +99,8 @@ impl GraphEngine {
             next_segment_id: AtomicU64::new(max_seg_id.saturating_add(1).max(1)),
             manifest_epoch: AtomicU64::new(state.manifest_epoch),
             checkpoint_txid: AtomicU64::new(state.checkpoint_txid),
+            properties_root: AtomicU64::new(state.properties_root),
+            stats_root: AtomicU64::new(state.stats_root),
         })
     }
 
@@ -141,7 +145,16 @@ impl GraphEngine {
         let segments = self.published_segments.read().unwrap().clone();
         let labels = self.published_labels.read().unwrap().clone();
         let node_labels = self.published_node_labels.read().unwrap().clone();
-        Snapshot::new(runs, segments, labels, node_labels)
+        let properties_root = self.properties_root.load(Ordering::Relaxed);
+        let stats_root = self.stats_root.load(Ordering::Relaxed);
+        Snapshot::new(
+            runs,
+            segments,
+            labels,
+            node_labels,
+            properties_root,
+            stats_root,
+        )
     }
 
     pub fn begin_write(&self) -> WriteTxn<'_> {
@@ -286,6 +299,94 @@ impl GraphEngine {
             Arc::new(next)
         };
 
+        // Property Sinking: Persist properties from L0Runs into the B-Tree Property Store.
+        let mut sink_node_props = BTreeMap::new();
+        let mut sink_edge_props = BTreeMap::new();
+        for run in runs.iter() {
+            for (node, props) in &run.node_properties {
+                for (key, val) in props {
+                    sink_node_props
+                        .entry((*node, key.clone()))
+                        .or_insert(val.clone());
+                }
+            }
+            for (edge, props) in &run.edge_properties {
+                for (key, val) in props {
+                    sink_edge_props
+                        .entry((*edge, key.clone()))
+                        .or_insert(val.clone());
+                }
+            }
+        }
+
+        let mut current_root = self.properties_root.load(Ordering::SeqCst);
+        if !sink_node_props.is_empty() || !sink_edge_props.is_empty() {
+            let mut pager = self.pager.lock().unwrap();
+            let mut tree = if current_root == 0 {
+                BTree::create(&mut pager)?
+            } else {
+                BTree::load(PageId::new(current_root))
+            };
+
+            // Sink Node Properties (Tag 0)
+            for ((node, key), value) in sink_node_props {
+                let mut btree_key = Vec::with_capacity(1 + 4 + 4 + key.len());
+                btree_key.push(0u8); // Tag 0: Node Property
+                btree_key.extend_from_slice(&node.to_be_bytes());
+                btree_key.extend_from_slice(&(key.len() as u32).to_be_bytes());
+                btree_key.extend_from_slice(key.as_bytes());
+
+                let encoded_val = value.encode();
+                let blob_id = crate::blob_store::BlobStore::write(&mut pager, &encoded_val)?;
+                tree.insert(&mut pager, &btree_key, blob_id)?;
+            }
+
+            // Sink Edge Properties (Tag 1)
+            for ((edge, key), value) in sink_edge_props {
+                let mut btree_key = Vec::with_capacity(1 + 4 + 4 + 4 + 4 + key.len());
+                btree_key.push(1u8); // Tag 1: Edge Property
+                btree_key.extend_from_slice(&edge.src.to_be_bytes());
+                btree_key.extend_from_slice(&edge.rel.to_be_bytes());
+                btree_key.extend_from_slice(&edge.dst.to_be_bytes());
+                btree_key.extend_from_slice(&(key.len() as u32).to_be_bytes());
+                btree_key.extend_from_slice(key.as_bytes());
+
+                let encoded_val = value.encode();
+                let blob_id = crate::blob_store::BlobStore::write(&mut pager, &encoded_val)?;
+                tree.insert(&mut pager, &btree_key, blob_id)?;
+            }
+
+            current_root = tree.root().as_u64();
+        }
+
+        // Statistics Collection - read directly from IdMap for accuracy
+        let mut stats = crate::stats::GraphStatistics::default();
+        {
+            let idmap = self.idmap.lock().unwrap();
+            let node_labels = idmap.get_i2l_snapshot();
+
+            // Count nodes per label (node_labels[iid] = label_id for that node)
+            // All labels should be counted, including label 0 (which is a valid label)
+            stats.total_nodes = node_labels.len() as u64;
+            for &label_id in node_labels.iter() {
+                *stats.node_counts_by_label.entry(label_id).or_default() += 1;
+            }
+        }
+
+        for seg in new_segments.iter() {
+            stats.total_edges += seg.edges.len() as u64;
+            for edge in &seg.edges {
+                *stats.edge_counts_by_type.entry(edge.rel).or_default() += 1;
+            }
+        }
+
+        let stats_root;
+        {
+            let mut pager = self.pager.lock().unwrap();
+            let encoded_stats = stats.encode();
+            stats_root = crate::blob_store::BlobStore::write(&mut pager, &encoded_stats)?;
+        }
+
         let pointers: Vec<SegmentPointer> = new_segments
             .iter()
             .map(|s| SegmentPointer {
@@ -301,15 +402,25 @@ impl GraphEngine {
             wal.append(&WalRecord::ManifestSwitch {
                 epoch,
                 segments: pointers,
+                properties_root: current_root,
+                stats_root,
             })?;
-            if !has_properties {
-                wal.append(&WalRecord::Checkpoint { up_to_txid, epoch })?;
-            }
+            // After sinking properties, we can safely checkpoint up_to_txid
+            wal.append(&WalRecord::Checkpoint {
+                up_to_txid,
+                epoch,
+                properties_root: current_root,
+                stats_root,
+            })?;
             wal.append(&WalRecord::CommitTx { txid: system_txid })?;
             wal.fsync()?;
         }
 
-        if !has_properties {
+        // 4. Update memory state
+        self.checkpoint_txid.store(up_to_txid, Ordering::SeqCst);
+        self.properties_root.store(current_root, Ordering::SeqCst);
+        self.stats_root.store(stats_root, Ordering::SeqCst);
+        {
             let mut cur_runs = self.published_runs.write().unwrap();
             *cur_runs = Arc::new(Vec::new());
         }
@@ -386,11 +497,20 @@ impl GraphEngine {
             }
         }
 
+        let properties_root = self.properties_root.load(Ordering::Relaxed);
+        let stats_root = self.stats_root.load(Ordering::Relaxed);
         ops.push(WalRecord::ManifestSwitch {
             epoch,
             segments: pointers,
+            properties_root,
+            stats_root,
         });
-        ops.push(WalRecord::Checkpoint { up_to_txid, epoch });
+        ops.push(WalRecord::Checkpoint {
+            up_to_txid,
+            epoch,
+            properties_root,
+            stats_root,
+        });
 
         {
             let mut wal = self.wal.lock().unwrap();
@@ -642,23 +762,7 @@ impl<'a> WriteTxn<'a> {
             let snapshot = self.engine.snapshot();
 
             // Helper to convert API PropertyValue to Storage PropertyValue
-            fn to_storage(v: nervusdb_v2_api::PropertyValue) -> crate::property::PropertyValue {
-                match v {
-                    nervusdb_v2_api::PropertyValue::Null => crate::property::PropertyValue::Null,
-                    nervusdb_v2_api::PropertyValue::Bool(b) => {
-                        crate::property::PropertyValue::Bool(b)
-                    }
-                    nervusdb_v2_api::PropertyValue::Int(i) => {
-                        crate::property::PropertyValue::Int(i)
-                    }
-                    nervusdb_v2_api::PropertyValue::Float(f) => {
-                        crate::property::PropertyValue::Float(f)
-                    }
-                    nervusdb_v2_api::PropertyValue::String(s) => {
-                        crate::property::PropertyValue::String(s)
-                    }
-                }
-            }
+            use crate::api::to_storage;
 
             for (node, key, value) in &node_properties {
                 let is_new = self.created_nodes.iter().any(|(_, _, iid)| iid == node);
@@ -897,6 +1001,8 @@ struct RecoveryState {
     manifest_segments: Vec<SegmentPointer>,
     checkpoint_txid: u64,
     max_txid: u64,
+    properties_root: u64,
+    stats_root: u64,
 }
 
 fn scan_recovery_state(committed: &[CommittedTx]) -> RecoveryState {
@@ -905,16 +1011,30 @@ fn scan_recovery_state(committed: &[CommittedTx]) -> RecoveryState {
         state.max_txid = state.max_txid.max(tx.txid);
         for op in &tx.ops {
             match op {
-                WalRecord::ManifestSwitch { epoch, segments } => {
+                WalRecord::ManifestSwitch {
+                    epoch,
+                    segments,
+                    properties_root,
+                    stats_root,
+                } => {
                     if *epoch >= state.manifest_epoch {
                         state.manifest_epoch = *epoch;
                         state.manifest_segments = segments.clone();
                         state.checkpoint_txid = 0;
+                        state.properties_root = *properties_root;
+                        state.stats_root = *stats_root;
                     }
                 }
-                WalRecord::Checkpoint { up_to_txid, epoch } => {
+                WalRecord::Checkpoint {
+                    up_to_txid,
+                    epoch,
+                    properties_root,
+                    stats_root,
+                } => {
                     if *epoch == state.manifest_epoch {
                         state.checkpoint_txid = state.checkpoint_txid.max(*up_to_txid);
+                        state.properties_root = *properties_root;
+                        state.stats_root = *stats_root;
                     }
                 }
                 _ => {}
@@ -968,7 +1088,10 @@ mod tests {
     }
 
     #[test]
-    fn t103_compaction_does_not_checkpoint_when_properties_present() {
+    fn t103_compaction_checkpoints_even_with_properties() {
+        use crate::api::StorageSnapshot;
+        use nervusdb_v2_api::GraphSnapshot;
+
         let dir = tempdir().unwrap();
         let ndb = dir.path().join("graph_props.ndb");
         let wal = dir.path().join("graph_props.wal");
@@ -987,15 +1110,16 @@ mod tests {
             internal_id = node;
 
             engine.compact().unwrap();
-            // Runs must remain because properties are not persisted into .ndb yet.
-            assert!(!engine.published_runs.read().unwrap().is_empty());
+            // Runs MUST BE cleared because properties are now persisted.
+            assert!(engine.published_runs.read().unwrap().is_empty());
         }
 
         let engine = GraphEngine::open(&ndb, &wal).unwrap();
-        let snap = engine.begin_read();
+        // Use API-level snapshot which supports reading from B-Tree
+        let snap: StorageSnapshot = engine.snapshot();
         let age = snap.node_property(internal_id, "age").unwrap();
-        assert_eq!(age, crate::property::PropertyValue::Int(30));
-        // And we must have runs after restart, because recovery can't skip replay.
-        assert!(!engine.published_runs.read().unwrap().is_empty());
+        assert_eq!(age, nervusdb_v2_api::PropertyValue::Int(30));
+        // And we must have NO runs after restart, because they were checkpointed.
+        assert!(engine.published_runs.read().unwrap().is_empty());
     }
 }

@@ -46,10 +46,14 @@ pub enum WalRecord {
     ManifestSwitch {
         epoch: u64,
         segments: Vec<SegmentPointer>,
+        properties_root: u64,
+        stats_root: u64,
     },
     Checkpoint {
         up_to_txid: u64,
         epoch: u64,
+        properties_root: u64,
+        stats_root: u64,
     },
     SetNodeProperty {
         node: u32,
@@ -142,7 +146,12 @@ impl WalRecord {
             WalRecord::TombstoneNode { node } => {
                 out.extend_from_slice(&node.to_le_bytes());
             }
-            WalRecord::ManifestSwitch { epoch, segments } => {
+            WalRecord::ManifestSwitch {
+                epoch,
+                segments,
+                properties_root,
+                stats_root,
+            } => {
                 out.extend_from_slice(&epoch.to_le_bytes());
                 let count: u32 = segments
                     .len()
@@ -154,10 +163,19 @@ impl WalRecord {
                     out.extend_from_slice(&seg.id.to_le_bytes());
                     out.extend_from_slice(&seg.meta_page_id.to_le_bytes());
                 }
+                out.extend_from_slice(&properties_root.to_le_bytes());
+                out.extend_from_slice(&stats_root.to_le_bytes());
             }
-            WalRecord::Checkpoint { up_to_txid, epoch } => {
+            WalRecord::Checkpoint {
+                up_to_txid,
+                epoch,
+                properties_root,
+                stats_root,
+            } => {
                 out.extend_from_slice(&up_to_txid.to_le_bytes());
                 out.extend_from_slice(&epoch.to_le_bytes());
+                out.extend_from_slice(&properties_root.to_le_bytes());
+                out.extend_from_slice(&stats_root.to_le_bytes());
             }
             WalRecord::SetNodeProperty { node, key, value } => {
                 out.extend_from_slice(&node.to_le_bytes());
@@ -290,16 +308,18 @@ impl WalRecord {
                 Ok(WalRecord::TombstoneEdge { src, rel, dst })
             }
             9 => {
-                if payload.len() < 8 + 4 {
+                if payload.len() < 8 + 4 + 8 + 8 {
                     return Err(Error::WalProtocol("invalid ManifestSwitch payload length"));
                 }
                 let epoch = u64::from_le_bytes(payload[0..8].try_into().unwrap());
                 let count = u32::from_le_bytes(payload[8..12].try_into().unwrap()) as usize;
-                let mut offset = 12;
-                let expected = 12 + count * 16;
-                if payload.len() != expected {
+
+                let segments_end = 12 + count * 16;
+                if payload.len() < segments_end + 8 {
                     return Err(Error::WalProtocol("invalid ManifestSwitch payload length"));
                 }
+
+                let mut offset = 12;
                 let mut segments = Vec::with_capacity(count);
                 for _ in 0..count {
                     let id = u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
@@ -308,15 +328,31 @@ impl WalRecord {
                     segments.push(SegmentPointer { id, meta_page_id });
                     offset += 16;
                 }
-                Ok(WalRecord::ManifestSwitch { epoch, segments })
+                let properties_root =
+                    u64::from_le_bytes(payload[offset..offset + 8].try_into().unwrap());
+                let stats_root =
+                    u64::from_le_bytes(payload[offset + 8..offset + 16].try_into().unwrap());
+                Ok(WalRecord::ManifestSwitch {
+                    epoch,
+                    segments,
+                    properties_root,
+                    stats_root,
+                })
             }
             10 => {
-                if payload.len() != 16 {
+                if payload.len() != 32 {
                     return Err(Error::WalProtocol("invalid Checkpoint payload length"));
                 }
                 let up_to_txid = u64::from_le_bytes(payload[0..8].try_into().unwrap());
                 let epoch = u64::from_le_bytes(payload[8..16].try_into().unwrap());
-                Ok(WalRecord::Checkpoint { up_to_txid, epoch })
+                let properties_root = u64::from_le_bytes(payload[16..24].try_into().unwrap());
+                let stats_root = u64::from_le_bytes(payload[24..32].try_into().unwrap());
+                Ok(WalRecord::Checkpoint {
+                    up_to_txid,
+                    epoch,
+                    properties_root,
+                    stats_root,
+                })
             }
             11 => {
                 // SetNodeProperty: [node: u32][key_len: u32][key: bytes][value: encoded]

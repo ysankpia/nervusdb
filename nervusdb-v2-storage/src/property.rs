@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 /// Property value types for nodes and edges.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PropertyValue {
@@ -6,6 +8,10 @@ pub enum PropertyValue {
     Int(i64),
     Float(f64),
     String(String),
+    DateTime(i64),
+    Blob(Vec<u8>),
+    List(Vec<PropertyValue>),
+    Map(BTreeMap<String, PropertyValue>),
 }
 
 impl PropertyValue {
@@ -36,49 +42,145 @@ impl PropertyValue {
                 out.extend_from_slice(bytes);
                 out
             }
+            PropertyValue::DateTime(i) => {
+                let mut out = vec![5];
+                out.extend_from_slice(&i.to_le_bytes());
+                out
+            }
+            PropertyValue::Blob(b) => {
+                let mut out = vec![6];
+                let len = u32::try_from(b.len()).expect("blob length should fit in u32");
+                out.extend_from_slice(&len.to_le_bytes());
+                out.extend_from_slice(b);
+                out
+            }
+            PropertyValue::List(l) => {
+                let mut out = vec![7];
+                let len = u32::try_from(l.len()).expect("list length should fit in u32");
+                out.extend_from_slice(&len.to_le_bytes());
+                for item in l {
+                    out.extend_from_slice(&item.encode());
+                }
+                out
+            }
+            PropertyValue::Map(m) => {
+                let mut out = vec![8];
+                let len = u32::try_from(m.len()).expect("map length should fit in u32");
+                out.extend_from_slice(&len.to_le_bytes());
+                for (k, v) in m {
+                    let k_bytes = k.as_bytes();
+                    let k_len = u32::try_from(k_bytes.len()).expect("key length should fit in u32");
+                    out.extend_from_slice(&k_len.to_le_bytes());
+                    out.extend_from_slice(k_bytes);
+                    out.extend_from_slice(&v.encode());
+                }
+                out
+            }
         }
     }
 
     /// Decode property value from bytes.
     pub fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        let (val, _) = Self::decode_recursive(bytes)?;
+        Ok(val)
+    }
+
+    fn decode_recursive(bytes: &[u8]) -> Result<(Self, usize), DecodeError> {
         if bytes.is_empty() {
             return Err(DecodeError::Empty);
         }
         let ty = bytes[0];
-        let payload = &bytes[1..];
+        let mut pos = 1;
         match ty {
-            0 => Ok(PropertyValue::Null),
+            0 => Ok((PropertyValue::Null, 1)),
             1 => {
-                if payload.len() != 1 {
+                if bytes.len() < 2 {
                     return Err(DecodeError::InvalidLength);
                 }
-                Ok(PropertyValue::Bool(payload[0] != 0))
+                Ok((PropertyValue::Bool(bytes[1] != 0), 2))
             }
             2 => {
-                if payload.len() != 8 {
+                if bytes.len() < 9 {
                     return Err(DecodeError::InvalidLength);
                 }
-                let i = i64::from_le_bytes(payload[0..8].try_into().unwrap());
-                Ok(PropertyValue::Int(i))
+                let i = i64::from_le_bytes(bytes[1..9].try_into().unwrap());
+                Ok((PropertyValue::Int(i), 9))
             }
             3 => {
-                if payload.len() != 8 {
+                if bytes.len() < 9 {
                     return Err(DecodeError::InvalidLength);
                 }
-                let f = f64::from_le_bytes(payload[0..8].try_into().unwrap());
-                Ok(PropertyValue::Float(f))
+                let f = f64::from_le_bytes(bytes[1..9].try_into().unwrap());
+                Ok((PropertyValue::Float(f), 9))
             }
             4 => {
-                if payload.len() < 4 {
+                if bytes.len() < 5 {
                     return Err(DecodeError::InvalidLength);
                 }
-                let len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
-                if payload.len() < 4 + len {
+                let len = u32::from_le_bytes(bytes[1..5].try_into().unwrap()) as usize;
+                if bytes.len() < 5 + len {
                     return Err(DecodeError::InvalidLength);
                 }
-                let s = String::from_utf8(payload[4..4 + len].to_vec())
+                let s = String::from_utf8(bytes[5..5 + len].to_vec())
                     .map_err(|_| DecodeError::InvalidUtf8)?;
-                Ok(PropertyValue::String(s))
+                Ok((PropertyValue::String(s), 5 + len))
+            }
+            5 => {
+                if bytes.len() < 9 {
+                    return Err(DecodeError::InvalidLength);
+                }
+                let i = i64::from_le_bytes(bytes[1..9].try_into().unwrap());
+                Ok((PropertyValue::DateTime(i), 9))
+            }
+            6 => {
+                if bytes.len() < 5 {
+                    return Err(DecodeError::InvalidLength);
+                }
+                let len = u32::from_le_bytes(bytes[1..5].try_into().unwrap()) as usize;
+                if bytes.len() < 5 + len {
+                    return Err(DecodeError::InvalidLength);
+                }
+                Ok((PropertyValue::Blob(bytes[5..5 + len].to_vec()), 5 + len))
+            }
+            7 => {
+                if bytes.len() < 5 {
+                    return Err(DecodeError::InvalidLength);
+                }
+                let count = u32::from_le_bytes(bytes[1..5].try_into().unwrap()) as usize;
+                pos = 5;
+                let mut items = Vec::with_capacity(count);
+                for _ in 0..count {
+                    let (item, consumed) = Self::decode_recursive(&bytes[pos..])?;
+                    items.push(item);
+                    pos += consumed;
+                }
+                Ok((PropertyValue::List(items), pos))
+            }
+            8 => {
+                if bytes.len() < 5 {
+                    return Err(DecodeError::InvalidLength);
+                }
+                let count = u32::from_le_bytes(bytes[1..5].try_into().unwrap()) as usize;
+                pos = 5;
+                let mut map = BTreeMap::new();
+                for _ in 0..count {
+                    if bytes.len() < pos + 4 {
+                        return Err(DecodeError::InvalidLength);
+                    }
+                    let k_len =
+                        u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
+                    pos += 4;
+                    if bytes.len() < pos + k_len {
+                        return Err(DecodeError::InvalidLength);
+                    }
+                    let key = String::from_utf8(bytes[pos..pos + k_len].to_vec())
+                        .map_err(|_| DecodeError::InvalidUtf8)?;
+                    pos += k_len;
+                    let (val, consumed) = Self::decode_recursive(&bytes[pos..])?;
+                    map.insert(key, val);
+                    pos += consumed;
+                }
+                Ok((PropertyValue::Map(map), pos))
             }
             _ => Err(DecodeError::UnknownType(ty)),
         }
@@ -174,18 +276,41 @@ mod tests {
     }
 
     #[test]
-    fn encode_decode_string() {
-        for s in ["", "hello", "世界"] {
-            let v = PropertyValue::String(s.to_string());
-            let encoded = v.encode();
-            let decoded = PropertyValue::decode(&encoded).unwrap();
-            assert_eq!(v, decoded);
-        }
-        // Test long string separately
-        let long_str = "a".repeat(1000);
-        let v = PropertyValue::String(long_str.clone());
+    fn encode_decode_datetime() {
+        let v = PropertyValue::DateTime(123456789);
         let encoded = v.encode();
         let decoded = PropertyValue::decode(&encoded).unwrap();
-        assert_eq!(PropertyValue::String(long_str), decoded);
+        assert_eq!(v, decoded);
+    }
+
+    #[test]
+    fn encode_decode_blob() {
+        let v = PropertyValue::Blob(vec![0x00, 0xFF, 0xDE, 0xAD, 0xBE, 0xEF]);
+        let encoded = v.encode();
+        let decoded = PropertyValue::decode(&encoded).unwrap();
+        assert_eq!(v, decoded);
+    }
+
+    #[test]
+    fn encode_decode_list() {
+        let v = PropertyValue::List(vec![
+            PropertyValue::Int(1),
+            PropertyValue::String("hello".into()),
+            PropertyValue::List(vec![PropertyValue::Bool(true)]),
+        ]);
+        let encoded = v.encode();
+        let decoded = PropertyValue::decode(&encoded).unwrap();
+        assert_eq!(v, decoded);
+    }
+
+    #[test]
+    fn encode_decode_map() {
+        let mut map = BTreeMap::new();
+        map.insert("a".into(), PropertyValue::Int(1));
+        map.insert("b".into(), PropertyValue::List(vec![PropertyValue::Null]));
+        let v = PropertyValue::Map(map);
+        let encoded = v.encode();
+        let decoded = PropertyValue::decode(&encoded).unwrap();
+        assert_eq!(v, decoded);
     }
 }

@@ -31,7 +31,7 @@ pub use nervusdb_v2_api::{
     RelTypeId,
 };
 
-use crate::{Error, Params, Result, Row, prepare};
+use crate::{Error, Params, Result, Row};
 
 /// Executes a Cypher query and collects all results into a Vec.
 ///
@@ -58,7 +58,7 @@ pub fn query_collect<S: GraphSnapshot>(
     cypher: &str,
     params: &Params,
 ) -> Result<Vec<Row>> {
-    let query = prepare(cypher).map_err(|e| Error::Other(e.to_string()))?;
+    let query = crate::query_api::prepare(cypher).map_err(|e| Error::Other(e.to_string()))?;
     let results: Vec<Result<Row>> = query.execute_streaming(snapshot, params).collect();
     results.into_iter().collect()
 }

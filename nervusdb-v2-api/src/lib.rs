@@ -24,14 +24,16 @@ pub type RelTypeId = u32;
 
 /// Property value types for nodes and edges.
 ///
-/// Supports basic types needed for Cypher property expressions:
+/// Supports basic and complex types needed for Cypher property expressions:
 /// - Null: NULL values
 /// - Bool: true/false
 /// - Int: 64-bit signed integers
 /// - Float: 64-bit floating point
 /// - String: UTF-8 strings
-///
-/// Note: MVP does not support nested structures (maps/lists) as property values.
+/// - DateTime: 64-bit signed microseconds since Unix epoch
+/// - Blob: Raw binary data
+/// - List: Ordered list of PropertyValues
+/// - Map: String-keyed map of PropertyValues
 #[derive(Debug, Clone, PartialEq)]
 pub enum PropertyValue {
     Null,
@@ -39,6 +41,10 @@ pub enum PropertyValue {
     Int(i64),
     Float(f64),
     String(String),
+    DateTime(i64),
+    Blob(Vec<u8>),
+    List(Vec<PropertyValue>),
+    Map(BTreeMap<String, PropertyValue>),
 }
 
 /// A directed edge from a source node to a destination node with a relationship type.
@@ -171,5 +177,15 @@ pub trait GraphSnapshot {
     /// Resolve a relationship type ID to its name.
     fn resolve_rel_type_name(&self, _id: RelTypeId) -> Option<String> {
         None
+    }
+
+    /// Get the estimated number of nodes, optionally filtered by label.
+    fn node_count(&self, _label: Option<LabelId>) -> u64 {
+        0
+    }
+
+    /// Get the estimated number of edges, optionally filtered by relationship type.
+    fn edge_count(&self, _rel: Option<RelTypeId>) -> u64 {
+        0
     }
 }

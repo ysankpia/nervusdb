@@ -133,5 +133,15 @@ fn convert_api_property_to_value(api_value: &ApiPropertyValue) -> Value {
         ApiPropertyValue::Int(i) => Value::Int(*i),
         ApiPropertyValue::Float(f) => Value::Float(*f),
         ApiPropertyValue::String(s) => Value::String(s.clone()),
+        ApiPropertyValue::DateTime(i) => Value::DateTime(*i),
+        ApiPropertyValue::Blob(b) => Value::Blob(b.clone()),
+        ApiPropertyValue::List(l) => {
+            Value::List(l.iter().map(convert_api_property_to_value).collect())
+        }
+        ApiPropertyValue::Map(m) => Value::Map(
+            m.iter()
+                .map(|(k, v)| (k.clone(), convert_api_property_to_value(v)))
+                .collect(),
+        ),
     }
 }
