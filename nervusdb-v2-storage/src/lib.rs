@@ -3,6 +3,7 @@ pub mod csr;
 pub mod engine;
 mod error;
 pub mod idmap;
+pub mod index;
 pub mod label_interner;
 pub mod memtable;
 pub mod pager;
