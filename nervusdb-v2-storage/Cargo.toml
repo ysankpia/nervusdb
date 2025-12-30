@@ -1,6 +1,10 @@
 [package]
 name = "nervusdb-v2-storage"
-version = "0.1.0"
+version = "2.0.0"
+license = "AGPL-3.0-only"
+description = "NervusDB v2 storage layer – crash-safe page store, WAL, and B-tree index"
+repository = "https://github.com/LuQing-Studio/nervusdb"
+documentation = "https://docs.rs/nervusdb-v2-storage"
 edition = "2024"
 
 [dependencies]

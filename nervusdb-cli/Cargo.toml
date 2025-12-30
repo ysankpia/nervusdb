@@ -1,10 +1,11 @@
 [package]
 name = "nervusdb-cli"
-version = "1.0.3"
+version = "2.0.0"
 edition = "2024"
 license = "AGPL-3.0-only"
-description = "NervusDB CLI (streaming Cypher)"
+description = "NervusDB CLI – Embedded graph database with Cypher query support"
 repository = "https://github.com/LuQing-Studio/nervusdb"
+documentation = "https://github.com/LuQing-Studio/nervusdb#readme"
 autobins = false
 
 [[bin]]

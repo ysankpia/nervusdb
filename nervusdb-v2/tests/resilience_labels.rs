@@ -1,5 +1,5 @@
-use nervusdb_v2::query::{GraphSnapshot, Params, QueryExt};
 use nervusdb_v2::Db;
+use nervusdb_v2::query::{GraphSnapshot, Params, QueryExt};
 use tempfile::tempdir;
 
 #[test]
