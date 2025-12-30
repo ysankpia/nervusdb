@@ -1,19 +1,21 @@
-# Task Tracking (Rust-First 1.0)
+# Task Tracking (v2.0 Roadmap)
+
+> **Focus**: Architecture Parity (Indexes), Cypher Completeness, and Ecosystem.
+> **Source**: `docs/ROADMAP_2.0.md`
 
 | ID | Task | Risk | Status | Branch | Notes |
-|----|------|------|--------|--------|-------|
-| T61 | [Example] Implement `examples/tour.rs` to validate DX | Low | Done | - | A comprehensive tour of CRUD & Cypher |
-| T62 | [API] Audit `nervusdb-v2` exports & naming | Low | Done | - | Fixed dependency cycle & re-exports |
-| T63 | [CLI] Implement REPL mode in `nervusdb-cli` | Medium | Done | feat/T63-cli-repl | Interactive shell support |
-| T64 | [Docs] Generate & Polish RustDocs | Low | Done | feat/T64-rustdocs | Ensure `cargo doc --open` looks professional |
-| T65 | Query Engine: Support String Labels/Types | High | Done | feat/T65-string-labels | Verified in tour.rs, `MATCH (n:Person)` support |
-| T66 | [Test] Resilience/Persistence Verification | High | Done | - | Verified label persistence in `tests/resilience_labels.rs` |
-| T67 | [API] Finalize Public Facade & Hide Internals | Medium | Plan | - | Encapsulate `InternalId`, clean `pub` exports |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Phase 1** | **Core Architecture** | | | | |
+| T101 | [Storage] Implement `PageCursor` & B-Tree Page Layout | High | WIP | feat/T101-btree-page-layout | Slotted pages + ordered keys + cursor |
+| T102 | [Storage] Implement `IndexCatalog` & B-Tree Logic | High | Plan | - | Insert/Search/Delete on Pager |
+| T103 | [Storage] Compaction Integration (Merge to Index) | High | Plan | - | Feed MemTable data into B-Tree on flush |
+| T104 | [Query] Implement `EXPLAIN` Clause | Low | Plan | - | Show Plan visualization |
+| T105 | [Query] Implement `MERGE` Clause | Medium | Plan | - | Idempotent Create |
+| T106 | [Lifecycle] Implement Checkpoint-on-Close | Medium | Plan | - | Merge WAL to NDB on shutdown |
+| **Phase 2** | **Ecosystem & AI** | | | | |
+| T201 | [Binding] UniFFI Setup & Python Binding | Medium | Plan | - | `pip install nervusdb` |
+| T202 | [Tool] Bulk Import Tool (CSV/JSONL) | Medium | Plan | - | Bypass WAL for speed |
+| T203 | [AI] HNSW Index Prototype | High | Plan | - | Vector Search MVP |
 
-## Status Definitions
-
-- Plan: Planned
-- WIP: Work in Progress
-- Review: Pending Review
-- Done: Completed
-- Blocked: Blocked
+## Archived (v1/Alpha)
+*Previous tasks (T1-T67) are archived in `docs/memos/DONE.md`.*
