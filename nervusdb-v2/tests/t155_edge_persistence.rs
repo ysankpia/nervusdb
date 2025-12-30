@@ -1,5 +1,6 @@
 use nervusdb_v2::query::WriteableGraph;
 use nervusdb_v2::{Db, GraphSnapshot, PropertyValue};
+use nervusdb_v2_api::EdgeKey;
 use tempfile::tempdir;
 
 #[test]
@@ -21,7 +22,7 @@ fn test_edge_property_persistence() {
         let rel_knows = tx.get_or_create_label("KNOWS").unwrap();
         tx.create_edge(node_a, rel_knows, node_b);
 
-        edge_key = nervusdb_v2::EdgeKey {
+        edge_key = EdgeKey {
             src: node_a,
             rel: rel_knows,
             dst: node_b,
