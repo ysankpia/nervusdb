@@ -415,6 +415,10 @@ impl BTree {
         self.root
     }
 
+    pub fn load(root: PageId) -> Self {
+        Self { root }
+    }
+
     pub fn create(pager: &mut Pager) -> Result<Self> {
         let root = pager.allocate_page()?;
         let mut buf = [0u8; PAGE_SIZE];
@@ -483,6 +487,132 @@ impl BTree {
                 }
             }
         }
+    }
+
+    /// Delete an exact `(key, payload)` tuple by rebuilding the whole tree.
+    ///
+    /// This is intentionally brute-force: it keeps the page layout and separator invariants
+    /// correct without implementing complex in-place rebalancing yet.
+    ///
+    /// Downside: pages are not reclaimed (pager has no vacuum yet). This is acceptable for MVP.
+    pub fn delete_exact_rebuild(
+        &mut self,
+        pager: &mut Pager,
+        key: &[u8],
+        payload: u64,
+    ) -> Result<bool> {
+        let mut entries = self.scan_all(pager)?;
+        let pos = entries
+            .binary_search_by(|(k, v)| (k.as_slice(), *v).cmp(&(key, payload)))
+            .ok();
+        let Some(i) = pos else {
+            return Ok(false);
+        };
+        // Guard: remove only if full key matches and payload matches (already ensured by binary_search).
+        entries.remove(i);
+        self.root = Self::build_from_sorted_entries(pager, &entries)?;
+        Ok(true)
+    }
+
+    fn scan_all(&self, pager: &mut Pager) -> Result<Vec<(Vec<u8>, u64)>> {
+        let mut cur = self.cursor_lower_bound(pager, &[])?;
+        let mut out = Vec::new();
+        while cur.is_valid()? {
+            out.push((cur.key()?, cur.payload()?));
+            if !cur.advance()? {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    fn build_from_sorted_entries(pager: &mut Pager, entries: &[(Vec<u8>, u64)]) -> Result<PageId> {
+        // Build leaf pages.
+        let mut leaf_pages: Vec<(PageId, Vec<u8>)> = Vec::new(); // (page_id, min_key)
+        let mut cur_leaf_id = pager.allocate_page()?;
+        let mut cur_leaf_buf = [0u8; PAGE_SIZE];
+        let mut cur_leaf = Page::new(&mut cur_leaf_buf);
+        cur_leaf.init_leaf();
+
+        let mut leaf_entries: Vec<(Vec<u8>, u64)> = Vec::new();
+        let mut leaf_min_key: Option<Vec<u8>> = None;
+
+        for (k, v) in entries {
+            if leaf_min_key.is_none() {
+                leaf_min_key = Some(k.clone());
+            }
+            let idx = leaf_entries.len();
+            if cur_leaf.leaf_insert_at(idx, k, *v).is_ok() {
+                leaf_entries.push((k.clone(), *v));
+                continue;
+            }
+
+            // Finalize current leaf and start a new one.
+            let next_leaf_id = pager.allocate_page()?;
+            cur_leaf.rebuild_leaf(next_leaf_id, &leaf_entries);
+            pager.write_page(cur_leaf_id, &cur_leaf_buf)?;
+            leaf_pages.push((cur_leaf_id, leaf_min_key.take().unwrap()));
+
+            cur_leaf_id = next_leaf_id;
+            cur_leaf_buf = [0u8; PAGE_SIZE];
+            cur_leaf = Page::new(&mut cur_leaf_buf);
+            cur_leaf.init_leaf();
+            leaf_entries.clear();
+
+            leaf_min_key = Some(k.clone());
+            cur_leaf.leaf_insert_at(0, k, *v)?;
+            leaf_entries.push((k.clone(), *v));
+        }
+
+        // Finalize the last leaf.
+        cur_leaf.rebuild_leaf(PageId::new(0), &leaf_entries);
+        pager.write_page(cur_leaf_id, &cur_leaf_buf)?;
+        if let Some(min) = leaf_min_key {
+            leaf_pages.push((cur_leaf_id, min));
+        } else {
+            // Empty tree: keep a single empty leaf.
+            leaf_pages.push((cur_leaf_id, Vec::new()));
+        }
+
+        // Build internal levels until one root remains.
+        let mut level: Vec<(PageId, Vec<u8>)> = leaf_pages;
+        while level.len() > 1 {
+            let mut next_level: Vec<(PageId, Vec<u8>)> = Vec::new();
+
+            let mut i = 0usize;
+            while i < level.len() {
+                // Start a new internal page with first child.
+                let (first_child_id, first_min_key) = &level[i];
+                let internal_id = pager.allocate_page()?;
+                let mut buf = [0u8; PAGE_SIZE];
+                let mut page = Page::new(&mut buf);
+                page.init_internal(*first_child_id);
+
+                let page_min_key = first_min_key.clone();
+                i += 1;
+
+                // Fill keys for subsequent children as long as there is space.
+                while i < level.len() {
+                    let (child_id, child_min_key) = &level[i];
+                    let idx = page.cell_count();
+                    if page
+                        .internal_insert_at(idx, child_min_key, *child_id)
+                        .is_ok()
+                    {
+                        i += 1;
+                        continue;
+                    }
+                    break;
+                }
+
+                pager.write_page(internal_id, &buf)?;
+                next_level.push((internal_id, page_min_key));
+            }
+
+            level = next_level;
+        }
+
+        Ok(level[0].0)
     }
 
     fn insert_into_parent(

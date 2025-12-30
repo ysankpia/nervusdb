@@ -32,6 +32,8 @@ struct Meta {
     i2e_start_page_id: u64,
     i2e_len: u64,
     next_internal_id: u64,
+    index_catalog_root: u64,
+    next_index_id: u32,
 }
 
 impl Meta {
@@ -45,6 +47,8 @@ impl Meta {
             i2e_start_page_id: 0,
             i2e_len: 0,
             next_internal_id: 0,
+            index_catalog_root: 0,
+            next_index_id: 0,
         }
     }
 
@@ -59,6 +63,8 @@ impl Meta {
         page[48..56].copy_from_slice(&self.i2e_start_page_id.to_le_bytes());
         page[56..64].copy_from_slice(&self.i2e_len.to_le_bytes());
         page[64..72].copy_from_slice(&self.next_internal_id.to_le_bytes());
+        page[72..80].copy_from_slice(&self.index_catalog_root.to_le_bytes());
+        page[80..84].copy_from_slice(&self.next_index_id.to_le_bytes());
         page
     }
 
@@ -75,6 +81,8 @@ impl Meta {
         let i2e_start_page_id = u64::from_le_bytes(page[48..56].try_into().unwrap());
         let i2e_len = u64::from_le_bytes(page[56..64].try_into().unwrap());
         let next_internal_id = u64::from_le_bytes(page[64..72].try_into().unwrap());
+        let index_catalog_root = u64::from_le_bytes(page[72..80].try_into().unwrap());
+        let next_index_id = u32::from_le_bytes(page[80..84].try_into().unwrap());
 
         if page_size != PAGE_SIZE as u64 {
             return Err(Error::UnsupportedPageSize(page_size));
@@ -95,6 +103,8 @@ impl Meta {
             i2e_start_page_id,
             i2e_len,
             next_internal_id,
+            index_catalog_root,
+            next_index_id,
         })
     }
 }
@@ -225,6 +235,24 @@ impl Pager {
         u32::try_from(self.meta.next_internal_id).unwrap_or(u32::MAX)
     }
 
+    #[inline]
+    pub fn index_catalog_root(&self) -> Option<PageId> {
+        if self.meta.index_catalog_root == 0 {
+            None
+        } else {
+            Some(PageId::new(self.meta.index_catalog_root))
+        }
+    }
+
+    #[inline]
+    pub fn next_index_id(&self) -> u32 {
+        if self.meta.next_index_id == 0 {
+            1
+        } else {
+            self.meta.next_index_id
+        }
+    }
+
     pub fn set_i2e_start_page(&mut self, start: Option<PageId>) -> Result<()> {
         self.meta.i2e_start_page_id = start.map(|p| p.as_u64()).unwrap_or(0);
         self.flush_meta_and_bitmap()
@@ -238,6 +266,18 @@ impl Pager {
     pub fn set_next_internal_id(&mut self, next: u32) -> Result<()> {
         self.meta.next_internal_id = next as u64;
         self.flush_meta_and_bitmap()
+    }
+
+    pub fn set_index_catalog_root(&mut self, root: Option<PageId>) -> Result<()> {
+        self.meta.index_catalog_root = root.map(|p| p.as_u64()).unwrap_or(0);
+        self.flush_meta_and_bitmap()
+    }
+
+    pub fn allocate_index_id(&mut self) -> Result<u32> {
+        let id = self.next_index_id();
+        self.meta.next_index_id = id.saturating_add(1);
+        self.flush_meta_and_bitmap()?;
+        Ok(id)
     }
 
     pub fn allocate_page(&mut self) -> Result<PageId> {

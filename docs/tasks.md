@@ -6,8 +6,8 @@
 | ID | Task | Risk | Status | Branch | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Phase 1** | **Core Architecture** | | | | |
-| T101 | [Storage] Implement `PageCursor` & B-Tree Page Layout | High | WIP | feat/T101-btree-page-layout | Slotted pages + ordered keys + cursor |
-| T102 | [Storage] Implement `IndexCatalog` & B-Tree Logic | High | Plan | - | Insert/Search/Delete on Pager |
+| T101 | [Storage] Implement `PageCursor` & B-Tree Page Layout | High | Done | - | Slotted pages + ordered keys + cursor |
+| T102 | [Storage] Implement `IndexCatalog` & B-Tree Logic | High | WIP | feat/T102-index-catalog | Insert/Search/Delete on Pager |
 | T103 | [Storage] Compaction Integration (Merge to Index) | High | Plan | - | Feed MemTable data into B-Tree on flush |
 | T104 | [Query] Implement `EXPLAIN` Clause | Low | Plan | - | Show Plan visualization |
 | T105 | [Query] Implement `MERGE` Clause | Medium | Plan | - | Idempotent Create |
