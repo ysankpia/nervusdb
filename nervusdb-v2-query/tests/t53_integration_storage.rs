@@ -1,29 +1,41 @@
-use nervusdb_v2_api::GraphStore;
+use nervusdb_v2::{Db, GraphSnapshot};
 use nervusdb_v2_query::{Params, Result, Value, prepare};
-use nervusdb_v2_storage::engine::GraphEngine;
 use tempfile::tempdir;
 
 #[test]
 fn t53_end_to_end_v2_storage_plus_query() {
     let dir = tempdir().unwrap();
-    let ndb = dir.path().join("graph.ndb");
-    let wal = dir.path().join("graph.wal");
+    let db = Db::open(dir.path()).unwrap();
 
-    let engine = GraphEngine::open(&ndb, &wal).unwrap();
     let (a, b) = {
-        let mut tx = engine.begin_write();
-        let a = tx.create_node(10, 1).unwrap();
-        let b = tx.create_node(20, 1).unwrap();
-        tx.create_edge(a, 7, b);
-        tx.commit().unwrap();
+        let mut txn = db.begin_write();
+        // Setup using CREATE to ensure interning
+        let q = prepare("CREATE (a {ext: 10})-[:7]->(b {ext: 20})").unwrap();
+        q.execute_write(&db.snapshot(), &mut txn, &Params::new())
+            .unwrap();
+        txn.commit().unwrap();
+
+        let snapshot = db.snapshot();
+        let a = snapshot
+            .nodes()
+            .find(|&n| {
+                snapshot.node_property(n, "ext") == Some(nervusdb_v2::PropertyValue::Int(10))
+            })
+            .unwrap();
+        let b = snapshot
+            .nodes()
+            .find(|&n| {
+                snapshot.node_property(n, "ext") == Some(nervusdb_v2::PropertyValue::Int(20))
+            })
+            .unwrap();
         (a, b)
     };
 
-    let snap = engine.snapshot();
+    let snap = db.snapshot();
     let q = prepare("MATCH (n)-[:7]->(m) RETURN n, m LIMIT 10").unwrap();
     let rows: Vec<_> = q
         .execute_streaming(&snap, &Params::new())
-        .collect::<Result<_>>()
+        .collect::<Result<Vec<_>>>()
         .unwrap();
 
     assert_eq!(rows.len(), 1);

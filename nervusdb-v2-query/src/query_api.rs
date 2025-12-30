@@ -1,7 +1,7 @@
 use crate::ast::{Clause, Expression, Literal, Query, RelationshipDirection};
 use crate::error::{Error, Result};
 use crate::executor::{Plan, Row, Value, execute_plan, execute_write};
-use nervusdb_v2_api::{GraphSnapshot, RelTypeId};
+use nervusdb_v2_api::GraphSnapshot;
 use std::collections::BTreeMap;
 
 /// Query parameters for parameterized Cypher queries.

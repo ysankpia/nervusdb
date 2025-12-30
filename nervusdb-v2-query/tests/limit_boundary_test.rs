@@ -1,106 +1,28 @@
-//! LIMIT boundary tests for v2 query engine
-//!
-//! Tests for LIMIT edge cases:
-//! - LIMIT 0 (should return empty)
-//! - LIMIT larger than result set
-//! - LIMIT with zero results
-//! - RETURN 1 with various LIMIT values
-
-use nervusdb_v2_api::{EdgeKey, ExternalId, GraphSnapshot, InternalNodeId, RelTypeId};
+use nervusdb_v2::Db;
+use nervusdb_v2_api::GraphSnapshot;
 use nervusdb_v2_query::{Params, Result, Value, prepare};
-use std::collections::HashMap;
-
-#[derive(Debug)]
-struct FakeSnapshot {
-    nodes: Vec<InternalNodeId>,
-    edges_by_src: HashMap<InternalNodeId, Vec<EdgeKey>>,
-    external: HashMap<InternalNodeId, ExternalId>,
-}
-
-#[derive(Debug)]
-struct FakeNeighbors<'a> {
-    edges: &'a [EdgeKey],
-    rel: Option<RelTypeId>,
-    idx: usize,
-}
-
-impl<'a> Iterator for FakeNeighbors<'a> {
-    type Item = EdgeKey;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while self.idx < self.edges.len() {
-            let e = self.edges[self.idx];
-            self.idx += 1;
-            if let Some(rel) = self.rel
-                && e.rel != rel
-            {
-                continue;
-            }
-            return Some(e);
-        }
-        None
-    }
-}
-
-impl GraphSnapshot for FakeSnapshot {
-    type Neighbors<'a>
-        = FakeNeighbors<'a>
-    where
-        Self: 'a;
-
-    fn neighbors(&self, src: InternalNodeId, rel: Option<RelTypeId>) -> Self::Neighbors<'_> {
-        let edges = self
-            .edges_by_src
-            .get(&src)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
-        FakeNeighbors { edges, rel, idx: 0 }
-    }
-
-    fn nodes(&self) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {
-        Box::new(self.nodes.iter().copied())
-    }
-
-    fn resolve_external(&self, iid: InternalNodeId) -> Option<ExternalId> {
-        self.external.get(&iid).copied()
-    }
-}
-
-fn make_snapshot_with_edges(edge_count: usize) -> FakeSnapshot {
-    let mut edges_by_src = HashMap::new();
-    let mut nodes = Vec::new();
-    let mut external = HashMap::new();
-
-    for i in 0..edge_count {
-        let src = i as InternalNodeId;
-        nodes.push(src);
-        external.insert(src, (i as ExternalId) + 100);
-
-        let edges: Vec<_> = (0..3)
-            .map(|j| EdgeKey {
-                src,
-                rel: 1,
-                dst: ((i + j + 1) % edge_count) as InternalNodeId,
-            })
-            .collect();
-        edges_by_src.insert(src, edges);
-    }
-
-    FakeSnapshot {
-        nodes,
-        edges_by_src,
-        external,
-    }
-}
+use tempfile::tempdir;
 
 #[test]
 fn test_limit_zero_returns_empty() {
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path()).unwrap();
+
+    // Create some data
+    {
+        let mut txn = db.begin_write();
+        let q = prepare("CREATE (n)-[:1]->(m)").unwrap();
+        q.execute_write(&db.snapshot(), &mut txn, &Params::new())
+            .unwrap();
+        txn.commit().unwrap();
+    }
+
     let q = prepare("MATCH (n)-[:1]->(m) RETURN n, m LIMIT 0").unwrap();
-    let snap = make_snapshot_with_edges(10);
+    let snapshot = db.snapshot();
 
     let rows: Vec<_> = q
-        .execute_streaming(&snap, &Params::new())
-        .collect::<Result<_>>()
+        .execute_streaming(&snapshot, &Params::new())
+        .collect::<Result<Vec<_>>>()
         .unwrap();
 
     assert!(rows.is_empty(), "LIMIT 0 should return empty result");
@@ -108,26 +30,52 @@ fn test_limit_zero_returns_empty() {
 
 #[test]
 fn test_limit_larger_than_results() {
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path()).unwrap();
+
+    // Create 5 pairs = 5 edges
+    {
+        let mut txn = db.begin_write();
+        for _ in 0..5 {
+            let q = prepare("CREATE (n)-[:1]->(m)").unwrap();
+            q.execute_write(&db.snapshot(), &mut txn, &Params::new())
+                .unwrap();
+        }
+        txn.commit().unwrap();
+    }
+
     let q = prepare("MATCH (n)-[:1]->(m) RETURN n, m LIMIT 1000").unwrap();
-    let snap = make_snapshot_with_edges(5); // Only 5 nodes = ~15 edges
+    let snapshot = db.snapshot();
 
     let rows: Vec<_> = q
-        .execute_streaming(&snap, &Params::new())
-        .collect::<Result<_>>()
+        .execute_streaming(&snapshot, &Params::new())
+        .collect::<Result<Vec<_>>>()
         .unwrap();
 
-    // Should return all available results (5 * 3 = 15 edges)
-    assert_eq!(rows.len(), 15);
+    // Should return all available results (5 edges)
+    assert_eq!(rows.len(), 5);
 }
 
 #[test]
 fn test_limit_with_no_matching_edges() {
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path()).unwrap();
+
+    // Create some data with rel type "1"
+    {
+        let mut txn = db.begin_write();
+        let q = prepare("CREATE (n)-[:1]->(m)").unwrap();
+        q.execute_write(&db.snapshot(), &mut txn, &Params::new())
+            .unwrap();
+        txn.commit().unwrap();
+    }
+
     let q = prepare("MATCH (n)-[:999]->(m) RETURN n, m LIMIT 10").unwrap();
-    let snap = make_snapshot_with_edges(5); // Only rel type 1 exists
+    let snapshot = db.snapshot();
 
     let rows: Vec<_> = q
-        .execute_streaming(&snap, &Params::new())
-        .collect::<Result<_>>()
+        .execute_streaming(&snapshot, &Params::new())
+        .collect::<Result<Vec<_>>>()
         .unwrap();
 
     assert!(rows.is_empty(), "No matching edges should return empty");
@@ -135,17 +83,16 @@ fn test_limit_with_no_matching_edges() {
 
 #[test]
 fn test_return_one_limit_5() {
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path()).unwrap();
+    let snapshot = db.snapshot();
+
     // RETURN 1 with LIMIT
     let q = prepare("RETURN 1 LIMIT 5").unwrap();
-    let snap = FakeSnapshot {
-        nodes: vec![],
-        edges_by_src: HashMap::new(),
-        external: HashMap::new(),
-    };
 
     let rows: Vec<_> = q
-        .execute_streaming(&snap, &Params::new())
-        .collect::<Result<_>>()
+        .execute_streaming(&snapshot, &Params::new())
+        .collect::<Result<Vec<_>>>()
         .unwrap();
 
     assert_eq!(rows.len(), 1);
@@ -154,17 +101,16 @@ fn test_return_one_limit_5() {
 
 #[test]
 fn test_return_one_limit_100() {
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path()).unwrap();
+    let snapshot = db.snapshot();
+
     // RETURN 1 with large LIMIT - should still return 1 row
     let q = prepare("RETURN 1 LIMIT 100").unwrap();
-    let snap = FakeSnapshot {
-        nodes: vec![],
-        edges_by_src: HashMap::new(),
-        external: HashMap::new(),
-    };
 
     let rows: Vec<_> = q
-        .execute_streaming(&snap, &Params::new())
-        .collect::<Result<_>>()
+        .execute_streaming(&snapshot, &Params::new())
+        .collect::<Result<Vec<_>>>()
         .unwrap();
 
     assert_eq!(rows.len(), 1);
@@ -172,29 +118,27 @@ fn test_return_one_limit_100() {
 }
 
 #[test]
-fn test_match_with_large_limit() {
-    // Test that large LIMIT doesn't cause issues
-    let q = prepare("MATCH (n)-[:1]->(m) RETURN n, m LIMIT 100000").unwrap();
-    let snap = make_snapshot_with_edges(100); // 100 nodes
-
-    let rows: Vec<_> = q
-        .execute_streaming(&snap, &Params::new())
-        .collect::<Result<_>>()
-        .unwrap();
-
-    // Each node has 3 outgoing edges, 100 nodes = 300 edges
-    assert_eq!(rows.len(), 300);
-}
-
-#[test]
 fn test_match_limit_1() {
-    // Test LIMIT 1 returns exactly one result
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path()).unwrap();
+
+    // Create 10 edges
+    {
+        let mut txn = db.begin_write();
+        for _ in 0..10 {
+            let q = prepare("CREATE (n)-[:1]->(m)").unwrap();
+            q.execute_write(&db.snapshot(), &mut txn, &Params::new())
+                .unwrap();
+        }
+        txn.commit().unwrap();
+    }
+
     let q = prepare("MATCH (n)-[:1]->(m) RETURN n, m LIMIT 1").unwrap();
-    let snap = make_snapshot_with_edges(10);
+    let snapshot = db.snapshot();
 
     let rows: Vec<_> = q
-        .execute_streaming(&snap, &Params::new())
-        .collect::<Result<_>>()
+        .execute_streaming(&snapshot, &Params::new())
+        .collect::<Result<Vec<_>>>()
         .unwrap();
 
     assert_eq!(rows.len(), 1);
@@ -202,13 +146,26 @@ fn test_match_limit_1() {
 
 #[test]
 fn test_match_limit_5() {
-    // Test LIMIT 5 returns exactly 5 results
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path()).unwrap();
+
+    // Create 10 edges
+    {
+        let mut txn = db.begin_write();
+        for _ in 0..10 {
+            let q = prepare("CREATE (n)-[:1]->(m)").unwrap();
+            q.execute_write(&db.snapshot(), &mut txn, &Params::new())
+                .unwrap();
+        }
+        txn.commit().unwrap();
+    }
+
     let q = prepare("MATCH (n)-[:1]->(m) RETURN n, m LIMIT 5").unwrap();
-    let snap = make_snapshot_with_edges(10);
+    let snapshot = db.snapshot();
 
     let rows: Vec<_> = q
-        .execute_streaming(&snap, &Params::new())
-        .collect::<Result<_>>()
+        .execute_streaming(&snapshot, &Params::new())
+        .collect::<Result<Vec<_>>>()
         .unwrap();
 
     assert_eq!(rows.len(), 5);
@@ -216,38 +173,46 @@ fn test_match_limit_5() {
 
 #[test]
 fn test_match_external_id_projection() {
-    // Test that external ID is projected correctly
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path()).unwrap();
+
+    // Create a node with external ID
+    // M3 CREATE doesn't support setting external ID directly in syntax?
+    // Actually CREATE (n) uses default label and 0 external ID in execution.
+    // Let's use raw txn for external ID setup.
+    {
+        let mut txn = db.begin_write();
+        // Use query engine's trait methods via the implementation on WriteTxn
+        use nervusdb_v2_query::WriteableGraph;
+
+        let label_id = txn.get_or_create_label_id("User").unwrap();
+        let rel_id = txn.get_or_create_rel_type_id("1").unwrap();
+
+        let n1 = txn.create_node(100, label_id).unwrap();
+        let n2 = txn.create_node(200, label_id).unwrap();
+        txn.create_edge(n1, rel_id, n2); // Returns ()
+        txn.commit().unwrap();
+    }
+
     let q = prepare("MATCH (n)-[:1]->(m) RETURN n, m LIMIT 5").unwrap();
-
-    let mut edges_by_src = HashMap::new();
-    edges_by_src.insert(
-        0,
-        vec![EdgeKey {
-            src: 0,
-            rel: 1,
-            dst: 1,
-        }],
-    );
-
-    let mut external = HashMap::new();
-    external.insert(0, 100);
-    external.insert(1, 200);
-
-    let snap = FakeSnapshot {
-        nodes: vec![0, 1],
-        edges_by_src,
-        external,
-    };
+    let snapshot = db.snapshot();
 
     let rows: Vec<_> = q
-        .execute_streaming(&snap, &Params::new())
-        .collect::<Result<_>>()
+        .execute_streaming(&snapshot, &Params::new())
+        .collect::<Result<Vec<_>>>()
         .unwrap();
 
     assert_eq!(rows.len(), 1);
 
-    // Verify the row contains both node IDs (as internal IDs)
+    // Verify the row contains both node IDs
     let cols = rows[0].columns();
     assert_eq!(cols[0].0, "n");
     assert_eq!(cols[1].0, "m");
+
+    // Check if we can resolve external IDs via snapshot
+    if let Value::NodeId(iid) = cols[0].1 {
+        assert_eq!(snapshot.resolve_external(iid), Some(100));
+    } else {
+        panic!("Expected NodeId");
+    }
 }

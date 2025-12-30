@@ -1,62 +1,12 @@
 use nervusdb_v2::Db;
-use nervusdb_v2_api::{EdgeKey, GraphSnapshot, InternalNodeId, RelTypeId};
 use nervusdb_v2_query::prepare;
 use tempfile::tempdir;
-
-fn get_snapshot(db: &Db) -> impl GraphSnapshot + '_ {
-    struct DbSnapshot<'a> {
-        db: &'a Db,
-    }
-
-    impl<'a> GraphSnapshot for DbSnapshot<'a> {
-        type Neighbors<'b>
-            = std::vec::IntoIter<EdgeKey>
-        where
-            Self: 'b;
-
-        fn neighbors(&self, src: InternalNodeId, rel: Option<RelTypeId>) -> Self::Neighbors<'_> {
-            let snapshot = self.db.begin_read();
-            snapshot
-                .neighbors(src, rel)
-                .map(|e| EdgeKey {
-                    src: e.src,
-                    rel: e.rel,
-                    dst: e.dst,
-                })
-                .collect::<Vec<_>>()
-                .into_iter()
-        }
-
-        fn nodes(&self) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {
-            // For DELETE tests, we need to iterate over existing nodes
-            // This is a simplified implementation - in production, ReadTxn should implement GraphSnapshot
-            let snapshot = self.db.begin_read();
-            // Since ReadTxn doesn't have nodes(), we use neighbors to find nodes
-            // A node that has no outgoing edges might be missed, but for tests it should work
-            let mut nodes: Vec<InternalNodeId> = Vec::new();
-            // Collect up to 100 node IDs by probing
-            for i in 0..100u32 {
-                let neighbors: Vec<_> = snapshot.neighbors(i, None).collect();
-                if !neighbors.is_empty() {
-                    nodes.push(i);
-                }
-            }
-            Box::new(nodes.into_iter())
-        }
-
-        fn is_tombstoned_node(&self, _iid: InternalNodeId) -> bool {
-            false
-        }
-    }
-
-    DbSnapshot { db }
-}
 
 #[test]
 fn test_create_single_node() {
     let dir = tempdir().unwrap();
     let db = Db::open(dir.path()).unwrap();
-    let snapshot = get_snapshot(&db);
+    let snapshot = db.snapshot();
 
     let query = prepare("CREATE (n)").unwrap();
     let mut txn = db.begin_write();
@@ -72,7 +22,7 @@ fn test_create_single_node() {
 fn test_create_node_with_properties() {
     let dir = tempdir().unwrap();
     let db = Db::open(dir.path()).unwrap();
-    let snapshot = get_snapshot(&db);
+    let snapshot = db.snapshot();
 
     let query = prepare("CREATE (n {name: 'Alice', age: 30})").unwrap();
     let mut txn = db.begin_write();
@@ -88,7 +38,7 @@ fn test_create_node_with_properties() {
 fn test_create_relationship() {
     let dir = tempdir().unwrap();
     let db = Db::open(dir.path()).unwrap();
-    let snapshot = get_snapshot(&db);
+    let snapshot = db.snapshot();
 
     let query = prepare("CREATE (a)-[:1]->(b)").unwrap();
     let mut txn = db.begin_write();
@@ -104,7 +54,7 @@ fn test_create_relationship() {
 fn test_create_relationship_with_properties() {
     let dir = tempdir().unwrap();
     let db = Db::open(dir.path()).unwrap();
-    let snapshot = get_snapshot(&db);
+    let snapshot = db.snapshot();
 
     let query = prepare("CREATE (a {name: 'A'})-[:1 {weight: 2.5}]->(b {name: 'B'})").unwrap();
     let mut txn = db.begin_write();
@@ -120,7 +70,7 @@ fn test_create_relationship_with_properties() {
 fn test_create_multiple_nodes() {
     let dir = tempdir().unwrap();
     let db = Db::open(dir.path()).unwrap();
-    let snapshot = get_snapshot(&db);
+    let snapshot = db.snapshot();
 
     // M3: Create nodes one at a time (no comma-separated list)
     let query = prepare("CREATE (a)").unwrap();
@@ -145,7 +95,7 @@ fn test_create_multiple_nodes() {
 fn test_create_complex_pattern() {
     let dir = tempdir().unwrap();
     let db = Db::open(dir.path()).unwrap();
-    let snapshot = get_snapshot(&db);
+    let snapshot = db.snapshot();
 
     let query = prepare("CREATE (a {x: 1})-[:1]->(b {y: 2})").unwrap();
     let mut txn = db.begin_write();
@@ -161,7 +111,7 @@ fn test_create_complex_pattern() {
 fn test_delete_basic() {
     let dir = tempdir().unwrap();
     let db = Db::open(dir.path()).unwrap();
-    let snapshot = get_snapshot(&db);
+    let snapshot = db.snapshot();
 
     // Create first
     let create_query = prepare("CREATE (a)-[:1]->(b)").unwrap();
@@ -173,6 +123,7 @@ fn test_delete_basic() {
     assert_eq!(count, 3);
 
     // Now delete
+    let snapshot = db.snapshot();
     let delete_query = prepare("MATCH (a)-[:1]->(b) DELETE a").unwrap();
     let mut txn = db.begin_write();
     let deleted = delete_query
@@ -187,7 +138,7 @@ fn test_delete_basic() {
 fn test_delete_second_node() {
     let dir = tempdir().unwrap();
     let db = Db::open(dir.path()).unwrap();
-    let snapshot = get_snapshot(&db);
+    let snapshot = db.snapshot();
 
     // Create first
     let create_query = prepare("CREATE (a)-[:1]->(b)").unwrap();
@@ -198,6 +149,7 @@ fn test_delete_second_node() {
     txn.commit().unwrap();
 
     // Delete the second node
+    let snapshot = db.snapshot();
     let delete_query = prepare("MATCH (a)-[:1]->(b) DELETE b").unwrap();
     let mut txn = db.begin_write();
     let deleted = delete_query
@@ -212,7 +164,7 @@ fn test_delete_second_node() {
 fn test_detach_delete() {
     let dir = tempdir().unwrap();
     let db = Db::open(dir.path()).unwrap();
-    let snapshot = get_snapshot(&db);
+    let snapshot = db.snapshot();
 
     // Create first
     let create_query = prepare("CREATE (a)-[:1]->(b)").unwrap();
@@ -223,6 +175,7 @@ fn test_detach_delete() {
     txn.commit().unwrap();
 
     // DETACH DELETE
+    let snapshot = db.snapshot();
     let delete_query = prepare("MATCH (a)-[:1]->(b) DETACH DELETE a").unwrap();
     let mut txn = db.begin_write();
     let deleted = delete_query
@@ -238,7 +191,7 @@ fn test_detach_delete() {
 fn test_detach_delete_standalone() {
     let dir = tempdir().unwrap();
     let db = Db::open(dir.path()).unwrap();
-    let snapshot = get_snapshot(&db);
+    let snapshot = db.snapshot();
 
     // Create a pattern: a -> b
     let create_query = prepare("CREATE (a)-[:1]->(b)").unwrap();
@@ -249,6 +202,7 @@ fn test_detach_delete_standalone() {
     txn.commit().unwrap();
 
     // DETACH DELETE with MATCH
+    let snapshot = db.snapshot();
     let delete_query = prepare("MATCH (a)-[:1]->(b) DETACH DELETE a").unwrap();
     let mut txn = db.begin_write();
     let deleted = delete_query
@@ -264,7 +218,7 @@ fn test_detach_delete_standalone() {
 fn test_delete_multiple_nodes() {
     let dir = tempdir().unwrap();
     let db = Db::open(dir.path()).unwrap();
-    let snapshot = get_snapshot(&db);
+    let snapshot = db.snapshot();
 
     // Create two disconnected nodes
     let create_query = prepare("CREATE (a)").unwrap();
@@ -290,6 +244,7 @@ fn test_delete_multiple_nodes() {
     txn.commit().unwrap();
 
     // Delete node with self-loop
+    let snapshot = db.snapshot();
     let delete_query = prepare("MATCH (a)-[:1]->(a) DELETE a").unwrap();
     let mut txn = db.begin_write();
     let deleted = delete_query

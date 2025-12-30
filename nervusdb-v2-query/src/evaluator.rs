@@ -1,5 +1,6 @@
 use crate::ast::{BinaryOperator, Expression, Literal};
 use crate::executor::{Row, Value};
+use crate::query_api::Params;
 use nervusdb_v2_api::{GraphSnapshot, PropertyValue as ApiPropertyValue};
 
 /// Evaluate an expression to a boolean value (for WHERE clauses).
@@ -7,7 +8,7 @@ pub fn evaluate_expression_bool<S: GraphSnapshot>(
     expr: &Expression,
     row: &Row,
     snapshot: &S,
-    params: &crate::query_api::Params,
+    params: &Params,
 ) -> bool {
     match evaluate_expression_value(expr, row, snapshot, params) {
         Value::Bool(b) => b,
@@ -20,7 +21,7 @@ pub fn evaluate_expression_value<S: GraphSnapshot>(
     expr: &Expression,
     row: &Row,
     snapshot: &S,
-    params: &crate::query_api::Params,
+    params: &Params,
 ) -> Value {
     match expr {
         Expression::Literal(l) => match l {
@@ -85,6 +86,7 @@ pub fn evaluate_expression_value<S: GraphSnapshot>(
                 BinaryOperator::LessThan => compare_values(&left, &right, |l, r| l < r),
                 BinaryOperator::LessEqual => compare_values(&left, &right, |l, r| l <= r),
                 BinaryOperator::GreaterThan => compare_values(&left, &right, |l, r| l > r),
+
                 BinaryOperator::GreaterEqual => compare_values(&left, &right, |l, r| l >= r),
                 _ => Value::Null, // MVP: only support basic comparisons
             }

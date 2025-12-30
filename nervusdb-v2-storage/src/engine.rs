@@ -134,18 +134,46 @@ impl GraphEngine {
     ///
     /// This is a write operation and must be called within a write transaction.
     pub fn get_or_create_label(&self, name: &str) -> Result<LabelId> {
-        let mut interner = self.label_interner.lock().unwrap();
-        let old_len = interner.len();
-        let id = interner.get_or_create(name);
-
-        // Always update published labels when a new label is created
-        if interner.len() > old_len {
-            let snapshot = interner.snapshot();
-            let mut published = self.published_labels.write().unwrap();
-            *published = Arc::new(snapshot);
+        // Optimistic read
+        {
+            let interner = self.label_interner.lock().unwrap();
+            if let Some(id) = interner.get_id(name) {
+                return Ok(id);
+            }
         }
 
-        Ok(id)
+        // Write path: serialize with a lock or just rely on interner lock?
+        // We need to write to WAL, so let's handle it carefully.
+        // We'll just lock interner, check again, then write WAL, then update interner.
+        let mut interner = self.label_interner.lock().unwrap();
+        if let Some(id) = interner.get_id(name) {
+            return Ok(id);
+        }
+
+        // It's a new label.
+        // We update memory first to get the authoritative ID.
+        let returned_id = interner.get_or_create(name);
+
+        // Durability: Log to WAL (post-facto, but before return)
+        // We wrap this in a mini-transaction to ensure replayability.
+        {
+            let txid = self.next_txid.fetch_add(1, Ordering::Relaxed);
+            let mut wal = self.wal.lock().unwrap();
+            wal.append(&WalRecord::BeginTx { txid })?;
+            wal.append(&WalRecord::CreateLabel {
+                name: name.to_string(),
+                label_id: returned_id,
+            })?;
+            wal.append(&WalRecord::CommitTx { txid })?;
+            wal.fsync()?;
+        }
+
+        // Update Published Snapshot
+        let snapshot = interner.snapshot();
+        let mut published = self.published_labels.write().unwrap();
+        *published = Arc::new(snapshot);
+
+        Ok(returned_id)
     }
 
     /// Update published node labels from IdMap.

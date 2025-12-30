@@ -8,7 +8,6 @@
 
 use nervusdb_v2::query::GraphSnapshot;
 use nervusdb_v2::{Db, Result};
-use nervusdb_v2_storage::idmap::LabelId;
 use tempfile::tempdir;
 
 fn main() -> Result<()> {

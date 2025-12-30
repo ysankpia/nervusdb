@@ -1,25 +1,17 @@
+mod error;
+
 use nervusdb_v2_api::GraphStore;
 use nervusdb_v2_storage::api::StorageSnapshot;
 use nervusdb_v2_storage::engine::GraphEngine;
-use nervusdb_v2_storage::snapshot::{EdgeKey, RelTypeId, Snapshot};
+use nervusdb_v2_storage::snapshot::Snapshot;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+pub use error::{Error, Result};
+pub use nervusdb_v2_api::{
+    EdgeKey, ExternalId, GraphSnapshot, InternalNodeId, LabelId, PropertyValue, RelTypeId,
+};
 pub use nervusdb_v2_query as query;
-pub use nervusdb_v2_storage::idmap::{ExternalId, InternalNodeId, LabelId};
-pub use nervusdb_v2_storage::{Error, Result};
-
-/// Property value types for nodes and edges.
-///
-/// See [`nervusdb_v2_api::PropertyValue`] for the API-level type definition.
-/// This type is provided for convenience in the v2 facade.
-#[derive(Debug, Clone, PartialEq)]
-pub enum PropertyValue {
-    Null,
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    String(String),
-}
 
 /// The main database handle for NervusDB v2.
 ///
@@ -99,10 +91,10 @@ impl Db {
 
     /// Creates a snapshot for query execution.
     ///
-    /// Returns a `StorageSnapshot` that implements `GraphSnapshot` trait,
+    /// Returns a `DbSnapshot` that implements `GraphSnapshot` trait,
     /// suitable for use with the query engine.
-    pub fn snapshot(&self) -> StorageSnapshot {
-        self.engine.snapshot()
+    pub fn snapshot(&self) -> DbSnapshot {
+        DbSnapshot(self.engine.snapshot())
     }
 
     /// Begins a write transaction.
@@ -125,7 +117,7 @@ impl Db {
     /// tombstoned entries. This is a potentially expensive operation
     /// that should be done during maintenance windows.
     pub fn compact(&self) -> Result<()> {
-        self.engine.compact()
+        self.engine.compact().map_err(Error::from)
     }
 
     /// Creates a durability checkpoint.
@@ -134,7 +126,66 @@ impl Db {
     /// implement lightweight checkpoints that don't require full compaction.
     pub fn checkpoint(&self) -> Result<()> {
         // MVP: checkpoint == explicit compaction boundary + durability manifest.
-        self.engine.compact()
+        self.engine.compact().map_err(Error::from)
+    }
+}
+
+/// A wrapper around the storage snapshot to hide internal types.
+pub struct DbSnapshot(StorageSnapshot);
+
+impl GraphSnapshot for DbSnapshot {
+    type Neighbors<'a> = Box<dyn Iterator<Item = EdgeKey> + 'a>;
+
+    fn neighbors(&self, src: InternalNodeId, rel: Option<RelTypeId>) -> Self::Neighbors<'_> {
+        Box::new(self.0.neighbors(src, rel))
+    }
+
+    fn nodes(&self) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {
+        self.0.nodes()
+    }
+
+    fn resolve_external(&self, iid: InternalNodeId) -> Option<ExternalId> {
+        self.0.resolve_external(iid)
+    }
+
+    fn node_label(&self, iid: InternalNodeId) -> Option<LabelId> {
+        self.0.node_label(iid)
+    }
+
+    fn is_tombstoned_node(&self, iid: InternalNodeId) -> bool {
+        self.0.is_tombstoned_node(iid)
+    }
+
+    fn node_property(&self, iid: InternalNodeId, key: &str) -> Option<PropertyValue> {
+        self.0.node_property(iid, key)
+    }
+
+    fn edge_property(&self, edge: EdgeKey, key: &str) -> Option<PropertyValue> {
+        self.0.edge_property(edge, key)
+    }
+
+    fn node_properties(&self, iid: InternalNodeId) -> Option<BTreeMap<String, PropertyValue>> {
+        self.0.node_properties(iid)
+    }
+
+    fn edge_properties(&self, edge: EdgeKey) -> Option<BTreeMap<String, PropertyValue>> {
+        self.0.edge_properties(edge)
+    }
+
+    fn resolve_label_id(&self, name: &str) -> Option<LabelId> {
+        self.0.resolve_label_id(name)
+    }
+
+    fn resolve_rel_type_id(&self, name: &str) -> Option<RelTypeId> {
+        self.0.resolve_rel_type_id(name)
+    }
+
+    fn resolve_label_name(&self, id: LabelId) -> Option<String> {
+        self.0.resolve_label_name(id)
+    }
+
+    fn resolve_rel_type_name(&self, id: RelTypeId) -> Option<String> {
+        self.0.resolve_rel_type_name(id)
     }
 }
 
@@ -156,7 +207,11 @@ impl ReadTxn {
         src: InternalNodeId,
         rel: Option<RelTypeId>,
     ) -> impl Iterator<Item = EdgeKey> + '_ {
-        self.snapshot.neighbors(src, rel)
+        self.snapshot.neighbors(src, rel).map(|k| EdgeKey {
+            src: k.src,
+            rel: k.rel,
+            dst: k.dst,
+        })
     }
 }
 
@@ -177,7 +232,9 @@ impl<'a> WriteTxn<'a> {
         external_id: ExternalId,
         label_id: LabelId,
     ) -> Result<InternalNodeId> {
-        self.inner.create_node(external_id, label_id)
+        self.inner
+            .create_node(external_id, label_id)
+            .map_err(Error::from)
     }
 
     /// Creates a directed edge from source to destination.
@@ -264,7 +321,7 @@ impl<'a> WriteTxn<'a> {
     ///
     /// Returns `Ok(())` on success, or an error if commit fails.
     pub fn commit(self) -> Result<()> {
-        self.inner.commit()
+        self.inner.commit().map_err(Error::from)
     }
 }
 
