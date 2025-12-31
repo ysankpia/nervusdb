@@ -1,4 +1,4 @@
-use nervusdb_v2::Db;
+use nervusdb_v2::{Db, GraphSnapshot};
 use nervusdb_v2_query::prepare;
 use tempfile::tempdir;
 
@@ -252,4 +252,42 @@ fn test_delete_multiple_nodes() {
         .unwrap();
     txn.commit().unwrap();
     assert_eq!(deleted, 1);
+}
+
+#[test]
+fn test_delete_edge_variable() {
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path()).unwrap();
+
+    // Create a pattern: a -> b
+    {
+        let snapshot = db.snapshot();
+        let create_query = prepare("CREATE (a)-[:1]->(b)").unwrap();
+        let mut txn = db.begin_write();
+        create_query
+            .execute_write(&snapshot, &mut txn, &nervusdb_v2_query::Params::new())
+            .unwrap();
+        txn.commit().unwrap();
+    }
+
+    // Delete edge by binding it to a variable.
+    {
+        let snapshot = db.snapshot();
+        let delete_query = prepare("MATCH (a)-[r:1]->(b) DELETE r").unwrap();
+        let mut txn = db.begin_write();
+        let deleted = delete_query
+            .execute_write(&snapshot, &mut txn, &nervusdb_v2_query::Params::new())
+            .unwrap();
+        txn.commit().unwrap();
+        assert_eq!(deleted, 1);
+    }
+
+    // Verify there are no edges left.
+    let snap = db.snapshot();
+    let nodes: Vec<_> = snap.nodes().collect();
+    let mut total_edges = 0usize;
+    for &n in &nodes {
+        total_edges += snap.neighbors(n, None).count();
+    }
+    assert_eq!(total_edges, 0);
 }

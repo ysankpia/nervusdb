@@ -1,7 +1,13 @@
 use crate::{Error, FILE_MAGIC, PAGE_SIZE, Result, VERSION_MAJOR, VERSION_MINOR};
+use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io;
 use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+use std::os::unix::fs::FileExt as _;
+#[cfg(windows)]
+use std::os::windows::fs::FileExt as _;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PageId(u64);
@@ -165,11 +171,20 @@ pub struct Pager {
     bitmap: Bitmap,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct VacuumCopyStats {
+    pub old_next_page_id: u64,
+    pub new_next_page_id: u64,
+    pub copied_data_pages: u64,
+    pub old_file_pages: u64,
+    pub new_file_pages: u64,
+}
+
 impl Pager {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let existed = path.exists();
-        let mut file = OpenOptions::new()
+        let file = OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
@@ -196,11 +211,11 @@ impl Pager {
         }
 
         let mut meta_page = [0u8; PAGE_SIZE];
-        read_page_raw(&mut file, META_PAGE_ID, &mut meta_page)?;
+        read_page_raw(&file, META_PAGE_ID, &mut meta_page)?;
         let meta = Meta::decode_page(&meta_page)?;
 
         let mut bitmap_page = [0u8; PAGE_SIZE];
-        read_page_raw(&mut file, BITMAP_PAGE_ID, &mut bitmap_page)?;
+        read_page_raw(&file, BITMAP_PAGE_ID, &mut bitmap_page)?;
         let bitmap = Bitmap { data: bitmap_page };
 
         Ok(Self {
@@ -208,6 +223,72 @@ impl Pager {
             file,
             meta,
             bitmap,
+        })
+    }
+
+    pub(crate) fn write_vacuum_copy(
+        &self,
+        target_path: &Path,
+        reachable: &BTreeSet<PageId>,
+    ) -> Result<VacuumCopyStats> {
+        let old_file_pages = self.file.metadata()?.len() / PAGE_SIZE as u64;
+        let old_next_page_id = self.meta.next_page_id;
+
+        let mut max_page_id = BITMAP_PAGE_ID.as_u64();
+        let mut copied_data_pages = 0u64;
+        for p in reachable {
+            let id = p.as_u64();
+            if id >= BITMAP_BITS {
+                return Err(Error::PageIdOutOfRange(id));
+            }
+            max_page_id = max_page_id.max(id);
+            if id >= FIRST_DATA_PAGE_ID.as_u64() {
+                copied_data_pages = copied_data_pages.saturating_add(1);
+            }
+        }
+
+        let new_next_page_id = max_page_id
+            .saturating_add(1)
+            .max(FIRST_DATA_PAGE_ID.as_u64());
+
+        let mut meta = self.meta;
+        meta.next_page_id = new_next_page_id;
+
+        let mut bitmap = Bitmap::new();
+        for p in reachable {
+            if p.as_u64() >= FIRST_DATA_PAGE_ID.as_u64() {
+                bitmap.set_allocated(*p, true);
+            }
+        }
+
+        let out = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .truncate(false)
+            .open(target_path)?;
+
+        out.set_len(new_next_page_id.saturating_mul(PAGE_SIZE as u64))?;
+
+        let meta_page = meta.encode_page();
+        write_page_raw(&out, META_PAGE_ID, &meta_page)?;
+        write_page_raw(&out, BITMAP_PAGE_ID, &bitmap.data)?;
+
+        for p in reachable {
+            if p.as_u64() < FIRST_DATA_PAGE_ID.as_u64() {
+                continue;
+            }
+            let page = self.read_page(*p)?;
+            write_page_raw(&out, *p, &page)?;
+        }
+
+        out.sync_data()?;
+
+        Ok(VacuumCopyStats {
+            old_next_page_id,
+            new_next_page_id,
+            copied_data_pages,
+            old_file_pages,
+            new_file_pages: new_next_page_id,
         })
     }
 
@@ -310,14 +391,14 @@ impl Pager {
         Ok(())
     }
 
-    pub fn read_page(&mut self, page_id: PageId) -> Result<[u8; PAGE_SIZE]> {
+    pub fn read_page(&self, page_id: PageId) -> Result<[u8; PAGE_SIZE]> {
         self.validate_data_page_id(page_id)?;
         if !self.bitmap.is_allocated(page_id) {
             return Err(Error::PageNotAllocated(page_id.as_u64()));
         }
 
         let mut page = [0u8; PAGE_SIZE];
-        read_page_raw(&mut self.file, page_id, &mut page)?;
+        read_page_raw(&self.file, page_id, &mut page)?;
         Ok(page)
     }
 
@@ -327,7 +408,7 @@ impl Pager {
             return Err(Error::PageNotAllocated(page_id.as_u64()));
         }
 
-        write_page_raw(&mut self.file, page_id, page)?;
+        write_page_raw(&self.file, page_id, page)?;
         Ok(())
     }
 
@@ -365,25 +446,75 @@ impl Pager {
 
     fn flush_meta_and_bitmap(&mut self) -> Result<()> {
         let meta_page = self.meta.encode_page();
-        write_page_raw(&mut self.file, META_PAGE_ID, &meta_page)?;
-        write_page_raw(&mut self.file, BITMAP_PAGE_ID, &self.bitmap.data)?;
-        self.file.flush()?;
+        write_page_raw(&self.file, META_PAGE_ID, &meta_page)?;
+        write_page_raw(&self.file, BITMAP_PAGE_ID, &self.bitmap.data)?;
+        // Ensure meta + bitmap durability. WAL replay can recover data pages, but
+        // durable metadata reduces recovery work and avoids pathological re-scan.
+        self.file.sync_data()?;
         Ok(())
     }
 }
 
-fn read_page_raw(file: &mut File, page_id: PageId, buf: &mut [u8; PAGE_SIZE]) -> Result<()> {
+fn read_page_raw(file: &File, page_id: PageId, buf: &mut [u8; PAGE_SIZE]) -> Result<()> {
     let offset = page_id.as_u64() * PAGE_SIZE as u64;
-    file.seek(SeekFrom::Start(offset))?;
-    file.read_exact(buf)?;
+    read_exact_at(file, offset, buf).map_err(Error::Io)?;
     Ok(())
 }
 
-fn write_page_raw(file: &mut File, page_id: PageId, buf: &[u8; PAGE_SIZE]) -> Result<()> {
+fn write_page_raw(file: &File, page_id: PageId, buf: &[u8; PAGE_SIZE]) -> Result<()> {
     let offset = page_id.as_u64() * PAGE_SIZE as u64;
-    file.seek(SeekFrom::Start(offset))?;
-    file.write_all(buf)?;
+    write_all_at(file, offset, buf).map_err(Error::Io)?;
     Ok(())
+}
+
+fn read_exact_at(file: &File, mut offset: u64, mut buf: &mut [u8]) -> io::Result<()> {
+    while !buf.is_empty() {
+        let n = read_at(file, offset, buf)?;
+        if n == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "read_at returned 0 bytes",
+            ));
+        }
+        offset = offset.saturating_add(n as u64);
+        buf = &mut buf[n..];
+    }
+    Ok(())
+}
+
+fn write_all_at(file: &File, mut offset: u64, mut buf: &[u8]) -> io::Result<()> {
+    while !buf.is_empty() {
+        let n = write_at(file, offset, buf)?;
+        if n == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "write_at returned 0 bytes",
+            ));
+        }
+        offset = offset.saturating_add(n as u64);
+        buf = &buf[n..];
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn read_at(file: &File, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+    file.read_at(buf, offset)
+}
+
+#[cfg(windows)]
+fn read_at(file: &File, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+    file.seek_read(buf, offset)
+}
+
+#[cfg(unix)]
+fn write_at(file: &File, offset: u64, buf: &[u8]) -> io::Result<usize> {
+    file.write_at(buf, offset)
+}
+
+#[cfg(windows)]
+fn write_at(file: &File, offset: u64, buf: &[u8]) -> io::Result<usize> {
+    file.seek_write(buf, offset)
 }
 
 #[cfg(test)]

@@ -2,6 +2,9 @@ use crate::csr::{CsrSegment, EdgeRecord, SegmentId};
 use crate::idmap::{ExternalId, I2eRecord, IdMap, InternalNodeId, LabelId};
 use crate::index::btree::BTree;
 use crate::index::catalog::IndexCatalog;
+use crate::index::hnsw::HnswIndex;
+use crate::index::hnsw::params::HnswParams;
+use crate::index::hnsw::storage::{PersistentGraphStorage, PersistentVectorStorage};
 use crate::index::ordered_key::encode_ordered_value;
 use crate::label_interner::{LabelInterner, LabelSnapshot};
 use crate::memtable::MemTable;
@@ -15,16 +18,21 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
+type NativeHnsw = HnswIndex<PersistentVectorStorage, PersistentGraphStorage>;
+
 #[derive(Debug)]
 pub struct GraphEngine {
     ndb_path: PathBuf,
     wal_path: PathBuf,
 
-    pager: Arc<Mutex<Pager>>,
+    pager: Arc<RwLock<Pager>>,
     wal: Mutex<Wal>,
     idmap: Mutex<IdMap>,
     label_interner: Mutex<LabelInterner>,
     index_catalog: Arc<Mutex<IndexCatalog>>,
+
+    // T203: Vector Search Index
+    vector_index: Arc<Mutex<NativeHnsw>>,
 
     published_runs: RwLock<Arc<Vec<Arc<L0Run>>>>,
     published_segments: RwLock<Arc<Vec<Arc<CsrSegment>>>>,
@@ -48,7 +56,22 @@ impl GraphEngine {
         let wal = Wal::open(&wal_path)?;
 
         let mut idmap = IdMap::load(&mut pager)?;
-        let index_catalog = IndexCatalog::open_or_create(&mut pager)?;
+        let mut index_catalog = IndexCatalog::open_or_create(&mut pager)?;
+
+        // Initialize HNSW Index (T203)
+        // We use RESERVED names in IndexCatalog to store the roots for Vector and Graph BTrees.
+        let vec_def = index_catalog.get_or_create(&mut pager, "__sys_hnsw_vec")?;
+        let graph_def = index_catalog.get_or_create(&mut pager, "__sys_hnsw_graph")?;
+
+        let v_store = PersistentVectorStorage::new(BTree::load(vec_def.root));
+        let g_store = PersistentGraphStorage::new(BTree::load(graph_def.root));
+        let params = HnswParams {
+            m: 16,
+            ef_construction: 200,
+            ef_search: 200,
+        };
+        // HnswIndex::load needs generic Ctx = &mut Pager
+        let vector_index = HnswIndex::load(params, v_store, g_store, &mut pager)?;
 
         let committed = wal.replay_committed()?;
         let state = scan_recovery_state(&committed);
@@ -85,11 +108,12 @@ impl GraphEngine {
         Ok(Self {
             ndb_path,
             wal_path,
-            pager: Arc::new(Mutex::new(pager)),
+            pager: Arc::new(RwLock::new(pager)),
             wal: Mutex::new(wal),
             idmap: Mutex::new(idmap),
             label_interner: Mutex::new(label_interner),
             index_catalog: Arc::new(Mutex::new(index_catalog)),
+            vector_index: Arc::new(Mutex::new(vector_index)),
             published_runs: RwLock::new(Arc::new(runs)),
             published_segments: RwLock::new(Arc::new(segments)),
             published_labels: RwLock::new(Arc::new(label_snapshot)),
@@ -114,7 +138,7 @@ impl GraphEngine {
         &self.wal_path
     }
 
-    pub(crate) fn get_pager(&self) -> Arc<Mutex<Pager>> {
+    pub(crate) fn get_pager(&self) -> Arc<RwLock<Pager>> {
         self.pager.clone()
     }
 
@@ -134,7 +158,7 @@ impl GraphEngine {
             return Ok(());
         }
 
-        let mut pager = self.pager.lock().unwrap();
+        let mut pager = self.pager.write().unwrap();
         catalog.get_or_create(&mut pager, &name)?;
         catalog.flush(&mut pager)?;
         Ok(())
@@ -249,10 +273,22 @@ impl GraphEngine {
             .map(String::from)
     }
 
-    pub fn scan_i2e_records(&self) -> Result<Vec<I2eRecord>> {
-        let mut pager = self.pager.lock().unwrap();
+    // T203: HNSW Public API
+    pub fn insert_vector(&self, id: InternalNodeId, vector: Vec<f32>) -> Result<()> {
+        let mut pager = self.pager.write().unwrap();
+        let mut idx = self.vector_index.lock().unwrap();
+        idx.insert(&mut *pager, id, vector)
+    }
+
+    pub fn search_vector(&self, query: &[f32], k: usize) -> Result<Vec<(InternalNodeId, f32)>> {
+        let mut pager = self.pager.write().unwrap();
+        let mut idx = self.vector_index.lock().unwrap();
+        idx.search(&mut *pager, query, k)
+    }
+
+    pub fn scan_i2e_records(&self) -> Vec<I2eRecord> {
         let idmap = self.idmap.lock().unwrap();
-        idmap.scan_i2e(&mut pager)
+        idmap.get_i2e_snapshot()
     }
 
     fn publish_run(&self, run: Arc<L0Run>) {
@@ -283,7 +319,7 @@ impl GraphEngine {
         let mut seg = build_segment_from_runs(seg_id, &runs);
 
         {
-            let mut pager = self.pager.lock().unwrap();
+            let mut pager = self.pager.write().unwrap();
             seg.persist(&mut pager)?;
             pager.sync()?;
         }
@@ -321,7 +357,7 @@ impl GraphEngine {
 
         let mut current_root = self.properties_root.load(Ordering::SeqCst);
         if !sink_node_props.is_empty() || !sink_edge_props.is_empty() {
-            let mut pager = self.pager.lock().unwrap();
+            let mut pager = self.pager.write().unwrap();
             let mut tree = if current_root == 0 {
                 BTree::create(&mut pager)?
             } else {
@@ -337,7 +373,7 @@ impl GraphEngine {
                 btree_key.extend_from_slice(key.as_bytes());
 
                 let encoded_val = value.encode();
-                let blob_id = crate::blob_store::BlobStore::write(&mut pager, &encoded_val)?;
+                let blob_id = crate::blob_store::BlobStore::write(&mut *pager, &encoded_val)?;
                 tree.insert(&mut pager, &btree_key, blob_id)?;
             }
 
@@ -352,7 +388,7 @@ impl GraphEngine {
                 btree_key.extend_from_slice(key.as_bytes());
 
                 let encoded_val = value.encode();
-                let blob_id = crate::blob_store::BlobStore::write(&mut pager, &encoded_val)?;
+                let blob_id = crate::blob_store::BlobStore::write(&mut *pager, &encoded_val)?;
                 tree.insert(&mut pager, &btree_key, blob_id)?;
             }
 
@@ -382,9 +418,9 @@ impl GraphEngine {
 
         let stats_root;
         {
-            let mut pager = self.pager.lock().unwrap();
+            let mut pager = self.pager.write().unwrap();
             let encoded_stats = stats.encode();
-            stats_root = crate::blob_store::BlobStore::write(&mut pager, &encoded_stats)?;
+            stats_root = crate::blob_store::BlobStore::write(&mut *pager, &encoded_stats)?;
         }
 
         let pointers: Vec<SegmentPointer> = new_segments
@@ -453,7 +489,7 @@ impl GraphEngine {
             // Cannot compact WAL safely while L0 runs (esp. properties) are WAL-only.
             // Best-effort durability: flush NDB + WAL.
             {
-                let mut pager = self.pager.lock().unwrap();
+                let mut pager = self.pager.write().unwrap();
                 pager.sync()?;
             }
             {
@@ -465,7 +501,7 @@ impl GraphEngine {
 
         // Ensure idmap/pages are durable before allowing recovery to skip old WAL.
         {
-            let mut pager = self.pager.lock().unwrap();
+            let mut pager = self.pager.write().unwrap();
             pager.sync()?;
         }
 
@@ -688,6 +724,11 @@ impl<'a> WriteTxn<'a> {
         self.memtable.remove_edge_property(src, rel, dst, key);
     }
 
+    // T203: HNSW Support
+    pub fn set_vector(&mut self, id: InternalNodeId, vector: Vec<f32>) -> Result<()> {
+        self.engine.insert_vector(id, vector)
+    }
+
     pub fn commit(self) -> Result<()> {
         // Extract property data before freezing (since freeze consumes memtable)
         let node_properties = self.memtable.node_properties_for_wal();
@@ -815,7 +856,7 @@ impl<'a> WriteTxn<'a> {
             // Apply Index Updates
             if !index_ops.is_empty() {
                 let mut catalog = self.engine.index_catalog.lock().unwrap();
-                let mut pager = self.engine.pager.lock().unwrap();
+                let mut pager = self.engine.pager.write().unwrap();
 
                 for (op, node_id) in index_ops {
                     match op {
@@ -841,11 +882,7 @@ impl<'a> WriteTxn<'a> {
                                     old_key.extend_from_slice(&re.id.to_be_bytes());
                                     old_key.extend_from_slice(&encode_ordered_value(&old_val));
 
-                                    let _ = tree.delete_exact_rebuild(
-                                        &mut pager,
-                                        &old_key,
-                                        node_id as u64,
-                                    );
+                                    let _ = tree.delete(&mut pager, &old_key, node_id as u64);
                                 }
 
                                 // 2. Insert new value
@@ -873,7 +910,7 @@ impl<'a> WriteTxn<'a> {
         // 3. Apply created nodes to IdMap / Node Index
         {
             let mut idmap = self.engine.idmap.lock().unwrap();
-            let mut pager = self.engine.pager.lock().unwrap();
+            let mut pager = self.engine.pager.write().unwrap();
             for (external_id, label_id, internal_id) in self.created_nodes {
                 idmap.apply_create_node(&mut pager, external_id, label_id, internal_id)?;
             }

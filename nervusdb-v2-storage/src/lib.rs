@@ -13,6 +13,7 @@ pub mod pager;
 pub mod property;
 pub mod snapshot;
 pub mod stats;
+pub mod vacuum;
 pub mod wal;
 
 pub use crate::error::{Error, Result};

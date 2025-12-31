@@ -41,6 +41,7 @@ impl I2eRecord {
 pub struct IdMap {
     e2i: HashMap<ExternalId, InternalNodeId>,
     i2l: Vec<LabelId>,
+    i2e: Vec<I2eRecord>,
     i2e_start: Option<PageId>,
     i2e_len: u64,
 }
@@ -52,10 +53,12 @@ impl IdMap {
 
         let mut e2i = HashMap::with_capacity(i2e_len as usize);
         let mut i2l = Vec::with_capacity(i2e_len as usize);
+        let mut i2e = Vec::with_capacity(i2e_len as usize);
 
         if let Some(start) = i2e_start {
             for internal_id_u64 in 0..i2e_len {
                 let record = read_i2e_record(pager, start, internal_id_u64)?;
+                i2e.push(record);
                 if record.external_id != 0 {
                     e2i.insert(record.external_id, internal_id_u64 as u32);
                 }
@@ -66,6 +69,7 @@ impl IdMap {
         Ok(Self {
             e2i,
             i2l,
+            i2e,
             i2e_start,
             i2e_len,
         })
@@ -100,6 +104,10 @@ impl IdMap {
     /// Get the entire label mapping vector (for snapshotting).
     pub fn get_i2l_snapshot(&self) -> Vec<LabelId> {
         self.i2l.clone()
+    }
+
+    pub fn get_i2e_snapshot(&self) -> Vec<I2eRecord> {
+        self.i2e.clone()
     }
 
     pub fn apply_create_node(
@@ -144,18 +152,12 @@ impl IdMap {
 
         self.e2i.insert(external_id, internal_id);
         self.i2l.push(label_id);
+        self.i2e.push(I2eRecord {
+            external_id,
+            label_id,
+            flags: 0,
+        });
         Ok(())
-    }
-
-    pub fn scan_i2e(&self, pager: &mut Pager) -> Result<Vec<I2eRecord>> {
-        let Some(start) = self.i2e_start else {
-            return Ok(Vec::new());
-        };
-        let mut out = Vec::with_capacity(self.i2e_len as usize);
-        for internal_id_u64 in 0..self.i2e_len {
-            out.push(read_i2e_record(pager, start, internal_id_u64)?);
-        }
-        Ok(out)
     }
 }
 

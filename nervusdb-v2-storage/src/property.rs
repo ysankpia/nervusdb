@@ -90,7 +90,6 @@ impl PropertyValue {
             return Err(DecodeError::Empty);
         }
         let ty = bytes[0];
-        let mut pos = 1;
         match ty {
             0 => Ok((PropertyValue::Null, 1)),
             1 => {
@@ -147,7 +146,7 @@ impl PropertyValue {
                     return Err(DecodeError::InvalidLength);
                 }
                 let count = u32::from_le_bytes(bytes[1..5].try_into().unwrap()) as usize;
-                pos = 5;
+                let mut pos = 5;
                 let mut items = Vec::with_capacity(count);
                 for _ in 0..count {
                     let (item, consumed) = Self::decode_recursive(&bytes[pos..])?;
@@ -161,7 +160,7 @@ impl PropertyValue {
                     return Err(DecodeError::InvalidLength);
                 }
                 let count = u32::from_le_bytes(bytes[1..5].try_into().unwrap()) as usize;
-                pos = 5;
+                let mut pos = 5;
                 let mut map = BTreeMap::new();
                 for _ in 0..count {
                     if bytes.len() < pos + 4 {

@@ -6,6 +6,7 @@ use nervusdb_v2_query::prepare;
 use nervusdb_v2_storage::engine::GraphEngine;
 use std::collections::HashMap;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -33,6 +34,7 @@ enum V2Commands {
     Query(V2QueryArgs),
     Write(V2WriteArgs),
     Repl(V2ReplArgs),
+    Vacuum(V2VacuumArgs),
 }
 
 #[derive(Parser)]
@@ -86,6 +88,21 @@ struct V2WriteArgs {
     /// Parameters as a JSON object (M3: supports scalar values)
     #[arg(long)]
     params_json: Option<String>,
+}
+
+#[derive(Parser)]
+struct V2VacuumArgs {
+    /// Database base path
+    #[arg(long)]
+    db: PathBuf,
+}
+
+fn derive_paths(path: &Path) -> (PathBuf, PathBuf) {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("ndb") => (path.to_path_buf(), path.with_extension("wal")),
+        Some("wal") => (path.with_extension("ndb"), path.to_path_buf()),
+        _ => (path.with_extension("ndb"), path.with_extension("wal")),
+    }
 }
 
 fn value_to_json_v2<S: GraphSnapshot>(snapshot: &S, value: &V2Value) -> serde_json::Value {
@@ -212,6 +229,26 @@ fn run_v2_write(args: V2WriteArgs) -> Result<(), String> {
     Ok(())
 }
 
+fn run_v2_vacuum(args: V2VacuumArgs) -> Result<(), String> {
+    let (ndb_path, wal_path) = derive_paths(&args.db);
+    let report = nervusdb_v2_storage::vacuum::vacuum_in_place(&ndb_path, &wal_path)
+        .map_err(|e| e.to_string())?;
+
+    println!(
+        "{}",
+        serde_json::json!({
+            "ndb_path": report.ndb_path,
+            "backup_path": report.backup_path,
+            "old_next_page_id": report.old_next_page_id,
+            "new_next_page_id": report.new_next_page_id,
+            "copied_data_pages": report.copied_data_pages,
+            "old_file_pages": report.old_file_pages,
+            "new_file_pages": report.new_file_pages,
+        })
+    );
+    Ok(())
+}
+
 fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
@@ -219,6 +256,7 @@ fn main() {
             V2Commands::Query(args) => run_v2_query(args),
             V2Commands::Write(args) => run_v2_write(args),
             V2Commands::Repl(args) => repl::run_repl(&args.db),
+            V2Commands::Vacuum(args) => run_v2_vacuum(args),
         },
     };
 

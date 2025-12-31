@@ -201,36 +201,112 @@ pub enum Plan {
     },
 }
 
+pub enum PlanIterator<'a, S: GraphSnapshot> {
+    ReturnOne(std::iter::Once<Result<Row>>),
+    NodeScan(NodeScanIter<'a, S>),
+    Filter(FilterIter<'a, S>),
+    Dynamic(Box<dyn Iterator<Item = Result<Row>> + 'a>),
+}
+
+impl<'a, S: GraphSnapshot> Iterator for PlanIterator<'a, S> {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            PlanIterator::ReturnOne(iter) => iter.next(),
+            PlanIterator::NodeScan(iter) => iter.next(),
+            PlanIterator::Filter(iter) => iter.next(),
+            PlanIterator::Dynamic(iter) => iter.next(),
+        }
+    }
+}
+
+pub struct NodeScanIter<'a, S: GraphSnapshot> {
+    snapshot: &'a S,
+    node_iter: Box<dyn Iterator<Item = InternalNodeId> + 'a>, // Still boxed internally for now as nodes() returns abstract iter
+    alias: String,
+    label_id: Option<LabelId>,
+}
+
+impl<'a, S: GraphSnapshot> Iterator for NodeScanIter<'a, S> {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(iid) = self.node_iter.next() {
+            if self.snapshot.is_tombstoned_node(iid) {
+                continue;
+            }
+            if let Some(lid) = self.label_id {
+                if self.snapshot.node_label(iid) != Some(lid) {
+                    continue;
+                }
+            }
+            return Some(Ok(
+                Row::default().with(self.alias.clone(), Value::NodeId(iid))
+            ));
+        }
+        None
+    }
+}
+
+pub struct FilterIter<'a, S: GraphSnapshot> {
+    snapshot: &'a S,
+    input: Box<PlanIterator<'a, S>>,
+    predicate: &'a Expression,
+    params: &'a crate::query_api::Params,
+}
+
+impl<'a, S: GraphSnapshot> Iterator for FilterIter<'a, S> {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.input.next() {
+                Some(Ok(row)) => {
+                    let pass = crate::evaluator::evaluate_expression_bool(
+                        self.predicate,
+                        &row,
+                        self.snapshot,
+                        self.params,
+                    );
+                    if pass {
+                        return Some(Ok(row));
+                    } else {
+                        continue;
+                    }
+                }
+                Some(Err(e)) => return Some(Err(e)),
+                None => return None,
+            }
+        }
+    }
+}
+
 pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
     snapshot: &'a S,
     plan: &'a Plan,
     params: &'a crate::query_api::Params,
-) -> Box<dyn Iterator<Item = Result<Row>> + 'a> {
+) -> PlanIterator<'a, S> {
     match plan {
-        Plan::ReturnOne => Box::new(std::iter::once(Ok(Row::default().with("1", Value::Int(1))))),
+        Plan::ReturnOne => {
+            PlanIterator::ReturnOne(std::iter::once(Ok(Row::default().with("1", Value::Int(1)))))
+        }
         Plan::NodeScan { alias, label } => {
-            let alias = alias.clone();
             let label_id = if let Some(l) = label {
                 match snapshot.resolve_label_id(l) {
                     Some(id) => Some(id),
-                    None => return Box::new(std::iter::empty()),
+                    None => return PlanIterator::Dynamic(Box::new(std::iter::empty())),
                 }
             } else {
                 None
             };
 
-            Box::new(snapshot.nodes().filter_map(move |iid| {
-                if snapshot.is_tombstoned_node(iid) {
-                    return None;
-                }
-                if let Some(lid) = label_id {
-                    // Check label match
-                    if snapshot.node_label(iid) != Some(lid) {
-                        return None;
-                    }
-                }
-                Some(Ok(Row::default().with(alias.clone(), Value::NodeId(iid))))
-            }))
+            PlanIterator::NodeScan(NodeScanIter {
+                snapshot,
+                node_iter: Box::new(snapshot.nodes()), // Logic moved to NodeScanIter
+                alias: alias.clone(),
+                label_id,
+            })
         }
         Plan::MatchOut {
             input,
@@ -246,7 +322,7 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
             let rel_id = if let Some(r) = rel {
                 match snapshot.resolve_rel_type_id(r) {
                     Some(id) => Some(id),
-                    None => return Box::new(std::iter::empty()),
+                    None => return PlanIterator::Dynamic(Box::new(std::iter::empty())),
                 }
             } else {
                 None
@@ -256,7 +332,7 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                 let input_iter = execute_plan(snapshot, input_plan, params);
                 let expand = ExpandIter {
                     snapshot,
-                    input: input_iter,
+                    input: Box::new(input_iter),
                     src_alias,
                     rel: rel_id,
                     edge_alias: edge_alias.as_deref(),
@@ -267,9 +343,9 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                     yielded_any: false,
                 };
                 if let Some(n) = limit {
-                    Box::new(expand.take(*n as usize))
+                    PlanIterator::Dynamic(Box::new(expand.take(*n as usize)))
                 } else {
-                    Box::new(expand)
+                    PlanIterator::Dynamic(Box::new(expand))
                 }
             } else {
                 let base = MatchOutIter::new(
@@ -280,9 +356,9 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                     dst_alias,
                 );
                 if let Some(n) = limit {
-                    Box::new(base.take(*n as usize))
+                    PlanIterator::Dynamic(Box::new(base.take(*n as usize)))
                 } else {
-                    Box::new(base)
+                    PlanIterator::Dynamic(Box::new(base))
                 }
             }
         }
@@ -304,7 +380,7 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
             let rel_id = if let Some(r) = rel {
                 match snapshot.resolve_rel_type_id(r) {
                     Some(id) => Some(id),
-                    None => return Box::new(std::iter::empty()),
+                    None => return PlanIterator::Dynamic(Box::new(std::iter::empty())),
                 }
             } else {
                 None
@@ -312,7 +388,7 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
 
             let base = MatchOutVarLenIter::new(
                 snapshot,
-                input_iter,
+                input_iter.map(|i| Box::new(i) as Box<dyn Iterator<Item = Result<Row>>>),
                 src_alias,
                 rel_id,
                 edge_alias.as_deref(),
@@ -323,26 +399,26 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                 *optional,
             );
             if let Some(n) = limit {
-                Box::new(base.take(*n as usize))
+                PlanIterator::Dynamic(Box::new(base.take(*n as usize)))
             } else {
-                Box::new(base)
+                PlanIterator::Dynamic(Box::new(base))
             }
         }
         Plan::Filter { input, predicate } => {
             let input_iter = execute_plan(snapshot, input, params);
-            Box::new(input_iter.filter(move |result| {
-                match result {
-                    Ok(row) => {
-                        crate::evaluator::evaluate_expression_bool(predicate, row, snapshot, params)
-                    }
-                    Err(_) => true, // Pass through errors
-                }
-            }))
+            PlanIterator::Filter(FilterIter {
+                snapshot,
+                input: Box::new(input_iter),
+                predicate,
+                params,
+            })
         }
         Plan::Project { input, columns } => {
             let input_iter = execute_plan(snapshot, input, params);
             let names: Vec<&str> = columns.iter().map(|s| s.as_str()).collect();
-            Box::new(input_iter.map(move |result| result.map(|row| row.project(&names))))
+            PlanIterator::Dynamic(Box::new(
+                input_iter.map(move |result| result.map(|row| row.project(&names))),
+            ))
         }
         Plan::Aggregate {
             input,
@@ -350,13 +426,13 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
             aggregates,
         } => {
             let input_iter = execute_plan(snapshot, input, params);
-            execute_aggregate(
+            PlanIterator::Dynamic(execute_aggregate(
                 snapshot,
-                input_iter,
+                Box::new(input_iter),
                 group_by.clone(),
                 aggregates.clone(),
                 params,
-            )
+            ))
         }
         Plan::OrderBy { input, items } => {
             let input_iter = execute_plan(snapshot, input, params);
@@ -398,20 +474,20 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                 std::cmp::Ordering::Equal
             });
 
-            Box::new(sortable.into_iter().map(|(row, _)| row))
+            PlanIterator::Dynamic(Box::new(sortable.into_iter().map(|(row, _)| row)))
         }
         Plan::Skip { input, skip } => {
             let input_iter = execute_plan(snapshot, input, params);
-            Box::new(input_iter.skip(*skip as usize))
+            PlanIterator::Dynamic(Box::new(input_iter.skip(*skip as usize)))
         }
         Plan::Limit { input, limit } => {
             let input_iter = execute_plan(snapshot, input, params);
-            Box::new(input_iter.take(*limit as usize))
+            PlanIterator::Dynamic(Box::new(input_iter.take(*limit as usize)))
         }
         Plan::Distinct { input } => {
             let input_iter = execute_plan(snapshot, input, params);
             let mut seen = std::collections::HashSet::new();
-            Box::new(input_iter.filter(move |result| {
+            PlanIterator::Dynamic(Box::new(input_iter.filter(move |result| {
                 if let Ok(row) = result {
                     let key = row
                         .columns()
@@ -424,25 +500,25 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                     }
                 }
                 false
-            }))
+            })))
         }
         Plan::Create { pattern: _ } => {
             // CREATE should be executed via execute_write, not execute_plan
-            Box::new(std::iter::once(Err(Error::Other(
+            PlanIterator::Dynamic(Box::new(std::iter::once(Err(Error::Other(
                 "CREATE must be executed via execute_write".into(),
-            ))))
+            )))))
         }
         Plan::Delete { .. } => {
             // DELETE should be executed via execute_write, not execute_plan
-            Box::new(std::iter::once(Err(Error::Other(
+            PlanIterator::Dynamic(Box::new(std::iter::once(Err(Error::Other(
                 "DELETE must be executed via execute_write".into(),
-            ))))
+            )))))
         }
         Plan::SetProperty { .. } => {
             // SET should be executed via execute_write, not execute_plan
-            Box::new(std::iter::once(Err(Error::Other(
+            PlanIterator::Dynamic(Box::new(std::iter::once(Err(Error::Other(
                 "SET must be executed via execute_write".into(),
-            ))))
+            )))))
         }
         Plan::IndexSeek {
             alias,
@@ -476,11 +552,11 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                 // Sort IDs for consistent output (optional but good)
                 node_ids.sort();
                 let alias = alias.clone();
-                Box::new(
+                PlanIterator::Dynamic(Box::new(
                     node_ids
                         .into_iter()
                         .map(move |iid| Ok(Row::default().with(alias.clone(), Value::NodeId(iid)))),
-                )
+                ))
             } else {
                 // 4. Fallback if index missing
                 execute_plan(snapshot, fallback, params)
@@ -946,6 +1022,8 @@ fn execute_delete<S: GraphSnapshot>(
     let mut nodes_to_delete: Vec<InternalNodeId> = Vec::new();
     let mut seen_nodes: std::collections::HashSet<InternalNodeId> =
         std::collections::HashSet::new();
+    let mut edges_to_delete: Vec<EdgeKey> = Vec::new();
+    let mut seen_edges: std::collections::HashSet<EdgeKey> = std::collections::HashSet::new();
 
     // Stream input rows and collect delete targets without materializing all rows.
     for row in execute_plan(snapshot, input, params) {
@@ -953,17 +1031,26 @@ fn execute_delete<S: GraphSnapshot>(
         for expr in expressions {
             match expr {
                 Expression::Variable(var_name) => {
-                    if let Some(node_id) = row.get_node(var_name)
-                        && seen_nodes.insert(node_id)
-                    {
-                        nodes_to_delete.push(node_id);
-                        if nodes_to_delete.len() > MAX_DELETE_TARGETS {
-                            return Err(Error::Other(format!(
-                                "DELETE target limit exceeded ({MAX_DELETE_TARGETS}); batch your deletes"
-                            )));
+                    if let Some(node_id) = row.get_node(var_name) {
+                        if seen_nodes.insert(node_id) {
+                            nodes_to_delete.push(node_id);
                         }
+                    } else if let Some(edge) = row.get_edge(var_name) {
+                        if seen_edges.insert(edge) {
+                            edges_to_delete.push(edge);
+                        }
+                    } else {
+                        return Err(Error::Other(format!(
+                            "Variable {} not found in row",
+                            var_name
+                        )));
                     }
-                    // TODO: Support deleting edges by variable once we expose edge bindings in Row API.
+
+                    if nodes_to_delete.len() + edges_to_delete.len() > MAX_DELETE_TARGETS {
+                        return Err(Error::Other(format!(
+                            "DELETE target limit exceeded ({MAX_DELETE_TARGETS}); batch your deletes"
+                        )));
+                    }
                 }
                 Expression::PropertyAccess(_pa) => {
                     return Err(Error::NotImplemented(
@@ -988,6 +1075,12 @@ fn execute_delete<S: GraphSnapshot>(
                 deleted_count += 1;
             }
         }
+    }
+
+    // Delete explicitly targeted edges.
+    for edge in edges_to_delete {
+        txn.tombstone_edge(edge.src, edge.rel, edge.dst)?;
+        deleted_count += 1;
     }
 
     // Delete the nodes
@@ -1041,19 +1134,20 @@ fn execute_set<S: GraphSnapshot>(
     for row in execute_plan(snapshot, input, params) {
         let row = row?;
         for (var, key, expr) in items {
-            // Get Node ID from row variable
-            let node_id = row.get_node(var).ok_or_else(|| {
-                Error::Other(format!("Variable {} not found in row or not a node", var))
-            })?;
-
             // Evaluate expression
             let val = evaluate_expression_value(expr, &row, snapshot, params);
 
             // Convert value to PropertyValue
             let prop_val = convert_executor_value_to_property(&val)?;
 
-            // Set property
-            txn.set_node_property(node_id, key.clone(), prop_val)?;
+            // Set property (node or edge)
+            if let Some(node_id) = row.get_node(var) {
+                txn.set_node_property(node_id, key.clone(), prop_val)?;
+            } else if let Some(edge) = row.get_edge(var) {
+                txn.set_edge_property(edge.src, edge.rel, edge.dst, key.clone(), prop_val)?;
+            } else {
+                return Err(Error::Other(format!("Variable {} not found in row", var)));
+            }
             count += 1;
         }
     }

@@ -195,6 +195,13 @@ impl Db {
             .create_index(label, property)
             .map_err(Error::from)
     }
+
+    /// Searches for nodes with vectors similar to the query vector.
+    ///
+    /// Returns a list of `(node_id, distance)` tuples.
+    pub fn search_vector(&self, query: &[f32], k: usize) -> Result<Vec<(InternalNodeId, f32)>> {
+        self.engine.search_vector(query, k).map_err(Error::from)
+    }
 }
 
 /// A wrapper around the storage snapshot to hide internal types.
@@ -399,6 +406,13 @@ impl<'a> WriteTxn<'a> {
     ) -> Result<()> {
         self.inner.remove_edge_property(src, rel, dst, key);
         Ok(())
+    }
+
+    /// Sets the vector embedding for a node.
+    ///
+    /// This vector can be used for similarity search.
+    pub fn set_vector(&mut self, node: InternalNodeId, vector: Vec<f32>) -> Result<()> {
+        self.inner.set_vector(node, vector).map_err(Error::from)
     }
 
     /// Commits the transaction.

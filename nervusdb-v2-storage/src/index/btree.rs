@@ -1,6 +1,7 @@
 use crate::PAGE_SIZE;
 use crate::error::{Error, Result};
 use crate::pager::{PageId, Pager};
+use std::collections::{BTreeSet, VecDeque};
 
 const MAGIC: [u8; 4] = *b"NDBI";
 const VERSION: u8 = 1;
@@ -207,6 +208,22 @@ impl<'a> Page<'a> {
         Ok(())
     }
 
+    fn shift_slots_left(&mut self, idx: usize) -> Result<()> {
+        let count = self.cell_count();
+        if idx >= count {
+            return Err(Error::WalProtocol("index page: slot idx out of bounds"));
+        }
+
+        let slots = self.slots_off()?;
+        let dst = slots + idx * 2;
+        let src = dst + 2;
+        let len = (count - idx - 1) * 2;
+        if len > 0 {
+            self.buf.copy_within(src..src + len, dst);
+        }
+        Ok(())
+    }
+
     fn set_cell_count(&mut self, count: usize) {
         write_u16_le(self.buf, OFF_CELL_COUNT, count as u16);
     }
@@ -397,6 +414,22 @@ impl<'a> Page<'a> {
         }
         Ok(())
     }
+
+    fn delete_from_leaf(&mut self, idx: usize) -> Result<()> {
+        if self.kind()? != PageKind::Leaf {
+            return Err(Error::WalProtocol("index page: not leaf"));
+        }
+        let count = self.cell_count();
+        if idx >= count {
+            return Err(Error::WalProtocol("index page: delete idx out of bounds"));
+        }
+
+        // We don't compact the cell content area for now (T206 MVP).
+        // Just shift slots left and decrease count.
+        self.shift_slots_left(idx)?;
+        self.set_cell_count(count - 1);
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -489,18 +522,64 @@ impl BTree {
         }
     }
 
+    /// Delete an exact `(key, payload)` tuple using incremental leaf modification.
+    ///
+    /// This implementation only modifies the leaf page containing the key.
+    /// It does NOT yet implement page merging or rebalancing (MVP).
+    pub fn delete(&mut self, pager: &mut Pager, key: &[u8], payload: u64) -> Result<bool> {
+        let mut cur = self.root;
+        loop {
+            let mut buf = pager.read_page(cur)?;
+            let kind = Page::new(&mut buf).kind()?;
+            match kind {
+                PageKind::Leaf => {
+                    let mut page = Page::new(&mut buf);
+                    // Use binary search to find exact match
+                    if let Ok(idx) =
+                        (0..page.cell_count())
+                            .collect::<Vec<_>>()
+                            .binary_search_by(|&i| {
+                                let (k, v) = page.leaf_cell_key_and_payload(i).unwrap();
+                                (k, v).cmp(&(key, payload))
+                            })
+                    {
+                        // Found it, delete in place
+                        page.delete_from_leaf(idx)?;
+                        pager.write_page(cur, &buf)?;
+                        return Ok(true);
+                    } else {
+                        // Not found in this leaf
+                        return Ok(false);
+                    }
+                }
+                PageKind::Internal => {
+                    let page = Page::new(&mut buf);
+                    let (child, _) = page.internal_child_for_key(key)?;
+                    cur = child;
+                }
+            }
+        }
+    }
+
     /// Delete an exact `(key, payload)` tuple by rebuilding the whole tree.
     ///
     /// This is intentionally brute-force: it keeps the page layout and separator invariants
     /// correct without implementing complex in-place rebalancing yet.
     ///
     /// Downside: pages are not reclaimed (pager has no vacuum yet). This is acceptable for MVP.
+    #[deprecated(note = "Use BTree::delete instead which performs incremental updates")]
     pub fn delete_exact_rebuild(
         &mut self,
         pager: &mut Pager,
         key: &[u8],
         payload: u64,
     ) -> Result<bool> {
+        if self.root.as_u64() != 0 {
+            eprintln!(
+                "WARN: B-Tree delete_exact_rebuild triggered. This causes a full rewrite of the index tree (ID: {:?}).",
+                self.root
+            );
+        }
         let mut entries = self.scan_all(pager)?;
         let pos = entries
             .binary_search_by(|(k, v)| (k.as_slice(), *v).cmp(&(key, payload)))
@@ -512,6 +591,66 @@ impl BTree {
         entries.remove(i);
         self.root = Self::build_from_sorted_entries(pager, &entries)?;
         Ok(true)
+    }
+
+    pub(crate) fn mark_reachable_pages(
+        &self,
+        pager: &Pager,
+        out: &mut BTreeSet<PageId>,
+        mut payloads: Option<&mut Vec<u64>>,
+    ) -> Result<()> {
+        if self.root.as_u64() == 0 {
+            return Ok(());
+        }
+
+        let mut queue = VecDeque::new();
+        queue.push_back(self.root);
+
+        while let Some(page_id) = queue.pop_front() {
+            if !out.insert(page_id) {
+                continue;
+            }
+
+            let mut buf = pager.read_page(page_id)?;
+            let page = Page::new(&mut buf);
+            match page.kind()? {
+                PageKind::Leaf => {
+                    let right = page.right_sibling();
+                    if right.as_u64() != 0 {
+                        queue.push_back(right);
+                    }
+
+                    if let Some(payloads) = payloads.as_deref_mut() {
+                        for i in 0..page.cell_count() {
+                            let (_, v) = page.leaf_cell_key_and_payload(i)?;
+                            payloads.push(v);
+                        }
+                    }
+                }
+                PageKind::Internal => {
+                    let right = page.right_sibling();
+                    if right.as_u64() != 0 {
+                        queue.push_back(right);
+                    }
+
+                    let left = page.leftmost_child()?;
+                    if left.as_u64() == 0 {
+                        return Err(Error::WalProtocol("index page: zero leftmost child"));
+                    }
+                    queue.push_back(left);
+
+                    for i in 0..page.cell_count() {
+                        let (_, child) = page.internal_cell_key_and_right_child(i)?;
+                        if child.as_u64() == 0 {
+                            return Err(Error::WalProtocol("index page: zero right child"));
+                        }
+                        queue.push_back(child);
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn scan_all(&self, pager: &mut Pager) -> Result<Vec<(Vec<u8>, u64)>> {
@@ -701,11 +840,7 @@ impl BTree {
         }
     }
 
-    pub fn cursor_lower_bound<'a>(
-        &self,
-        pager: &'a mut Pager,
-        key: &[u8],
-    ) -> Result<BTreeCursor<'a>> {
+    pub fn cursor_lower_bound<'a>(&self, pager: &'a Pager, key: &[u8]) -> Result<BTreeCursor<'a>> {
         let mut cur = self.root;
         loop {
             let mut buf = pager.read_page(cur)?;
@@ -761,7 +896,7 @@ impl BTree {
 }
 
 pub struct BTreeCursor<'a> {
-    pager: &'a mut Pager,
+    pager: &'a Pager,
     leaf: PageId,
     buf: [u8; PAGE_SIZE],
     slot: u16,

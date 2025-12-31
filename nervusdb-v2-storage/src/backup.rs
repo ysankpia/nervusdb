@@ -5,9 +5,9 @@
 
 use crate::Result;
 use crate::error::Error;
+use crate::wal::Wal;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -259,7 +259,7 @@ impl BackupManager {
                 let manifest: BackupManifest = self.read_manifest(&handle.backup_dir)?;
                 match manifest.status {
                     ManifestStatus::Completed {
-                        completed_at,
+                        completed_at: _,
                         total_bytes,
                     } => Ok(BackupStatus::Completed(BackupInfo {
                         id: handle.id,
@@ -427,12 +427,24 @@ impl BackupManager {
     }
 
     fn get_checkpoint_info(&self) -> Result<WalCheckpointInfo> {
-        // Read WAL to get current checkpoint
-        // For now, return default values
-        // TODO: Implement proper checkpoint info reading
+        let wal_path = self.wal_path();
+        if !wal_path.exists() {
+            return Ok(WalCheckpointInfo {
+                txid: 0,
+                epoch: 0,
+                wal_offset: 0,
+            });
+        }
+
+        let wal = Wal::open(&wal_path)?;
+        let (txid, epoch) = wal.latest_checkpoint_info()?.unwrap_or((0, 0));
+
+        // NOTE: We currently copy the full WAL file in `copy_wal_file()`, so the safe
+        // start offset is always 0. Trimming WAL requires writing a self-contained
+        // snapshot WAL (labels + manifest) or other stronger invariants.
         Ok(WalCheckpointInfo {
-            txid: 0,
-            epoch: 0,
+            txid,
+            epoch,
             wal_offset: 0,
         })
     }
@@ -518,6 +530,7 @@ struct WalCheckpointInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wal::WalRecord;
     use tempfile::tempdir;
 
     #[test]
@@ -540,5 +553,35 @@ mod tests {
 
         let manager = BackupManager::new(db_path, backup_path);
         assert!(manager.active_backup.read().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_get_checkpoint_info_reads_latest_checkpoint() {
+        let dir = tempdir().unwrap();
+        let ndb = dir.path().join("test.ndb");
+        let wal = dir.path().join("test.wal");
+
+        // Ensure files exist.
+        std::fs::write(&ndb, b"").unwrap();
+
+        {
+            let mut wal = Wal::open(&wal).unwrap();
+            wal.append(&WalRecord::BeginTx { txid: 42 }).unwrap();
+            wal.append(&WalRecord::Checkpoint {
+                up_to_txid: 123,
+                epoch: 7,
+                properties_root: 0,
+                stats_root: 0,
+            })
+            .unwrap();
+            wal.append(&WalRecord::CommitTx { txid: 42 }).unwrap();
+            wal.fsync().unwrap();
+        }
+
+        let manager = BackupManager::new(ndb, dir.path().join("backups"));
+        let ckpt = manager.get_checkpoint_info().unwrap();
+        assert_eq!(ckpt.txid, 123);
+        assert_eq!(ckpt.epoch, 7);
+        assert_eq!(ckpt.wal_offset, 0);
     }
 }

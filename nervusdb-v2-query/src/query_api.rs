@@ -82,7 +82,7 @@ impl PreparedQuery {
             )));
             return it;
         }
-        execute_plan(snapshot, &self.plan, params)
+        Box::new(execute_plan(snapshot, &self.plan, params))
     }
 
     /// Executes a write query (CREATE/DELETE) with a write transaction.
@@ -813,11 +813,12 @@ fn compile_delete_plan(
     let src_alias_2 = src_alias.clone();
     let dst_alias_1 = dst_alias.clone();
     let dst_alias_2 = dst_alias.clone();
+    let edge_alias = rel_pat.variable.clone();
     let mut input_plan = Plan::MatchOut {
         input: None,
         src_alias,
         rel,
-        edge_alias: rel_pat.variable.clone(),
+        edge_alias: edge_alias.clone(),
         dst_alias,
         limit: None,
         project: vec![src_alias_1, dst_alias_1],
@@ -834,9 +835,13 @@ fn compile_delete_plan(
     }
 
     // Add projection to preserve columns for DELETE variable resolution
+    let mut columns = vec![src_alias_2, dst_alias_2];
+    if let Some(edge_alias) = edge_alias {
+        columns.push(edge_alias);
+    }
     input_plan = Plan::Project {
         input: Box::new(input_plan),
-        columns: vec![src_alias_2, dst_alias_2],
+        columns,
     };
 
     // Build DELETE plan with input
@@ -863,30 +868,12 @@ fn compile_set_plan(
         return Err(Error::NotImplemented("OPTIONAL MATCH with SET in v2 M3"));
     }
 
-    let mut plan = match m.pattern.elements.len() {
-        1 => {
-            let node = match &m.pattern.elements[0] {
-                crate::ast::PathElement::Node(n) => n,
-                _ => return Err(Error::Other("pattern must be a node".into())),
-            };
-            let alias = node
-                .variable
-                .as_deref()
-                .ok_or(Error::NotImplemented("anonymous node"))?
-                .to_string();
+    let mut predicates = BTreeMap::new();
+    if let Some(w) = &where_clause {
+        extract_predicates(&w.expression, &mut predicates);
+    }
 
-            Plan::NodeScan {
-                alias,
-                label: node.labels.first().cloned(),
-            }
-        }
-        // TODO: Support SET on relationships (length 3 pattern)
-        _ => {
-            return Err(Error::NotImplemented(
-                "only single-node patterns with SET in v2 M3",
-            ));
-        }
-    };
+    let mut plan = compile_match_plan(None, m, &predicates)?;
 
     // Add WHERE filter if present
     if let Some(w) = where_clause {

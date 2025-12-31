@@ -86,3 +86,54 @@ fn test_set_clause_index_update() -> nervusdb_v2::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_set_clause_on_relationship() -> nervusdb_v2::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("t108_edge.ndb");
+    let db = Db::open(&db_path)?;
+
+    // Create two nodes and an edge between them.
+    {
+        let mut txn = db.begin_write();
+        let person = txn.get_or_create_label("Person")?;
+        let rel = txn.get_or_create_label("1")?;
+
+        let a = txn.create_node(1, person)?;
+        let b = txn.create_node(2, person)?;
+        txn.create_edge(a, rel, b);
+
+        txn.commit()?;
+    }
+
+    // Update edge property via SET.
+    {
+        let snapshot = db.snapshot();
+        let mut txn = db.begin_write();
+        let prepared = nervusdb_v2::query::prepare("MATCH (a)-[r:1]->(b) SET r.since = 2024")?;
+        let count = prepared.execute_write(&snapshot, &mut txn, &Default::default())?;
+        assert_eq!(count, 1);
+        txn.commit()?;
+    }
+
+    // Verify edge property.
+    let snap = db.snapshot();
+    let a = snap
+        .nodes()
+        .find(|&iid| snap.resolve_external(iid) == Some(1))
+        .expect("node 1 should exist");
+    let rel = snap
+        .resolve_rel_type_id("1")
+        .expect("rel type should exist");
+    let edge = snap
+        .neighbors(a, Some(rel))
+        .next()
+        .expect("edge should exist");
+
+    let since = snap
+        .edge_property(edge, "since")
+        .expect("edge property should exist");
+    assert_eq!(since, PropertyValue::Int(2024));
+
+    Ok(())
+}

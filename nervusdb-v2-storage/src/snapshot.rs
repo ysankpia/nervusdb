@@ -145,7 +145,7 @@ impl Snapshot {
 
     pub fn get_statistics(
         &self,
-        pager: &mut std::sync::MutexGuard<'_, crate::pager::Pager>,
+        pager: &crate::pager::Pager,
     ) -> crate::Result<crate::stats::GraphStatistics> {
         if self.stats_root == 0 {
             return Ok(crate::stats::GraphStatistics::default());

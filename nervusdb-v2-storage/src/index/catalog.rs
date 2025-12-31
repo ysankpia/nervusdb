@@ -41,6 +41,15 @@ impl IndexCatalog {
         Ok(Self { page, entries })
     }
 
+    pub fn open_existing(pager: &Pager) -> Result<Option<Self>> {
+        let Some(page) = pager.index_catalog_root() else {
+            return Ok(None);
+        };
+        let buf = pager.read_page(page)?;
+        let entries = decode_catalog_page(&buf)?;
+        Ok(Some(Self { page, entries }))
+    }
+
     pub fn get(&self, name: &str) -> Option<&IndexDef> {
         self.entries.get(name)
     }

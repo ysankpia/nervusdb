@@ -106,7 +106,7 @@ impl WalRecord {
         }
     }
 
-    fn encode_body(&self) -> Vec<u8> {
+    fn encode_body(&self) -> Result<Vec<u8>> {
         let mut out = Vec::with_capacity(1 + 8 + PAGE_SIZE);
         out.push(self.record_type());
         match self {
@@ -123,7 +123,7 @@ impl WalRecord {
             WalRecord::CreateLabel { name, label_id } => {
                 let name_bytes = name.as_bytes();
                 let name_len = u32::try_from(name_bytes.len())
-                    .unwrap_or_else(|_| panic!("label name too long: {} bytes", name_bytes.len()));
+                    .map_err(|_| Error::WalRecordTooLarge(u32::MAX))?;
                 out.extend_from_slice(&label_id.to_le_bytes());
                 out.extend_from_slice(&name_len.to_le_bytes());
                 out.extend_from_slice(name_bytes);
@@ -156,8 +156,7 @@ impl WalRecord {
                 let count: u32 = segments
                     .len()
                     .try_into()
-                    .map_err(|_| Error::WalProtocol("too many segments"))
-                    .unwrap();
+                    .map_err(|_| Error::WalProtocol("too many segments"))?;
                 out.extend_from_slice(&count.to_le_bytes());
                 for seg in segments {
                     out.extend_from_slice(&seg.id.to_le_bytes());
@@ -181,7 +180,7 @@ impl WalRecord {
                 out.extend_from_slice(&node.to_le_bytes());
                 let key_bytes = key.as_bytes();
                 let key_len = u32::try_from(key_bytes.len())
-                    .unwrap_or_else(|_| panic!("key too long: {} bytes", key_bytes.len()));
+                    .map_err(|_| Error::WalRecordTooLarge(u32::MAX))?;
                 out.extend_from_slice(&key_len.to_le_bytes());
                 out.extend_from_slice(key_bytes);
                 let value_bytes = value.encode();
@@ -199,7 +198,7 @@ impl WalRecord {
                 out.extend_from_slice(&dst.to_le_bytes());
                 let key_bytes = key.as_bytes();
                 let key_len = u32::try_from(key_bytes.len())
-                    .unwrap_or_else(|_| panic!("key too long: {} bytes", key_bytes.len()));
+                    .map_err(|_| Error::WalRecordTooLarge(u32::MAX))?;
                 out.extend_from_slice(&key_len.to_le_bytes());
                 out.extend_from_slice(key_bytes);
                 let value_bytes = value.encode();
@@ -209,7 +208,7 @@ impl WalRecord {
                 out.extend_from_slice(&node.to_le_bytes());
                 let key_bytes = key.as_bytes();
                 let key_len = u32::try_from(key_bytes.len())
-                    .unwrap_or_else(|_| panic!("key too long: {} bytes", key_bytes.len()));
+                    .map_err(|_| Error::WalRecordTooLarge(u32::MAX))?;
                 out.extend_from_slice(&key_len.to_le_bytes());
                 out.extend_from_slice(key_bytes);
             }
@@ -219,12 +218,12 @@ impl WalRecord {
                 out.extend_from_slice(&dst.to_le_bytes());
                 let key_bytes = key.as_bytes();
                 let key_len = u32::try_from(key_bytes.len())
-                    .unwrap_or_else(|_| panic!("key too long: {} bytes", key_bytes.len()));
+                    .map_err(|_| Error::WalRecordTooLarge(u32::MAX))?;
                 out.extend_from_slice(&key_len.to_le_bytes());
                 out.extend_from_slice(key_bytes);
             }
         }
-        out
+        Ok(out)
     }
 
     fn decode_body(body: &[u8]) -> Result<Self> {
@@ -469,7 +468,7 @@ impl Wal {
         let Some(file) = self.file.as_mut() else {
             return Err(Error::WalProtocol("wal file is closed"));
         };
-        let body = record.encode_body();
+        let body = record.encode_body()?;
         let len = u32::try_from(body.len()).map_err(|_| Error::WalRecordTooLarge(u32::MAX))?;
         let crc = crc32(&body);
 
@@ -507,7 +506,7 @@ impl Wal {
                 .open(&tmp)?;
 
             fn append_to(file: &mut File, record: &WalRecord) -> Result<()> {
-                let body = record.encode_body();
+                let body = record.encode_body()?;
                 let len =
                     u32::try_from(body.len()).map_err(|_| Error::WalRecordTooLarge(u32::MAX))?;
                 let crc = crc32(&body);
@@ -587,7 +586,11 @@ impl Wal {
     }
 
     pub fn replay_committed(&self) -> Result<Vec<CommittedTx>> {
-        let mut reader = WalReader::open(&self.path)?;
+        Self::replay_committed_from_path(&self.path)
+    }
+
+    pub fn replay_committed_from_path(path: impl AsRef<Path>) -> Result<Vec<CommittedTx>> {
+        let mut reader = WalReader::open(path.as_ref())?;
         let mut out: Vec<CommittedTx> = Vec::new();
 
         let mut current_txid: Option<u64> = None;
@@ -619,6 +622,20 @@ impl Wal {
         }
 
         Ok(out)
+    }
+
+    pub(crate) fn latest_checkpoint_info(&self) -> Result<Option<(u64, u64)>> {
+        let mut reader = WalReader::open(&self.path)?;
+        let mut last: Option<(u64, u64)> = None;
+        while let Some((_offset, record)) = reader.next_record()? {
+            if let WalRecord::Checkpoint {
+                up_to_txid, epoch, ..
+            } = record
+            {
+                last = Some((up_to_txid, epoch));
+            }
+        }
+        Ok(last)
     }
 }
 

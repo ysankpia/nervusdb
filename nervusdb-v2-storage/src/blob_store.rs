@@ -1,6 +1,5 @@
 use crate::Result;
 use crate::pager::{PageId, Pager};
-use std::sync::MutexGuard;
 
 /// BlobStore manages large variable-length data by chaining 4KB pages.
 /// Each page has a header: [next_page_id: u64 (0 if last)][data_len: u16][data...]
@@ -11,8 +10,7 @@ const MAX_DATA_PER_PAGE: usize = crate::PAGE_SIZE - HEADER_SIZE;
 
 impl BlobStore {
     /// Writes a blob to the pager and returns the first page ID.
-    /// Requires a MutexGuard (for use through GraphEngine).
-    pub fn write(pager: &mut MutexGuard<'_, Pager>, data: &[u8]) -> Result<u64> {
+    pub fn write(pager: &mut Pager, data: &[u8]) -> Result<u64> {
         Self::write_direct(pager, data)
     }
 
@@ -49,7 +47,12 @@ impl BlobStore {
     }
 
     /// Reads a blob starting from the given page ID.
-    pub fn read(pager: &mut MutexGuard<'_, Pager>, mut page_id: u64) -> Result<Vec<u8>> {
+    pub fn read(pager: &Pager, page_id: u64) -> Result<Vec<u8>> {
+        Self::read_direct(pager, page_id)
+    }
+
+    /// Reads a blob directly from pager (no MutexGuard needed).
+    pub fn read_direct(pager: &Pager, mut page_id: u64) -> Result<Vec<u8>> {
         let mut out = Vec::new();
         while page_id != 0 {
             let page = pager.read_page(PageId::new(page_id))?;
@@ -67,7 +70,7 @@ impl BlobStore {
     }
 
     /// Frees all pages in a blob chain.
-    pub fn delete(pager: &mut MutexGuard<'_, Pager>, mut page_id: u64) -> Result<()> {
+    pub fn delete(pager: &mut Pager, mut page_id: u64) -> Result<()> {
         while page_id != 0 {
             let page = pager.read_page(PageId::new(page_id))?;
             let next_page_id = u64::from_le_bytes(page[0..8].try_into().unwrap());

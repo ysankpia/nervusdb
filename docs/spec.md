@@ -3,6 +3,7 @@
 > 这份 spec 是 v2 的“宪法”：写清楚约束和边界，避免靠幻想写代码。
 >
 > **范围声明**：
+>
 > - 本 spec 约束 NervusDB v2（新 crate / 新磁盘格式 / 不兼容 v1）
 > - 路线图（愿景/规划）在 `docs/ROADMAP_2.0.md`，不要把“计划”当“已实现”
 
@@ -15,7 +16,7 @@
 
 这些是“已经存在”的东西；其他任何内容都必须明确标注为“计划”。
 
-- 存储：`.ndb + .wal`（Pager + redo WAL），页大小固定 `8KB`
+- 存储：`.ndb + .wal`（Pager `RwLock` + Offset IO + redo WAL），页大小固定 `8KB`，支持 Vacuum
 - 一致性：Single Writer + Snapshot Readers（快照读并发）
 - 崩溃恢复：WAL replay + manifest/checkpoint（crash gate）
 - 图数据：MemTable → L0 frozen runs → 多段 CSR segments（compaction）
@@ -56,3 +57,7 @@
 - 单元测试：pager/wal/idmap/memtable/index page layout（T101 相关）
 - 集成测试：storage + query 端到端（最小子集）
 - 崩溃门禁：CI crash-gate（PR 小跑 + 定时大跑）
+
+## 6. 已知技术债与折衷（Technical Debt & Trade-offs）
+
+- **暂无**：目前主要技术债（如 Vacuum, B-Tree 删除, 执行器动态分发）已在 v2.0 (T204-T207) 阶段解决。

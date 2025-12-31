@@ -32,8 +32,12 @@ v2 M3 是新一代查询引擎，支持通过 `nervusdb-v2-query` crate 或 CLI 
 - `DELETE` / `DETACH DELETE`：
   - `MATCH (n) DELETE n`（删除节点）
   - `MATCH (a)-[:1]->(b) DELETE a`（删除节点）
+  - `MATCH (a)-[r:1]->(b) DELETE r`（删除边；需要给关系绑定变量）
   - `MATCH (a)-[:1]->(b) DETACH DELETE a`（先删除边，再删除节点）
   - 单次语句删除目标数量上限：`100_000`（超过会 fail-fast；请分批删除）
+- `SET`（属性更新）：
+  - 节点属性：`MATCH (n:Person) WHERE n.name = 'Alice' SET n.name = 'Bob'`
+  - 边属性：`MATCH (a)-[r:1]->(b) SET r.since = 2024`
 
 ### 已知限制
 
@@ -43,7 +47,7 @@ v2 M3 是新一代查询引擎，支持通过 `nervusdb-v2-query` crate 或 CLI 
 - 不支持在 `MATCH` pattern 内写属性：`MATCH (a {name:'Alice'})-[:1]->(b)` 会 fail-fast（请用 WHERE）
 - `MERGE` 节点必须提供非空 property map（否则没有稳定 identity）
 - `DELETE` 不支持级联删除
-- `WITH` / `UNWIND` / `UNION` / `CALL` / `SET`：明确不支持（超出即 fail-fast）
+- `WITH` / `UNWIND` / `UNION` / `CALL`：明确不支持（超出即 fail-fast）
 - `OPTIONAL MATCH`：明确不支持（超出即 fail-fast）
 
 ## 可变长度的现实边界（别踩雷）
