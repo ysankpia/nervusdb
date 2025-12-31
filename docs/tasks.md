@@ -60,8 +60,8 @@
 | T319          | [Query] CALL { ... } Subquery (Apply)                      | High   | Done   | feat/T319-subquery          | Subquery scope + correlated apply                        |
 | T320          | [Query] Procedure CALL/YIELD (NervusDB Extensions)         | High   | Done   | feat/T320-procedures        | e.g. `CALL vector.search(...) YIELD ...`                 |
 | T321          | [Storage/API] Incoming Neighbors Support                   | High   | Done   | feat/T321-incoming          | 100% - All tests passing                                 |
-| T322          | [Storage/API] Multi-Label Model + SET/REMOVE Labels        | High   | Plan   | feat/T322-multi-label       | Storage + query semantics                                |
-| T323          | [Query] MERGE Full Semantics (ON CREATE/ON MATCH)          | High   | Plan   | feat/T323-merge-semantics   | Cypher-complete MERGE behavior                           |
+| T322          | [Storage/API] Multi-Label Model + SET/REMOVE Labels        | High   | Done   | feat/T322-multi-label       | Storage + query semantics                                |
+| T323          | [Query] MERGE Full Semantics (ON CREATE/ON MATCH)          | High   | WIP    | feat/T323-merge-semantics   | Cypher-complete MERGE behavior                           |
 | T324          | [Query] FOREACH Clause                                     | Medium | Plan   | feat/T324-foreach           | Iterative updates                                        |
 | T325          | [Query] Pattern Properties Rewrite (Pattern → WHERE)       | Medium | Plan   | feat/T325-pattern-props     | Accept `(n {k:v})` by lowering into predicates           |
 | T326          | [CI] Integrate openCypher TCK Harness                      | High   | Plan   | feat/T326-tck               | Parse-only gate → Exec gate                              |
