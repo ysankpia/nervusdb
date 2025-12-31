@@ -13,14 +13,14 @@ fn test_cartesian_product_nodes() -> Result<()> {
     let person_label = txn.get_or_create_label("Person")?;
     let city_label = txn.get_or_create_label("City")?;
 
-    let alice = txn.create_node(101u64.into(), person_label)?;
+    let alice = txn.create_node(101u64, person_label)?;
     txn.set_node_property(
         alice,
         "name".to_string(),
         PropertyValue::String("Alice".into()),
     )?;
 
-    let london = txn.create_node(201u64.into(), city_label)?;
+    let london = txn.create_node(201u64, city_label)?;
     txn.set_node_property(
         london,
         "name".to_string(),
@@ -57,9 +57,9 @@ fn test_disjoint_match_clauses() -> Result<()> {
     let mut txn = db.begin_write();
 
     let l = txn.get_or_create_label("L")?;
-    let n1 = txn.create_node(1u64.into(), l)?;
+    let n1 = txn.create_node(1u64, l)?;
     txn.set_node_property(n1, "v".to_string(), PropertyValue::Int(1))?;
-    let n2 = txn.create_node(2u64.into(), l)?;
+    let n2 = txn.create_node(2u64, l)?;
     txn.set_node_property(n2, "v".to_string(), PropertyValue::Int(2))?;
 
     txn.commit()?;
@@ -87,13 +87,13 @@ fn test_shared_variable_expansion() -> Result<()> {
     let label = txn.get_or_create_label("Node")?;
     let rel_type = txn.get_or_create_rel_type("KNOWS")?;
 
-    let alice_node = txn.create_node(1u64.into(), label)?;
+    let alice_node = txn.create_node(1u64, label)?;
     txn.set_node_property(
         alice_node,
         "name".to_string(),
         PropertyValue::String("Alice".into()),
     )?;
-    let bob_node = txn.create_node(2u64.into(), label)?;
+    let bob_node = txn.create_node(2u64, label)?;
     txn.set_node_property(
         bob_node,
         "name".to_string(),
@@ -128,9 +128,9 @@ fn test_cross_join_with_where() -> Result<()> {
     let mut txn = db.begin_write();
 
     let l = txn.get_or_create_label("N")?;
-    let n1 = txn.create_node(1u64.into(), l)?;
+    let n1 = txn.create_node(1u64, l)?;
     txn.set_node_property(n1, "val".to_string(), PropertyValue::Int(10))?;
-    let n2 = txn.create_node(2u64.into(), l)?;
+    let n2 = txn.create_node(2u64, l)?;
     txn.set_node_property(n2, "val".to_string(), PropertyValue::Int(20))?;
 
     txn.commit()?;

@@ -77,9 +77,8 @@ impl TokenParser {
         }
 
         // Fail-fast on unsupported top-level clauses/keywords.
-        match &self.peek().token_type {
-            TokenType::Foreach => return Err(Error::NotImplemented("FOREACH")),
-            _ => {}
+        if self.peek().token_type == TokenType::Foreach {
+            return Err(Error::NotImplemented("FOREACH"));
         }
 
         if self.match_token(&TokenType::Optional) {

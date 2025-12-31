@@ -373,7 +373,7 @@ impl GraphEngine {
                 btree_key.extend_from_slice(key.as_bytes());
 
                 let encoded_val = value.encode();
-                let blob_id = crate::blob_store::BlobStore::write(&mut *pager, &encoded_val)?;
+                let blob_id = crate::blob_store::BlobStore::write(&mut pager, &encoded_val)?;
                 tree.insert(&mut pager, &btree_key, blob_id)?;
             }
 
@@ -388,7 +388,7 @@ impl GraphEngine {
                 btree_key.extend_from_slice(key.as_bytes());
 
                 let encoded_val = value.encode();
-                let blob_id = crate::blob_store::BlobStore::write(&mut *pager, &encoded_val)?;
+                let blob_id = crate::blob_store::BlobStore::write(&mut pager, &encoded_val)?;
                 tree.insert(&mut pager, &btree_key, blob_id)?;
             }
 
@@ -420,7 +420,7 @@ impl GraphEngine {
         {
             let mut pager = self.pager.write().unwrap();
             let encoded_stats = stats.encode();
-            stats_root = crate::blob_store::BlobStore::write(&mut *pager, &encoded_stats)?;
+            stats_root = crate::blob_store::BlobStore::write(&mut pager, &encoded_stats)?;
         }
 
         let pointers: Vec<SegmentPointer> = new_segments

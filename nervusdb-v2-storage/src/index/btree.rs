@@ -964,7 +964,7 @@ mod tests {
 
         keys.sort_by(|a, b| a.0.cmp(&b.0));
 
-        let mut cur = tree.cursor_lower_bound(&mut pager, &[]).unwrap();
+        let mut cur = tree.cursor_lower_bound(&pager, &[]).unwrap();
         let mut got = Vec::new();
         while cur.is_valid().unwrap() {
             got.push((cur.key().unwrap(), cur.payload().unwrap()));
@@ -990,7 +990,7 @@ mod tests {
         tree.insert(&mut pager, &k2, 2).unwrap();
 
         let needle = encode_index_key(1, &PropertyValue::Int(2), 0);
-        let mut cur = tree.cursor_lower_bound(&mut pager, &needle).unwrap();
+        let mut cur = tree.cursor_lower_bound(&pager, &needle).unwrap();
         assert!(cur.is_valid().unwrap());
         assert_eq!(cur.key().unwrap(), k2);
     }
@@ -1014,7 +1014,7 @@ mod tests {
 
         keys.sort_by(|a, b| a.0.cmp(&b.0));
 
-        let mut cur = tree.cursor_lower_bound(&mut pager, &[]).unwrap();
+        let mut cur = tree.cursor_lower_bound(&pager, &[]).unwrap();
         let mut got = Vec::new();
         while cur.is_valid().unwrap() {
             got.push((cur.key().unwrap(), cur.payload().unwrap()));

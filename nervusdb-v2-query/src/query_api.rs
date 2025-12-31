@@ -481,7 +481,7 @@ fn compile_m3_plan(query: Query) -> Result<CompiledQuery> {
                 // Rust iterators don't let you consume from `peek`.
                 // So we just check behavior.
 
-                if matches!(plan, None) {
+                if plan.is_none() {
                     return Err(Error::Other("WHERE cannot be the first clause".into()));
                 }
                 plan = Some(Plan::Filter {
@@ -725,31 +725,31 @@ fn compile_projection_aggregation(
     for (i, item) in items.iter().enumerate() {
         // Check for aggregation function
         let mut found_agg = false;
-        if let Expression::FunctionCall(call) = &item.expression {
-            if let Some(agg) = parse_aggregate_function(call)? {
-                found_agg = true;
-                is_aggregation = true;
-                let alias = item.alias.clone().unwrap_or_else(|| format!("agg_{}", i));
-                aggregates.push((agg, alias.clone()));
-                project_cols.push(alias);
+        if let Expression::FunctionCall(call) = &item.expression
+            && let Some(agg) = parse_aggregate_function(call)?
+        {
+            found_agg = true;
+            is_aggregation = true;
+            let alias = item.alias.clone().unwrap_or_else(|| format!("agg_{}", i));
+            aggregates.push((agg, alias.clone()));
+            project_cols.push(alias);
 
-                // Capture dependencies
-                let mut deps = std::collections::HashSet::new();
-                for arg in &call.args {
-                    extract_variables_from_expr(arg, &mut deps);
-                }
-                // We will add deps to pre_projections AFTER loop or handle logic carefully.
-                // If we add them here, they are "implicit" projections.
-                // We need them to evaluate the aggregate.
-                // BUT, if the same variable is ALSO a grouping key later in the list...
-                // It's okay. Duplicates in pre_projections might be inefficient but usually fine if logic uses aliases.
-                // However, Plan::Aggregate uses grouping keys to form groups.
-                // Implicit deps are just "extra columns" passed through.
-                for dep in deps {
-                    if !projected_aliases.contains(&dep) {
-                        pre_projections.push((dep.clone(), Expression::Variable(dep.clone())));
-                        projected_aliases.insert(dep);
-                    }
+            // Capture dependencies
+            let mut deps = std::collections::HashSet::new();
+            for arg in &call.args {
+                extract_variables_from_expr(arg, &mut deps);
+            }
+            // We will add deps to pre_projections AFTER loop or handle logic carefully.
+            // If we add them here, they are "implicit" projections.
+            // We need them to evaluate the aggregate.
+            // BUT, if the same variable is ALSO a grouping key later in the list...
+            // It's okay. Duplicates in pre_projections might be inefficient but usually fine if logic uses aliases.
+            // However, Plan::Aggregate uses grouping keys to form groups.
+            // Implicit deps are just "extra columns" passed through.
+            for dep in deps {
+                if !projected_aliases.contains(&dep) {
+                    pre_projections.push((dep.clone(), Expression::Variable(dep.clone())));
+                    projected_aliases.insert(dep);
                 }
             }
         }
@@ -1013,7 +1013,7 @@ fn compile_match_plan(
             crate::ast::PathElement::Node(n) => n
                 .variable
                 .clone()
-                .ok_or_else(|| Error::NotImplemented("anonymous start node"))?,
+                .ok_or(Error::NotImplemented("anonymous start node"))?,
             _ => return Err(Error::Other("pattern must start with a node".into())),
         };
 
@@ -1139,18 +1139,17 @@ fn compile_pattern_chain(
         };
 
         // Try IndexSeek optimization
-        if let Some(label_name) = &src_label {
-            if let Some(var_preds) = local_predicates.get(&src_alias) {
-                if let Some((field, val_expr)) = var_preds.iter().next() {
-                    start_plan = Plan::IndexSeek {
-                        alias: src_alias.clone(),
-                        label: label_name.clone(),
-                        field: field.clone(),
-                        value_expr: val_expr.clone(),
-                        fallback: Box::new(start_plan),
-                    };
-                }
-            }
+        if let Some(label_name) = &src_label
+            && let Some(var_preds) = local_predicates.get(&src_alias)
+            && let Some((field, val_expr)) = var_preds.iter().next()
+        {
+            start_plan = Plan::IndexSeek {
+                alias: src_alias.clone(),
+                label: label_name.clone(),
+                field: field.clone(),
+                value_expr: val_expr.clone(),
+                fallback: Box::new(start_plan),
+            };
         }
 
         // Apply filter for all properties
@@ -1436,10 +1435,10 @@ fn parse_aggregate_function(
             if call.args.is_empty() {
                 Ok(Some(crate::ast::AggregateFunction::Count(None)))
             } else if call.args.len() == 1 {
-                if let Expression::Literal(Literal::String(s)) = &call.args[0] {
-                    if s == "*" {
-                        return Ok(Some(crate::ast::AggregateFunction::Count(None)));
-                    }
+                if let Expression::Literal(Literal::String(s)) = &call.args[0]
+                    && s == "*"
+                {
+                    return Ok(Some(crate::ast::AggregateFunction::Count(None)));
                 }
                 Ok(Some(crate::ast::AggregateFunction::Count(Some(
                     call.args[0].clone(),
@@ -1493,29 +1492,26 @@ fn parse_aggregate_function(
 }
 
 fn extract_predicates(expr: &Expression, map: &mut BTreeMap<String, BTreeMap<String, Expression>>) {
-    match expr {
-        Expression::Binary(bin) => {
-            if matches!(bin.operator, BinaryOperator::And) {
-                extract_predicates(&bin.left, map);
-                extract_predicates(&bin.right, map);
-            } else if matches!(bin.operator, BinaryOperator::Equals) {
-                let mut check_eq = |left: &Expression, right: &Expression| {
-                    if let Expression::PropertyAccess(pa) = left {
-                        match right {
-                            Expression::Literal(_) | Expression::Parameter(_) => {
-                                map.entry(pa.variable.clone())
-                                    .or_default()
-                                    .insert(pa.property.clone(), right.clone());
-                            }
-                            _ => {}
+    if let Expression::Binary(bin) = expr {
+        if matches!(bin.operator, BinaryOperator::And) {
+            extract_predicates(&bin.left, map);
+            extract_predicates(&bin.right, map);
+        } else if matches!(bin.operator, BinaryOperator::Equals) {
+            let mut check_eq = |left: &Expression, right: &Expression| {
+                if let Expression::PropertyAccess(pa) = left {
+                    match right {
+                        Expression::Literal(_) | Expression::Parameter(_) => {
+                            map.entry(pa.variable.clone())
+                                .or_default()
+                                .insert(pa.property.clone(), right.clone());
                         }
+                        _ => {}
                     }
-                };
-                check_eq(&bin.left, &bin.right);
-                check_eq(&bin.right, &bin.left);
-            }
+                }
+            };
+            check_eq(&bin.left, &bin.right);
+            check_eq(&bin.right, &bin.left);
         }
-        _ => {}
     }
 }
 

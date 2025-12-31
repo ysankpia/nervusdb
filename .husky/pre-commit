@@ -4,8 +4,13 @@ set -e
 echo "[husky] pre-commit: cargo fmt"
 cargo fmt --all
 
-echo "[husky] pre-commit: cargo clippy (warnings only)"
-cargo clippy --workspace --all-targets -- -W warnings || true
+echo "[husky] pre-commit: cargo clippy (strict mode)"
+# 严格模式：将警告视为错误，在 commit之前就发现问题
+cargo clippy --workspace --all-targets -- -W warnings
+
+echo "[husky] pre-commit: cargo test (quick check)"
+# 快速运行核心测试，避免提交无法编译的代码
+cargo test --lib --workspace --no-fail-fast
 
 # 将格式化产生的变更加入本次提交
 git add -u

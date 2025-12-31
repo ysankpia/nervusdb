@@ -1,5 +1,5 @@
+use nervusdb_v2::Db;
 use nervusdb_v2::query::{Params, prepare};
-use nervusdb_v2::{Db, PropertyValue};
 use tempfile::tempdir;
 
 #[test]
@@ -31,7 +31,7 @@ fn test_incoming_match() {
     // 2. Query: MATCH (n {name: 'B'})<-[:KNOWS]-(m) RETURN m.name
     let snapshot = db.snapshot();
     let q = "MATCH (n {name: 'B'})<-[:KNOWS]-(m) RETURN m.name ORDER BY m.name";
-    let mut prepared = prepare(q).unwrap();
+    let prepared = prepare(q).unwrap();
     let params = Params::new();
     let results = prepared.execute_streaming(&snapshot, &params);
 
@@ -69,7 +69,7 @@ fn test_undirected_match() {
 
     // MATCH (n)-[:KNOWS]-(m) WHERE n.name = 'A' -> should find B (outgoing)
     let q1 = "MATCH (n {name: 'A'})-[:KNOWS]-(m) RETURN m.name";
-    let mut p1 = prepare(q1).unwrap();
+    let p1 = prepare(q1).unwrap();
     let mut res1 = p1.execute_streaming(&snapshot, &params);
     assert_eq!(
         res1.next()
@@ -85,7 +85,7 @@ fn test_undirected_match() {
 
     // MATCH (n)-[:KNOWS]-(m) WHERE n.name = 'B' -> should find A (incoming)
     let q2 = "MATCH (n {name: 'B'})-[:KNOWS]-(m) RETURN m.name";
-    let mut p2 = prepare(q2).unwrap();
+    let p2 = prepare(q2).unwrap();
     let mut res2 = p2.execute_streaming(&snapshot, &params);
     assert_eq!(
         res2.next()
@@ -123,7 +123,7 @@ fn test_incoming_after_compaction() {
 
     let snapshot = db.snapshot();
     let q = "MATCH (n {name: 'B'})<-[:KNOWS]-(m) RETURN m.name";
-    let mut p = prepare(q).unwrap();
+    let p = prepare(q).unwrap();
     let params = Params::new();
     let mut res = p.execute_streaming(&snapshot, &params);
     assert_eq!(

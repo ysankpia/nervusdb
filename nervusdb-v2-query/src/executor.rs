@@ -65,6 +65,12 @@ pub struct ProcedureRegistry {
     handlers: HashMap<String, Arc<dyn Procedure>>,
 }
 
+impl Default for ProcedureRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProcedureRegistry {
     pub fn new() -> Self {
         let mut handlers: HashMap<String, Arc<dyn Procedure>> = HashMap::new();
@@ -469,14 +475,14 @@ impl<'a, S: GraphSnapshot> Iterator for NodeScanIter<'a, S> {
     type Item = Result<Row>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(iid) = self.node_iter.next() {
+        for iid in self.node_iter.by_ref() {
             if self.snapshot.is_tombstoned_node(iid) {
                 continue;
             }
-            if let Some(lid) = self.label_id {
-                if self.snapshot.node_label(iid) != Some(lid) {
-                    continue;
-                }
+            if let Some(lid) = self.label_id
+                && self.snapshot.node_label(iid) != Some(lid)
+            {
+                continue;
             }
             return Some(Ok(
                 Row::default().with(self.alias.clone(), Value::NodeId(iid))
@@ -1928,7 +1934,7 @@ fn convert_executor_value_to_property(value: &Value) -> Result<PropertyValue> {
             Ok(PropertyValue::Map(map))
         }
         Value::NodeId(_) | Value::ExternalId(_) | Value::EdgeKey(_) => Err(Error::NotImplemented(
-            "node/edge identifiers as property values are not supported".into(),
+            "node/edge identifiers as property values are not supported",
         )),
     }
 }
@@ -2128,10 +2134,10 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
         let max_hops = self.max_hops.unwrap_or(DEFAULT_MAX_VAR_LEN_HOPS);
 
         // Check limit
-        if let Some(limit) = self.limit {
-            if self.emitted >= limit {
-                return None;
-            }
+        if let Some(limit) = self.limit
+            && self.emitted >= limit
+        {
+            return None;
         }
 
         loop {
@@ -2145,7 +2151,7 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
                         for rel in rels {
                             for edge in self.snapshot.neighbors(current_node, Some(*rel)) {
                                 let mut next_path = current_path.clone();
-                                if let Some(_) = self.path_alias {
+                                if self.path_alias.is_some() {
                                     // Build next path
                                     if let Some(p) = &mut next_path {
                                         p.edges.push(edge);
@@ -2229,17 +2235,19 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
             }
 
             // 2. Stack Empty: Check Optional Null emission
-            if let Some(row) = &self.cur_row {
-                if self.optional && !self.yielded_any && self.input.is_some() {
-                    self.yielded_any = true;
-                    let mut null_row = row.clone();
-                    null_row = null_row.with(self.dst_alias, Value::Null);
-                    if let Some(ea) = self.edge_alias {
-                        null_row = null_row.with(ea, Value::Null);
-                    }
-                    self.emitted += 1;
-                    return Some(Ok(null_row));
+            if let Some(row) = &self.cur_row
+                && self.optional
+                && !self.yielded_any
+                && self.input.is_some()
+            {
+                self.yielded_any = true;
+                let mut null_row = row.clone();
+                null_row = null_row.with(self.dst_alias, Value::Null);
+                if let Some(ea) = self.edge_alias {
+                    null_row = null_row.with(ea, Value::Null);
                 }
+                self.emitted += 1;
+                return Some(Ok(null_row));
             }
 
             // 3. Get Next Start Node
@@ -2634,27 +2642,27 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for ProcedureCallIter<'a, S> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             // 1. Try to yield from current sub-results
-            if let Some(proc_row) = self.current_results.next() {
-                if let Some(outer_row) = &self.current_outer_row {
-                    // Start with outer row
-                    let mut joined = outer_row.clone();
-                    // Merge proc_row into joined, applying YIELD aliases
-                    if self.yields.is_empty() {
-                        // If no yields specified, just merge all?
-                        // Actually in Cypher, if no YIELD is specified, it might be an error or return all.
-                        // For NervusDB MVP: if yields is empty, assume we return everything from proc_row.
-                        for (k, v) in proc_row.cols {
-                            joined = joined.with(k, v);
-                        }
-                    } else {
-                        for (field, alias) in self.yields {
-                            if let Some(val) = proc_row.get(field) {
-                                joined = joined.with(alias.as_ref().unwrap_or(field), val.clone());
-                            }
+            if let Some(proc_row) = self.current_results.next()
+                && let Some(outer_row) = &self.current_outer_row
+            {
+                // Start with outer row
+                let mut joined = outer_row.clone();
+                // Merge proc_row into joined, applying YIELD aliases
+                if self.yields.is_empty() {
+                    // If no yields specified, just merge all?
+                    // Actually in Cypher, if no YIELD is specified, it might be an error or return all.
+                    // For NervusDB MVP: if yields is empty, assume we return everything from proc_row.
+                    for (k, v) in proc_row.cols {
+                        joined = joined.with(k, v);
+                    }
+                } else {
+                    for (field, alias) in self.yields {
+                        if let Some(val) = proc_row.get(field) {
+                            joined = joined.with(alias.as_ref().unwrap_or(field), val.clone());
                         }
                     }
-                    return Some(Ok(joined));
                 }
+                return Some(Ok(joined));
             }
 
             // 2. Fetch next outer row

@@ -27,7 +27,7 @@ fn test_exists_with_edge() -> nervusdb_v2::Result<()> {
         "name".to_string(),
         nervusdb_v2::PropertyValue::String("Bob".to_string()),
     )?;
-    txn.create_edge(n1, n2, rel_type.into());
+    txn.create_edge(n1, n2, rel_type);
     txn.commit()?;
 
     // MATCH (n:Person) WHERE EXISTS ((n)-[:KNOWS]->()) RETURN n.name
@@ -103,7 +103,7 @@ fn test_not_exists() -> nervusdb_v2::Result<()> {
         "name".to_string(),
         nervusdb_v2::PropertyValue::String("Bob".to_string()),
     )?;
-    txn.create_edge(n1, n2, rel_type.into());
+    txn.create_edge(n1, n2, rel_type);
     txn.commit()?;
 
     // NOT EXISTS - Bob doesn't have outgoing KNOWS

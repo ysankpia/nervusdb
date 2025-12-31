@@ -206,7 +206,7 @@ mod tests {
             p
         };
 
-        let mut cur = tree.cursor_lower_bound(&mut pager, &prefix).unwrap();
+        let mut cur = tree.cursor_lower_bound(&pager, &prefix).unwrap();
         let mut got = Vec::new();
         while cur.is_valid().unwrap() {
             let k = cur.key().unwrap();
@@ -226,7 +226,7 @@ mod tests {
         assert!(tree.delete_exact_rebuild(&mut pager, &del_key, 10).unwrap());
         cat.update_root(&mut pager, "age", tree.root()).unwrap();
 
-        let mut cur = tree.cursor_lower_bound(&mut pager, &prefix).unwrap();
+        let mut cur = tree.cursor_lower_bound(&pager, &prefix).unwrap();
         let mut got2 = Vec::new();
         while cur.is_valid().unwrap() {
             let k = cur.key().unwrap();

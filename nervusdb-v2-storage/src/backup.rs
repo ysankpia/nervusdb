@@ -159,7 +159,7 @@ impl BackupManager {
         let backup_dir = self.backup_path.join(backup_id.to_string());
 
         // Create backup directory
-        std::fs::create_dir_all(&backup_dir).map_err(|e| Error::Io(e))?;
+        std::fs::create_dir_all(&backup_dir).map_err(Error::Io)?;
 
         // Get file sizes for progress tracking
         let ndb_size = self.get_file_size(&self.db_path)?;
@@ -293,15 +293,15 @@ impl BackupManager {
         // Mark backup as completed
         {
             let mut active = self.active_backup.write().unwrap();
-            if let Some(ref mut backup) = *active {
-                if backup.id == handle.id {
-                    backup.manifest.status = ManifestStatus::Completed {
-                        completed_at: chrono::Utc::now(),
-                        total_bytes: backup.total_bytes.load(Ordering::Relaxed),
-                    };
-                    self.write_manifest(&handle.backup_dir, &backup.manifest)?;
-                    *active = None;
-                }
+            if let Some(ref mut backup) = *active
+                && backup.id == handle.id
+            {
+                backup.manifest.status = ManifestStatus::Completed {
+                    completed_at: chrono::Utc::now(),
+                    total_bytes: backup.total_bytes.load(Ordering::Relaxed),
+                };
+                self.write_manifest(&handle.backup_dir, &backup.manifest)?;
+                *active = None;
             }
         }
 
@@ -312,18 +312,18 @@ impl BackupManager {
     pub fn cancel_backup(&self, handle: &BackupHandle) -> Result<()> {
         let mut active = self.active_backup.write().unwrap();
 
-        if let Some(ref backup) = *active {
-            if backup.id == handle.id {
-                // Remove active backup marker
-                *active = None;
+        if let Some(ref backup) = *active
+            && backup.id == handle.id
+        {
+            // Remove active backup marker
+            *active = None;
 
-                // Mark manifest as failed
-                let mut manifest: BackupManifest = self.read_manifest(&handle.backup_dir)?;
-                manifest.status = ManifestStatus::Failed {
-                    error: "Cancelled by user".to_string(),
-                };
-                self.write_manifest(&handle.backup_dir, &manifest)?;
-            }
+            // Mark manifest as failed
+            let mut manifest: BackupManifest = self.read_manifest(&handle.backup_dir)?;
+            manifest.status = ManifestStatus::Failed {
+                error: "Cancelled by user".to_string(),
+            };
+            self.write_manifest(&handle.backup_dir, &manifest)?;
         }
 
         Ok(())
@@ -337,29 +337,25 @@ impl BackupManager {
             return Ok(backups);
         }
 
-        for entry in std::fs::read_dir(backup_dir).map_err(|e| Error::Io(e))? {
-            let entry = entry.map_err(|e| Error::Io(e))?;
+        for entry in std::fs::read_dir(backup_dir).map_err(Error::Io)? {
+            let entry = entry.map_err(Error::Io)?;
             let path = entry.path();
 
             if path.is_dir() {
                 let manifest_path = path.join("backup_manifest.json");
-                if manifest_path.exists() {
-                    if let Ok(manifest) = Self::read_manifest_from_path(&manifest_path) {
-                        match manifest.status {
-                            ManifestStatus::Completed { total_bytes, .. } => {
-                                backups.push(BackupInfo {
-                                    id: manifest.backup_id,
-                                    created_at: manifest.created_at,
-                                    size_bytes: total_bytes,
-                                    file_count: manifest.files.len(),
-                                    nervusdb_version: manifest.nervusdb_version,
-                                    checkpoint_txid: manifest.checkpoint.txid,
-                                    checkpoint_epoch: manifest.checkpoint.epoch,
-                                });
-                            }
-                            _ => {}
-                        }
-                    }
+                if manifest_path.exists()
+                    && let Ok(manifest) = Self::read_manifest_from_path(&manifest_path)
+                    && let ManifestStatus::Completed { total_bytes, .. } = manifest.status
+                {
+                    backups.push(BackupInfo {
+                        id: manifest.backup_id,
+                        created_at: manifest.created_at,
+                        size_bytes: total_bytes,
+                        file_count: manifest.files.len(),
+                        nervusdb_version: manifest.nervusdb_version,
+                        checkpoint_txid: manifest.checkpoint.txid,
+                        checkpoint_epoch: manifest.checkpoint.epoch,
+                    });
                 }
             }
         }
@@ -399,7 +395,7 @@ impl BackupManager {
                 target_db_path.to_path_buf()
             };
 
-            std::fs::copy(&src, &dst).map_err(|e| Error::Io(e))?;
+            std::fs::copy(&src, &dst).map_err(Error::Io)?;
         }
 
         Ok(())
@@ -412,9 +408,7 @@ impl BackupManager {
     }
 
     fn get_file_size(&self, path: &Path) -> Result<u64> {
-        std::fs::metadata(path)
-            .map(|m| m.len())
-            .map_err(|e| Error::Io(e))
+        std::fs::metadata(path).map(|m| m.len()).map_err(Error::Io)
     }
 
     fn get_wal_size(&self) -> Result<u64> {
@@ -458,10 +452,10 @@ impl BackupManager {
                 .into_owned(),
         );
 
-        let mut src_file = File::open(src).map_err(|e| Error::Io(e))?;
-        let mut dst_file = File::create(&dst).map_err(|e| Error::Io(e))?;
+        let mut src_file = File::open(src).map_err(Error::Io)?;
+        let mut dst_file = File::create(&dst).map_err(Error::Io)?;
 
-        let total = std::io::copy(&mut src_file, &mut dst_file).map_err(|e| Error::Io(e))?;
+        let total = std::io::copy(&mut src_file, &mut dst_file).map_err(Error::Io)?;
 
         // Update progress
         {
@@ -487,10 +481,10 @@ impl BackupManager {
                 .into_owned(),
         );
 
-        let mut src_file = File::open(&src).map_err(|e| Error::Io(e))?;
-        let mut dst_file = File::create(&dst).map_err(|e| Error::Io(e))?;
+        let mut src_file = File::open(&src).map_err(Error::Io)?;
+        let mut dst_file = File::create(&dst).map_err(Error::Io)?;
 
-        let total = std::io::copy(&mut src_file, &mut dst_file).map_err(|e| Error::Io(e))?;
+        let total = std::io::copy(&mut src_file, &mut dst_file).map_err(Error::Io)?;
 
         // Update progress
         {
@@ -505,8 +499,8 @@ impl BackupManager {
 
     fn write_manifest(&self, dir: &Path, manifest: &BackupManifest) -> Result<()> {
         let path = dir.join("backup_manifest.json");
-        let file = File::create(&path).map_err(|e| Error::Io(e))?;
-        serde_json::to_writer_pretty(file, manifest).map_err(|e| Error::Serialization(e))?;
+        let file = File::create(&path).map_err(Error::Io)?;
+        serde_json::to_writer_pretty(file, manifest).map_err(Error::Serialization)?;
         Ok(())
     }
 
@@ -515,8 +509,8 @@ impl BackupManager {
     }
 
     fn read_manifest_from_path(path: &Path) -> Result<BackupManifest> {
-        let file = File::open(path).map_err(|e| Error::Io(e))?;
-        serde_json::from_reader(file).map_err(|e| Error::Serialization(e))
+        let file = File::open(path).map_err(Error::Io)?;
+        serde_json::from_reader(file).map_err(Error::Serialization)
     }
 }
 

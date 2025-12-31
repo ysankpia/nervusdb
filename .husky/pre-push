@@ -1,11 +1,9 @@
 #!/usr/bin/env sh
 set -e
 
-echo "[husky] pre-push: cargo fmt check"
-cargo fmt --all -- --check
-
-echo "[husky] pre-push: cargo clippy"
-cargo clippy --workspace --all-targets -- -W warnings
-
-echo "[husky] pre-push: cargo test"
+echo "[husky] pre-push: final verification"
+# pre-commit 已经检查过 fmt 和 clippy，这里只做最终全量测试
+echo "[husky] pre-push: cargo test --workspace"
 cargo test --workspace
+
+echo "[husky] ✅ All checks passed, pushing to remote..."

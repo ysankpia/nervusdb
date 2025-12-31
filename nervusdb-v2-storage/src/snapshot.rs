@@ -95,10 +95,10 @@ impl L0Run {
         // If this run deleted the property, return None explicitly (but maybe we should indicate deletion?)
         // For L0Run::node_property, we're returning the value if present.
         // But if it's tombstoned in this run, we shouldn't return it even if it's in `node_properties` (logic error if both happen).
-        if let Some(deleted) = self.tombstoned_node_properties.get(&node) {
-            if deleted.contains(key) {
-                return None;
-            }
+        if let Some(deleted) = self.tombstoned_node_properties.get(&node)
+            && deleted.contains(key)
+        {
+            return None;
         }
         self.node_properties
             .get(&node)
@@ -106,10 +106,10 @@ impl L0Run {
     }
 
     pub(crate) fn edge_property(&self, edge: EdgeKey, key: &str) -> Option<&PropertyValue> {
-        if let Some(deleted) = self.tombstoned_edge_properties.get(&edge) {
-            if deleted.contains(key) {
-                return None;
-            }
+        if let Some(deleted) = self.tombstoned_edge_properties.get(&edge)
+            && deleted.contains(key)
+        {
+            return None;
         }
         self.edge_properties
             .get(&edge)
@@ -196,8 +196,9 @@ impl Snapshot {
             return Ok(crate::stats::GraphStatistics::default());
         }
         let bytes = crate::blob_store::BlobStore::read(pager, self.stats_root)?;
-        crate::stats::GraphStatistics::decode(&bytes)
-            .ok_or_else(|| crate::Error::StorageCorrupted("failed to decode statistics"))
+        crate::stats::GraphStatistics::decode(&bytes).ok_or(crate::Error::StorageCorrupted(
+            "failed to decode statistics",
+        ))
     }
 
     /// Get the label ID for a node.
@@ -211,10 +212,10 @@ impl Snapshot {
         // Search from newest to oldest runs
         for run in self.runs.iter() {
             // If run has deletion mark, stop searching and return None
-            if let Some(deleted) = run.tombstoned_node_properties.get(&node) {
-                if deleted.contains(key) {
-                    return None;
-                }
+            if let Some(deleted) = run.tombstoned_node_properties.get(&node)
+                && deleted.contains(key)
+            {
+                return None;
             }
             if let Some(value) = run.node_property(node, key) {
                 return Some(value.clone());
@@ -227,10 +228,10 @@ impl Snapshot {
     pub(crate) fn edge_property(&self, edge: EdgeKey, key: &str) -> Option<PropertyValue> {
         // Search from newest to oldest runs
         for run in self.runs.iter() {
-            if let Some(deleted) = run.tombstoned_edge_properties.get(&edge) {
-                if deleted.contains(key) {
-                    return None;
-                }
+            if let Some(deleted) = run.tombstoned_edge_properties.get(&edge)
+                && deleted.contains(key)
+            {
+                return None;
             }
             if let Some(value) = run.edge_property(edge, key) {
                 return Some(value.clone());
@@ -401,7 +402,7 @@ impl nervusdb_v2_api::GraphSnapshot for Snapshot {
         iid: InternalNodeId,
         key: &str,
     ) -> Option<nervusdb_v2_api::PropertyValue> {
-        self.node_property(iid, key).map(|p| convert_property(p))
+        self.node_property(iid, key).map(convert_property)
     }
 
     fn edge_property(
@@ -414,8 +415,7 @@ impl nervusdb_v2_api::GraphSnapshot for Snapshot {
             rel: edge.rel,
             dst: edge.dst,
         };
-        self.edge_property(internal_edge, key)
-            .map(|p| convert_property(p))
+        self.edge_property(internal_edge, key).map(convert_property)
     }
 
     fn node_properties(
