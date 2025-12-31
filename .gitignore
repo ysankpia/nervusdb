@@ -57,3 +57,4 @@ bindings/node/temp_verification_db.redb
 repomix-output.xml
 repomix-output.md
 bindings/node/*.tgz
+.husky/
