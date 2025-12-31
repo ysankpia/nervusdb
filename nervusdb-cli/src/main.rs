@@ -145,6 +145,21 @@ fn value_to_json_v2<S: GraphSnapshot>(snapshot: &S, value: &V2Value) -> serde_js
                 })).collect::<Vec<_>>()
             })
         }
+        V2Value::Node(node) => serde_json::json!({
+            "id": node.id,
+            "labels": node.labels,
+            "properties": node.properties
+        }),
+        V2Value::Relationship(rel) => serde_json::json!({
+            "src": rel.key.src,
+            "rel": rel.key.rel,
+            "dst": rel.key.dst,
+            "properties": rel.properties
+        }),
+        V2Value::ReifiedPath(path) => serde_json::json!({
+            "nodes": path.nodes,
+            "relationships": path.relationships
+        }),
     }
 }
 

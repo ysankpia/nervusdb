@@ -1,0 +1,13 @@
+# lefthook configuration for nervusdb
+# https://lefthook.dev/configuration/
+
+pre-commit:
+  parallel: true
+  commands:
+    # Format Rust code automatically
+    format:
+      run: cargo fmt --all
+      # Only run on Rust files
+      glob: "*.rs"
+      # Stage formatted files after formatting
+      stage: true

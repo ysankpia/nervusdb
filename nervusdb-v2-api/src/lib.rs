@@ -80,7 +80,7 @@ impl From<bool> for PropertyValue {
 /// A directed edge from a source node to a destination node with a relationship type.
 ///
 /// Used as the key type for neighbor lookups and edge operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub struct EdgeKey {
     pub src: InternalNodeId,
     pub rel: RelTypeId,

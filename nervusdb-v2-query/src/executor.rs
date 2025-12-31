@@ -3,6 +3,7 @@ use crate::error::{Error, Result};
 use crate::evaluator::evaluate_expression_value;
 pub use nervusdb_v2_api::LabelId;
 use nervusdb_v2_api::{EdgeKey, ExternalId, GraphSnapshot, InternalNodeId, RelTypeId};
+use serde::ser::{SerializeMap, SerializeSeq};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
@@ -182,6 +183,57 @@ pub struct ReifiedPathValue {
     pub relationships: Vec<RelationshipValue>,
 }
 
+impl serde::Serialize for NodeValue {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(3))?;
+        map.serialize_entry("id", &self.id)?;
+        map.serialize_entry("labels", &self.labels)?;
+        map.serialize_entry("properties", &self.properties)?;
+        map.end()
+    }
+}
+
+impl serde::Serialize for RelationshipValue {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(4))?;
+        map.serialize_entry("src", &self.key.src)?;
+        map.serialize_entry("rel", &self.key.rel)?;
+        map.serialize_entry("dst", &self.key.dst)?;
+        map.serialize_entry("properties", &self.properties)?;
+        map.end()
+    }
+}
+
+impl serde::Serialize for PathValue {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(2))?;
+        map.serialize_entry("nodes", &self.nodes)?;
+        map.serialize_entry("edges", &self.edges)?;
+        map.end()
+    }
+}
+
+impl serde::Serialize for ReifiedPathValue {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(2))?;
+        map.serialize_entry("nodes", &self.nodes)?;
+        map.serialize_entry("relationships", &self.relationships)?;
+        map.end()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum Value {
     NodeId(InternalNodeId),
@@ -200,6 +252,96 @@ pub enum Value {
     Node(NodeValue),
     Relationship(RelationshipValue),
     ReifiedPath(ReifiedPathValue),
+}
+
+impl serde::Serialize for Value {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            Value::NodeId(iid) => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("type", "node_id")?;
+                map.serialize_entry("id", iid)?;
+                map.end()
+            }
+            Value::ExternalId(id) => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("type", "external_id")?;
+                map.serialize_entry("id", id)?;
+                map.end()
+            }
+            Value::EdgeKey(e) => {
+                let mut map = serializer.serialize_map(Some(4))?;
+                map.serialize_entry("type", "edge_key")?;
+                map.serialize_entry("src", &e.src)?;
+                map.serialize_entry("rel", &e.rel)?;
+                map.serialize_entry("dst", &e.dst)?;
+                map.end()
+            }
+            Value::Int(i) => serializer.serialize_i64(*i),
+            Value::Float(f) => serializer.serialize_f64(*f),
+            Value::String(s) => serializer.serialize_str(s),
+            Value::Bool(b) => serializer.serialize_bool(*b),
+            Value::Null => serializer.serialize_none(),
+            Value::List(list) => {
+                let mut seq = serializer.serialize_seq(Some(list.len()))?;
+                for item in list {
+                    seq.serialize_element(item)?;
+                }
+                seq.end()
+            }
+            Value::DateTime(i) => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("type", "datetime")?;
+                map.serialize_entry("value", i)?;
+                map.end()
+            }
+            Value::Blob(_) => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("type", "blob")?;
+                map.serialize_entry("data", "<binary>")?;
+                map.end()
+            }
+            Value::Map(map) => {
+                let mut ser = serializer.serialize_map(Some(map.len()))?;
+                for (k, v) in map {
+                    ser.serialize_entry(k, v)?;
+                }
+                ser.end()
+            }
+            Value::Path(p) => {
+                let mut map = serializer.serialize_map(Some(3))?;
+                map.serialize_entry("type", "path")?;
+                map.serialize_entry("nodes", &p.nodes)?;
+                map.serialize_entry("edges", &p.edges)?;
+                map.end()
+            }
+            Value::Node(n) => {
+                let mut map = serializer.serialize_map(Some(3))?;
+                map.serialize_entry("type", "node")?;
+                map.serialize_entry("id", &n.id)?;
+                map.serialize_entry("labels", &n.labels)?;
+                map.end()
+            }
+            Value::Relationship(r) => {
+                let mut map = serializer.serialize_map(Some(4))?;
+                map.serialize_entry("type", "relationship")?;
+                map.serialize_entry("src", &r.key.src)?;
+                map.serialize_entry("rel", &r.key.rel)?;
+                map.serialize_entry("dst", &r.key.dst)?;
+                map.end()
+            }
+            Value::ReifiedPath(p) => {
+                let mut map = serializer.serialize_map(Some(3))?;
+                map.serialize_entry("type", "reified_path")?;
+                map.serialize_entry("nodes", &p.nodes)?;
+                map.serialize_entry("relationships", &p.relationships)?;
+                map.end()
+            }
+        }
+    }
 }
 
 impl Value {
