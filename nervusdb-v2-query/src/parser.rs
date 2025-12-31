@@ -93,9 +93,7 @@ impl TokenParser {
         }
 
         // Fail-fast on unsupported top-level clauses/keywords.
-        if self.peek().token_type == TokenType::Foreach {
-            return Err(Error::NotImplemented("FOREACH"));
-        }
+        // if self.peek().token_type == TokenType::Foreach { ... }
 
         if self.match_token(&TokenType::Optional) {
             self.consume(&TokenType::Match, "Expected MATCH after OPTIONAL")?;
@@ -133,6 +131,10 @@ impl TokenParser {
         }
         if self.check(&TokenType::Detach) || self.check(&TokenType::Delete) {
             return Ok(Some(Clause::Delete(self.parse_delete()?)));
+        }
+
+        if self.match_token(&TokenType::Foreach) {
+            return Ok(Some(Clause::Foreach(self.parse_foreach()?)));
         }
 
         if !self.is_at_end() {
@@ -654,6 +656,35 @@ impl TokenParser {
         }
 
         Ok(OrderByClause { items })
+    }
+
+    fn parse_foreach(&mut self) -> Result<ForeachClause, Error> {
+        self.consume(&TokenType::LeftParen, "Expected '(' after FOREACH")?;
+        let variable = self.parse_identifier("FOREACH variable")?;
+        self.consume(&TokenType::In, "Expected IN after FOREACH variable")?;
+        let list = self.parse_expression()?;
+        self.consume(&TokenType::Pipe, "Expected '|' after FOREACH list")?;
+
+        let mut updates = Vec::new();
+        while !self.check(&TokenType::RightParen) && !self.is_at_end() {
+             if let Some(clause) = self.parse_clause()? {
+                 match clause {
+                     Clause::Create(_) | Clause::Merge(_) | Clause::Set(_) | Clause::Delete(_) | Clause::Remove(_) | Clause::Foreach(_) => {
+                         updates.push(clause);
+                     }
+                     _ => return Err(Error::Other(format!("Invalid clause inside FOREACH: {:?}", clause))),
+                 }
+             } else {
+                 break;
+             }
+        }
+
+        self.consume(&TokenType::RightParen, "Expected ')' at end of FOREACH")?;
+        Ok(ForeachClause {
+            variable,
+            list,
+            updates,
+        })
     }
 
     fn parse_integer(&mut self, ctx: &'static str) -> Result<u32, Error> {

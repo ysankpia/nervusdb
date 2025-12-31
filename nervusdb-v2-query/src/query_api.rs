@@ -153,11 +153,11 @@ pub fn prepare(cypher: &str) -> Result<PreparedQuery> {
         }
         let (query, merge_subclauses) = crate::parser::Parser::parse_with_merge_subclauses(inner)?;
         let mut merge_subclauses = VecDeque::from(merge_subclauses);
-        let compiled = compile_m3_plan(query, &mut merge_subclauses)?;
+        let compiled = compile_m3_plan(query, &mut merge_subclauses, None)?;
         if !merge_subclauses.is_empty() {
-            return Err(Error::Other(
-                "internal error: unconsumed MERGE subclauses".into(),
-            ));
+             return Err(Error::Other(
+                 "internal error: unconsumed MERGE subclauses".into(),
+             ));
         }
         let explain = Some(render_plan(&compiled.plan));
         return Ok(PreparedQuery {
@@ -171,7 +171,7 @@ pub fn prepare(cypher: &str) -> Result<PreparedQuery> {
 
     let (query, merge_subclauses) = crate::parser::Parser::parse_with_merge_subclauses(cypher)?;
     let mut merge_subclauses = VecDeque::from(merge_subclauses);
-    let compiled = compile_m3_plan(query, &mut merge_subclauses)?;
+    let compiled = compile_m3_plan(query, &mut merge_subclauses, None)?;
     if !merge_subclauses.is_empty() {
         return Err(Error::Other(
             "internal error: unconsumed MERGE subclauses".into(),
@@ -215,6 +215,20 @@ fn render_plan(plan: &Plan) -> String {
             Plan::ReturnOne => {
                 let _ = writeln!(out, "{pad}ReturnOne");
             }
+            Plan::Values { rows } => {
+                let _ = writeln!(out, "{pad}Values(rows={})", rows.len());
+            }
+            Plan::Create { input, pattern } => {
+                let _ = writeln!(out, "{pad}Create(pattern={pattern:?})");
+                go(out, input, depth + 1);
+            }
+            Plan::Foreach { input, variable, list, sub_plan } => {
+                let _ = writeln!(out, "{pad}Foreach(var={variable}, list={list:?})");
+                go(out, input, depth + 1);
+                let _ = writeln!(out, "{pad}  SubPlan:");
+                go(out, sub_plan, depth + 2);
+            }
+
             Plan::NodeScan { alias, label } => {
                 let _ = writeln!(out, "{pad}NodeScan(alias={alias}, label={label:?})");
             }
@@ -390,9 +404,7 @@ fn render_plan(plan: &Plan) -> String {
                 let _ = writeln!(out, "{pad}Distinct");
                 go(out, input, depth + 1);
             }
-            Plan::Create { pattern } => {
-                let _ = writeln!(out, "{pad}Create(pattern={pattern:?})");
-            }
+
             Plan::Delete {
                 input,
                 detach,
@@ -456,8 +468,9 @@ struct CompiledQuery {
 fn compile_m3_plan(
     query: Query,
     merge_subclauses: &mut VecDeque<crate::parser::MergeSubclauses>,
+    initial_input: Option<Plan>,
 ) -> Result<CompiledQuery> {
-    let mut plan: Option<Plan> = None;
+    let mut plan: Option<Plan> = initial_input;
     let mut clauses = query.clauses.iter().peekable();
     let mut write_semantics = WriteSemantics::Default;
     let mut merge_on_create_items: Vec<(String, String, Expression)> = Vec::new();
@@ -522,7 +535,7 @@ fn compile_m3_plan(
             Clause::Call(c) => match c {
                 CallClause::Subquery(sub_query) => {
                     let input = plan.unwrap_or(Plan::ReturnOne);
-                    let sub_query_compiled = compile_m3_plan(sub_query.clone(), merge_subclauses)?;
+                    let sub_query_compiled = compile_m3_plan(sub_query.clone(), merge_subclauses, None)?;
                     plan = Some(Plan::Apply {
                         input: Box::new(input),
                         subquery: Box::new(sub_query_compiled.plan),
@@ -575,24 +588,8 @@ fn compile_m3_plan(
                 }
             }
             Clause::Create(c) => {
-                // CREATE can start a query or follow others.
-                if plan.is_none() {
-                    plan = Some(compile_create_plan(c.clone())?);
-                } else {
-                    // Creating in context (after MATCH/WITH)
-                    // Plan::Create needs to support input?
-                    // Existing Plan::Create { pattern } might be standalone?
-                    // We need Plan::Create to be "Create and Pass Through".
-                    // Ideally: Plan::Create { input, pattern }.
-                    // But let's check definition of Plan::Create.
-                    // It likely doesn't have input.
-                    // If it doesn't, we can't chain it yet.
-                    // T305 focus is WITH. Let's block chaining CREATE for now unless it's first?
-                    // Or check if we can modify Plan.
-                    return Err(Error::NotImplemented(
-                        "Chained CREATE not supported yet (v2 M3)",
-                    ));
-                }
+                let input = plan.unwrap_or(Plan::ReturnOne);
+                plan = Some(compile_create_plan(input, c.clone())?);
             }
             Clause::Merge(m) => {
                 write_semantics = WriteSemantics::Merge;
@@ -603,7 +600,7 @@ fn compile_m3_plan(
                     let merge_vars = extract_merge_pattern_vars(&m.pattern);
                     merge_on_create_items = compile_merge_set_items(&merge_vars, sub.on_create)?;
                     merge_on_match_items = compile_merge_set_items(&merge_vars, sub.on_match)?;
-                    plan = Some(compile_merge_plan(m.clone())?);
+                    plan = Some(compile_merge_plan(Plan::ReturnOne, m.clone())?);
                 } else {
                     return Err(Error::NotImplemented("Chained MERGE not supported yet"));
                 }
@@ -633,12 +630,16 @@ fn compile_m3_plan(
                 // UNION logic: current plan is the "left" side; the clause's nested query is the "right" side
                 let left_plan =
                     plan.ok_or_else(|| Error::Other("UNION requires left query part".into()))?;
-                let right_compiled = compile_m3_plan(u.query.clone(), merge_subclauses)?;
+                let right_compiled = compile_m3_plan(u.query.clone(), merge_subclauses, None)?;
                 plan = Some(Plan::Union {
                     left: Box::new(left_plan),
                     right: Box::new(right_compiled.plan),
                     all: u.all,
                 });
+            }
+            Clause::Foreach(f) => {
+                 let input = plan.unwrap_or(Plan::ReturnOne);
+                 plan = Some(compile_foreach_plan(input, f.clone(), merge_subclauses)?);
             }
         }
     }
@@ -975,7 +976,7 @@ fn compile_delete_plan_v2(input: Plan, delete: crate::ast::DeleteClause) -> Resu
     })
 }
 
-fn compile_create_plan(create_clause: crate::ast::CreateClause) -> Result<Plan> {
+fn compile_create_plan(input: Plan, create_clause: crate::ast::CreateClause) -> Result<Plan> {
     // M3 CREATE supports:
     // - CREATE (n {prop: val}) - single node with properties
     // - CREATE (n)-[:rel]->(m) - single-hop pattern
@@ -995,11 +996,12 @@ fn compile_create_plan(create_clause: crate::ast::CreateClause) -> Result<Plan> 
     }
 
     Ok(Plan::Create {
+        input: Box::new(input),
         pattern: create_clause.pattern,
     })
 }
 
-fn compile_merge_plan(merge_clause: crate::ast::MergeClause) -> Result<Plan> {
+fn compile_merge_plan(input: Plan, merge_clause: crate::ast::MergeClause) -> Result<Plan> {
     let pattern = merge_clause.pattern;
     if pattern.elements.is_empty() {
         return Err(Error::Other("MERGE pattern cannot be empty".into()));
@@ -1068,7 +1070,10 @@ fn compile_merge_plan(merge_clause: crate::ast::MergeClause) -> Result<Plan> {
         }
     }
 
-    Ok(Plan::Create { pattern })
+    Ok(Plan::Create { 
+        input: Box::new(input),
+        pattern: pattern 
+    })
 }
 
 fn compile_match_plan(
@@ -1494,12 +1499,16 @@ fn extract_output_vars(plan: &Plan, vars: &mut BTreeSet<String>) {
         } => {
             vars.insert(alias.clone());
             extract_output_vars(fallback, vars);
+
         }
-        Plan::Create { .. }
-        | Plan::Delete { .. }
-        | Plan::SetProperty { .. }
-        | Plan::RemoveProperty { .. } => {
-            // Update operations don't currently introduce new variables used for joins in v2
+        Plan::Foreach { input, .. } => extract_output_vars(input, vars),
+        Plan::Values { .. } => {}
+        Plan::Create { input, pattern } => {
+            extract_output_vars(input, vars);
+            vars.extend(extract_merge_pattern_vars(pattern));
+        }
+        Plan::Delete { input, .. } | Plan::SetProperty { input, .. } | Plan::RemoveProperty { input, .. } => {
+            extract_output_vars(input, vars);
         }
     }
 }
@@ -1625,4 +1634,27 @@ fn extract_variables_from_expr(expr: &Expression, vars: &mut std::collections::H
         }
         _ => {}
     }
+}
+
+fn compile_foreach_plan(
+    input: Plan,
+    foreach: crate::ast::ForeachClause,
+    merge_subclauses: &mut VecDeque<crate::parser::MergeSubclauses>,
+) -> Result<Plan> {
+    // Compile updates sub-plan with a placeholder input
+    let initial_input = Some(Plan::Values { rows: vec![] });
+    
+    // Wrap updates in a Query structure for compilation
+    let sub_query = Query {
+        clauses: foreach.updates,
+    };
+    
+    let compiled_sub = compile_m3_plan(sub_query, merge_subclauses, initial_input)?;
+    
+    Ok(Plan::Foreach {
+        input: Box::new(input),
+        variable: foreach.variable,
+        list: foreach.list,
+        sub_plan: Box::new(compiled_sub.plan),
+    })
 }

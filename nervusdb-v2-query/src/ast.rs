@@ -19,6 +19,7 @@ pub enum Clause {
     Remove(RemoveClause),
     Delete(DeleteClause),
     Union(UnionClause),
+    Foreach(ForeachClause),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -66,6 +67,13 @@ pub struct YieldItem {
 pub struct UnionClause {
     pub all: bool,
     pub query: Query,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ForeachClause {
+    pub variable: String,
+    pub list: Expression,
+    pub updates: Vec<Clause>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
