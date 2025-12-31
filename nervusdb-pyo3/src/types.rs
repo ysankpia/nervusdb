@@ -1,5 +1,42 @@
+use nervusdb_v2_api::InternalNodeId;
 use nervusdb_v2_query::Value;
 use pyo3::prelude::*;
+use std::collections::BTreeMap;
+
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct Node {
+    #[pyo3(get)]
+    pub id: u64,
+    #[pyo3(get)]
+    pub labels: Vec<String>,
+    #[pyo3(get)]
+    pub properties: BTreeMap<String, PyObject>,
+}
+
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct Relationship {
+    #[pyo3(get)]
+    pub id: Option<u64>,
+    #[pyo3(get)]
+    pub start_node_id: u64,
+    #[pyo3(get)]
+    pub end_node_id: u64,
+    #[pyo3(get)]
+    pub rel_type: String,
+    #[pyo3(get)]
+    pub properties: BTreeMap<String, PyObject>,
+}
+
+#[pyclass]
+#[derive(Debug, Clone)]
+pub struct Path {
+    #[pyo3(get)]
+    pub nodes: Vec<Node>,
+    #[pyo3(get)]
+    pub relationships: Vec<Relationship>,
+}
 
 /// Convert a generic Python object to a NervusDB Value.
 pub fn py_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
@@ -68,7 +105,94 @@ pub fn value_to_py(val: Value, py: Python<'_>) -> Py<PyAny> {
             }
             py_dict.into()
         }
-        // Handle other types if necessary
+        Value::Node(n) => {
+            let mut props = BTreeMap::new();
+            for (k, v) in n.properties {
+                props.insert(k, value_to_py(v, py));
+            }
+            Node {
+                id: n.id.0,
+                labels: n.labels,
+                properties: props,
+            }
+            .into_py(py)
+        }
+        Value::Relationship(r) => {
+            let mut props = BTreeMap::new();
+            for (k, v) in r.properties {
+                props.insert(k, value_to_py(v, py));
+            }
+            Relationship {
+                id: r.id.map(|k| k.src ^ k.dst ^ 0x0102030405060708), // Dummy stable ID for now
+                start_node_id: r.start.0,
+                end_node_id: r.end.0,
+                rel_type: r.rel_type,
+                properties: props,
+            }
+            .into_py(py)
+        }
+        Value::ReifiedPath(p) => {
+            let nodes = p
+                .nodes
+                .into_iter()
+                .map(|n| {
+                    let mut props = BTreeMap::new();
+                    for (k, v) in n.properties {
+                        props.insert(k, value_to_py(v, py));
+                    }
+                    Node {
+                        id: n.id.0,
+                        labels: n.labels,
+                        properties: props,
+                    }
+                })
+                .collect();
+            let rels = p
+                .relationships
+                .into_iter()
+                .map(|r| {
+                    let mut props = BTreeMap::new();
+                    for (k, v) in r.properties {
+                        props.insert(k, value_to_py(v, py));
+                    }
+                    Relationship {
+                        id: r.id.map(|k| k.src ^ k.dst ^ 0x0102030405060708),
+                        start_node_id: r.start.0,
+                        end_node_id: r.end.0,
+                        rel_type: r.rel_type,
+                        properties: props,
+                    }
+                })
+                .collect();
+            Path {
+                nodes,
+                relationships: rels,
+            }
+            .into_py(py)
+        }
+        Value::NodeId(id) => id.0.into_py(py),
+        Value::EdgeKey(key) => format!("{key:?}").into_py(py),
+        Value::Path(p) => {
+            // Deprecated Path representation, but let's keep it for compatibility if needed
+            let mut out = BTreeMap::new();
+            out.insert(
+                "nodes".to_string(),
+                p.nodes
+                    .iter()
+                    .map(|id| id.0)
+                    .collect::<Vec<_>>()
+                    .into_py(py),
+            );
+            out.insert(
+                "edges".to_string(),
+                p.edges
+                    .iter()
+                    .map(|k| format!("{k:?}"))
+                    .collect::<Vec<_>>()
+                    .into_py(py),
+            );
+            out.into_py(py)
+        }
         _ => py.None(),
     }
 }

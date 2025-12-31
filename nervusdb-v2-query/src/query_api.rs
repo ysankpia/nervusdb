@@ -1161,6 +1161,7 @@ fn compile_pattern_chain(
         .to_string();
     let src_label = src_node_el.labels.first().cloned();
 
+    let mut local_predicates = predicates.clone();
     let mut plan = if let Some(existing_plan) = input {
         // Expansion Join: src_alias must be in known_vars
         if !known_vars.contains(&src_alias) {
@@ -1170,52 +1171,16 @@ fn compile_pattern_chain(
             )));
         }
 
-        let mut cur_plan = existing_plan;
-
         // Apply filters for inline properties of this node
-        let mut local_predicates = predicates.clone();
         extend_predicates_from_properties(
             &src_alias,
             &src_node_el.properties,
             &mut local_predicates,
         );
 
-        if let Some(var_preds) = local_predicates.get(&src_alias) {
-            let mut combined_pred: Option<Expression> = None;
-            for (field, val_expr) in var_preds {
-                let prop_access = Expression::PropertyAccess(crate::ast::PropertyAccess {
-                    variable: src_alias.clone(),
-                    property: field.clone(),
-                });
-                let eq_expr = Expression::Binary(Box::new(crate::ast::BinaryExpression {
-                    operator: crate::ast::BinaryOperator::Equals,
-                    left: prop_access,
-                    right: val_expr.clone(),
-                }));
-
-                combined_pred = match combined_pred {
-                    Some(prev) => {
-                        Some(Expression::Binary(Box::new(crate::ast::BinaryExpression {
-                            operator: crate::ast::BinaryOperator::And,
-                            left: prev,
-                            right: eq_expr,
-                        })))
-                    }
-                    None => Some(eq_expr),
-                };
-            }
-
-            if let Some(predicate) = combined_pred {
-                cur_plan = Plan::Filter {
-                    input: Box::new(cur_plan),
-                    predicate,
-                };
-            }
-        }
-        cur_plan
+        apply_filters_for_alias(existing_plan, &src_alias, &local_predicates)
     } else {
         // Build Initial Plan (Scan or IndexSeek)
-        let mut local_predicates = predicates.clone();
         extend_predicates_from_properties(
             &src_alias,
             &src_node_el.properties,
@@ -1241,41 +1206,7 @@ fn compile_pattern_chain(
             };
         }
 
-        // Apply filter for all properties
-        if let Some(var_preds) = local_predicates.get(&src_alias) {
-            let mut combined_pred: Option<Expression> = None;
-            for (field, val_expr) in var_preds {
-                let prop_access = Expression::PropertyAccess(crate::ast::PropertyAccess {
-                    variable: src_alias.clone(),
-                    property: field.clone(),
-                });
-                let eq_expr = Expression::Binary(Box::new(crate::ast::BinaryExpression {
-                    operator: crate::ast::BinaryOperator::Equals,
-                    left: prop_access,
-                    right: val_expr.clone(),
-                }));
-
-                combined_pred = match combined_pred {
-                    Some(prev) => {
-                        Some(Expression::Binary(Box::new(crate::ast::BinaryExpression {
-                            operator: crate::ast::BinaryOperator::And,
-                            left: prev,
-                            right: eq_expr,
-                        })))
-                    }
-                    None => Some(eq_expr),
-                };
-            }
-
-            if let Some(predicate) = combined_pred {
-                start_plan = Plan::Filter {
-                    input: Box::new(start_plan),
-                    predicate,
-                };
-            }
-        }
-
-        start_plan
+        apply_filters_for_alias(start_plan, &src_alias, &local_predicates)
     };
 
     // Subsequent hops
@@ -1314,7 +1245,7 @@ fn compile_pattern_chain(
                         input: Some(Box::new(plan)),
                         src_alias: curr_src_alias.clone(),
                         dst_alias: dst_alias.clone(),
-                        edge_alias,
+                        edge_alias: edge_alias.clone(),
                         rels: rel_types,
                         min_hops: var_len.min.unwrap_or(1),
                         max_hops: var_len.max,
@@ -1338,7 +1269,7 @@ fn compile_pattern_chain(
                         input: Some(Box::new(plan)),
                         src_alias: curr_src_alias.clone(),
                         dst_alias: dst_alias.clone(),
-                        edge_alias,
+                        edge_alias: edge_alias.clone(),
                         rels: rel_types,
                         limit: None,
                         project: Vec::new(),
@@ -1352,7 +1283,7 @@ fn compile_pattern_chain(
                         input: Some(Box::new(plan)),
                         src_alias: curr_src_alias.clone(),
                         dst_alias: dst_alias.clone(),
-                        edge_alias,
+                        edge_alias: edge_alias.clone(),
                         rels: rel_types,
                         limit: None,
                         optional,
@@ -1364,7 +1295,7 @@ fn compile_pattern_chain(
                         input: Some(Box::new(plan)),
                         src_alias: curr_src_alias.clone(),
                         dst_alias: dst_alias.clone(),
-                        edge_alias,
+                        edge_alias: edge_alias.clone(),
                         rels: rel_types,
                         limit: None,
                         optional,
@@ -1374,11 +1305,65 @@ fn compile_pattern_chain(
             }
         }
 
+        // Extract properties from dst node and relationship
+        extend_predicates_from_properties(
+            &dst_alias,
+            &dst_node_el.properties,
+            &mut local_predicates,
+        );
+        if let Some(ea) = &edge_alias {
+            extend_predicates_from_properties(ea, &rel_el.properties, &mut local_predicates);
+        }
+
+        // Apply filters
+        plan = apply_filters_for_alias(plan, &dst_alias, &local_predicates);
+        if let Some(ea) = &edge_alias {
+            plan = apply_filters_for_alias(plan, ea, &local_predicates);
+        }
+
         curr_src_alias = dst_alias;
         i += 2;
     }
 
     Ok(plan)
+}
+
+fn apply_filters_for_alias(
+    plan: Plan,
+    alias: &str,
+    local_predicates: &BTreeMap<String, BTreeMap<String, Expression>>,
+) -> Plan {
+    if let Some(var_preds) = local_predicates.get(alias) {
+        let mut combined_pred: Option<Expression> = None;
+        for (field, val_expr) in var_preds {
+            let prop_access = Expression::PropertyAccess(crate::ast::PropertyAccess {
+                variable: alias.to_string(),
+                property: field.clone(),
+            });
+            let eq_expr = Expression::Binary(Box::new(crate::ast::BinaryExpression {
+                operator: crate::ast::BinaryOperator::Equals,
+                left: prop_access,
+                right: val_expr.clone(),
+            }));
+
+            combined_pred = match combined_pred {
+                Some(prev) => Some(Expression::Binary(Box::new(crate::ast::BinaryExpression {
+                    operator: crate::ast::BinaryOperator::And,
+                    left: prev,
+                    right: eq_expr,
+                }))),
+                None => Some(eq_expr),
+            };
+        }
+
+        if let Some(predicate) = combined_pred {
+            return Plan::Filter {
+                input: Box::new(plan),
+                predicate,
+            };
+        }
+    }
+    plan
 }
 
 /// Helper to convert inline map properties to predicates

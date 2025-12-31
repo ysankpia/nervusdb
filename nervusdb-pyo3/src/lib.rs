@@ -33,6 +33,9 @@ fn nervusdb_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(open, m)?)?;
     m.add_class::<Db>()?;
     m.add_class::<WriteTxn>()?;
+    m.add_class::<types::Node>()?;
+    m.add_class::<types::Relationship>()?;
+    m.add_class::<types::Path>()?;
     m.add("__version__", "2.0.0")?;
     Ok(())
 }

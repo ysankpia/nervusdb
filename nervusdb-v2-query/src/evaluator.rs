@@ -1,7 +1,7 @@
 use crate::ast::{BinaryOperator, Expression, Literal, UnaryOperator};
-use crate::executor::{Row, Value};
+use crate::executor::{Row, Value, convert_api_property_to_value};
 use crate::query_api::Params;
-use nervusdb_v2_api::{GraphSnapshot, PropertyValue as ApiPropertyValue};
+use nervusdb_v2_api::GraphSnapshot;
 
 /// Evaluate an expression to a boolean value (for WHERE clauses).
 pub fn evaluate_expression_bool<S: GraphSnapshot>(
@@ -589,25 +589,5 @@ fn numeric_pow(left: &Value, right: &Value) -> Value {
         (Value::Float(l), Value::Int(r)) => Value::Float(l.powf(*r as f64)),
         (Value::Float(l), Value::Float(r)) => Value::Float(l.powf(*r)),
         _ => Value::Null,
-    }
-}
-
-fn convert_api_property_to_value(api_value: &ApiPropertyValue) -> Value {
-    match api_value {
-        ApiPropertyValue::Null => Value::Null,
-        ApiPropertyValue::Bool(b) => Value::Bool(*b),
-        ApiPropertyValue::Int(i) => Value::Int(*i),
-        ApiPropertyValue::Float(f) => Value::Float(*f),
-        ApiPropertyValue::String(s) => Value::String(s.clone()),
-        ApiPropertyValue::DateTime(i) => Value::DateTime(*i),
-        ApiPropertyValue::Blob(b) => Value::Blob(b.clone()),
-        ApiPropertyValue::List(l) => {
-            Value::List(l.iter().map(convert_api_property_to_value).collect())
-        }
-        ApiPropertyValue::Map(m) => Value::Map(
-            m.iter()
-                .map(|(k, v)| (k.clone(), convert_api_property_to_value(v)))
-                .collect(),
-        ),
     }
 }
