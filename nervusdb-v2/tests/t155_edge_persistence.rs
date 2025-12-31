@@ -50,10 +50,10 @@ fn test_edge_property_persistence() {
     // 2. Verify in L0Run
     {
         let snap = db.snapshot();
-        let p_since = snap.edge_property(edge_key.clone(), "since").unwrap();
+        let p_since = snap.edge_property(edge_key, "since").unwrap();
         assert_eq!(p_since, PropertyValue::Int(2023));
 
-        let props = snap.edge_properties(edge_key.clone()).unwrap();
+        let props = snap.edge_properties(edge_key).unwrap();
         assert_eq!(props.get("since").unwrap(), &PropertyValue::Int(2023));
         assert_eq!(props.get("strength").unwrap(), &PropertyValue::Float(0.9));
     }
@@ -65,12 +65,12 @@ fn test_edge_property_persistence() {
     {
         let snap = db.snapshot();
         let p_since = snap
-            .edge_property(edge_key.clone(), "since")
+            .edge_property(edge_key, "since")
             .expect("Edge property 'since' should be found after compaction");
         assert_eq!(p_since, PropertyValue::Int(2023));
 
         let props = snap
-            .edge_properties(edge_key.clone())
+            .edge_properties(edge_key)
             .expect("Edge properties should be found after compaction");
         assert_eq!(props.get("since").unwrap(), &PropertyValue::Int(2023));
         assert_eq!(props.get("strength").unwrap(), &PropertyValue::Float(0.9));
@@ -81,7 +81,7 @@ fn test_edge_property_persistence() {
     let db = Db::open(dir.path()).unwrap();
     {
         let snap = db.snapshot();
-        let p_since = snap.edge_property(edge_key.clone(), "since").unwrap();
+        let p_since = snap.edge_property(edge_key, "since").unwrap();
         assert_eq!(p_since, PropertyValue::Int(2023));
     }
 }

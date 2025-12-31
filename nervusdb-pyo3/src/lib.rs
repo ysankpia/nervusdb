@@ -1,4 +1,5 @@
 //! Python bindings for NervusDB v2
+#![allow(clippy::useless_conversion)]
 //!
 //! ```python
 //! import nervusdb
