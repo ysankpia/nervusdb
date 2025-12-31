@@ -37,6 +37,36 @@
 | **Phase 3**   | **Tech Debt Resolution**                              |        |        |                             |                                                          |
 | T206          | [Storage] B-Tree Incremental Delete                   | Medium | Done   | feat/T202-T203-integration  | Replace `delete_exact_rebuild` with in-place delete      |
 | T207          | [Query] Executor Optimization                         | Medium | Done   | feat/T202-T203-integration  | Enum-based iterator to reduce dynamic dispatch           |
+| **Phase 4**   | **Cypher Full Support**                              |        |        |                             |                                                          |
+| T300          | [Query] Define “Full Cypher” Contract + TCK Gate      | High   | Plan   | feat/T300-cypher-full       | Design doc + CI gate (parse-only → exec)                 |
+| T301          | [Query] Implement Arithmetic Expressions (+,-,*,/,%,^) | Medium | Plan   | feat/T301-arithmetic        | Support numeric calculations in queries                   |
+| T302          | [Query] Implement String Operations (STARTS/ENDS/CONTAINS) | Medium | Plan   | feat/T302-string-ops        | Enable text search and pattern matching                   |
+| T303          | [Query] Implement IN Operator                        | Low    | Plan   | feat/T303-in-operator       | Array membership testing                                  |
+| T304          | [Query] Implement REMOVE Clause                      | Low    | Plan   | feat/T304-remove-clause     | Delete properties from nodes/edges                        |
+| T305          | [Query] Implement WITH Clause                        | High   | Plan   | feat/T305-with-clause       | Multi-stage query pipeline                               |
+| T306          | [Query] Implement UNWIND Clause                      | Medium | Plan   | feat/T306-unwind-clause     | Array expansion and iteration                            |
+| T307          | [Query] Implement UNION (ALL)                        | Medium | Plan   | feat/T307-union             | Merge result sets from multiple queries                  |
+| T308          | [Query] Implement CASE Expression                     | Medium | Plan   | feat/T308-case-expr         | Conditional logic in SELECT                              |
+| T309          | [Query] Implement EXISTS Subquery/Operator           | Low    | Plan   | feat/T309-exists            | Pattern existence testing                                 |
+| T310          | [Docs] Update cypher_support.md                      | High   | Plan   | feat/T310-docs-update       | Fix OPTIONAL MATCH and aggregation docs                   |
+| T311          | [Query] Support RETURN/WITH Expressions (Projection)  | High   | Plan   | feat/T311-projection-expr   | Allow computed columns, not only variables/aggregates     |
+| T312          | [Query] Expression Precedence + Unary (NOT/Negate)    | High   | Plan   | feat/T312-expr-precedence   | Full expression parser + evaluator semantics              |
+| T313          | [Query] Built-in Functions (String/Math/List/Type)    | High   | Plan   | feat/T313-functions         | toUpper/substring/size/coalesce/...                       |
+| T314          | [Query] Generalize Patterns (multi-hop > 3 elements)  | High   | Plan   | feat/T314-pattern-general   | Multi-hop patterns + multiple relationships               |
+| T315          | [Query] Support `<-` and Undirected `-` Patterns      | High   | Plan   | feat/T315-direction         | Incoming/undirected expansion semantics                   |
+| T316          | [Query] Relationship Type Alternation (`:A|B`)        | Medium | Plan   | feat/T316-type-alternation  | Parser+planner+executor support                           |
+| T317          | [Query] Multiple MATCH Parts & Join Semantics         | High   | Plan   | feat/T317-joins             | Inner/left join + cartesian product rules                |
+| T318          | [Query] Path Values + Path Functions                  | High   | Plan   | feat/T318-path-values       | `p=...`, length(), nodes(), relationships()               |
+| T319          | [Query] CALL { ... } Subquery (Apply)                 | High   | Plan   | feat/T319-subquery          | Subquery scope + correlated apply                         |
+| T320          | [Query] Procedure CALL/YIELD (NervusDB Extensions)    | High   | Plan   | feat/T320-procedures        | e.g. `CALL vector.search(...) YIELD ...`                  |
+| T321          | [Storage/API] Incoming Neighbors Support              | High   | Plan   | feat/T321-incoming          | Disk format + snapshot API extension                      |
+| T322          | [Storage/API] Multi-Label Model + SET/REMOVE Labels   | High   | Plan   | feat/T322-multi-label       | Storage + query semantics                                 |
+| T323          | [Query] MERGE Full Semantics (ON CREATE/ON MATCH)     | High   | Plan   | feat/T323-merge-semantics   | Cypher-complete MERGE behavior                             |
+| T324          | [Query] FOREACH Clause                                | Medium | Plan   | feat/T324-foreach           | Iterative updates                                         |
+| T325          | [Query] Pattern Properties Rewrite (Pattern → WHERE)  | Medium | Plan   | feat/T325-pattern-props     | Accept `(n {k:v})` by lowering into predicates            |
+| T326          | [CI] Integrate openCypher TCK Harness                 | High   | Plan   | feat/T326-tck               | Parse-only gate → Exec gate                               |
+| T327          | [Tool] Cypher Fuzz (Parser/Planner/Executor)          | Medium | Plan   | feat/T327-fuzz              | Find panics + semantic mismatches                          |
+| T328          | [Binding] Output Model Upgrade (Node/Rel/Path Values) | High   | Plan   | feat/T328-output-model      | Align CLI/Python with Cypher value semantics              |
 
 ## Archived (v1/Alpha)
 

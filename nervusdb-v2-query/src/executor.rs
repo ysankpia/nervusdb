@@ -191,6 +191,11 @@ pub enum Plan {
         input: Box<Plan>,
         items: Vec<(String, String, Expression)>, // (variable, key, value_expression)
     },
+    /// `REMOVE n.prop` - remove properties from nodes/edges
+    RemoveProperty {
+        input: Box<Plan>,
+        items: Vec<(String, String)>, // (variable, key)
+    },
     /// `IndexSeek` - optimize scan using index if available, else fallback
     IndexSeek {
         alias: String,
@@ -520,6 +525,12 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                 "SET must be executed via execute_write".into(),
             )))))
         }
+        Plan::RemoveProperty { .. } => {
+            // REMOVE should be executed via execute_write, not execute_plan
+            PlanIterator::Dynamic(Box::new(std::iter::once(Err(Error::Other(
+                "REMOVE must be executed via execute_write".into(),
+            )))))
+        }
         Plan::IndexSeek {
             alias,
             label,
@@ -565,7 +576,7 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
     }
 }
 
-/// Execute a write plan (CREATE/DELETE/SET) with a transaction
+/// Execute a write plan (CREATE/DELETE/SET/REMOVE) with a transaction
 pub fn execute_write<S: GraphSnapshot>(
     plan: &Plan,
     snapshot: &S,
@@ -580,8 +591,11 @@ pub fn execute_write<S: GraphSnapshot>(
             expressions,
         } => execute_delete(snapshot, input, txn, *detach, expressions, params),
         Plan::SetProperty { input, items } => execute_set(snapshot, input, txn, items, params),
+        Plan::RemoveProperty { input, items } => {
+            execute_remove(snapshot, input, txn, items, params)
+        }
         _ => Err(Error::Other(
-            "Only CREATE, DELETE, and SET plans can be executed with execute_write".into(),
+            "Only CREATE, DELETE, SET, and REMOVE plans can be executed with execute_write".into(),
         )),
     }
 }
@@ -835,6 +849,14 @@ pub trait WriteableGraph {
         key: String,
         value: PropertyValue,
     ) -> Result<()>;
+    fn remove_node_property(&mut self, node: InternalNodeId, key: &str) -> Result<()>;
+    fn remove_edge_property(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+        key: &str,
+    ) -> Result<()>;
     fn tombstone_node(&mut self, node: InternalNodeId) -> Result<()>;
     fn tombstone_edge(
         &mut self,
@@ -895,6 +917,22 @@ mod txn_engine_impl {
             value: PropertyValue,
         ) -> Result<()> {
             EngineWriteTxn::set_edge_property(self, src, rel, dst, key, value);
+            Ok(())
+        }
+
+        fn remove_node_property(&mut self, node: InternalNodeId, key: &str) -> Result<()> {
+            EngineWriteTxn::remove_node_property(self, node, key);
+            Ok(())
+        }
+
+        fn remove_edge_property(
+            &mut self,
+            src: InternalNodeId,
+            rel: RelTypeId,
+            dst: InternalNodeId,
+            key: &str,
+        ) -> Result<()> {
+            EngineWriteTxn::remove_edge_property(self, src, rel, dst, key);
             Ok(())
         }
 
@@ -1145,6 +1183,30 @@ fn execute_set<S: GraphSnapshot>(
                 txn.set_node_property(node_id, key.clone(), prop_val)?;
             } else if let Some(edge) = row.get_edge(var) {
                 txn.set_edge_property(edge.src, edge.rel, edge.dst, key.clone(), prop_val)?;
+            } else {
+                return Err(Error::Other(format!("Variable {} not found in row", var)));
+            }
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+fn execute_remove<S: GraphSnapshot>(
+    snapshot: &S,
+    input: &Plan,
+    txn: &mut dyn WriteableGraph,
+    items: &[(String, String)],
+    params: &crate::query_api::Params,
+) -> Result<u32> {
+    let mut count = 0;
+    for row in execute_plan(snapshot, input, params) {
+        let row = row?;
+        for (var, key) in items {
+            if let Some(node_id) = row.get_node(var) {
+                txn.remove_node_property(node_id, key)?;
+            } else if let Some(edge) = row.get_edge(var) {
+                txn.remove_edge_property(edge.src, edge.rel, edge.dst, key)?;
             } else {
                 return Err(Error::Other(format!("Variable {} not found in row", var)));
             }

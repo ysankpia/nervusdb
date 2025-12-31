@@ -507,6 +507,26 @@ impl nervusdb_v2_query::WriteableGraph for WriteTxn<'_> {
         Ok(())
     }
 
+    fn remove_node_property(
+        &mut self,
+        node: InternalNodeId,
+        key: &str,
+    ) -> nervusdb_v2_query::Result<()> {
+        self.inner.remove_node_property(node, key);
+        Ok(())
+    }
+
+    fn remove_edge_property(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+        key: &str,
+    ) -> nervusdb_v2_query::Result<()> {
+        self.inner.remove_edge_property(src, rel, dst, key);
+        Ok(())
+    }
+
     fn tombstone_node(&mut self, node: InternalNodeId) -> nervusdb_v2_query::Result<()> {
         self.inner.tombstone_node(node);
         Ok(())

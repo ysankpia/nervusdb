@@ -12,6 +12,10 @@ pub struct MemTable {
     node_properties: HashMap<InternalNodeId, HashMap<String, PropertyValue>>,
     // Edge properties: edge_key -> { key -> value }
     edge_properties: HashMap<EdgeKey, HashMap<String, PropertyValue>>,
+    // Removed node properties: node_id -> set of keys
+    removed_node_properties: HashMap<InternalNodeId, BTreeSet<String>>,
+    // Removed edge properties: edge_key -> set of keys
+    removed_edge_properties: HashMap<EdgeKey, BTreeSet<String>>,
 }
 
 impl MemTable {
@@ -40,7 +44,11 @@ impl MemTable {
         self.node_properties
             .entry(node)
             .or_default()
-            .insert(key, value);
+            .insert(key.clone(), value);
+        // If we set a property, ensure it's not marked as removed in this tx
+        if let Some(removed) = self.removed_node_properties.get_mut(&node) {
+            removed.remove(&key);
+        }
     }
 
     pub fn remove_node_property(&mut self, node: InternalNodeId, key: &str) {
@@ -50,6 +58,10 @@ impl MemTable {
                 self.node_properties.remove(&node);
             }
         }
+        self.removed_node_properties
+            .entry(node)
+            .or_default()
+            .insert(key.to_string());
     }
 
     pub fn set_edge_property(
@@ -64,7 +76,11 @@ impl MemTable {
         self.edge_properties
             .entry(edge)
             .or_default()
-            .insert(key, value);
+            .insert(key.clone(), value);
+        // If we set, un-remove
+        if let Some(removed) = self.removed_edge_properties.get_mut(&edge) {
+            removed.remove(&key);
+        }
     }
 
     pub fn remove_edge_property(
@@ -81,6 +97,31 @@ impl MemTable {
                 self.edge_properties.remove(&edge);
             }
         }
+        self.removed_edge_properties
+            .entry(edge)
+            .or_default()
+            .insert(key.to_string());
+    }
+
+    /// Get removed node properties for WAL writing.
+    pub fn removed_node_properties_for_wal(&self) -> Vec<(InternalNodeId, String)> {
+        self.removed_node_properties
+            .iter()
+            .flat_map(|(node, keys)| keys.iter().map(move |key| (*node, key.clone())))
+            .collect()
+    }
+
+    /// Get removed edge properties for WAL writing.
+    pub fn removed_edge_properties_for_wal(
+        &self,
+    ) -> Vec<(InternalNodeId, RelTypeId, InternalNodeId, String)> {
+        self.removed_edge_properties
+            .iter()
+            .flat_map(|(edge, keys)| {
+                keys.iter()
+                    .map(move |key| (edge.src, edge.rel, edge.dst, key.clone()))
+            })
+            .collect()
     }
 
     /// Get all node properties for WAL writing.
@@ -140,6 +181,8 @@ impl MemTable {
             self.tombstoned_edges,
             node_properties,
             edge_properties,
+            self.removed_node_properties.into_iter().collect(), // HashMap -> BTreeMap
+            self.removed_edge_properties.into_iter().collect(), // HashMap -> BTreeMap
         )
     }
 }

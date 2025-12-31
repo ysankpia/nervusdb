@@ -23,6 +23,10 @@ pub struct L0Run {
     pub(crate) node_properties: BTreeMap<InternalNodeId, BTreeMap<String, PropertyValue>>,
     // Edge properties: edge_key -> { key -> value }
     pub(crate) edge_properties: BTreeMap<EdgeKey, BTreeMap<String, PropertyValue>>,
+    // Tombstoned node properties: node_id -> set of keys
+    pub(crate) tombstoned_node_properties: BTreeMap<InternalNodeId, BTreeSet<String>>,
+    // Tombstoned edge properties: edge_key -> set of keys
+    pub(crate) tombstoned_edge_properties: BTreeMap<EdgeKey, BTreeSet<String>>,
 }
 
 impl L0Run {
@@ -33,6 +37,8 @@ impl L0Run {
         tombstoned_edges: BTreeSet<EdgeKey>,
         node_properties: BTreeMap<InternalNodeId, BTreeMap<String, PropertyValue>>,
         edge_properties: BTreeMap<EdgeKey, BTreeMap<String, PropertyValue>>,
+        tombstoned_node_properties: BTreeMap<InternalNodeId, BTreeSet<String>>,
+        tombstoned_edge_properties: BTreeMap<EdgeKey, BTreeSet<String>>,
     ) -> Self {
         Self {
             txid,
@@ -41,6 +47,8 @@ impl L0Run {
             tombstoned_edges,
             node_properties,
             edge_properties,
+            tombstoned_node_properties,
+            tombstoned_edge_properties,
         }
     }
 
@@ -61,19 +69,37 @@ impl L0Run {
             && self.tombstoned_edges.is_empty()
             && self.node_properties.is_empty()
             && self.edge_properties.is_empty()
+            && self.tombstoned_node_properties.is_empty()
+            && self.tombstoned_edge_properties.is_empty()
     }
 
     pub(crate) fn has_properties(&self) -> bool {
-        !self.node_properties.is_empty() || !self.edge_properties.is_empty()
+        !self.node_properties.is_empty()
+            || !self.edge_properties.is_empty()
+            || !self.tombstoned_node_properties.is_empty()
+            || !self.tombstoned_edge_properties.is_empty()
     }
 
     pub(crate) fn node_property(&self, node: InternalNodeId, key: &str) -> Option<&PropertyValue> {
+        // If this run deleted the property, return None explicitly (but maybe we should indicate deletion?)
+        // For L0Run::node_property, we're returning the value if present.
+        // But if it's tombstoned in this run, we shouldn't return it even if it's in `node_properties` (logic error if both happen).
+        if let Some(deleted) = self.tombstoned_node_properties.get(&node) {
+            if deleted.contains(key) {
+                return None;
+            }
+        }
         self.node_properties
             .get(&node)
             .and_then(|props| props.get(key))
     }
 
     pub(crate) fn edge_property(&self, edge: EdgeKey, key: &str) -> Option<&PropertyValue> {
+        if let Some(deleted) = self.tombstoned_edge_properties.get(&edge) {
+            if deleted.contains(key) {
+                return None;
+            }
+        }
         self.edge_properties
             .get(&edge)
             .and_then(|props| props.get(key))
@@ -161,9 +187,16 @@ impl Snapshot {
     }
 
     /// Get node property from the most recent run that has it.
+    /// Get node property from the most recent run that has it.
     pub(crate) fn node_property(&self, node: InternalNodeId, key: &str) -> Option<PropertyValue> {
         // Search from newest to oldest runs
         for run in self.runs.iter() {
+            // If run has deletion mark, stop searching and return None
+            if let Some(deleted) = run.tombstoned_node_properties.get(&node) {
+                if deleted.contains(key) {
+                    return None;
+                }
+            }
             if let Some(value) = run.node_property(node, key) {
                 return Some(value.clone());
             }
@@ -175,6 +208,11 @@ impl Snapshot {
     pub(crate) fn edge_property(&self, edge: EdgeKey, key: &str) -> Option<PropertyValue> {
         // Search from newest to oldest runs
         for run in self.runs.iter() {
+            if let Some(deleted) = run.tombstoned_edge_properties.get(&edge) {
+                if deleted.contains(key) {
+                    return None;
+                }
+            }
             if let Some(value) = run.edge_property(edge, key) {
                 return Some(value.clone());
             }

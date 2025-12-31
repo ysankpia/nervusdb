@@ -733,6 +733,8 @@ impl<'a> WriteTxn<'a> {
         // Extract property data before freezing (since freeze consumes memtable)
         let node_properties = self.memtable.node_properties_for_wal();
         let edge_properties = self.memtable.edge_properties_for_wal();
+        let removed_node_props = self.memtable.removed_node_properties_for_wal();
+        let removed_edge_props = self.memtable.removed_edge_properties_for_wal();
 
         let run = self.memtable.freeze_into_run(self.txid);
 
@@ -776,6 +778,14 @@ impl<'a> WriteTxn<'a> {
                     value: value.clone(),
                 })?;
             }
+            // Removed Node properties
+            for (node, key) in &removed_node_props {
+                wal.append(&WalRecord::RemoveNodeProperty {
+                    node: *node,
+                    key: key.clone(),
+                })?;
+            }
+
             for (src, rel, dst, key, value) in edge_properties {
                 wal.append(&WalRecord::SetEdgeProperty {
                     src,
@@ -783,6 +793,15 @@ impl<'a> WriteTxn<'a> {
                     dst,
                     key,
                     value,
+                })?;
+            }
+            // Removed Edge properties
+            for (src, rel, dst, key) in &removed_edge_props {
+                wal.append(&WalRecord::RemoveEdgeProperty {
+                    src: *src,
+                    rel: *rel,
+                    dst: *dst,
+                    key: key.clone(),
                 })?;
             }
 
@@ -796,6 +815,7 @@ impl<'a> WriteTxn<'a> {
                     Option<crate::property::PropertyValue>,
                     crate::property::PropertyValue,
                 ),
+                Remove(String, Option<crate::property::PropertyValue>),
             }
             let mut index_ops = Vec::new();
 
@@ -853,6 +873,43 @@ impl<'a> WriteTxn<'a> {
                 }
             }
 
+            // Removed properties index updates
+            for (node, key) in &removed_node_props {
+                // If it was created in this tx, it won't be in index yet, so removing it is no-op for index
+                // (except if we added then removed in same tx, MemTable handles that by removing from node_properties)
+                // So we only care about existing nodes.
+                let is_new = self.created_nodes.iter().any(|(_, _, iid)| iid == node);
+                if is_new {
+                    continue;
+                }
+
+                let label_id = snapshot.node_label(*node);
+                if let Some(lid) = label_id {
+                    let label_name = self
+                        .engine
+                        .label_interner
+                        .lock()
+                        .unwrap()
+                        .get_name(lid)
+                        .map(|s| s.to_string());
+                    if let Some(label_name) = label_name {
+                        let index_name = format!("{}.{}", label_name, key);
+                        let has_index = self
+                            .engine
+                            .index_catalog
+                            .lock()
+                            .unwrap()
+                            .get(&index_name)
+                            .is_some();
+
+                        if has_index {
+                            let old_value = snapshot.node_property(*node, key).map(to_storage);
+                            index_ops.push((IndexOp::Remove(index_name, old_value), *node));
+                        }
+                    }
+                }
+            }
+
             // Apply Index Updates
             if !index_ops.is_empty() {
                 let mut catalog = self.engine.index_catalog.lock().unwrap();
@@ -894,6 +951,19 @@ impl<'a> WriteTxn<'a> {
                                 re.root = tree.root();
                             }
                         }
+                        IndexOp::Remove(name, old_val_opt) => {
+                            if let Some(re) = catalog.entries.get_mut(&name) {
+                                let mut tree = crate::index::btree::BTree::load(re.root);
+
+                                if let Some(old_val) = old_val_opt {
+                                    let mut old_key = Vec::new();
+                                    old_key.extend_from_slice(&re.id.to_be_bytes());
+                                    old_key.extend_from_slice(&encode_ordered_value(&old_val));
+                                    let _ = tree.delete(&mut pager, &old_key, node_id as u64);
+                                    re.root = tree.root();
+                                }
+                            }
+                        }
                     }
                 }
                 catalog.flush(&mut pager)?;
@@ -923,6 +993,8 @@ impl<'a> WriteTxn<'a> {
         if !run.is_empty() {
             self.engine.publish_run(Arc::new(run));
         }
+
+        self.engine.next_txid.fetch_add(1, Ordering::Relaxed);
 
         Ok(())
     }

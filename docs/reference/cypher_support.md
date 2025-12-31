@@ -15,11 +15,18 @@ v2 M3 是新一代查询引擎，支持通过 `nervusdb-v2-query` crate 或 CLI 
 - 单节点扫描：`MATCH (n) RETURN n`
 - 单跳模式：`MATCH (a)-[:<u32>]->(b) RETURN a, b`
 - 单跳可变长度：`MATCH (a)-[:<u32>*1..5]->(b) RETURN a, b`
+- `OPTIONAL MATCH`：`MATCH (a) OPTIONAL MATCH (a)-[:1]->(b) RETURN a, b`（左外连接，无匹配返回 NULL）
 - `WHERE` 属性过滤（节点/边）：`MATCH (a)-[r:1]->(b) WHERE a.name = 'Alice' AND r.weight > 1.0 RETURN a, b`
 - `ORDER BY <var> [ASC|DESC]`（限制：M3 仅支持对变量排序）
 - `SKIP n`
 - `RETURN DISTINCT`
 - `LIMIT n`（非负整数）
+- **聚合函数**（支持 GROUP BY）：
+  - `COUNT(*)` / `COUNT(expr)`：计数
+  - `SUM(expr)`：求和
+  - `AVG(expr)`：平均值
+  - `MIN(expr)` / `MAX(expr)`：最值
+  - `COLLECT(expr)`：数组收集
 
 ### 写入
 
@@ -42,13 +49,13 @@ v2 M3 是新一代查询引擎，支持通过 `nervusdb-v2-query` crate 或 CLI 
 ### 已知限制
 
 - 仅支持单节点或单跳模式（pattern elements 为 1 或 3）；可变长度仍然必须是这一个关系上的 `*min..max`
-- 关系类型目前按“字符串名字”处理（推荐使用数字：`:1`, `:2` 等）
+- 关系类型目前按"字符串名字"处理（推荐使用数字：`:1`, `:2` 等）
 - 标签（`:Label`）已支持于 `MATCH`/`CREATE`/`MERGE` 的最小子集；`DELETE` 仍不支持标签
 - 不支持在 `MATCH` pattern 内写属性：`MATCH (a {name:'Alice'})-[:1]->(b)` 会 fail-fast（请用 WHERE）
 - `MERGE` 节点必须提供非空 property map（否则没有稳定 identity）
 - `DELETE` 不支持级联删除
 - `WITH` / `UNWIND` / `UNION` / `CALL`：明确不支持（超出即 fail-fast）
-- `OPTIONAL MATCH`：明确不支持（超出即 fail-fast）
+- `REMOVE`：明确不支持（超出即 fail-fast）
 
 ## 可变长度的现实边界（别踩雷）
 

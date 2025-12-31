@@ -284,6 +284,10 @@ fn render_plan(plan: &Plan) -> String {
                 let _ = writeln!(out, "{pad}SetProperty(items={items:?})");
                 go(out, input, depth + 1);
             }
+            Plan::RemoveProperty { input, items } => {
+                let _ = writeln!(out, "{pad}RemoveProperty(items={items:?})");
+                go(out, input, depth + 1);
+            }
             Plan::IndexSeek {
                 alias,
                 label,
@@ -315,6 +319,7 @@ fn compile_m3_plan(query: Query) -> Result<CompiledQuery> {
     let mut where_clause = None;
     let mut return_clause = None;
     let mut set_clause = None;
+    let mut remove_clause = None;
     let mut delete_clause = None;
 
     for clause in query.clauses {
@@ -340,14 +345,17 @@ fn compile_m3_plan(query: Query) -> Result<CompiledQuery> {
             Clause::Unwind(_) => return Err(Error::NotImplemented("UNWIND in v2 M3")),
             Clause::Call(_) => return Err(Error::NotImplemented("CALL in v2 M3")),
             Clause::Set(s) => set_clause = Some(s),
+            Clause::Remove(r) => remove_clause = Some(r),
             Clause::Delete(d) => delete_clause = Some(d),
             Clause::Union(_) => return Err(Error::NotImplemented("UNION in v2 M3")),
         }
     }
 
     if let Some(delete) = delete_clause {
-        if set_clause.is_some() {
-            return Err(Error::NotImplemented("Mixing SET and DELETE in v2 M3"));
+        if set_clause.is_some() || remove_clause.is_some() {
+            return Err(Error::NotImplemented(
+                "Mixing SET/REMOVE and DELETE in v2 M3",
+            ));
         }
         if matches.len() > 1 {
             return Err(Error::NotImplemented("Multiple MATCH with DELETE in v2 M3"));
@@ -361,11 +369,26 @@ fn compile_m3_plan(query: Query) -> Result<CompiledQuery> {
     }
 
     if let Some(set) = set_clause {
+        if remove_clause.is_some() {
+            return Err(Error::NotImplemented("Mixing SET and REMOVE in v2 M3"));
+        }
         if matches.len() > 1 {
             return Err(Error::NotImplemented("Multiple MATCH with SET in v2 M3"));
         }
         let m = matches.into_iter().next();
         let plan = compile_set_plan(m, where_clause, set)?;
+        return Ok(CompiledQuery {
+            plan,
+            write: WriteSemantics::Default,
+        });
+    }
+
+    if let Some(remove) = remove_clause {
+        if matches.len() > 1 {
+            return Err(Error::NotImplemented("Multiple MATCH with REMOVE in v2 M3"));
+        }
+        let m = matches.into_iter().next();
+        let plan = compile_remove_plan(m, where_clause, remove)?;
         return Ok(CompiledQuery {
             plan,
             write: WriteSemantics::Default,
@@ -892,6 +915,50 @@ fn compile_set_plan(
     }
 
     Ok(Plan::SetProperty {
+        input: Box::new(plan),
+        items,
+    })
+}
+
+fn compile_remove_plan(
+    match_clause: Option<crate::ast::MatchClause>,
+    where_clause: Option<crate::ast::WhereClause>,
+    remove_clause: crate::ast::RemoveClause,
+) -> Result<Plan> {
+    // REMOVE requires a preceding MATCH clause
+    let Some(m) = match_clause else {
+        return Err(Error::Other(
+            "REMOVE requires a preceding MATCH clause in v2 M3".into(),
+        ));
+    };
+
+    if m.optional {
+        return Err(Error::NotImplemented("OPTIONAL MATCH with REMOVE in v2 M3"));
+    }
+
+    let mut predicates = BTreeMap::new();
+    if let Some(w) = &where_clause {
+        extract_predicates(&w.expression, &mut predicates);
+    }
+
+    let mut plan = compile_match_plan(None, m, &predicates)?;
+
+    // Add WHERE filter if present
+    if let Some(w) = where_clause {
+        let filter_plan = Plan::Filter {
+            input: Box::new(plan),
+            predicate: w.expression.clone(),
+        };
+        plan = try_optimize_nodescan_filter(filter_plan, w.expression);
+    }
+
+    // Convert properties to (var, key)
+    let mut items = Vec::with_capacity(remove_clause.properties.len());
+    for prop in remove_clause.properties {
+        items.push((prop.variable, prop.property));
+    }
+
+    Ok(Plan::RemoveProperty {
         input: Box::new(plan),
         items,
     })

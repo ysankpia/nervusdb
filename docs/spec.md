@@ -47,6 +47,10 @@
 
 - `EXPLAIN`、`MERGE` 等按任务推进（T104/T105…）
 - 优化器/索引选择属于后续，必须可测试、可回滚
+- **Cypher 兼容（计划）**：
+  - “全量支持”的定义必须可验收：以 `docs/design/T300-cypher-full.md` 为总设计，任务拆解以 `docs/tasks.md` Phase 4（T300+）为准
+  - 发布口径以自动化门禁为准：优先引入 openCypher TCK（先 parse-only gate，再逐步扩展到 exec gate）；未通过门禁不算“支持”
+  - NervusDB 扩展（例如向量检索）必须作为扩展能力单独标注，避免混同于 openCypher 兼容宣称
 
 ### 4.3 Lifecycle（计划）
 
@@ -57,6 +61,7 @@
 - 单元测试：pager/wal/idmap/memtable/index page layout（T101 相关）
 - 集成测试：storage + query 端到端（最小子集）
 - 崩溃门禁：CI crash-gate（PR 小跑 + 定时大跑）
+- Cypher 兼容门禁：openCypher TCK / 可扩展 harness（T300/T326）+ 关键用户路径黄金用例
 
 ## 6. 已知技术债与折衷（Technical Debt & Trade-offs）
 

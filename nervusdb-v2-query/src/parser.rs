@@ -21,6 +21,16 @@ struct TokenParser {
 }
 
 impl TokenParser {
+    // Pratt parser binding powers (higher = tighter binding).
+    const BP_OR: u8 = 1;
+    const BP_XOR: u8 = 2;
+    const BP_AND: u8 = 3;
+    const BP_CMP: u8 = 4;
+    const BP_ADD: u8 = 5;
+    const BP_MUL: u8 = 6;
+    const BP_POW: u8 = 7;
+    const BP_PREFIX: u8 = 8;
+
     fn new(tokens: Vec<Token>) -> Self {
         Self {
             tokens,
@@ -65,7 +75,6 @@ impl TokenParser {
 
         // Fail-fast on unsupported top-level clauses/keywords.
         match &self.peek().token_type {
-            TokenType::Remove => return Err(Error::NotImplemented("REMOVE")),
             TokenType::Foreach => return Err(Error::NotImplemented("FOREACH")),
             _ => {}
         }
@@ -100,6 +109,9 @@ impl TokenParser {
         }
         if self.match_token(&TokenType::Set) {
             return Ok(Some(Clause::Set(self.parse_set()?)));
+        }
+        if self.match_token(&TokenType::Remove) {
+            return Ok(Some(Clause::Remove(self.parse_remove()?)));
         }
         if self.check(&TokenType::Detach) || self.check(&TokenType::Delete) {
             return Ok(Some(Clause::Delete(self.parse_delete()?)));
@@ -287,6 +299,17 @@ impl TokenParser {
         self.consume(&TokenType::Equals, "Expected '=' in SET clause")?;
         let value = self.parse_expression()?;
         Ok(SetItem { property, value })
+    }
+
+    fn parse_remove(&mut self) -> Result<RemoveClause, Error> {
+        let mut properties = Vec::new();
+        loop {
+            properties.push(self.parse_property_access()?);
+            if !self.match_token(&TokenType::Comma) {
+                break;
+            }
+        }
+        Ok(RemoveClause { properties })
     }
 
     fn parse_delete(&mut self) -> Result<DeleteClause, Error> {
@@ -537,87 +560,279 @@ impl TokenParser {
     }
 
     fn parse_expression(&mut self) -> Result<Expression, Error> {
-        // T50: compile gate only.
-        // Keep the full expression parser in v1; v2 M3 executor decides the supported subset.
+        self.parse_expression_bp(0)
+    }
 
-        // Parse left-hand side (primary expression)
-        let left = match &self.peek().token_type {
+    fn parse_expression_bp(&mut self, min_bp: u8) -> Result<Expression, Error> {
+        let mut lhs = self.parse_prefix_expression()?;
+
+        loop {
+            let Some((op, lbp, rbp, needs_with)) = self.peek_infix_operator() else {
+                break;
+            };
+            if lbp < min_bp {
+                break;
+            }
+
+            // Consume operator token(s)
+            self.advance();
+            if needs_with {
+                self.consume(&TokenType::With, "Expected WITH after STARTS/ENDS")?;
+            }
+
+            let rhs = self.parse_expression_bp(rbp)?;
+            lhs = Expression::Binary(Box::new(BinaryExpression {
+                left: lhs,
+                operator: op,
+                right: rhs,
+            }));
+        }
+
+        Ok(lhs)
+    }
+
+    fn parse_prefix_expression(&mut self) -> Result<Expression, Error> {
+        if self.match_token(&TokenType::Not) {
+            let operand = self.parse_expression_bp(Self::BP_PREFIX)?;
+            return Ok(Expression::Unary(Box::new(UnaryExpression {
+                operator: UnaryOperator::Not,
+                operand,
+            })));
+        }
+
+        // NOTE: The lexer tokenizes '-' as `Dash` (shared with pattern syntax).
+        // In expression context, we interpret it as unary negation / binary subtraction.
+        if self.match_token(&TokenType::Dash) {
+            let operand = self.parse_expression_bp(Self::BP_PREFIX)?;
+            return Ok(Expression::Unary(Box::new(UnaryExpression {
+                operator: UnaryOperator::Negate,
+                operand,
+            })));
+        }
+
+        // Unary plus: no-op (still parses for completeness).
+        if self.match_token(&TokenType::Plus) {
+            return self.parse_expression_bp(Self::BP_PREFIX);
+        }
+
+        self.parse_primary_expression()
+    }
+
+    fn parse_primary_expression(&mut self) -> Result<Expression, Error> {
+        match &self.peek().token_type {
+            TokenType::LeftParen => {
+                self.advance(); // '('
+                let expr = self.parse_expression_bp(0)?;
+                self.consume(&TokenType::RightParen, "Expected ')'")?;
+                Ok(expr)
+            }
             TokenType::Number(n) => {
                 let n = *n;
                 self.advance();
-                Expression::Literal(Literal::Number(n))
+                Ok(Expression::Literal(Literal::Number(n)))
             }
             TokenType::String(s) => {
                 let s = s.clone();
                 self.advance();
-                Expression::Literal(Literal::String(s))
+                Ok(Expression::Literal(Literal::String(s)))
             }
             TokenType::Boolean(b) => {
                 let b = *b;
                 self.advance();
-                Expression::Literal(Literal::Boolean(b))
+                Ok(Expression::Literal(Literal::Boolean(b)))
             }
             TokenType::Null => {
                 self.advance();
-                Expression::Literal(Literal::Null)
+                Ok(Expression::Literal(Literal::Null))
             }
             TokenType::Variable(name) => {
                 let name = name.clone();
                 self.advance();
-                Expression::Parameter(name)
+                Ok(Expression::Parameter(name))
             }
             TokenType::Identifier(name) => {
                 let name = name.clone();
                 self.advance();
-                // Check for function call (e.g., COUNT(...), SUM(...), AVG(...))
+
+                // Function call: foo(...)
                 if self.check(&TokenType::LeftParen) {
-                    self.advance(); // consume '('
+                    self.advance(); // '('
                     let args = self.parse_function_arguments()?;
-                    Expression::FunctionCall(FunctionCall { name, args })
-                } else if self.check(&TokenType::Dot) {
-                    // Check for property access on identifier (e.g., n.age)
-                    self.advance(); // consume the dot
-                    Expression::PropertyAccess(PropertyAccess {
+                    return Ok(Expression::FunctionCall(FunctionCall { name, args }));
+                }
+
+                // Property access: n.prop
+                if self.check(&TokenType::Dot) {
+                    self.advance(); // '.'
+                    return Ok(Expression::PropertyAccess(PropertyAccess {
                         variable: name,
                         property: self.parse_identifier("property name")?,
-                    })
-                } else {
-                    Expression::Variable(name)
+                    }));
                 }
+
+                Ok(Expression::Variable(name))
             }
             TokenType::LeftBracket => {
-                // List literal (e.g., [1, 2, 3])
-                self.advance(); // consume '['
-                Expression::List(self.parse_list()?)
+                // List literal: [a, b, c]
+                self.advance(); // '['
+                Ok(Expression::List(self.parse_list()?))
             }
             TokenType::LeftBrace => {
-                // Map literal (e.g., {key: value})
-                self.advance(); // consume '{'
-                Expression::Map(self.parse_property_map()?)
+                // Map literal: {k: v, ...}
+                Ok(Expression::Map(self.parse_property_map()?))
             }
-            _ => return Err(Error::NotImplemented("expression")),
+            TokenType::Asterisk => {
+                // Used for COUNT(*). We encode it as a string literal "*" for the aggregate parser.
+                self.advance();
+                Ok(Expression::Literal(Literal::String("*".to_string())))
+            }
+            TokenType::Case => {
+                self.advance(); // 'CASE'
+                Ok(Expression::Case(Box::new(self.parse_case_expression()?)))
+            }
+            _ => Err(Error::NotImplemented("expression")),
+        }
+    }
+
+    fn parse_case_expression(&mut self) -> Result<CaseExpression, Error> {
+        // Supported form:
+        //
+        // CASE
+        //   WHEN <cond> THEN <expr>
+        //   [WHEN ... THEN ...]*
+        //   [ELSE <expr>]?
+        // END
+        if !self.check(&TokenType::When) {
+            return Err(Error::NotImplemented("simple CASE expression"));
+        }
+
+        let mut when_clauses = Vec::new();
+        while self.match_token(&TokenType::When) {
+            let cond = self.parse_expression_bp(0)?;
+            self.consume(&TokenType::Then, "Expected THEN after CASE WHEN condition")?;
+            let value = self.parse_expression_bp(0)?;
+            when_clauses.push((cond, value));
+        }
+
+        let else_expression = if self.match_token(&TokenType::Else) {
+            Some(self.parse_expression_bp(0)?)
+        } else {
+            None
         };
 
-        // Check for binary operator
-        let operator = match &self.peek().token_type {
-            TokenType::Equals => BinaryOperator::Equals,
-            TokenType::NotEquals => BinaryOperator::NotEquals,
-            TokenType::LessThan => BinaryOperator::LessThan,
-            TokenType::LessEqual => BinaryOperator::LessEqual,
-            TokenType::GreaterThan => BinaryOperator::GreaterThan,
-            TokenType::GreaterEqual => BinaryOperator::GreaterEqual,
-            TokenType::And => BinaryOperator::And,
-            TokenType::Or => BinaryOperator::Or,
-            _ => return Ok(left), // No binary operator, return primary expression
-        };
+        self.consume(&TokenType::End, "Expected END to close CASE expression")?;
 
-        self.advance(); // consume operator
-        let right = self.parse_expression()?;
-        Ok(Expression::Binary(Box::new(BinaryExpression {
-            left,
-            operator,
-            right,
-        })))
+        Ok(CaseExpression {
+            when_clauses,
+            else_expression,
+        })
+    }
+
+    fn peek_infix_operator(&mut self) -> Option<(BinaryOperator, u8, u8, bool)> {
+        // returns: (op, lbp, rbp, needs_with_token)
+        match &self.peek().token_type {
+            TokenType::Or => Some((BinaryOperator::Or, Self::BP_OR, Self::BP_OR + 1, false)),
+            TokenType::Xor => Some((BinaryOperator::Xor, Self::BP_XOR, Self::BP_XOR + 1, false)),
+            TokenType::And => Some((BinaryOperator::And, Self::BP_AND, Self::BP_AND + 1, false)),
+
+            // Comparisons / predicates
+            TokenType::Equals => Some((
+                BinaryOperator::Equals,
+                Self::BP_CMP,
+                Self::BP_CMP + 1,
+                false,
+            )),
+            TokenType::NotEquals => Some((
+                BinaryOperator::NotEquals,
+                Self::BP_CMP,
+                Self::BP_CMP + 1,
+                false,
+            )),
+            TokenType::LessThan => Some((
+                BinaryOperator::LessThan,
+                Self::BP_CMP,
+                Self::BP_CMP + 1,
+                false,
+            )),
+            TokenType::LessEqual => Some((
+                BinaryOperator::LessEqual,
+                Self::BP_CMP,
+                Self::BP_CMP + 1,
+                false,
+            )),
+            TokenType::GreaterThan => Some((
+                BinaryOperator::GreaterThan,
+                Self::BP_CMP,
+                Self::BP_CMP + 1,
+                false,
+            )),
+            TokenType::GreaterEqual => Some((
+                BinaryOperator::GreaterEqual,
+                Self::BP_CMP,
+                Self::BP_CMP + 1,
+                false,
+            )),
+            TokenType::In => Some((BinaryOperator::In, Self::BP_CMP, Self::BP_CMP + 1, false)),
+            TokenType::Contains => Some((
+                BinaryOperator::Contains,
+                Self::BP_CMP,
+                Self::BP_CMP + 1,
+                false,
+            )),
+            TokenType::Starts => {
+                if self.check_next(&TokenType::With) {
+                    Some((
+                        BinaryOperator::StartsWith,
+                        Self::BP_CMP,
+                        Self::BP_CMP + 1,
+                        true,
+                    ))
+                } else {
+                    None
+                }
+            }
+            TokenType::Ends => {
+                if self.check_next(&TokenType::With) {
+                    Some((
+                        BinaryOperator::EndsWith,
+                        Self::BP_CMP,
+                        Self::BP_CMP + 1,
+                        true,
+                    ))
+                } else {
+                    None
+                }
+            }
+
+            // Arithmetic
+            TokenType::Plus => Some((BinaryOperator::Add, Self::BP_ADD, Self::BP_ADD + 1, false)),
+            TokenType::Dash => Some((
+                BinaryOperator::Subtract,
+                Self::BP_ADD,
+                Self::BP_ADD + 1,
+                false,
+            )),
+            TokenType::Asterisk => Some((
+                BinaryOperator::Multiply,
+                Self::BP_MUL,
+                Self::BP_MUL + 1,
+                false,
+            )),
+            TokenType::Divide => Some((
+                BinaryOperator::Divide,
+                Self::BP_MUL,
+                Self::BP_MUL + 1,
+                false,
+            )),
+            TokenType::Modulo => Some((
+                BinaryOperator::Modulo,
+                Self::BP_MUL,
+                Self::BP_MUL + 1,
+                false,
+            )),
+            TokenType::Power => Some((BinaryOperator::Power, Self::BP_POW, Self::BP_POW, false)), // right-assoc
+            _ => None,
+        }
     }
 
     fn parse_braced_subquery(&mut self) -> Result<Query, Error> {
@@ -674,6 +889,17 @@ impl TokenParser {
 
     fn peek_is_identifier(&self) -> bool {
         matches!(self.peek().token_type, TokenType::Identifier(_))
+    }
+
+    fn check_next(&self, token_type: &TokenType) -> bool {
+        if self.position + 1 >= self.tokens.len() {
+            return false;
+        }
+        let next = &self.tokens[self.position + 1];
+        match (token_type, &next.token_type) {
+            (TokenType::Identifier(_), TokenType::Identifier(_)) => true,
+            _ => std::mem::discriminant(token_type) == std::mem::discriminant(&next.token_type),
+        }
     }
 
     fn match_token(&mut self, token_type: &TokenType) -> bool {

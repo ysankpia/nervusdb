@@ -16,9 +16,9 @@ pub enum Clause {
     Where(WhereClause),
     With(WithClause),
     Set(SetClause),
+    Remove(RemoveClause),
     Delete(DeleteClause),
     Union(UnionClause),
-    // Remove can be added later
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -104,6 +104,11 @@ pub enum Direction {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SetClause {
     pub items: Vec<SetItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RemoveClause {
+    pub properties: Vec<PropertyAccess>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
