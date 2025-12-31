@@ -7,10 +7,7 @@ fn test_complex_types_storage() {
     let dir = tempdir().unwrap();
     let db = Db::open(dir.path()).unwrap();
 
-    let list = vec![
-        PropertyValue::Int(1),
-        PropertyValue::String("inner".into()),
-    ];
+    let list = vec![PropertyValue::Int(1), PropertyValue::String("inner".into())];
 
     let mut map = BTreeMap::new();
     map.insert("key1".into(), PropertyValue::Bool(true));
