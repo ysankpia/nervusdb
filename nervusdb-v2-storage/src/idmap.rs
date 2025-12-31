@@ -101,9 +101,7 @@ impl IdMap {
     #[deprecated(note = "Use get_labels() for multi-label support")]
     #[inline]
     pub fn get_label(&self, internal_id: InternalNodeId) -> Option<LabelId> {
-        self.i2l.get(internal_id as usize)?
-            .first()
-            .copied()
+        self.i2l.get(internal_id as usize)?.first().copied()
     }
 
     /// Get all label IDs for an internal node ID.
@@ -196,9 +194,11 @@ impl IdMap {
         internal_id: InternalNodeId,
         label: LabelId,
     ) -> Result<()> {
-        let labels = self.i2l.get_mut(internal_id as usize)
+        let labels = self
+            .i2l
+            .get_mut(internal_id as usize)
             .ok_or_else(|| Error::WalProtocol("node not found"))?;
-        
+
         if !labels.contains(&label) {
             labels.push(label);
             labels.sort_unstable();
@@ -213,9 +213,11 @@ impl IdMap {
         internal_id: InternalNodeId,
         label: LabelId,
     ) -> Result<()> {
-        let labels = self.i2l.get_mut(internal_id as usize)
+        let labels = self
+            .i2l
+            .get_mut(internal_id as usize)
             .ok_or_else(|| Error::WalProtocol("node not found"))?;
-        
+
         labels.retain(|&l| l != label);
         Ok(())
     }

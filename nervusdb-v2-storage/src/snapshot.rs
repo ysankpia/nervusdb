@@ -204,9 +204,7 @@ impl Snapshot {
     /// Get the label ID for a node.
     /// Get the first label for a node (backward compat).
     pub fn node_label(&self, iid: InternalNodeId) -> Option<crate::idmap::LabelId> {
-        self.node_labels.get(iid as usize)?
-            .first()
-            .copied()
+        self.node_labels.get(iid as usize)?.first().copied()
     }
 
     /// Get all labels for a node.
