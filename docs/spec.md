@@ -16,7 +16,7 @@
 
 这些是“已经存在”的东西；其他任何内容都必须明确标注为“计划”。
 
-- 存储：`.ndb + .wal`（Pager + redo WAL），页大小固定 `8KB`
+- 存储：`.ndb + .wal`（Pager `RwLock` + Offset IO + redo WAL），页大小固定 `8KB`，支持 Vacuum
 - 一致性：Single Writer + Snapshot Readers（快照读并发）
 - 崩溃恢复：WAL replay + manifest/checkpoint（crash gate）
 - 图数据：MemTable → L0 frozen runs → 多段 CSR segments（compaction）
@@ -62,4 +62,3 @@
 
 - **B-Tree 删除**：当前版本的 `delete_exact_rebuild` 会重建整棵树。这在小型索引上可行，但在大规模删除时会产生严重的 I/O 抖动。
 - **查询执行器开销**：`executor.rs` 基于 `Box<dyn Iterator>` 的动态分发，对于极高性能要求的场景存在虚函数调用开销。
-- **并发粒度**：`Pager` 使用全局 `Arc<Mutex<Pager>>`，高并发读取且 Cache 未命中时可能锁定整个引擎。
