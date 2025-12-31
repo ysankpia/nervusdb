@@ -188,7 +188,7 @@ fn test_last_of_list() -> nervusdb_v2::Result<()> {
 // ============================================================================
 
 #[test]
-#[ignore] // Requires snapshot access in evaluator which is not yet available
+
 fn test_keys_of_node() -> nervusdb_v2::Result<()> {
     let dir = tempdir()?;
     let db_path = dir.path().join("t313.ndb");
@@ -196,7 +196,7 @@ fn test_keys_of_node() -> nervusdb_v2::Result<()> {
     let mut txn = db.begin_write();
 
     let label = txn.get_or_create_label("Person")?;
-    let n = txn.create_node(label.into(), 1)?;
+    let n = txn.create_node(1, label)?;
     txn.set_node_property(
         n,
         "name".to_string(),
@@ -229,7 +229,7 @@ fn test_keys_of_node() -> nervusdb_v2::Result<()> {
 // ============================================================================
 
 #[test]
-#[ignore] // Fails with WAL protocol error (duplicate external id) - needs storage investigation
+
 fn test_type_of_relationship() -> nervusdb_v2::Result<()> {
     let dir = tempdir()?;
     let db_path = dir.path().join("t313.ndb");
@@ -239,9 +239,9 @@ fn test_type_of_relationship() -> nervusdb_v2::Result<()> {
     let label = txn.get_or_create_label("Person")?;
     let rel_type = txn.get_or_create_rel_type("KNOWS")?;
     // Use unique large external IDs to avoid conflicts
-    let n1 = txn.create_node(label.into(), 1001)?;
-    let n2 = txn.create_node(label.into(), 1002)?;
-    txn.create_edge(n1, n2, rel_type.into());
+    let n1 = txn.create_node(1001, label)?;
+    let n2 = txn.create_node(1002, label)?;
+    txn.create_edge(n1, n2, rel_type);
     txn.commit()?;
 
     let query = "MATCH (a)-[r]->(b) RETURN type(r) AS result";
@@ -254,10 +254,10 @@ fn test_type_of_relationship() -> nervusdb_v2::Result<()> {
     assert_eq!(results.len(), 1);
     // Note: evaluator returns type ID (int) currently, until we add schema lookup
     // Adjusting expectation to match current implementation
-    if let Value::Int(_) = results[0].get("result").unwrap() {
-        // OK
+    if let Value::String(s) = results[0].get("result").unwrap() {
+        assert_eq!(s, "KNOWS");
     } else {
-        panic!("Expected int type id");
+        panic!("Expected string type name");
     }
 
     Ok(())
@@ -268,7 +268,7 @@ fn test_type_of_relationship() -> nervusdb_v2::Result<()> {
 // ============================================================================
 
 #[test]
-#[ignore] // Fails with 0 results - MATCH/Index issue with new node
+
 fn test_id_of_node() -> nervusdb_v2::Result<()> {
     let dir = tempdir()?;
     let db_path = dir.path().join("t313.ndb");
@@ -276,7 +276,7 @@ fn test_id_of_node() -> nervusdb_v2::Result<()> {
     let mut txn = db.begin_write();
 
     let label = txn.get_or_create_label("Person")?;
-    let _n = txn.create_node(label.into(), 2001)?;
+    let _n = txn.create_node(2001, label)?;
     txn.commit()?;
 
     let query = "MATCH (n:Person) RETURN id(n) AS result";

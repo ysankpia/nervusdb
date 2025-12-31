@@ -3,7 +3,7 @@ use nervusdb_v2::query::Value;
 use tempfile::tempdir;
 
 #[test]
-#[ignore] // Blocked on parser support for EXISTS { match }
+
 fn test_exists_with_edge() -> nervusdb_v2::Result<()> {
     let dir = tempdir()?;
     let db_path = dir.path().join("t309.ndb");
@@ -12,20 +12,22 @@ fn test_exists_with_edge() -> nervusdb_v2::Result<()> {
 
     let label = txn.get_or_create_label("Person")?;
     let rel_type = txn.get_or_create_rel_type("KNOWS")?;
-    let n1 = txn.create_node(label.into(), 1)?;
+    let n1 = txn.create_node(1, label)?;
     txn.set_node_property(
         n1,
         "name".to_string(),
         nervusdb_v2::PropertyValue::String("Alice".to_string()),
     )?;
-    let n2 = txn.create_node(label.into(), 2)?;
+    txn.commit()?;
+
+    let mut txn = db.begin_write();
+    let n2 = txn.create_node(2, label)?;
     txn.set_node_property(
         n2,
         "name".to_string(),
         nervusdb_v2::PropertyValue::String("Bob".to_string()),
     )?;
-    // Alice knows Bob
-    txn.create_edge(n1, n2, rel_type.into());
+    txn.create_edge(n1, n2, rel_type);
     txn.commit()?;
 
     // MATCH (n:Person) WHERE EXISTS ((n)-[:KNOWS]->()) RETURN n.name
@@ -47,7 +49,7 @@ fn test_exists_with_edge() -> nervusdb_v2::Result<()> {
 }
 
 #[test]
-#[ignore] // Blocked on parser support for EXISTS { match }
+
 fn test_exists_no_edge() -> nervusdb_v2::Result<()> {
     let dir = tempdir()?;
     let db_path = dir.path().join("t309.ndb");
@@ -55,7 +57,7 @@ fn test_exists_no_edge() -> nervusdb_v2::Result<()> {
     let mut txn = db.begin_write();
 
     let label = txn.get_or_create_label("Person")?;
-    let n1 = txn.create_node(label.into(), 1)?;
+    let n1 = txn.create_node(1, label)?;
     txn.set_node_property(
         n1,
         "name".to_string(),
@@ -77,7 +79,7 @@ fn test_exists_no_edge() -> nervusdb_v2::Result<()> {
 }
 
 #[test]
-#[ignore] // Blocked on parser support for EXISTS { match }
+
 fn test_not_exists() -> nervusdb_v2::Result<()> {
     let dir = tempdir()?;
     let db_path = dir.path().join("t309.ndb");
@@ -86,19 +88,22 @@ fn test_not_exists() -> nervusdb_v2::Result<()> {
 
     let label = txn.get_or_create_label("Person")?;
     let rel_type = txn.get_or_create_rel_type("KNOWS")?;
-    let n1 = txn.create_node(label.into(), 1)?;
+    let n1 = txn.create_node(1, label)?;
     txn.set_node_property(
         n1,
         "name".to_string(),
         nervusdb_v2::PropertyValue::String("Alice".to_string()),
     )?;
-    let n2 = txn.create_node(label.into(), 2)?;
+    txn.commit()?;
+
+    let mut txn = db.begin_write();
+    let n2 = txn.create_node(2, label)?;
     txn.set_node_property(
         n2,
         "name".to_string(),
         nervusdb_v2::PropertyValue::String("Bob".to_string()),
     )?;
-    txn.create_edge(n1, n2, rel_type.into());
+    txn.create_edge(n1, n2, rel_type);
     txn.commit()?;
 
     // NOT EXISTS - Bob doesn't have outgoing KNOWS

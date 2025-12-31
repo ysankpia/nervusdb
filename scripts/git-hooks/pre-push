@@ -1,0 +1,15 @@
+#!/bin/sh
+# Git pre-push hook for Rust project
+set -e
+
+echo "🚀 [pre-push] Running final verification..."
+
+# Run full test suite
+echo "🧪 Running full test suite..."
+if ! cargo test --workspace; then
+    echo "❌ Tests failed. Push aborted."
+    exit 1
+fi
+
+echo "✅ All checks passed! Pushing to remote..."
+exit 0

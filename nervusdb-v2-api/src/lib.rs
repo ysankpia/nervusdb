@@ -47,6 +47,36 @@ pub enum PropertyValue {
     Map(BTreeMap<String, PropertyValue>),
 }
 
+impl From<&str> for PropertyValue {
+    fn from(s: &str) -> Self {
+        PropertyValue::String(s.to_string())
+    }
+}
+
+impl From<String> for PropertyValue {
+    fn from(s: String) -> Self {
+        PropertyValue::String(s)
+    }
+}
+
+impl From<i64> for PropertyValue {
+    fn from(i: i64) -> Self {
+        PropertyValue::Int(i)
+    }
+}
+
+impl From<f64> for PropertyValue {
+    fn from(f: f64) -> Self {
+        PropertyValue::Float(f)
+    }
+}
+
+impl From<bool> for PropertyValue {
+    fn from(b: bool) -> Self {
+        PropertyValue::Bool(b)
+    }
+}
+
 /// A directed edge from a source node to a destination node with a relationship type.
 ///
 /// Used as the key type for neighbor lookups and edge operations.
@@ -86,6 +116,17 @@ pub trait GraphSnapshot {
     /// If `rel` is `Some`, only edges of that type are returned.
     /// If `rel` is `None`, all outgoing edges are returned.
     fn neighbors(&self, src: InternalNodeId, rel: Option<RelTypeId>) -> Self::Neighbors<'_>;
+
+    /// Get incoming neighbors of a node, optionally filtered by relationship type.
+    ///
+    /// Returns an iterator over `EdgeKey`s representing incoming edges.
+    /// If `rel` is `Some`, only edges of that type are returned.
+    /// If `rel` is `None`, all incoming edges are returned.
+    fn incoming_neighbors(
+        &self,
+        dst: InternalNodeId,
+        rel: Option<RelTypeId>,
+    ) -> Self::Neighbors<'_>;
 
     /// Get an iterator over all non-tombstoned nodes.
     ///

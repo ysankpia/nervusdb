@@ -1,5 +1,5 @@
 use nervusdb_v2::query::{Row, Value, WriteableGraph};
-use nervusdb_v2::{Db, GraphSnapshot, PropertyValue};
+use nervusdb_v2::{Db, PropertyValue};
 use tempfile::tempdir;
 
 #[test]

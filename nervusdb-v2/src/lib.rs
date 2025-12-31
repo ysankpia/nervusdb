@@ -211,7 +211,15 @@ impl GraphSnapshot for DbSnapshot {
     type Neighbors<'a> = Box<dyn Iterator<Item = EdgeKey> + 'a>;
 
     fn neighbors(&self, src: InternalNodeId, rel: Option<RelTypeId>) -> Self::Neighbors<'_> {
-        Box::new(self.0.neighbors(src, rel))
+        self.0.neighbors(src, rel)
+    }
+
+    fn incoming_neighbors(
+        &self,
+        dst: InternalNodeId,
+        rel: Option<RelTypeId>,
+    ) -> Self::Neighbors<'_> {
+        self.0.incoming_neighbors(dst, rel)
     }
 
     fn nodes(&self) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {

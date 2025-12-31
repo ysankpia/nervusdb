@@ -275,8 +275,12 @@ impl BulkLoader {
                 meta_page_id: 0,
                 min_src: 0,
                 max_src: 0,
+                min_dst: 0,
+                max_dst: 0,
                 offsets: vec![0, 0],
                 edges: Vec::new(),
+                in_offsets: Vec::new(),
+                in_edges: Vec::new(),
             }]);
         }
 
@@ -315,8 +319,12 @@ impl BulkLoader {
             meta_page_id: 0,
             min_src,
             max_src,
+            min_dst: 0,
+            max_dst: 0,
             offsets,
             edges: edge_vec,
+            in_offsets: Vec::new(),
+            in_edges: Vec::new(),
         }])
     }
 

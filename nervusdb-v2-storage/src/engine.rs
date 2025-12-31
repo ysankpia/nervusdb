@@ -373,7 +373,7 @@ impl GraphEngine {
                 btree_key.extend_from_slice(key.as_bytes());
 
                 let encoded_val = value.encode();
-                let blob_id = crate::blob_store::BlobStore::write(&mut *pager, &encoded_val)?;
+                let blob_id = crate::blob_store::BlobStore::write(&mut pager, &encoded_val)?;
                 tree.insert(&mut pager, &btree_key, blob_id)?;
             }
 
@@ -388,7 +388,7 @@ impl GraphEngine {
                 btree_key.extend_from_slice(key.as_bytes());
 
                 let encoded_val = value.encode();
-                let blob_id = crate::blob_store::BlobStore::write(&mut *pager, &encoded_val)?;
+                let blob_id = crate::blob_store::BlobStore::write(&mut pager, &encoded_val)?;
                 tree.insert(&mut pager, &btree_key, blob_id)?;
             }
 
@@ -420,7 +420,7 @@ impl GraphEngine {
         {
             let mut pager = self.pager.write().unwrap();
             let encoded_stats = stats.encode();
-            stats_root = crate::blob_store::BlobStore::write(&mut *pager, &encoded_stats)?;
+            stats_root = crate::blob_store::BlobStore::write(&mut pager, &encoded_stats)?;
         }
 
         let pointers: Vec<SegmentPointer> = new_segments
@@ -597,8 +597,12 @@ fn build_segment_from_runs(seg_id: SegmentId, runs: &Arc<Vec<Arc<L0Run>>>) -> Cs
             meta_page_id: 0,
             min_src: 0,
             max_src: 0,
+            min_dst: 0,
+            max_dst: 0,
             offsets: vec![0, 0],
             edges: Vec::new(),
+            in_offsets: Vec::new(),
+            in_edges: Vec::new(),
         };
     }
 
@@ -630,8 +634,12 @@ fn build_segment_from_runs(seg_id: SegmentId, runs: &Arc<Vec<Arc<L0Run>>>) -> Cs
         meta_page_id: 0,
         min_src,
         max_src,
+        min_dst: 0,
+        max_dst: 0,
         offsets,
         edges: edge_vec,
+        in_offsets: Vec::new(),
+        in_edges: Vec::new(),
     }
 }
 

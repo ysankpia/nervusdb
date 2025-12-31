@@ -46,7 +46,7 @@ impl GraphStore for GraphEngine {
 
 impl GraphSnapshot for StorageSnapshot {
     type Neighbors<'a>
-        = std::iter::Map<snapshot::NeighborsIter, fn(snapshot::EdgeKey) -> EdgeKey>
+        = Box<dyn Iterator<Item = EdgeKey> + 'a>
     where
         Self: 'a;
 
@@ -58,9 +58,30 @@ impl GraphSnapshot for StorageSnapshot {
                 dst: e.dst,
             }
         }
-        self.inner
-            .neighbors(src, rel)
-            .map(conv as fn(snapshot::EdgeKey) -> EdgeKey)
+        Box::new(
+            self.inner
+                .neighbors(src, rel)
+                .map(conv as fn(snapshot::EdgeKey) -> EdgeKey),
+        )
+    }
+
+    fn incoming_neighbors(
+        &self,
+        dst: InternalNodeId,
+        rel: Option<RelTypeId>,
+    ) -> Self::Neighbors<'_> {
+        fn conv(e: snapshot::EdgeKey) -> EdgeKey {
+            EdgeKey {
+                src: e.src,
+                rel: e.rel,
+                dst: e.dst,
+            }
+        }
+        Box::new(
+            self.inner
+                .incoming_neighbors(dst, rel)
+                .map(conv as fn(snapshot::EdgeKey) -> EdgeKey),
+        )
     }
 
     fn lookup_index(

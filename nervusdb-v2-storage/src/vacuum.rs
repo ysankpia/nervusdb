@@ -126,7 +126,7 @@ fn mark_reachable_pages(pager: &Pager, roots: &WalRoots) -> Result<BTreeSet<Page
         if len > 0 {
             const I2E_RECORD_SIZE: u64 = 16;
             let records_per_page = (PAGE_SIZE as u64) / I2E_RECORD_SIZE;
-            let page_count = (len + records_per_page - 1) / records_per_page;
+            let page_count = len.div_ceil(records_per_page);
             for i in 0..page_count {
                 reachable.insert(PageId::new(start.as_u64() + i));
             }

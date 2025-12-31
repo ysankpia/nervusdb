@@ -3,7 +3,140 @@ use crate::error::{Error, Result};
 use crate::evaluator::evaluate_expression_value;
 pub use nervusdb_v2_api::LabelId;
 use nervusdb_v2_api::{EdgeKey, ExternalId, GraphSnapshot, InternalNodeId, RelTypeId};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::{Arc, OnceLock};
+
+pub trait Procedure: Send + Sync {
+    fn execute(&self, snapshot: &dyn ErasedSnapshot, args: Vec<Value>) -> Result<Vec<Row>>;
+}
+
+pub trait ErasedSnapshot {
+    fn neighbors_erased(
+        &self,
+        src: InternalNodeId,
+        rel: Option<RelTypeId>,
+    ) -> Box<dyn Iterator<Item = EdgeKey> + '_>;
+    fn incoming_neighbors_erased(
+        &self,
+        dst: InternalNodeId,
+        rel: Option<RelTypeId>,
+    ) -> Box<dyn Iterator<Item = EdgeKey> + '_>;
+    fn node_property_erased(
+        &self,
+        iid: InternalNodeId,
+        key: &str,
+    ) -> Option<nervusdb_v2_api::PropertyValue>;
+    fn resolve_label_name_erased(&self, id: LabelId) -> Option<String>;
+    fn resolve_rel_type_name_erased(&self, id: RelTypeId) -> Option<String>;
+}
+
+impl<S: GraphSnapshot> ErasedSnapshot for S {
+    fn neighbors_erased(
+        &self,
+        src: InternalNodeId,
+        rel: Option<RelTypeId>,
+    ) -> Box<dyn Iterator<Item = EdgeKey> + '_> {
+        Box::new(self.neighbors(src, rel))
+    }
+    fn incoming_neighbors_erased(
+        &self,
+        dst: InternalNodeId,
+        rel: Option<RelTypeId>,
+    ) -> Box<dyn Iterator<Item = EdgeKey> + '_> {
+        Box::new(self.incoming_neighbors(dst, rel))
+    }
+    fn node_property_erased(
+        &self,
+        iid: InternalNodeId,
+        key: &str,
+    ) -> Option<nervusdb_v2_api::PropertyValue> {
+        self.node_property(iid, key)
+    }
+    fn resolve_label_name_erased(&self, id: LabelId) -> Option<String> {
+        self.resolve_label_name(id)
+    }
+    fn resolve_rel_type_name_erased(&self, id: RelTypeId) -> Option<String> {
+        self.resolve_rel_type_name(id)
+    }
+}
+
+pub struct ProcedureRegistry {
+    handlers: HashMap<String, Arc<dyn Procedure>>,
+}
+
+impl Default for ProcedureRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProcedureRegistry {
+    pub fn new() -> Self {
+        let mut handlers: HashMap<String, Arc<dyn Procedure>> = HashMap::new();
+        // Register built-ins
+        handlers.insert("db.info".to_string(), Arc::new(DbInfoProcedure));
+        handlers.insert("math.add".to_string(), Arc::new(MathAddProcedure));
+        Self { handlers }
+    }
+
+    pub fn get(&self, name: &str) -> Option<Arc<dyn Procedure>> {
+        self.handlers.get(name).cloned()
+    }
+}
+
+pub static GLOBAL_PROCEDURE_REGISTRY: OnceLock<ProcedureRegistry> = OnceLock::new();
+
+pub fn get_procedure_registry() -> &'static ProcedureRegistry {
+    GLOBAL_PROCEDURE_REGISTRY.get_or_init(ProcedureRegistry::new)
+}
+
+struct DbInfoProcedure;
+impl Procedure for DbInfoProcedure {
+    fn execute(&self, _snapshot: &dyn ErasedSnapshot, _args: Vec<Value>) -> Result<Vec<Row>> {
+        Ok(vec![Row::new(vec![(
+            "version".to_string(),
+            Value::String("2.0.0".to_string()),
+        )])])
+    }
+}
+
+struct MathAddProcedure;
+impl Procedure for MathAddProcedure {
+    fn execute(&self, _snapshot: &dyn ErasedSnapshot, args: Vec<Value>) -> Result<Vec<Row>> {
+        if args.len() != 2 {
+            return Err(Error::Other("math.add requires 2 arguments".to_string()));
+        }
+        let a = match &args[0] {
+            Value::Int(i) => *i as f64,
+            Value::Float(f) => *f,
+            _ => {
+                return Err(Error::Other(
+                    "math.add requires numeric arguments".to_string(),
+                ));
+            }
+        };
+        let b = match &args[1] {
+            Value::Int(i) => *i as f64,
+            Value::Float(f) => *f,
+            _ => {
+                return Err(Error::Other(
+                    "math.add requires numeric arguments".to_string(),
+                ));
+            }
+        };
+        Ok(vec![Row::new(vec![(
+            "result".to_string(),
+            Value::Float(a + b),
+        )])])
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, PartialOrd, Hash)]
+pub struct PathValue {
+    pub nodes: Vec<InternalNodeId>,
+    pub edges: Vec<EdgeKey>,
+}
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum Value {
@@ -19,6 +152,16 @@ pub enum Value {
     DateTime(i64),
     Blob(Vec<u8>),
     Map(std::collections::BTreeMap<String, Value>),
+    Path(PathValue),
+}
+
+impl Value {
+    pub fn as_string(&self) -> Option<&str> {
+        match self {
+            Value::String(s) => Some(s),
+            _ => None,
+        }
+    }
 }
 
 // Custom Hash implementation for Value (since Float doesn't implement Hash)
@@ -40,6 +183,7 @@ impl Hash for Value {
             Value::DateTime(i) => i.hash(state),
             Value::Blob(b) => b.hash(state),
             Value::Map(m) => m.hash(state),
+            Value::Path(p) => p.hash(state),
         }
     }
 }
@@ -112,6 +256,45 @@ impl Row {
     pub fn columns(&self) -> &[(String, Value)] {
         &self.cols
     }
+
+    pub fn join(&self, other: &Row) -> Row {
+        let mut out = self.clone();
+        out.cols.extend(other.cols.clone());
+        out
+    }
+
+    pub fn join_path(
+        &mut self,
+        alias: &str,
+        src: InternalNodeId,
+        edge: EdgeKey,
+        dst: InternalNodeId,
+    ) {
+        let path = match self.get(alias) {
+            Some(Value::Path(p)) => {
+                let mut p = p.clone();
+                p.edges.push(edge);
+                p.nodes.push(dst);
+                Value::Path(p)
+            }
+            _ => {
+                // Initialize path
+                Value::Path(PathValue {
+                    nodes: vec![src, dst],
+                    edges: vec![edge],
+                })
+            }
+        };
+        self.with_mut(alias, path);
+    }
+
+    fn with_mut(&mut self, name: &str, value: Value) {
+        if let Some((_, v)) = self.cols.iter_mut().find(|(k, _)| k == name) {
+            *v = value;
+        } else {
+            self.cols.push((name.to_string(), value));
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -127,7 +310,7 @@ pub enum Plan {
     MatchOut {
         input: Option<Box<Plan>>,
         src_alias: String,
-        rel: Option<String>,
+        rels: Vec<String>,
         edge_alias: Option<String>,
         dst_alias: String,
         limit: Option<u32>,
@@ -136,12 +319,13 @@ pub enum Plan {
         project: Vec<String>,
         project_external: bool,
         optional: bool,
+        path_alias: Option<String>,
     },
     /// `MATCH (a)-[:rel*min..max]->(b) RETURN ...` (variable length)
     MatchOutVarLen {
         input: Option<Box<Plan>>,
         src_alias: String,
-        rel: Option<String>,
+        rels: Vec<String>,
         edge_alias: Option<String>,
         dst_alias: String,
         min_hops: u32,
@@ -150,6 +334,27 @@ pub enum Plan {
         project: Vec<String>,
         project_external: bool,
         optional: bool,
+        path_alias: Option<String>,
+    },
+    MatchIn {
+        input: Option<Box<Plan>>,
+        src_alias: String,
+        rels: Vec<String>,
+        edge_alias: Option<String>,
+        dst_alias: String,
+        limit: Option<u32>,
+        optional: bool,
+        path_alias: Option<String>,
+    },
+    MatchUndirected {
+        input: Option<Box<Plan>>,
+        src_alias: String,
+        rels: Vec<String>,
+        edge_alias: Option<String>,
+        dst_alias: String,
+        limit: Option<u32>,
+        optional: bool,
+        path_alias: Option<String>,
     },
     /// `MATCH ... WHERE ... RETURN ...` (with filter)
     Filter {
@@ -216,12 +421,30 @@ pub enum Plan {
         value_expr: Expression,
         fallback: Box<Plan>,
     },
+    /// `CartesianProduct` - multiply two plans (join without shared variables)
+    CartesianProduct { left: Box<Plan>, right: Box<Plan> },
+    /// `Apply` - execute subquery for each row (Correlated Subquery)
+    Apply {
+        input: Box<Plan>,
+        subquery: Box<Plan>,
+        alias: Option<String>, // Optional alias for subquery result? usually subquery projects...
+    },
+    /// `CALL namespace.name(args) YIELD x, y`
+    ProcedureCall {
+        input: Box<Plan>,
+        name: Vec<String>,
+        args: Vec<Expression>,
+        yields: Vec<(String, Option<String>)>, // (field_name, alias)
+    },
 }
 
 pub enum PlanIterator<'a, S: GraphSnapshot> {
     ReturnOne(std::iter::Once<Result<Row>>),
     NodeScan(NodeScanIter<'a, S>),
     Filter(FilterIter<'a, S>),
+    CartesianProduct(Box<CartesianProductIter<'a, S>>),
+    Apply(Box<ApplyIter<'a, S>>),
+    ProcedureCall(Box<ProcedureCallIter<'a, S>>),
     Dynamic(Box<dyn Iterator<Item = Result<Row>> + 'a>),
 }
 
@@ -233,6 +456,9 @@ impl<'a, S: GraphSnapshot> Iterator for PlanIterator<'a, S> {
             PlanIterator::ReturnOne(iter) => iter.next(),
             PlanIterator::NodeScan(iter) => iter.next(),
             PlanIterator::Filter(iter) => iter.next(),
+            PlanIterator::CartesianProduct(iter) => iter.next(),
+            PlanIterator::Apply(iter) => iter.next(),
+            PlanIterator::ProcedureCall(iter) => iter.next(),
             PlanIterator::Dynamic(iter) => iter.next(),
         }
     }
@@ -249,14 +475,14 @@ impl<'a, S: GraphSnapshot> Iterator for NodeScanIter<'a, S> {
     type Item = Result<Row>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(iid) = self.node_iter.next() {
+        for iid in self.node_iter.by_ref() {
             if self.snapshot.is_tombstoned_node(iid) {
                 continue;
             }
-            if let Some(lid) = self.label_id {
-                if self.snapshot.node_label(iid) != Some(lid) {
-                    continue;
-                }
+            if let Some(lid) = self.label_id
+                && self.snapshot.node_label(iid) != Some(lid)
+            {
+                continue;
             }
             return Some(Ok(
                 Row::default().with(self.alias.clone(), Value::NodeId(iid))
@@ -299,6 +525,54 @@ impl<'a, S: GraphSnapshot> Iterator for FilterIter<'a, S> {
     }
 }
 
+pub struct CartesianProductIter<'a, S: GraphSnapshot> {
+    pub left_iter: Box<PlanIterator<'a, S>>,
+    pub right_plan: &'a Plan,
+    pub snapshot: &'a S,
+    pub params: &'a crate::query_api::Params,
+
+    pub current_left_row: Option<Row>,
+    pub current_right_iter: Option<Box<PlanIterator<'a, S>>>,
+}
+
+impl<'a, S: GraphSnapshot> Iterator for CartesianProductIter<'a, S> {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.current_left_row.is_none() {
+                match self.left_iter.next() {
+                    Some(Ok(row)) => {
+                        self.current_left_row = Some(row);
+                        self.current_right_iter = Some(Box::new(execute_plan(
+                            self.snapshot,
+                            self.right_plan,
+                            self.params,
+                        )));
+                    }
+                    Some(Err(e)) => return Some(Err(e)),
+                    None => return None,
+                }
+            }
+
+            if let Some(right_iter) = &mut self.current_right_iter {
+                match right_iter.next() {
+                    Some(Ok(right_row)) => {
+                        let left_row = self.current_left_row.as_ref().unwrap();
+                        return Some(Ok(left_row.join(&right_row)));
+                    }
+                    Some(Err(e)) => return Some(Err(e)),
+                    None => {
+                        self.current_left_row = None;
+                        self.current_right_iter = None;
+                        continue;
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
     snapshot: &'a S,
     plan: &'a Plan,
@@ -307,6 +581,48 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
     match plan {
         Plan::ReturnOne => {
             PlanIterator::ReturnOne(std::iter::once(Ok(Row::default().with("1", Value::Int(1)))))
+        }
+        Plan::CartesianProduct { left, right } => {
+            let left_iter = execute_plan(snapshot, left, params);
+            PlanIterator::CartesianProduct(Box::new(CartesianProductIter {
+                left_iter: Box::new(left_iter),
+                right_plan: right,
+                snapshot,
+                params,
+                current_left_row: None,
+                current_right_iter: None,
+            }))
+        }
+        Plan::Apply {
+            input,
+            subquery,
+            alias: _,
+        } => {
+            let input_iter = execute_plan(snapshot, input, params);
+            PlanIterator::Apply(Box::new(ApplyIter {
+                input_iter: Box::new(input_iter),
+                subquery_plan: subquery,
+                snapshot,
+                base_params: params,
+                current_outer_row: None,
+                current_results: Vec::new().into_iter(),
+            }))
+        }
+        Plan::ProcedureCall {
+            input,
+            name,
+            args,
+            yields,
+        } => {
+            let input_iter = execute_plan(snapshot, input, params);
+            PlanIterator::ProcedureCall(Box::new(ProcedureCallIter::new(
+                Box::new(input_iter),
+                name.join("."),
+                args,
+                yields,
+                snapshot,
+                params,
+            )))
         }
         Plan::NodeScan { alias, label } => {
             let label_id = if let Some(l) = label {
@@ -328,21 +644,29 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
         Plan::MatchOut {
             input,
             src_alias,
-            rel,
+            rels,
             edge_alias,
             dst_alias,
             limit,
             project: _,
             project_external: _,
             optional,
+            path_alias,
         } => {
-            let rel_id = if let Some(r) = rel {
-                match snapshot.resolve_rel_type_id(r) {
-                    Some(id) => Some(id),
-                    None => return PlanIterator::Dynamic(Box::new(std::iter::empty())),
-                }
-            } else {
+            let rel_ids = if rels.is_empty() {
                 None
+            } else {
+                let mut ids = Vec::new();
+                for r in rels {
+                    if let Some(id) = snapshot.resolve_rel_type_id(r) {
+                        ids.push(id);
+                    }
+                }
+                if ids.is_empty() {
+                    // None of the requested types exist
+                    return PlanIterator::Dynamic(Box::new(std::iter::empty()));
+                }
+                Some(ids)
             };
 
             if let Some(input_plan) = input {
@@ -351,13 +675,14 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                     snapshot,
                     input: Box::new(input_iter),
                     src_alias,
-                    rel: rel_id,
+                    rels: rel_ids,
                     edge_alias: edge_alias.as_deref(),
                     dst_alias,
                     optional: *optional,
                     cur_row: None,
                     cur_edges: None,
                     yielded_any: false,
+                    path_alias: path_alias.as_deref(),
                 };
                 if let Some(n) = limit {
                     PlanIterator::Dynamic(Box::new(expand.take(*n as usize)))
@@ -368,9 +693,10 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                 let base = MatchOutIter::new(
                     snapshot,
                     src_alias,
-                    rel_id,
+                    rel_ids,
                     edge_alias.as_deref(),
                     dst_alias,
+                    path_alias.as_deref(),
                 );
                 if let Some(n) = limit {
                     PlanIterator::Dynamic(Box::new(base.take(*n as usize)))
@@ -382,7 +708,7 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
         Plan::MatchOutVarLen {
             input,
             src_alias,
-            rel,
+            rels,
             edge_alias,
             dst_alias,
             min_hops,
@@ -391,34 +717,302 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
             project: _,
             project_external: _,
             optional,
+            path_alias,
         } => {
             let input_iter = input.as_ref().map(|p| execute_plan(snapshot, p, params));
 
-            let rel_id = if let Some(r) = rel {
-                match snapshot.resolve_rel_type_id(r) {
-                    Some(id) => Some(id),
-                    None => return PlanIterator::Dynamic(Box::new(std::iter::empty())),
-                }
-            } else {
+            let rel_ids = if rels.is_empty() {
                 None
+            } else {
+                let mut ids = Vec::new();
+                for r in rels {
+                    if let Some(id) = snapshot.resolve_rel_type_id(r) {
+                        ids.push(id);
+                    }
+                }
+                if ids.is_empty() {
+                    return PlanIterator::Dynamic(Box::new(std::iter::empty()));
+                }
+                Some(ids)
             };
 
             let base = MatchOutVarLenIter::new(
                 snapshot,
                 input_iter.map(|i| Box::new(i) as Box<dyn Iterator<Item = Result<Row>>>),
                 src_alias,
-                rel_id,
+                rel_ids,
                 edge_alias.as_deref(),
                 dst_alias,
                 *min_hops,
                 *max_hops,
                 *limit,
                 *optional,
+                path_alias.as_deref(),
             );
             if let Some(n) = limit {
                 PlanIterator::Dynamic(Box::new(base.take(*n as usize)))
             } else {
                 PlanIterator::Dynamic(Box::new(base))
+            }
+        }
+        Plan::MatchIn {
+            input,
+            src_alias,
+            rels,
+            edge_alias,
+            dst_alias,
+            limit,
+            optional,
+            path_alias,
+        } => {
+            let rel_ids = if rels.is_empty() {
+                None
+            } else {
+                let mut ids = Vec::new();
+                for r in rels {
+                    if let Some(id) = snapshot.resolve_rel_type_id(r) {
+                        ids.push(id);
+                    }
+                }
+                if ids.is_empty() {
+                    return PlanIterator::Dynamic(Box::new(std::iter::empty()));
+                }
+                Some(ids)
+            };
+
+            let input_iter: Box<dyn Iterator<Item = Result<Row>>> = if let Some(input_plan) = input
+            {
+                Box::new(execute_plan(snapshot, input_plan, params))
+            } else {
+                Box::new(std::iter::once(Ok(Row::default())))
+            };
+
+            let src_alias = src_alias.clone();
+            let dst_alias = dst_alias.clone();
+            let edge_alias = edge_alias.clone();
+            let optional = *optional;
+
+            PlanIterator::Dynamic(Box::new(input_iter.flat_map(move |result| {
+                match result {
+                    Ok(row) => {
+                        let node_val = row.get(&src_alias).cloned();
+                        let target_iid = match node_val {
+                            Some(Value::NodeId(id)) => id,
+                            _ => {
+                                return Box::new(std::iter::empty())
+                                    as Box<dyn Iterator<Item = Result<Row>>>;
+                            }
+                        };
+
+                        let rel_ids = rel_ids.clone(); // Capture for closure
+                        let candidates: Box<dyn Iterator<Item = EdgeKey>> =
+                            if let Some(rids) = &rel_ids {
+                                let mut iter: Box<dyn Iterator<Item = EdgeKey>> =
+                                    Box::new(std::iter::empty());
+                                for rid in rids {
+                                    iter = Box::new(iter.chain(
+                                        snapshot.incoming_neighbors_erased(target_iid, Some(*rid)),
+                                    ));
+                                }
+                                iter
+                            } else {
+                                snapshot.incoming_neighbors_erased(target_iid, None)
+                            };
+
+                        let dst_alias_binding = dst_alias.clone();
+                        let edge_alias_binding = edge_alias.clone();
+                        let path_alias = path_alias.clone();
+                        let row_for_map = row.clone();
+
+                        let mapped = candidates.map(move |edge| {
+                            let mut new_row = row_for_map.clone();
+                            new_row =
+                                new_row.with(dst_alias_binding.clone(), Value::NodeId(edge.src));
+                            if let Some(ea) = &edge_alias_binding {
+                                new_row = new_row.with(ea.clone(), Value::EdgeKey(edge));
+                            }
+                            if let Some(pa) = &path_alias {
+                                new_row.join_path(pa, edge.dst, edge, edge.src);
+                            }
+                            Ok(new_row)
+                        });
+
+                        if optional {
+                            let results: Vec<_> = mapped.collect();
+                            if results.is_empty() {
+                                let mut new_row = row.clone();
+                                new_row = new_row.with(dst_alias.clone(), Value::Null);
+                                if let Some(ea) = &edge_alias {
+                                    new_row = new_row.with(ea.clone(), Value::Null);
+                                }
+                                Box::new(std::iter::once(Ok(new_row)))
+                                    as Box<dyn Iterator<Item = Result<Row>>>
+                            } else {
+                                Box::new(results.into_iter())
+                                    as Box<dyn Iterator<Item = Result<Row>>>
+                            }
+                        } else {
+                            Box::new(mapped) as Box<dyn Iterator<Item = Result<Row>>>
+                        }
+                    }
+                    Err(e) => {
+                        Box::new(std::iter::once(Err(e))) as Box<dyn Iterator<Item = Result<Row>>>
+                    }
+                }
+            })))
+        }
+        Plan::MatchUndirected {
+            input,
+            src_alias,
+            rels,
+            edge_alias,
+            dst_alias,
+            limit,
+            optional,
+            path_alias,
+        } => {
+            let rel_ids = if rels.is_empty() {
+                None
+            } else {
+                let mut ids = Vec::new();
+                for r in rels {
+                    if let Some(id) = snapshot.resolve_rel_type_id(r) {
+                        ids.push(id);
+                    }
+                }
+                if ids.is_empty() {
+                    return PlanIterator::Dynamic(Box::new(std::iter::empty()));
+                }
+                Some(ids)
+            };
+
+            let input_iter: Box<dyn Iterator<Item = Result<Row>>> = if let Some(input_plan) = input
+            {
+                Box::new(execute_plan(snapshot, input_plan, params))
+            } else {
+                Box::new(std::iter::once(Ok(Row::default())))
+            };
+
+            // Collect successfully to avoid cloning Error
+            let rows_result: Result<Vec<Row>> = input_iter.collect();
+            let rows = match rows_result {
+                Ok(r) => r,
+                Err(e) => return PlanIterator::Dynamic(Box::new(std::iter::once(Err(e)))),
+            };
+
+            let src_alias = src_alias.clone();
+            let dst_alias = dst_alias.clone();
+            let edge_alias = edge_alias.clone();
+            let optional = *optional;
+            let rel_ids_out = rel_ids.clone();
+
+            // Outgoing Iterator
+            let rows_out = rows.clone();
+            let src_alias_out = src_alias.clone();
+            let dst_alias_out = dst_alias.clone();
+            let edge_alias_out = edge_alias.clone();
+
+            let out_iter = rows_out.into_iter().map(Ok).flat_map(move |res| match res {
+                Ok(row) => {
+                    let node_val = row.get(&src_alias_out).cloned();
+                    let src_iid = match node_val {
+                        Some(Value::NodeId(id)) => id,
+                        _ => {
+                            return Box::new(std::iter::empty())
+                                as Box<dyn Iterator<Item = Result<Row>>>;
+                        }
+                    };
+
+                    let neighbors: Box<dyn Iterator<Item = EdgeKey>> = if let Some(rids) =
+                        &rel_ids_out
+                    {
+                        let mut iter: Box<dyn Iterator<Item = EdgeKey>> =
+                            Box::new(std::iter::empty());
+                        for rid in rids {
+                            iter = Box::new(iter.chain(snapshot.neighbors(src_iid, Some(*rid))));
+                        }
+                        iter
+                    } else {
+                        Box::new(snapshot.neighbors(src_iid, None))
+                    };
+
+                    let dst_alias_inner = dst_alias_out.clone();
+                    let edge_alias_inner = edge_alias_out.clone();
+
+                    let mapped = neighbors.map(move |edge| {
+                        let mut new_row = row.clone();
+                        new_row = new_row.with(dst_alias_inner.clone(), Value::NodeId(edge.dst));
+                        if let Some(ea) = &edge_alias_inner {
+                            new_row = new_row.with(ea.clone(), Value::EdgeKey(edge));
+                        }
+                        Ok(new_row)
+                    });
+                    Box::new(mapped) as Box<dyn Iterator<Item = Result<Row>>>
+                }
+                Err(e) => {
+                    Box::new(std::iter::once(Err(e))) as Box<dyn Iterator<Item = Result<Row>>>
+                }
+            });
+
+            let rows_in = rows;
+            // src_alias, dst_alias, edge_alias are still owned by this function scope (mostly),
+            // but were cloned for out_iter. Original vars can be moved into in_iter.
+            // Actually, `src_alias.clone()` above didn't consume `src_alias`.
+
+            let in_iter = rows_in.into_iter().map(Ok).flat_map(move |res| match res {
+                Ok(row) => {
+                    let node_val = row.get(&src_alias).cloned();
+                    let target_iid = match node_val {
+                        Some(Value::NodeId(id)) => id,
+                        _ => {
+                            return Box::new(std::iter::empty())
+                                as Box<dyn Iterator<Item = Result<Row>>>;
+                        }
+                    };
+
+                    let rel_ids_in = rel_ids.clone();
+                    let candidates: Box<dyn Iterator<Item = EdgeKey>> =
+                        if let Some(rids) = &rel_ids_in {
+                            let mut iter: Box<dyn Iterator<Item = EdgeKey>> =
+                                Box::new(std::iter::empty());
+                            for rid in rids {
+                                iter = Box::new(iter.chain(
+                                    snapshot.incoming_neighbors_erased(target_iid, Some(*rid)),
+                                ));
+                            }
+                            iter
+                        } else {
+                            snapshot.incoming_neighbors_erased(target_iid, None)
+                        };
+
+                    let dst_alias_inner = dst_alias.clone();
+                    let edge_alias_inner = edge_alias.clone();
+                    let path_alias_inner = path_alias.clone();
+
+                    let mapped = candidates.map(move |edge| {
+                        let mut new_row = row.clone();
+                        new_row = new_row.with(dst_alias_inner.clone(), Value::NodeId(edge.src));
+                        if let Some(ea) = &edge_alias_inner {
+                            new_row = new_row.with(ea.clone(), Value::EdgeKey(edge));
+                        }
+                        if let Some(pa) = &path_alias_inner {
+                            new_row.join_path(pa, edge.dst, edge, edge.src);
+                        }
+                        Ok(new_row)
+                    });
+                    Box::new(mapped) as Box<dyn Iterator<Item = Result<Row>>>
+                }
+                Err(e) => {
+                    Box::new(std::iter::once(Err(e))) as Box<dyn Iterator<Item = Result<Row>>>
+                }
+            });
+
+            let combined = out_iter.chain(in_iter);
+
+            if let Some(n) = limit {
+                PlanIterator::Dynamic(Box::new(combined.take(*n as usize)))
+            } else {
+                PlanIterator::Dynamic(Box::new(combined))
             }
         }
         Plan::Filter { input, predicate } => {
@@ -1322,6 +1916,9 @@ fn convert_executor_value_to_property(value: &Value) -> Result<PropertyValue> {
         Value::Float(f) => Ok(PropertyValue::Float(*f)),
         Value::DateTime(i) => Ok(PropertyValue::DateTime(*i)),
         Value::Blob(b) => Ok(PropertyValue::Blob(b.clone())),
+        Value::Path(_) => Err(Error::Other(
+            "Path value cannot be stored as property".to_string(),
+        )),
         Value::List(l) => {
             let mut list = Vec::with_capacity(l.len());
             for v in l {
@@ -1337,7 +1934,7 @@ fn convert_executor_value_to_property(value: &Value) -> Result<PropertyValue> {
             Ok(PropertyValue::Map(map))
         }
         Value::NodeId(_) | Value::ExternalId(_) | Value::EdgeKey(_) => Err(Error::NotImplemented(
-            "node/edge identifiers as property values are not supported".into(),
+            "node/edge identifiers as property values are not supported",
         )),
     }
 }
@@ -1345,31 +1942,34 @@ fn convert_executor_value_to_property(value: &Value) -> Result<PropertyValue> {
 struct MatchOutIter<'a, S: GraphSnapshot + 'a> {
     snapshot: &'a S,
     src_alias: &'a str,
-    rel: Option<RelTypeId>,
+    rels: Option<Vec<RelTypeId>>,
     edge_alias: Option<&'a str>,
     dst_alias: &'a str,
     node_iter: Box<dyn Iterator<Item = InternalNodeId> + 'a>,
     cur_src: Option<InternalNodeId>,
-    cur_edges: Option<S::Neighbors<'a>>,
+    cur_edges: Option<Box<dyn Iterator<Item = EdgeKey> + 'a>>,
+    path_alias: Option<&'a str>,
 }
 
 impl<'a, S: GraphSnapshot + 'a> MatchOutIter<'a, S> {
     fn new(
         snapshot: &'a S,
         src_alias: &'a str,
-        rel: Option<RelTypeId>,
+        rels: Option<Vec<RelTypeId>>,
         edge_alias: Option<&'a str>,
         dst_alias: &'a str,
+        path_alias: Option<&'a str>,
     ) -> Self {
         Self {
             snapshot,
             src_alias,
-            rel,
+            rels,
             edge_alias,
             dst_alias,
             node_iter: snapshot.nodes(),
             cur_src: None,
             cur_edges: None,
+            path_alias,
         }
     }
 
@@ -1392,7 +1992,24 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutIter<'a, S> {
             if self.cur_edges.is_none() {
                 let src = self.next_src()?;
                 self.cur_src = Some(src);
-                self.cur_edges = Some(self.snapshot.neighbors(src, self.rel));
+
+                if let Some(rels) = &self.rels {
+                    // Chain multiple iterators
+                    let mut iter: Box<dyn Iterator<Item = EdgeKey> + 'a> =
+                        Box::new(std::iter::empty());
+                    for rel in rels {
+                        // Note: Depending on impl, this might need optimizing.
+                        // But for now we chain them.
+                        // We must clone rel because it's owned by the Vec in struct? No, rel is Copy (RelTypeId).
+                        let r = *rel;
+                        let neighbors = self.snapshot.neighbors(src, Some(r));
+                        iter = Box::new(iter.chain(neighbors));
+                    }
+                    self.cur_edges = Some(iter);
+                } else {
+                    // Match all
+                    self.cur_edges = Some(Box::new(self.snapshot.neighbors(src, None)));
+                }
             }
 
             let edges = self.cur_edges.as_mut().expect("cur_edges must exist");
@@ -1403,6 +2020,10 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutIter<'a, S> {
                     row = row.with(edge_alias, Value::EdgeKey(edge));
                 }
                 row = row.with(self.dst_alias, Value::NodeId(edge.dst));
+
+                if let Some(path_alias) = self.path_alias {
+                    row.join_path(path_alias, edge.src, edge, edge.dst);
+                }
 
                 // Always return full row - projection happens in Plan::Project
                 return Some(Ok(row));
@@ -1423,18 +2044,25 @@ struct MatchOutVarLenIter<'a, S: GraphSnapshot + 'a> {
     input: Option<Box<dyn Iterator<Item = Result<Row>> + 'a>>,
     cur_row: Option<Row>,
     src_alias: &'a str,
-    rel: Option<RelTypeId>,
+    rels: Option<Vec<RelTypeId>>,
     edge_alias: Option<&'a str>,
     dst_alias: &'a str,
     min_hops: u32,
     max_hops: Option<u32>,
     limit: Option<u32>,
     node_iter: Option<Box<dyn Iterator<Item = InternalNodeId> + 'a>>,
-    // DFS state: (start_node, current_node, current_depth, incoming_edge)
-    stack: Vec<(InternalNodeId, InternalNodeId, u32, Option<EdgeKey>)>,
+    // DFS state: (start_node, current_node, current_depth, incoming_edge, current_path)
+    stack: Vec<(
+        InternalNodeId,
+        InternalNodeId,
+        u32,
+        Option<EdgeKey>,
+        Option<PathValue>,
+    )>,
     emitted: u32,
     yielded_any: bool,
     optional: bool,
+    path_alias: Option<&'a str>,
 }
 
 impl<'a, S: GraphSnapshot + 'a> MatchOutVarLenIter<'a, S> {
@@ -1443,13 +2071,14 @@ impl<'a, S: GraphSnapshot + 'a> MatchOutVarLenIter<'a, S> {
         snapshot: &'a S,
         input: Option<Box<dyn Iterator<Item = Result<Row>> + 'a>>,
         src_alias: &'a str,
-        rel: Option<RelTypeId>,
+        rels: Option<Vec<RelTypeId>>,
         edge_alias: Option<&'a str>,
         dst_alias: &'a str,
         min_hops: u32,
         max_hops: Option<u32>,
         limit: Option<u32>,
         optional: bool,
+        path_alias: Option<&'a str>,
     ) -> Self {
         let node_iter = if input.is_none() {
             Some(snapshot.nodes())
@@ -1462,7 +2091,7 @@ impl<'a, S: GraphSnapshot + 'a> MatchOutVarLenIter<'a, S> {
             input,
             cur_row: None,
             src_alias,
-            rel,
+            rels,
             edge_alias,
             dst_alias,
             min_hops,
@@ -1473,12 +2102,28 @@ impl<'a, S: GraphSnapshot + 'a> MatchOutVarLenIter<'a, S> {
             emitted: 0,
             yielded_any: false,
             optional,
+            path_alias,
         }
     }
 
     /// Start DFS from a node
     fn start_dfs(&mut self, start_node: InternalNodeId) {
-        self.stack.push((start_node, start_node, 0, None));
+        let initial_path = if let Some(alias) = self.path_alias
+            && let Some(row) = &self.cur_row
+        {
+            match row.get(alias) {
+                Some(Value::Path(p)) => Some(p.clone()),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        // If it's a new path (not continuation), initialize it with the first node.
+        // Actually, join_path will do that if we pass None initial_path.
+        // But for DFS stack, we need to hold it.
+        self.stack
+            .push((start_node, start_node, 0, None, initial_path));
     }
 }
 
@@ -1489,20 +2134,66 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
         let max_hops = self.max_hops.unwrap_or(DEFAULT_MAX_VAR_LEN_HOPS);
 
         // Check limit
-        if let Some(limit) = self.limit {
-            if self.emitted >= limit {
-                return None;
-            }
+        if let Some(limit) = self.limit
+            && self.emitted >= limit
+        {
+            return None;
         }
 
         loop {
             // 1. Process Stack (DFS)
-            if let Some((start_node, current_node, depth, incoming_edge)) = self.stack.pop() {
+            if let Some((start_node, current_node, depth, incoming_edge, current_path)) =
+                self.stack.pop()
+            {
                 // Expand
                 if depth < max_hops {
-                    for edge in self.snapshot.neighbors(current_node, self.rel) {
-                        self.stack
-                            .push((start_node, edge.dst, depth + 1, Some(edge)));
+                    if let Some(rels) = &self.rels {
+                        for rel in rels {
+                            for edge in self.snapshot.neighbors(current_node, Some(*rel)) {
+                                let mut next_path = current_path.clone();
+                                if self.path_alias.is_some() {
+                                    // Build next path
+                                    if let Some(p) = &mut next_path {
+                                        p.edges.push(edge);
+                                        p.nodes.push(edge.dst);
+                                    } else {
+                                        next_path = Some(PathValue {
+                                            nodes: vec![edge.src, edge.dst],
+                                            edges: vec![edge],
+                                        });
+                                    }
+                                }
+                                self.stack.push((
+                                    start_node,
+                                    edge.dst,
+                                    depth + 1,
+                                    Some(edge),
+                                    next_path,
+                                ));
+                            }
+                        }
+                    } else {
+                        for edge in self.snapshot.neighbors(current_node, None) {
+                            let mut next_path = current_path.clone();
+                            if let Some(path_alias) = self.path_alias {
+                                if let Some(p) = &mut next_path {
+                                    p.edges.push(edge);
+                                    p.nodes.push(edge.dst);
+                                } else {
+                                    next_path = Some(PathValue {
+                                        nodes: vec![edge.src, edge.dst],
+                                        edges: vec![edge],
+                                    });
+                                }
+                            }
+                            self.stack.push((
+                                start_node,
+                                edge.dst,
+                                depth + 1,
+                                Some(edge),
+                                next_path,
+                            ));
+                        }
                     }
                 }
 
@@ -1520,6 +2211,22 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
                     }
                     row = row.with(self.dst_alias, Value::NodeId(current_node));
 
+                    if let Some(path_alias) = self.path_alias {
+                        if let Some(p) = current_path {
+                            row = row.with(path_alias, Value::Path(p));
+                        } else if depth == 0 {
+                            // Empty path starting with just the node?
+                            // Cypher p = (n) where length(p) = 0.
+                            row = row.with(
+                                path_alias,
+                                Value::Path(PathValue {
+                                    nodes: vec![start_node],
+                                    edges: vec![],
+                                }),
+                            );
+                        }
+                    }
+
                     self.emitted += 1;
                     self.yielded_any = true;
                     return Some(Ok(row));
@@ -1528,17 +2235,19 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
             }
 
             // 2. Stack Empty: Check Optional Null emission
-            if let Some(row) = &self.cur_row {
-                if self.optional && !self.yielded_any && self.input.is_some() {
-                    self.yielded_any = true;
-                    let mut null_row = row.clone();
-                    null_row = null_row.with(self.dst_alias, Value::Null);
-                    if let Some(ea) = self.edge_alias {
-                        null_row = null_row.with(ea, Value::Null);
-                    }
-                    self.emitted += 1;
-                    return Some(Ok(null_row));
+            if let Some(row) = &self.cur_row
+                && self.optional
+                && !self.yielded_any
+                && self.input.is_some()
+            {
+                self.yielded_any = true;
+                let mut null_row = row.clone();
+                null_row = null_row.with(self.dst_alias, Value::Null);
+                if let Some(ea) = self.edge_alias {
+                    null_row = null_row.with(ea, Value::Null);
                 }
+                self.emitted += 1;
+                return Some(Ok(null_row));
             }
 
             // 3. Get Next Start Node
@@ -1731,13 +2440,14 @@ struct ExpandIter<'a, S: GraphSnapshot + 'a> {
     snapshot: &'a S,
     input: Box<dyn Iterator<Item = Result<Row>> + 'a>,
     src_alias: &'a str,
-    rel: Option<RelTypeId>,
+    rels: Option<Vec<RelTypeId>>,
     edge_alias: Option<&'a str>,
     dst_alias: &'a str,
     optional: bool,
     cur_row: Option<Row>,
-    cur_edges: Option<S::Neighbors<'a>>,
+    cur_edges: Option<Box<dyn Iterator<Item = EdgeKey> + 'a>>,
     yielded_any: bool,
+    path_alias: Option<&'a str>,
 }
 
 impl<'a, S: GraphSnapshot + 'a> Iterator for ExpandIter<'a, S> {
@@ -1755,7 +2465,19 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for ExpandIter<'a, S> {
                             .map(|(_, v)| v);
                         match src_val {
                             Some(Value::NodeId(id)) => {
-                                self.cur_edges = Some(self.snapshot.neighbors(*id, self.rel));
+                                if let Some(rels) = &self.rels {
+                                    let mut iter: Box<dyn Iterator<Item = EdgeKey> + 'a> =
+                                        Box::new(std::iter::empty());
+                                    // Reverse iteration to maintain chain order? Or standard.
+                                    for rel in rels {
+                                        let neighbors = self.snapshot.neighbors(*id, Some(*rel));
+                                        iter = Box::new(iter.chain(neighbors));
+                                    }
+                                    self.cur_edges = Some(iter);
+                                } else {
+                                    self.cur_edges =
+                                        Some(Box::new(self.snapshot.neighbors(*id, None)));
+                                }
                                 self.yielded_any = false;
                             }
                             Some(Value::Null) => {
@@ -1802,6 +2524,11 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for ExpandIter<'a, S> {
                     row = row.with(ea, Value::EdgeKey(edge));
                 }
                 row = row.with(self.dst_alias, Value::NodeId(edge.dst));
+
+                if let Some(path_alias) = self.path_alias {
+                    row.join_path(path_alias, edge.src, edge, edge.dst);
+                }
+
                 return Some(Ok(row));
             } else {
                 if self.optional && !self.yielded_any {
@@ -1816,6 +2543,159 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for ExpandIter<'a, S> {
                 }
                 self.cur_edges = None;
                 self.cur_row = None;
+            }
+        }
+    }
+}
+
+pub struct ApplyIter<'a, S: GraphSnapshot> {
+    pub input_iter: Box<PlanIterator<'a, S>>,
+    pub subquery_plan: &'a Plan,
+    pub snapshot: &'a S,
+    pub base_params: &'a crate::query_api::Params,
+    pub current_outer_row: Option<Row>,
+    pub current_results: std::vec::IntoIter<Row>,
+}
+
+impl<'a, S: GraphSnapshot> Iterator for ApplyIter<'a, S> {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            // 1. Try to yield from current subquery results
+            if let Some(inner_row) = self.current_results.next() {
+                if let Some(outer) = &self.current_outer_row {
+                    return Some(Ok(outer.join(&inner_row)));
+                } else {
+                    return Some(Err(Error::Other("Lost outer row in Apply".into())));
+                }
+            }
+
+            // 2. Consume next outer row
+            match self.input_iter.next() {
+                Some(Ok(outer_row)) => {
+                    self.current_outer_row = Some(outer_row.clone());
+
+                    // Prepare params
+                    // We need to merge base_params and outer_row
+                    let mut extended_params = self.base_params.clone();
+                    for (k, v) in &outer_row.cols {
+                        extended_params.insert(k.clone(), v.clone());
+                    }
+
+                    // Execute subquery
+                    // We must materialize to avoid lifetime issues with local extended_params
+                    // Note: execute_plan returns an Iterator. We consume it immediately.
+                    let iter = execute_plan(self.snapshot, self.subquery_plan, &extended_params);
+
+                    let results: Vec<Row> = match iter.collect() {
+                        Ok(rows) => rows,
+                        Err(e) => return Some(Err(e)),
+                    };
+
+                    self.current_results = results.into_iter();
+                    // Loop will continue and pick up the first result
+                }
+                Some(Err(e)) => return Some(Err(e)),
+                None => return None, // Input exhausted
+            }
+        }
+    }
+}
+
+pub struct ProcedureCallIter<'a, S: GraphSnapshot + 'a> {
+    input_iter: Box<PlanIterator<'a, S>>,
+    proc_name: String,
+    args: &'a [Expression],
+    yields: &'a [(String, Option<String>)],
+    snapshot: &'a S,
+    params: &'a crate::query_api::Params,
+    current_outer_row: Option<Row>,
+    current_results: std::vec::IntoIter<Row>,
+}
+
+impl<'a, S: GraphSnapshot + 'a> ProcedureCallIter<'a, S> {
+    pub fn new(
+        input_iter: Box<PlanIterator<'a, S>>,
+        proc_name: String,
+        args: &'a [Expression],
+        yields: &'a [(String, Option<String>)],
+        snapshot: &'a S,
+        params: &'a crate::query_api::Params,
+    ) -> Self {
+        Self {
+            input_iter,
+            proc_name,
+            args,
+            yields,
+            snapshot,
+            params,
+            current_outer_row: None,
+            current_results: Vec::new().into_iter(),
+        }
+    }
+}
+
+impl<'a, S: GraphSnapshot + 'a> Iterator for ProcedureCallIter<'a, S> {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            // 1. Try to yield from current sub-results
+            if let Some(proc_row) = self.current_results.next()
+                && let Some(outer_row) = &self.current_outer_row
+            {
+                // Start with outer row
+                let mut joined = outer_row.clone();
+                // Merge proc_row into joined, applying YIELD aliases
+                if self.yields.is_empty() {
+                    // If no yields specified, just merge all?
+                    // Actually in Cypher, if no YIELD is specified, it might be an error or return all.
+                    // For NervusDB MVP: if yields is empty, assume we return everything from proc_row.
+                    for (k, v) in proc_row.cols {
+                        joined = joined.with(k, v);
+                    }
+                } else {
+                    for (field, alias) in self.yields {
+                        if let Some(val) = proc_row.get(field) {
+                            joined = joined.with(alias.as_ref().unwrap_or(field), val.clone());
+                        }
+                    }
+                }
+                return Some(Ok(joined));
+            }
+
+            // 2. Fetch next outer row
+            match self.input_iter.next() {
+                Some(Ok(outer_row)) => {
+                    // 3. Evaluate arguments
+                    let mut eval_args = Vec::with_capacity(self.args.len());
+                    for arg in self.args {
+                        let v =
+                            evaluate_expression_value(arg, &outer_row, self.snapshot, self.params);
+                        eval_args.push(v);
+                    }
+
+                    // 4. Call procedure
+                    let registry = get_procedure_registry();
+                    if let Some(proc) = registry.get(&self.proc_name) {
+                        match proc.execute(self.snapshot as &dyn ErasedSnapshot, eval_args) {
+                            Ok(results) => {
+                                self.current_outer_row = Some(outer_row);
+                                self.current_results = results.into_iter();
+                                // Loop continues to yield from current_results
+                            }
+                            Err(e) => return Some(Err(e)),
+                        }
+                    } else {
+                        return Some(Err(Error::Other(format!(
+                            "Procedure {} not found",
+                            self.proc_name
+                        ))));
+                    }
+                }
+                Some(Err(e)) => return Some(Err(e)),
+                None => return None,
             }
         }
     }

@@ -135,6 +135,16 @@ fn value_to_json_v2<S: GraphSnapshot>(snapshot: &S, value: &V2Value) -> serde_js
                 list.iter().map(|v| value_to_json_v2(snapshot, v)).collect();
             serde_json::Value::Array(arr)
         }
+        V2Value::Path(path_value) => {
+            serde_json::json!({
+                "nodes": path_value.nodes,
+                "edges": path_value.edges.iter().map(|e| serde_json::json!({
+                    "src": e.src,
+                    "rel": e.rel,
+                    "dst": e.dst
+                })).collect::<Vec<_>>()
+            })
+        }
     }
 }
 

@@ -1,0 +1,29 @@
+#!/bin/sh
+# Git pre-commit hook for Rust project
+set -e
+
+echo "🔧 [pre-commit] Running checks..."
+
+# Format code
+echo "📝 Formatting code..."
+cargo fmt --all
+
+# Run clippy
+echo "🔍 Running clippy..."
+if ! cargo clippy --workspace --all-targets -- -W warnings; then
+    echo "❌ Clippy checks failed. Please fix the issues and try again."
+    exit 1
+fi
+
+# Run quick tests
+echo "⚡ Running quick tests..."
+if ! cargo test --lib --workspace --no-fail-fast; then
+    echo "❌ Tests failed. Please fix the failing tests and try again."
+    exit 1
+fi
+
+# Stage formatted files
+git add -u
+
+echo "✅ Pre-commit checks passed!"
+exit 0

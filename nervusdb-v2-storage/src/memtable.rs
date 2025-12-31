@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 #[derive(Debug, Default)]
 pub struct MemTable {
     out: HashMap<InternalNodeId, BTreeSet<EdgeKey>>,
+    in_: HashMap<InternalNodeId, BTreeSet<EdgeKey>>,
     tombstoned_nodes: BTreeSet<InternalNodeId>,
     tombstoned_edges: BTreeSet<EdgeKey>,
     // Node properties: node_id -> { key -> value }
@@ -23,6 +24,7 @@ impl MemTable {
         let key = EdgeKey { src, rel, dst };
         self.tombstoned_edges.remove(&key);
         self.out.entry(src).or_default().insert(key);
+        self.in_.entry(dst).or_default().insert(key);
     }
 
     pub fn tombstone_node(&mut self, node: InternalNodeId) {
@@ -35,6 +37,12 @@ impl MemTable {
             set.remove(&key);
             if set.is_empty() {
                 self.out.remove(&src);
+            }
+        }
+        if let Some(set) = self.in_.get_mut(&dst) {
+            set.remove(&key);
+            if set.is_empty() {
+                self.in_.remove(&dst);
             }
         }
         self.tombstoned_edges.insert(key);
@@ -162,6 +170,11 @@ impl MemTable {
             edges_by_src.insert(src, edges.into_iter().collect());
         }
 
+        let mut edges_by_dst: BTreeMap<InternalNodeId, Vec<EdgeKey>> = BTreeMap::new();
+        for (dst, edges) in self.in_ {
+            edges_by_dst.insert(dst, edges.into_iter().collect());
+        }
+
         // Convert HashMap to BTreeMap for L0Run
         let node_properties: BTreeMap<_, _> = self
             .node_properties
@@ -177,6 +190,7 @@ impl MemTable {
         L0Run::new(
             txid,
             edges_by_src,
+            edges_by_dst,
             self.tombstoned_nodes,
             self.tombstoned_edges,
             node_properties,

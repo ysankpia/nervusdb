@@ -1,8 +1,8 @@
-use crate::ast::{BinaryOperator, Clause, Expression, Literal, Query, RelationshipDirection};
+use crate::ast::{BinaryOperator, CallClause, Clause, Expression, Literal, Query};
 use crate::error::{Error, Result};
 use crate::executor::{Plan, Row, Value, execute_plan, execute_write};
 use nervusdb_v2_api::GraphSnapshot;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,24 +198,30 @@ fn render_plan(plan: &Plan) -> String {
             Plan::MatchOut {
                 input: _,
                 src_alias,
-                rel,
+                rels,
                 edge_alias,
                 dst_alias,
                 limit,
                 project: _,
                 project_external: _,
                 optional,
+                path_alias,
             } => {
                 let opt_str = if *optional { " OPTIONAL" } else { "" };
+                let path_str = if let Some(p) = path_alias {
+                    format!(" path={p}")
+                } else {
+                    "".to_string()
+                };
                 let _ = writeln!(
                     out,
-                    "{pad}MatchOut{opt_str}(src={src_alias}, rel={rel:?}, edge={edge_alias:?}, dst={dst_alias}, limit={limit:?})"
+                    "{pad}MatchOut{opt_str}(src={src_alias}, rels={rels:?}, edge={edge_alias:?}, dst={dst_alias}, limit={limit:?}{path_str})"
                 );
             }
             Plan::MatchOutVarLen {
                 input: _,
                 src_alias,
-                rel,
+                rels,
                 edge_alias,
                 dst_alias,
                 min_hops,
@@ -224,12 +230,66 @@ fn render_plan(plan: &Plan) -> String {
                 project: _,
                 project_external: _,
                 optional,
+                path_alias,
             } => {
                 let opt_str = if *optional { " OPTIONAL" } else { "" };
+                let path_str = if let Some(p) = path_alias {
+                    format!(" path={p}")
+                } else {
+                    "".to_string()
+                };
                 let _ = writeln!(
                     out,
-                    "{pad}MatchOutVarLen{opt_str}(src={src_alias}, rel={rel:?}, edge={edge_alias:?}, dst={dst_alias}, min={min_hops}, max={max_hops:?}, limit={limit:?})"
+                    "{pad}MatchOutVarLen{opt_str}(src={src_alias}, rels={rels:?}, edge={edge_alias:?}, dst={dst_alias}, min={min_hops}, max={max_hops:?}, limit={limit:?}{path_str})"
                 );
+            }
+            Plan::MatchIn {
+                input,
+                src_alias,
+                rels,
+                edge_alias,
+                dst_alias,
+                limit,
+                optional,
+                path_alias,
+            } => {
+                let opt_str = if *optional { " OPTIONAL" } else { "" };
+                let path_str = if let Some(p) = path_alias {
+                    format!(" path={p}")
+                } else {
+                    "".to_string()
+                };
+                let _ = writeln!(
+                    out,
+                    "{pad}MatchIn{opt_str}(src={src_alias}, rels={rels:?}, edge={edge_alias:?}, dst={dst_alias}, limit={limit:?}{path_str})"
+                );
+                if let Some(p) = input {
+                    go(out, p, depth + 1);
+                }
+            }
+            Plan::MatchUndirected {
+                input,
+                src_alias,
+                rels,
+                edge_alias,
+                dst_alias,
+                limit,
+                optional,
+                path_alias,
+            } => {
+                let opt_str = if *optional { " OPTIONAL" } else { "" };
+                let path_str = if let Some(p) = path_alias {
+                    format!(" path={p}")
+                } else {
+                    "".to_string()
+                };
+                let _ = writeln!(
+                    out,
+                    "{pad}MatchUndirected{opt_str}(src={src_alias}, rels={rels:?}, edge={edge_alias:?}, dst={dst_alias}, limit={limit:?}{path_str})"
+                );
+                if let Some(p) = input {
+                    go(out, p, depth + 1);
+                }
             }
             Plan::Filter { input, predicate } => {
                 let _ = writeln!(out, "{pad}Filter(predicate={predicate:?})");
@@ -260,6 +320,47 @@ fn render_plan(plan: &Plan) -> String {
             }
             Plan::Limit { input, limit } => {
                 let _ = writeln!(out, "{pad}Limit(limit={limit})");
+                go(out, input, depth + 1);
+            }
+            Plan::CartesianProduct { left, right } => {
+                let _ = writeln!(out, "{pad}CartesianProduct");
+                go(out, left, depth + 1);
+                go(out, right, depth + 1);
+            }
+            Plan::Apply {
+                input,
+                subquery,
+                alias,
+            } => {
+                let _ = writeln!(out, "{pad}Apply(alias={alias:?})");
+                go(out, input, depth + 1);
+                let _ = writeln!(out, "{pad}  Subquery:");
+                go(out, subquery, depth + 2);
+            }
+            Plan::ProcedureCall {
+                input,
+                name,
+                args: _,
+                yields,
+            } => {
+                let yields_str = yields
+                    .iter()
+                    .map(|(n, a)| {
+                        format!(
+                            "{n}{}",
+                            a.as_ref()
+                                .map(|ali| format!(" AS {ali}"))
+                                .unwrap_or_default()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let _ = writeln!(
+                    out,
+                    "{pad}ProcedureCall(name={}, yields=[{}])",
+                    name.join("."),
+                    yields_str
+                );
                 go(out, input, depth + 1);
             }
             Plan::Distinct { input } => {
@@ -380,7 +481,7 @@ fn compile_m3_plan(query: Query) -> Result<CompiledQuery> {
                 // Rust iterators don't let you consume from `peek`.
                 // So we just check behavior.
 
-                if matches!(plan, None) {
+                if plan.is_none() {
                     return Err(Error::Other("WHERE cannot be the first clause".into()));
                 }
                 plan = Some(Plan::Filter {
@@ -388,17 +489,40 @@ fn compile_m3_plan(query: Query) -> Result<CompiledQuery> {
                     predicate: w.expression.clone(),
                 });
             }
+            Clause::Call(c) => match c {
+                CallClause::Subquery(sub_query) => {
+                    let input = plan.unwrap_or(Plan::ReturnOne);
+                    let sub_query_compiled = compile_m3_plan(sub_query.clone())?;
+                    plan = Some(Plan::Apply {
+                        input: Box::new(input),
+                        subquery: Box::new(sub_query_compiled.plan),
+                        alias: None,
+                    });
+                }
+                CallClause::Procedure(proc_call) => {
+                    let input = plan.unwrap_or(Plan::ReturnOne);
+                    let mut yields = Vec::new();
+                    if let Some(items) = &proc_call.yields {
+                        for item in items {
+                            yields.push((item.name.clone(), item.alias.clone()));
+                        }
+                    }
+                    plan = Some(Plan::ProcedureCall {
+                        input: Box::new(input),
+                        name: proc_call.name.clone(),
+                        args: proc_call.arguments.clone(),
+                        yields,
+                    });
+                }
+            },
             Clause::With(w) => {
-                let input =
-                    plan.ok_or_else(|| Error::Other("WITH cannot be the first clause".into()))?;
+                let input = plan.unwrap_or(Plan::ReturnOne);
                 plan = Some(compile_with_plan(input, w)?);
             }
             Clause::Return(r) => {
                 let input = plan.unwrap_or(Plan::ReturnOne);
                 let (p, _) = compile_return_plan(input, r)?;
                 plan = Some(p);
-                // RETURN is terminal in M3 usually, but standard Cypher allows it at end.
-                // We continue loop? Standard Cypher ends with RETURN.
                 // If there are more clauses after RETURN, it might be an error or valid?
                 // In standard Cypher, RETURN is terminal UNLESS followed by UNION.
                 // Check if any clauses left?
@@ -467,7 +591,6 @@ fn compile_m3_plan(query: Query) -> Result<CompiledQuery> {
                 let input = plan.unwrap_or(Plan::ReturnOne);
                 plan = Some(compile_unwind_plan(input, u.clone()));
             }
-            Clause::Call(_) => return Err(Error::NotImplemented("CALL in v2 M3")),
             Clause::Union(u) => {
                 // UNION logic: current plan is the "left" side; the clause's nested query is the "right" side
                 let left_plan =
@@ -602,31 +725,31 @@ fn compile_projection_aggregation(
     for (i, item) in items.iter().enumerate() {
         // Check for aggregation function
         let mut found_agg = false;
-        if let Expression::FunctionCall(call) = &item.expression {
-            if let Some(agg) = parse_aggregate_function(call)? {
-                found_agg = true;
-                is_aggregation = true;
-                let alias = item.alias.clone().unwrap_or_else(|| format!("agg_{}", i));
-                aggregates.push((agg, alias.clone()));
-                project_cols.push(alias);
+        if let Expression::FunctionCall(call) = &item.expression
+            && let Some(agg) = parse_aggregate_function(call)?
+        {
+            found_agg = true;
+            is_aggregation = true;
+            let alias = item.alias.clone().unwrap_or_else(|| format!("agg_{}", i));
+            aggregates.push((agg, alias.clone()));
+            project_cols.push(alias);
 
-                // Capture dependencies
-                let mut deps = std::collections::HashSet::new();
-                for arg in &call.args {
-                    extract_variables_from_expr(arg, &mut deps);
-                }
-                // We will add deps to pre_projections AFTER loop or handle logic carefully.
-                // If we add them here, they are "implicit" projections.
-                // We need them to evaluate the aggregate.
-                // BUT, if the same variable is ALSO a grouping key later in the list...
-                // It's okay. Duplicates in pre_projections might be inefficient but usually fine if logic uses aliases.
-                // However, Plan::Aggregate uses grouping keys to form groups.
-                // Implicit deps are just "extra columns" passed through.
-                for dep in deps {
-                    if !projected_aliases.contains(&dep) {
-                        pre_projections.push((dep.clone(), Expression::Variable(dep.clone())));
-                        projected_aliases.insert(dep);
-                    }
+            // Capture dependencies
+            let mut deps = std::collections::HashSet::new();
+            for arg in &call.args {
+                extract_variables_from_expr(arg, &mut deps);
+            }
+            // We will add deps to pre_projections AFTER loop or handle logic carefully.
+            // If we add them here, they are "implicit" projections.
+            // We need them to evaluate the aggregate.
+            // BUT, if the same variable is ALSO a grouping key later in the list...
+            // It's okay. Duplicates in pre_projections might be inefficient but usually fine if logic uses aliases.
+            // However, Plan::Aggregate uses grouping keys to form groups.
+            // Implicit deps are just "extra columns" passed through.
+            for dep in deps {
+                if !projected_aliases.contains(&dep) {
+                    pre_projections.push((dep.clone(), Expression::Variable(dep.clone())));
+                    projected_aliases.insert(dep);
                 }
             }
         }
@@ -638,6 +761,21 @@ fn compile_projection_aggregation(
                 .unwrap_or_else(|| match &item.expression {
                     Expression::Variable(name) => name.clone(),
                     Expression::PropertyAccess(pa) => format!("{}.{}", pa.variable, pa.property),
+                    Expression::FunctionCall(call) => {
+                        // Generate descriptive alias for function calls like "length(p)"
+                        if call.args.is_empty() {
+                            format!("{}()", call.name)
+                        } else if call.args.len() == 1 {
+                            // For single arg functions, try to use variable name
+                            if let Expression::Variable(arg) = &call.args[0] {
+                                format!("{}({})", call.name, arg)
+                            } else {
+                                format!("{}(...)", call.name)
+                            }
+                        } else {
+                            format!("{}(...)", call.name)
+                        }
+                    }
                     _ => format!("expr_{}", i),
                 });
 
@@ -783,72 +921,6 @@ fn compile_create_plan(create_clause: crate::ast::CreateClause) -> Result<Plan> 
     })
 }
 
-fn try_optimize_nodescan_filter(plan: Plan, _predicate: Expression) -> Plan {
-    // 1. Unwrap input logic - needs to be a NodeScan
-    // The input to Filter is boxed, so we need to inspect the structure we just created
-    // But here we passed 'plan' which is Filter{NodeScan...}
-    let (input, predicate) = match &plan {
-        Plan::Filter { input, predicate } => (input, predicate),
-        _ => return plan,
-    };
-
-    let Plan::NodeScan { alias, label } = input.as_ref() else {
-        return plan;
-    };
-
-    // 2. Must have label to use index
-    let Some(label) = label else {
-        return plan;
-    };
-
-    // 3. Check predicate
-    // Helper to check for equality with a property
-    let check_eq =
-        |left: &Expression, right: &Expression| -> Option<(String, String, Expression)> {
-            // Return (variable, property, value_expr)
-            if let Expression::PropertyAccess(pa) = left {
-                if &pa.variable == alias {
-                    // Check if right is literal or parameter
-                    match right {
-                        Expression::Literal(_) | Expression::Parameter(_) => {
-                            return Some((pa.variable.clone(), pa.property.clone(), right.clone()));
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            None
-        };
-
-    if let Expression::Binary(bin) = &predicate {
-        // Access fields of BinaryExpression (box)
-        if matches!(bin.operator, crate::ast::BinaryOperator::Equals) {
-            // Check left = right
-            if let Some((v, p, val)) = check_eq(&bin.left, &bin.right) {
-                return Plan::IndexSeek {
-                    alias: v,
-                    label: label.clone(),
-                    field: p,
-                    value_expr: val,
-                    fallback: Box::new(plan.clone()),
-                };
-            }
-            // Check right = left
-            if let Some((v, p, val)) = check_eq(&bin.right, &bin.left) {
-                return Plan::IndexSeek {
-                    alias: v,
-                    label: label.clone(),
-                    field: p,
-                    value_expr: val,
-                    fallback: Box::new(plan.clone()),
-                };
-            }
-        }
-    }
-
-    plan
-}
-
 fn compile_merge_plan(merge_clause: crate::ast::MergeClause) -> Result<Plan> {
     let pattern = merge_clause.pattern;
     if pattern.elements.is_empty() {
@@ -926,222 +998,298 @@ fn compile_match_plan(
     m: crate::ast::MatchClause,
     predicates: &BTreeMap<String, BTreeMap<String, Expression>>,
 ) -> Result<Plan> {
-    match m.pattern.elements.len() {
-        1 => {
-            if input.is_some() {
-                // If input exists, we don't support disconnected MATCH (n) yet.
-                return Err(Error::NotImplemented(
-                    "Multiple disconnected MATCH clauses not supported (Cartesian product) in v2 M3",
-                ));
-            }
-            let node = match &m.pattern.elements[0] {
-                crate::ast::PathElement::Node(n) => n,
-                _ => return Err(Error::Other("pattern must be a node".into())),
-            };
-            let alias = node
-                .variable
-                .as_deref()
-                .ok_or(Error::NotImplemented("anonymous node"))?
-                .to_string();
-
-            let label = node.labels.first().cloned();
-
-            // Merge inline properties into predicates for optimization
-            let mut local_predicates = predicates.clone();
-            extend_predicates_from_properties(&alias, &node.properties, &mut local_predicates);
-
-            // Optimizer: Try IndexSeek if there is a predicate.
-            if let Some(label_name) = &label {
-                if let Some(var_preds) = local_predicates.get(&alias) {
-                    if let Some((field, val_expr)) = var_preds.iter().next() {
-                        // For MVP, we return IndexSeek with fallback.
-                        // It will try index at runtime, and if not found, use fallback scan.
-                        return Ok(Plan::IndexSeek {
-                            alias: alias.clone(),
-                            label: label_name.clone(),
-                            field: field.clone(),
-                            value_expr: val_expr.clone(),
-                            fallback: Box::new(Plan::NodeScan {
-                                alias: alias.clone(),
-                                label: label.clone(),
-                            }),
-                        });
-                    }
-                }
-            }
-
-            // Selection: Choose smallest label if multiple options (future)
-            // or just use stats to warn or adjust (T156).
-
-            Ok(Plan::NodeScan { alias, label })
-        }
-        3 => {
-            let src = match &m.pattern.elements[0] {
-                crate::ast::PathElement::Node(n) => n,
-                _ => return Err(Error::Other("pattern must start with node".into())),
-            };
-            let rel_pat = match &m.pattern.elements[1] {
-                crate::ast::PathElement::Relationship(r) => r,
-                _ => return Err(Error::Other("expected relationship in middle".into())),
-            };
-            let dst = match &m.pattern.elements[2] {
-                crate::ast::PathElement::Node(n) => n,
-                _ => return Err(Error::Other("pattern must end with node".into())),
-            };
-
-            let src_alias = src
-                .variable
-                .as_deref()
-                .ok_or(Error::NotImplemented("anonymous node"))?
-                .to_string();
-            let dst_alias = dst
-                .variable
-                .as_deref()
-                .ok_or(Error::NotImplemented("anonymous node"))?
-                .to_string();
-
-            // Note: We don't propagate these predicates to MatchOut/VarLen yet
-            // because those plans don't accept filters natively.
-            // But we shouldn't error. We should ideally wrap with filter?
-            // T305 MVP: Just ignore for optimization, but verify they don't block optimization of starting node?
-            // Actually, if we have predicates on src, we should optimize the input?
-            // compile_match_plan with len=3 takes `input` (Plan).
-            // Usually `input` is populated. If `input` is None (start of query),
-            // the first node is `src`. But `compile_match_plan` recursively handles inputs?
-            // No, `compile_m3_plan` chains them.
-            // Wait, for `MATCH (a)-[:R]->(b)`, the input to `compile_match_plan` is whatever came before.
-            // If it's the first clause, input is None.
-            // But `compile_match_plan` handles the *entire* pattern.
-            // If len=3, it assumes a full path?
-            // NervusDB v2 M3 likely handles `MATCH (a)-[:R]->(b)` by scanning `a` then expanding.
-            // But `compile_match_plan` doesn't construct the scan for `a`?
-            // Let's look at `compile_m3_plan`.
-            // Ah, `compile_match_plan` for len=3 checks `input`.
-            // If `input` is provided, it expands from it.
-            // If `input` is None, it creates a `Box<Plan>`.
-            // Currently `match m.pattern`...
-            // If len=3: `MatchOut` / `MatchOutVarLen` has `input: input.map(Box::new)`.
-            // If input is None, `MatchOut` iterates all relationships?
-            // `MatchOutIter` does `snapshot.nodes()`... let's check executor.
-
-            // Re: Inline properties for Relationship Pattern.
-            // Currently throwing error.
-            let effective_input = if input.is_none() {
-                if let Some(props) = &src.properties {
-                    let alias = src.variable.clone().ok_or(Error::NotImplemented(
-                        "anonymous start node with properties",
-                    ))?;
-                    let label = src.labels.first().cloned();
-
-                    let mut local_preds = predicates.clone();
-                    extend_predicates_from_properties(
-                        &alias,
-                        &Some(props.clone()),
-                        &mut local_preds,
-                    );
-
-                    if let Some(label_name) = &label
-                        && let Some(var_preds) = local_preds.get(&alias)
-                        && let Some((field, val_expr)) = var_preds.iter().next()
-                    {
-                        Some(Plan::IndexSeek {
-                            alias: alias.clone(),
-                            label: label_name.clone(),
-                            field: field.clone(),
-                            value_expr: val_expr.clone(),
-                            fallback: Box::new(Plan::NodeScan {
-                                alias: alias.clone(),
-                                label: label.clone(),
-                            }),
-                        })
-                    } else {
-                        Some(Plan::NodeScan {
-                            alias: alias.clone(),
-                            label: label.clone(),
-                        })
-                    }
-                } else {
-                    None
-                }
-            } else {
-                input
-            };
-
-            // Validation: Ensure we didn't drop properties silently
-            if src.properties.is_some() && effective_input.is_none() {
-                // effective_input is None implies input was None and src.properties was None.
-                // So this branch is unreachable if src.properties is Some.
-            }
-            if src.properties.is_some() && effective_input.is_some() {
-                let is_seek_or_scan = matches!(
-                    effective_input.as_ref().unwrap(),
-                    Plan::IndexSeek { .. } | Plan::NodeScan { .. }
-                );
-                // If input was Some originally, effective_input = input.
-                // And input is usually NOT a NodeScan (it's some previous plan).
-                // So if !is_seek_or_scan, it implies we didn't use src properties to build effective_input.
-                // This assumes "input" (from chained match) is not a raw scan/seek.
-                if !is_seek_or_scan {
-                    return Err(Error::NotImplemented(
-                        "Properties on start node only supported at start of query (chained match properties not supported)",
-                    ));
-                }
-            }
-
-            if !matches!(rel_pat.direction, RelationshipDirection::LeftToRight) {
-                return Err(Error::NotImplemented("only -> direction in v2 M3"));
-            }
-
-            let rel = rel_pat.types.first().cloned();
-            let edge_alias = rel_pat.variable.clone();
-
-            if let Some(var_len) = &rel_pat.variable_length {
-                let min_hops = var_len.min.unwrap_or(1);
-                let max_hops = var_len.max;
-                if min_hops == 0 {
-                    return Err(Error::NotImplemented(
-                        "0-length variable-length paths in v2 M3",
-                    ));
-                }
-                if let Some(max) = max_hops {
-                    if max < min_hops {
-                        return Err(Error::Other(
-                            "invalid variable-length range: max < min".into(),
-                        ));
-                    }
-                }
-
-                Ok(Plan::MatchOutVarLen {
-                    input: effective_input.map(Box::new),
-                    src_alias,
-                    rel,
-                    edge_alias,
-                    dst_alias,
-                    min_hops,
-                    max_hops,
-                    limit: None,
-                    project: Vec::new(),
-                    project_external: false,
-                    optional: m.optional,
-                })
-            } else {
-                Ok(Plan::MatchOut {
-                    input: effective_input.map(Box::new),
-                    src_alias,
-                    rel,
-                    edge_alias,
-                    dst_alias,
-                    limit: None,
-                    project: Vec::new(),
-                    project_external: false,
-                    optional: m.optional,
-                })
-            }
-        }
-        _ => Err(Error::NotImplemented(
-            "pattern length must be 1 or 3 in v2 M3",
-        )),
+    let mut plan = input;
+    let mut known_vars = BTreeSet::new();
+    if let Some(p) = &plan {
+        extract_output_vars(p, &mut known_vars);
     }
+
+    for pattern in m.patterns {
+        if pattern.elements.is_empty() {
+            return Err(Error::Other("pattern cannot be empty".into()));
+        }
+
+        let first_node_alias = match &pattern.elements[0] {
+            crate::ast::PathElement::Node(n) => n
+                .variable
+                .clone()
+                .ok_or(Error::NotImplemented("anonymous start node"))?,
+            _ => return Err(Error::Other("pattern must start with a node".into())),
+        };
+
+        if known_vars.contains(&first_node_alias) {
+            // Join via expansion (start node is already in plan)
+            plan = Some(compile_pattern_chain(
+                plan,
+                &pattern,
+                predicates,
+                m.optional,
+                &known_vars,
+            )?);
+        } else {
+            // Start a new component
+            let sub_plan =
+                compile_pattern_chain(None, &pattern, predicates, m.optional, &known_vars)?;
+            if let Some(existing) = plan {
+                plan = Some(Plan::CartesianProduct {
+                    left: Box::new(existing),
+                    right: Box::new(sub_plan),
+                });
+            } else {
+                plan = Some(sub_plan);
+            }
+        }
+
+        // Update known_vars after each pattern
+        if let Some(p) = &plan {
+            extract_output_vars(p, &mut known_vars);
+        }
+    }
+
+    plan.ok_or_else(|| Error::Other("No patterns in MATCH".into()))
+}
+
+fn compile_pattern_chain(
+    input: Option<Plan>,
+    pattern: &crate::ast::Pattern,
+    predicates: &BTreeMap<String, BTreeMap<String, Expression>>,
+    optional: bool,
+    known_vars: &BTreeSet<String>,
+) -> Result<Plan> {
+    if pattern.elements.is_empty() {
+        return Err(Error::Other("pattern cannot be empty".into()));
+    }
+
+    let src_node_el = match &pattern.elements[0] {
+        crate::ast::PathElement::Node(n) => n,
+        _ => return Err(Error::Other("pattern must start with a node".into())),
+    };
+
+    let src_alias = src_node_el
+        .variable
+        .as_deref()
+        .ok_or(Error::NotImplemented("anonymous start node"))?
+        .to_string();
+    let src_label = src_node_el.labels.first().cloned();
+
+    let mut plan = if let Some(existing_plan) = input {
+        // Expansion Join: src_alias must be in known_vars
+        if !known_vars.contains(&src_alias) {
+            return Err(Error::Other(format!(
+                "Join variable '{}' not found in plan",
+                src_alias
+            )));
+        }
+
+        let mut cur_plan = existing_plan;
+
+        // Apply filters for inline properties of this node
+        let mut local_predicates = predicates.clone();
+        extend_predicates_from_properties(
+            &src_alias,
+            &src_node_el.properties,
+            &mut local_predicates,
+        );
+
+        if let Some(var_preds) = local_predicates.get(&src_alias) {
+            let mut combined_pred: Option<Expression> = None;
+            for (field, val_expr) in var_preds {
+                let prop_access = Expression::PropertyAccess(crate::ast::PropertyAccess {
+                    variable: src_alias.clone(),
+                    property: field.clone(),
+                });
+                let eq_expr = Expression::Binary(Box::new(crate::ast::BinaryExpression {
+                    operator: crate::ast::BinaryOperator::Equals,
+                    left: prop_access,
+                    right: val_expr.clone(),
+                }));
+
+                combined_pred = match combined_pred {
+                    Some(prev) => {
+                        Some(Expression::Binary(Box::new(crate::ast::BinaryExpression {
+                            operator: crate::ast::BinaryOperator::And,
+                            left: prev,
+                            right: eq_expr,
+                        })))
+                    }
+                    None => Some(eq_expr),
+                };
+            }
+
+            if let Some(predicate) = combined_pred {
+                cur_plan = Plan::Filter {
+                    input: Box::new(cur_plan),
+                    predicate,
+                };
+            }
+        }
+        cur_plan
+    } else {
+        // Build Initial Plan (Scan or IndexSeek)
+        let mut local_predicates = predicates.clone();
+        extend_predicates_from_properties(
+            &src_alias,
+            &src_node_el.properties,
+            &mut local_predicates,
+        );
+
+        let mut start_plan = Plan::NodeScan {
+            alias: src_alias.clone(),
+            label: src_label.clone(),
+        };
+
+        // Try IndexSeek optimization
+        if let Some(label_name) = &src_label
+            && let Some(var_preds) = local_predicates.get(&src_alias)
+            && let Some((field, val_expr)) = var_preds.iter().next()
+        {
+            start_plan = Plan::IndexSeek {
+                alias: src_alias.clone(),
+                label: label_name.clone(),
+                field: field.clone(),
+                value_expr: val_expr.clone(),
+                fallback: Box::new(start_plan),
+            };
+        }
+
+        // Apply filter for all properties
+        if let Some(var_preds) = local_predicates.get(&src_alias) {
+            let mut combined_pred: Option<Expression> = None;
+            for (field, val_expr) in var_preds {
+                let prop_access = Expression::PropertyAccess(crate::ast::PropertyAccess {
+                    variable: src_alias.clone(),
+                    property: field.clone(),
+                });
+                let eq_expr = Expression::Binary(Box::new(crate::ast::BinaryExpression {
+                    operator: crate::ast::BinaryOperator::Equals,
+                    left: prop_access,
+                    right: val_expr.clone(),
+                }));
+
+                combined_pred = match combined_pred {
+                    Some(prev) => {
+                        Some(Expression::Binary(Box::new(crate::ast::BinaryExpression {
+                            operator: crate::ast::BinaryOperator::And,
+                            left: prev,
+                            right: eq_expr,
+                        })))
+                    }
+                    None => Some(eq_expr),
+                };
+            }
+
+            if let Some(predicate) = combined_pred {
+                start_plan = Plan::Filter {
+                    input: Box::new(start_plan),
+                    predicate,
+                };
+            }
+        }
+
+        start_plan
+    };
+
+    // Subsequent hops
+    let mut i = 1;
+    let mut curr_src_alias = src_alias;
+
+    while i < pattern.elements.len() {
+        if i + 1 >= pattern.elements.len() {
+            return Err(Error::Other("pattern must end with a node".into()));
+        }
+
+        let rel_el = match &pattern.elements[i] {
+            crate::ast::PathElement::Relationship(r) => r,
+            _ => return Err(Error::Other("expected relationship at odd index".into())),
+        };
+        let dst_node_el = match &pattern.elements[i + 1] {
+            crate::ast::PathElement::Node(n) => n,
+            _ => return Err(Error::Other("expected node at even index".into())),
+        };
+
+        let dst_alias = dst_node_el
+            .variable
+            .as_deref()
+            .ok_or(Error::NotImplemented("anonymous dest node"))?
+            .to_string();
+
+        let edge_alias = rel_el.variable.clone();
+        let rel_types = rel_el.types.clone();
+
+        let path_alias = pattern.variable.clone();
+
+        if let Some(var_len) = &rel_el.variable_length {
+            match rel_el.direction {
+                crate::ast::RelationshipDirection::LeftToRight => {
+                    plan = Plan::MatchOutVarLen {
+                        input: Some(Box::new(plan)),
+                        src_alias: curr_src_alias.clone(),
+                        dst_alias: dst_alias.clone(),
+                        edge_alias,
+                        rels: rel_types,
+                        min_hops: var_len.min.unwrap_or(1),
+                        max_hops: var_len.max,
+                        limit: None,
+                        project: Vec::new(),
+                        project_external: false,
+                        optional,
+                        path_alias,
+                    };
+                }
+                _ => {
+                    return Err(Error::NotImplemented(
+                        "Variable length relationships currently only support -> direction",
+                    ));
+                }
+            }
+        } else {
+            match rel_el.direction {
+                crate::ast::RelationshipDirection::LeftToRight => {
+                    plan = Plan::MatchOut {
+                        input: Some(Box::new(plan)),
+                        src_alias: curr_src_alias.clone(),
+                        dst_alias: dst_alias.clone(),
+                        edge_alias,
+                        rels: rel_types,
+                        limit: None,
+                        project: Vec::new(),
+                        project_external: false,
+                        optional,
+                        path_alias,
+                    };
+                }
+                crate::ast::RelationshipDirection::RightToLeft => {
+                    plan = Plan::MatchIn {
+                        input: Some(Box::new(plan)),
+                        src_alias: curr_src_alias.clone(),
+                        dst_alias: dst_alias.clone(),
+                        edge_alias,
+                        rels: rel_types,
+                        limit: None,
+                        optional,
+                        path_alias,
+                    };
+                }
+                crate::ast::RelationshipDirection::Undirected => {
+                    plan = Plan::MatchUndirected {
+                        input: Some(Box::new(plan)),
+                        src_alias: curr_src_alias.clone(),
+                        dst_alias: dst_alias.clone(),
+                        edge_alias,
+                        rels: rel_types,
+                        limit: None,
+                        optional,
+                        path_alias,
+                    };
+                }
+            }
+        }
+
+        curr_src_alias = dst_alias;
+        i += 2;
+    }
+
+    Ok(plan)
 }
 
 /// Helper to convert inline map properties to predicates
@@ -1160,6 +1308,124 @@ fn extend_predicates_from_properties(
     }
 }
 
+fn extract_output_vars(plan: &Plan, vars: &mut BTreeSet<String>) {
+    match plan {
+        Plan::ReturnOne => {}
+        Plan::NodeScan { alias, .. } => {
+            vars.insert(alias.clone());
+        }
+        Plan::MatchOut {
+            src_alias,
+            dst_alias,
+            edge_alias,
+            path_alias,
+            input,
+            ..
+        }
+        | Plan::MatchOutVarLen {
+            src_alias,
+            dst_alias,
+            edge_alias,
+            path_alias,
+            input,
+            ..
+        }
+        | Plan::MatchIn {
+            src_alias,
+            dst_alias,
+            edge_alias,
+            path_alias,
+            input,
+            ..
+        }
+        | Plan::MatchUndirected {
+            src_alias,
+            dst_alias,
+            edge_alias,
+            path_alias,
+            input,
+            ..
+        } => {
+            vars.insert(src_alias.clone());
+            vars.insert(dst_alias.clone());
+            if let Some(e) = edge_alias {
+                vars.insert(e.clone());
+            }
+            if let Some(p) = path_alias {
+                vars.insert(p.clone());
+            }
+            if let Some(p) = input {
+                extract_output_vars(p, vars);
+            }
+        }
+        Plan::Filter { input, .. }
+        | Plan::Skip { input, .. }
+        | Plan::Limit { input, .. }
+        | Plan::OrderBy { input, .. }
+        | Plan::Distinct { input } => extract_output_vars(input, vars),
+        Plan::Project { input, projections } => {
+            extract_output_vars(input, vars);
+            for (alias, _) in projections {
+                vars.insert(alias.clone());
+            }
+        }
+        Plan::Aggregate {
+            input,
+            group_by,
+            aggregates,
+        } => {
+            extract_output_vars(input, vars);
+            vars.extend(group_by.clone());
+            for (_, alias) in aggregates {
+                vars.insert(alias.clone());
+            }
+        }
+        Plan::Unwind { input, alias, .. } => {
+            extract_output_vars(input, vars);
+            vars.insert(alias.clone());
+        }
+        Plan::Union { left, right, .. } => {
+            extract_output_vars(left, vars);
+            extract_output_vars(right, vars);
+        }
+        Plan::CartesianProduct { left, right } => {
+            extract_output_vars(left, vars);
+            extract_output_vars(right, vars);
+        }
+        Plan::Apply {
+            input,
+            subquery,
+            alias: _,
+        } => {
+            extract_output_vars(input, vars);
+            extract_output_vars(subquery, vars);
+        }
+        Plan::ProcedureCall {
+            input,
+            name: _,
+            args: _,
+            yields,
+        } => {
+            extract_output_vars(input, vars);
+            for (name, alias) in yields {
+                vars.insert(alias.clone().unwrap_or_else(|| name.clone()));
+            }
+        }
+        Plan::IndexSeek {
+            alias, fallback, ..
+        } => {
+            vars.insert(alias.clone());
+            extract_output_vars(fallback, vars);
+        }
+        Plan::Create { .. }
+        | Plan::Delete { .. }
+        | Plan::SetProperty { .. }
+        | Plan::RemoveProperty { .. } => {
+            // Update operations don't currently introduce new variables used for joins in v2
+        }
+    }
+}
+
 fn parse_aggregate_function(
     call: &crate::ast::FunctionCall,
 ) -> Result<Option<crate::ast::AggregateFunction>> {
@@ -1169,10 +1435,10 @@ fn parse_aggregate_function(
             if call.args.is_empty() {
                 Ok(Some(crate::ast::AggregateFunction::Count(None)))
             } else if call.args.len() == 1 {
-                if let Expression::Literal(Literal::String(s)) = &call.args[0] {
-                    if s == "*" {
-                        return Ok(Some(crate::ast::AggregateFunction::Count(None)));
-                    }
+                if let Expression::Literal(Literal::String(s)) = &call.args[0]
+                    && s == "*"
+                {
+                    return Ok(Some(crate::ast::AggregateFunction::Count(None)));
                 }
                 Ok(Some(crate::ast::AggregateFunction::Count(Some(
                     call.args[0].clone(),
@@ -1226,29 +1492,26 @@ fn parse_aggregate_function(
 }
 
 fn extract_predicates(expr: &Expression, map: &mut BTreeMap<String, BTreeMap<String, Expression>>) {
-    match expr {
-        Expression::Binary(bin) => {
-            if matches!(bin.operator, BinaryOperator::And) {
-                extract_predicates(&bin.left, map);
-                extract_predicates(&bin.right, map);
-            } else if matches!(bin.operator, BinaryOperator::Equals) {
-                let mut check_eq = |left: &Expression, right: &Expression| {
-                    if let Expression::PropertyAccess(pa) = left {
-                        match right {
-                            Expression::Literal(_) | Expression::Parameter(_) => {
-                                map.entry(pa.variable.clone())
-                                    .or_default()
-                                    .insert(pa.property.clone(), right.clone());
-                            }
-                            _ => {}
+    if let Expression::Binary(bin) = expr {
+        if matches!(bin.operator, BinaryOperator::And) {
+            extract_predicates(&bin.left, map);
+            extract_predicates(&bin.right, map);
+        } else if matches!(bin.operator, BinaryOperator::Equals) {
+            let mut check_eq = |left: &Expression, right: &Expression| {
+                if let Expression::PropertyAccess(pa) = left {
+                    match right {
+                        Expression::Literal(_) | Expression::Parameter(_) => {
+                            map.entry(pa.variable.clone())
+                                .or_default()
+                                .insert(pa.property.clone(), right.clone());
                         }
+                        _ => {}
                     }
-                };
-                check_eq(&bin.left, &bin.right);
-                check_eq(&bin.right, &bin.left);
-            }
+                }
+            };
+            check_eq(&bin.left, &bin.right);
+            check_eq(&bin.right, &bin.left);
         }
-        _ => {}
     }
 }
 

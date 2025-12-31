@@ -57,7 +57,10 @@ impl TokenParser {
 
     fn parse_single_query_clauses(&mut self) -> Result<Vec<Clause>, Error> {
         let mut clauses = Vec::new();
-        while !self.is_at_end() && !self.check(&TokenType::Union) {
+        while !self.is_at_end()
+            && !self.check(&TokenType::Union)
+            && !self.check(&TokenType::RightBrace)
+        {
             if let Some(clause) = self.parse_clause()? {
                 clauses.push(clause);
             } else {
@@ -74,9 +77,8 @@ impl TokenParser {
         }
 
         // Fail-fast on unsupported top-level clauses/keywords.
-        match &self.peek().token_type {
-            TokenType::Foreach => return Err(Error::NotImplemented("FOREACH")),
-            _ => {}
+        if self.peek().token_type == TokenType::Foreach {
+            return Err(Error::NotImplemented("FOREACH"));
         }
 
         if self.match_token(&TokenType::Optional) {
@@ -125,27 +127,87 @@ impl TokenParser {
     }
 
     fn parse_call(&mut self) -> Result<CallClause, Error> {
-        if !self.check(&TokenType::LeftBrace) {
-            return Err(Error::NotImplemented("CALL (procedure)"));
+        if self.check(&TokenType::LeftBrace) {
+            let query = self.parse_braced_subquery()?;
+            Ok(CallClause::Subquery(query))
+        } else {
+            let procedure = self.parse_procedure_call()?;
+            Ok(CallClause::Procedure(procedure))
+        }
+    }
+
+    fn parse_procedure_call(&mut self) -> Result<ProcedureCall, Error> {
+        // 1. Parse name (e.g. db.info)
+        let mut name = Vec::new();
+        name.push(self.consume_identifier("Expected procedure name")?);
+        while self.match_token(&TokenType::Dot) {
+            name.push(self.consume_identifier("Expected procedure name segment after '.'")?);
         }
 
-        let query = self.parse_braced_subquery()?;
-        Ok(CallClause { query })
+        // 2. Parse arguments: (arg1, arg2)
+        self.consume(&TokenType::LeftParen, "Expected '(' after procedure name")?;
+        let arguments = self.parse_function_arguments()?;
+        // Note: parse_function_arguments already consumes RightParen
+
+        // 3. Optional YIELD
+        let mut yields = None;
+        if self.match_token(&TokenType::Yield) {
+            let mut yield_items = Vec::new();
+            yield_items.push(self.parse_yield_item()?);
+            while self.match_token(&TokenType::Comma) {
+                yield_items.push(self.parse_yield_item()?);
+            }
+            yields = Some(yield_items);
+        }
+
+        Ok(ProcedureCall {
+            name,
+            arguments,
+            yields,
+        })
+    }
+
+    fn parse_yield_item(&mut self) -> Result<YieldItem, Error> {
+        let name = self.consume_identifier("Expected yield column name")?;
+        let mut alias = None;
+        if self.match_token(&TokenType::As) {
+            alias = Some(self.consume_identifier("Expected alias after AS")?);
+        }
+        Ok(YieldItem { name, alias })
+    }
+
+    fn consume_identifier(&mut self, message: &str) -> Result<String, Error> {
+        let token = self.peek();
+        if let TokenType::Identifier(id) = &token.token_type {
+            let id = id.clone();
+            self.advance();
+            Ok(id)
+        } else {
+            Err(Error::Other(message.to_string()))
+        }
     }
 
     fn parse_match(&mut self) -> Result<MatchClause, Error> {
-        let pattern = self.parse_pattern()?;
+        let mut patterns = Vec::new();
+        patterns.push(self.parse_pattern()?);
+        while self.match_token(&TokenType::Comma) {
+            patterns.push(self.parse_pattern()?);
+        }
         Ok(MatchClause {
             optional: false,
-            pattern,
+            patterns,
         })
     }
 
     fn parse_optional_match(&mut self) -> Result<MatchClause, Error> {
-        let pattern = self.parse_pattern()?;
+        let mut patterns = Vec::new();
+        patterns.push(self.parse_pattern()?);
+        while self.match_token(&TokenType::Comma) {
+            patterns.push(self.parse_pattern()?);
+        }
         Ok(MatchClause {
             optional: true,
-            pattern,
+            patterns,
         })
     }
 
@@ -331,6 +393,14 @@ impl TokenParser {
     }
 
     fn parse_pattern(&mut self) -> Result<Pattern, Error> {
+        let variable = if self.peek_is_identifier() && self.check_next(&TokenType::Equals) {
+            let var = self.parse_identifier("path variable")?;
+            self.consume(&TokenType::Equals, "Expected '='")?;
+            Some(var)
+        } else {
+            None
+        };
+
         let mut elements = Vec::new();
         elements.push(PathElement::Node(self.parse_node_pattern()?));
 
@@ -340,7 +410,7 @@ impl TokenParser {
             ));
             elements.push(PathElement::Node(self.parse_node_pattern()?));
         }
-        Ok(Pattern { elements })
+        Ok(Pattern { variable, elements })
     }
 
     fn check_relationship_start(&self) -> bool {
@@ -413,26 +483,32 @@ impl TokenParser {
                 self.advance();
             }
 
-            while self.match_token(&TokenType::Colon) {
-                match &self.peek().token_type {
-                    TokenType::Identifier(t) => {
-                        types.push(t.clone());
-                        self.advance();
-                    }
-                    TokenType::Number(n) => {
-                        let n = *n;
-                        self.advance();
-                        if n.fract() != 0.0 || n < 0.0 {
+            if self.match_token(&TokenType::Colon) {
+                loop {
+                    match &self.peek().token_type {
+                        TokenType::Identifier(t) => {
+                            types.push(t.clone());
+                            self.advance();
+                        }
+                        TokenType::Number(n) => {
+                            let n = *n;
+                            self.advance();
+                            if n.fract() != 0.0 || n < 0.0 {
+                                return Err(Error::Other(
+                                    "Relationship type id must be a non-negative integer".into(),
+                                ));
+                            }
+                            types.push(format!("{}", n as u64));
+                        }
+                        _ => {
                             return Err(Error::Other(
-                                "Relationship type id must be a non-negative integer".into(),
+                                "Expected relationship type identifier".to_string(),
                             ));
                         }
-                        types.push(format!("{}", n as u64));
                     }
-                    _ => {
-                        return Err(Error::Other(
-                            "Expected relationship type identifier".to_string(),
-                        ));
+
+                    if !self.match_token(&TokenType::Pipe) {
+                        break;
                     }
                 }
             }
@@ -690,8 +766,26 @@ impl TokenParser {
                 self.advance(); // 'CASE'
                 Ok(Expression::Case(Box::new(self.parse_case_expression()?)))
             }
+            TokenType::Exists => {
+                self.advance(); // 'EXISTS'
+                Ok(Expression::Exists(Box::new(
+                    self.parse_exists_expression()?,
+                )))
+            }
             _ => Err(Error::NotImplemented("expression")),
         }
+    }
+
+    fn parse_exists_expression(&mut self) -> Result<ExistsExpression, Error> {
+        self.consume(&TokenType::LeftBrace, "Expected '{' after EXISTS")?;
+
+        // Check if it's a subquery (starts with MATCH) or a Pattern
+        // For T309 tests use `EXISTS { (n)-[:KNOWS]->() }` which is a Pattern.
+        // We will default to parsing a pattern for now.
+
+        let pattern = self.parse_pattern()?;
+        self.consume(&TokenType::RightBrace, "Expected '}' after EXISTS pattern")?;
+        Ok(ExistsExpression::Pattern(pattern))
     }
 
     fn parse_case_expression(&mut self) -> Result<CaseExpression, Error> {

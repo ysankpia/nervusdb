@@ -1,0 +1,14 @@
+# Clippy configuration
+
+# Minimum Supported Rust Version
+msrv = "1.75"
+
+# Allowed lints (for complex code)
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+
+# Cognitive complexity threshold
+cognitive-complexity-threshold = 30
+
+# Too many arguments warning threshold
+too-many-arguments-threshold = 8

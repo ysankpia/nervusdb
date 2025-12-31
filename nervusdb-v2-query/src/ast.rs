@@ -24,7 +24,7 @@ pub enum Clause {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MatchClause {
     pub optional: bool,
-    pub pattern: Pattern,
+    pub patterns: Vec<Pattern>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -44,8 +44,22 @@ pub struct UnwindClause {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct CallClause {
-    pub query: Query,
+pub enum CallClause {
+    Subquery(Query),
+    Procedure(ProcedureCall),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProcedureCall {
+    pub name: Vec<String>, // namespace.proc
+    pub arguments: Vec<Expression>,
+    pub yields: Option<Vec<YieldItem>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct YieldItem {
+    pub name: String,
+    pub alias: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -125,6 +139,7 @@ pub struct DeleteClause {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Pattern {
+    pub variable: Option<String>,
     pub elements: Vec<PathElement>,
 }
 
