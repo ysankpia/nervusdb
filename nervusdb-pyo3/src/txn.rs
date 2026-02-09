@@ -1,3 +1,4 @@
+use crate::classify_nervus_error;
 use crate::db::Db;
 use nervusdb_v2::WriteTxn as RustWriteTxn;
 use pyo3::prelude::*;
@@ -50,37 +51,36 @@ impl Drop for WriteTxn {
 impl WriteTxn {
     /// Execute a Cypher write query.
     fn query(&mut self, py: Python<'_>, query: &str) -> PyResult<()> {
-        let txn = self.inner.as_mut().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("Transaction already finished")
-        })?;
+        let txn = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| classify_nervus_error("Transaction already finished"))?;
 
         // Get snapshot from the parent Db
         let db_ref = self.db.borrow(py);
         let inner_db = db_ref
             .inner
             .as_ref()
-            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Database is closed"))?;
+            .ok_or_else(|| classify_nervus_error("Database is closed"))?;
         let snapshot = inner_db.snapshot();
 
-        let prepared = nervusdb_v2_query::prepare(query)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let prepared = nervusdb_v2_query::prepare(query).map_err(classify_nervus_error)?;
 
         prepared
             .execute_write(&snapshot, txn, &nervusdb_v2_query::Params::new())
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            .map_err(classify_nervus_error)?;
 
         Ok(())
     }
 
     /// Commit the transaction.
     fn commit(&mut self) -> PyResult<()> {
-        let txn = self.inner.take().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("Transaction already finished")
-        })?;
+        let txn = self
+            .inner
+            .take()
+            .ok_or_else(|| classify_nervus_error("Transaction already finished"))?;
 
-        let res = txn
-            .commit()
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()));
+        let res = txn.commit().map_err(classify_nervus_error);
         self.finish();
         res
     }
@@ -91,11 +91,12 @@ impl WriteTxn {
     ///     node_id: Internal Node ID (u32)
     ///     vector: List of floats
     fn set_vector(&mut self, node_id: u32, vector: Vec<f32>) -> PyResult<()> {
-        let txn = self.inner.as_mut().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("Transaction already finished")
-        })?;
+        let txn = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| classify_nervus_error("Transaction already finished"))?;
         txn.set_vector(node_id, vector)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            .map_err(classify_nervus_error)
     }
 
     /// Rollback the transaction.

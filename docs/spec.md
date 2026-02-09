@@ -1,68 +1,64 @@
-# NervusDB v2 — 产品规格（Spec v2.0）
+# NervusDB v2 — 产品规格（Spec v2.1, 解冻执行版）
 
-> 这份 spec 是 v2 的“宪法”：写清楚约束和边界，避免靠幻想写代码。
->
-> **范围声明**：
->
-> - 本 spec 约束 NervusDB v2（新 crate / 新磁盘格式 / 不兼容 v1）
-> - 路线图（愿景/规划）在 `docs/ROADMAP_2.0.md`，不要把“计划”当“已实现”
+> 这份 spec 是 v2 的工程宪法：对齐“已实现事实 + 进行中任务 + 验收门禁”，避免文档与代码打架。
 
-## 1. 产品定位（Product Identity）
+## 1. 项目定位
 
-- **一句话使命**：做一个纯 Rust 的嵌入式 Property Graph 数据库，像 SQLite 一样“一个文件打开就能用”，但为图遍历而生。
-- **核心用户路径**：本地打开 DB → 写入 → 查询（流式）→ 崩溃恢复可验证。
+- **一句话使命**：做一个纯 Rust 的嵌入式 Property Graph 数据库，像 SQLite 一样“单路径打开即用”，并以图遍历为核心。
+- **核心路径**：打开 DB → 写入 → 查询（含流式消费）→ 崩溃恢复可验证。
 
-## 2. 现状（仓库事实）
+## 2. 范围声明（解冻）
 
-这些是“已经存在”的东西；其他任何内容都必须明确标注为“计划”。
+- v2 继续保持：**新 crate / 新磁盘格式 / 不兼容 v1**。
+- 与“冻结范围”不同，当前阶段进入 **全量 Roadmap 收尾执行**：
+  - M4：Cypher 兼容门禁扩展（TCK clauses/expressions）
+  - M5：绑定、文档、基准、并发优化、HNSW 调优
+  - Industrial：Fuzz / Chaos / Soak
+- 对外口径仍坚持：**通过自动化门禁才算支持**。
 
-- 存储：`.ndb + .wal`（Pager `RwLock` + Offset IO + redo WAL），页大小固定 `8KB`，支持 Vacuum
-- 一致性：Single Writer + Snapshot Readers（快照读并发）
-- 崩溃恢复：WAL replay + manifest/checkpoint（crash gate）
-- 图数据：MemTable → L0 frozen runs → 多段 CSR segments（compaction）
-- 查询：v2 query 最小子集（以 `docs/reference/cypher_support.md` 白名单为准）
+## 3. 当前事实（已实现）
 
-## 3. 硬约束（Constraints）
+- 存储：`.ndb + .wal`，页大小 `8KB`，支持 checkpoint/vacuum/backup。
+- 并发：Single Writer + Snapshot Readers。
+- 恢复：WAL replay + checkpoint/crash gate。
+- 查询：已完成 T300~T331 与 M4-01~M4-11 的主体能力（详见 `docs/tasks.md`）。
 
-- **兼容性**：v2 不兼容 v1（文件格式/接口/实现都独立）；v1 继续存在但不是 v2 的包袱
-- **外部依赖**：零外部服务进程（不需要 daemon）
-- **平台**：Native 优先（Linux/macOS/Windows）；WASM 仅内存实现
-- **安全性**：不硬编码 secrets；崩溃一致性是硬门槛
-- **复杂度纪律**：不要为了“理论完美”引入不可控复杂度；能用最蠢的清晰做法就别耍花活
+## 4. 核心约束
 
-## 4. v2.0 路线（Roadmap 2.0: Planned）
+- **安全**：不得硬编码密钥；崩溃一致性是硬门槛。
+- **复杂度**：优先可读、可回滚、可测试的最小实现。
+- **兼容**：不以“口头支持”替代验收；未通过门禁视为未支持。
+- **发布**：主干必须可构建、可测试、可回归。
 
-以下是“计划”，不是仓库事实。具体拆解见：
+## 5. 技术路线（本轮锁定）
+
+- **TCK 策略**：分层门禁（Tier-0/Tier-1/Tier-2 阻塞；Tier-3 nightly）。
+- **绑定策略**：`PyO3 + N-API`，不迁移 UniFFI。
+- **交付节奏**：分阶段串行推进，阶段内保持 CI 可绿。
+
+## 6. 质量与门禁
+
+### 6.1 PR 阻塞门禁
+
+1. `cargo fmt --all -- --check`
+2. `cargo clippy --workspace --exclude nervusdb-pyo3 --all-targets -- -W warnings`
+3. workspace 快速测试
+4. TCK Tier-0/Tier-1/Tier-2
+5. Python/Node smoke + 跨语言契约快测
+
+### 6.2 Nightly / Manual 门禁
+
+1. TCK Tier-3 全量回归 + 失败聚类报告
+2. benchmark 对标（含 Neo4j/Memgraph）
+3. chaos 测试
+4. 24h soak 稳定性测试
+5. fuzz 长跑
+
+## 7. 文档与任务单一事实源
 
 - 路线图：`docs/ROADMAP_2.0.md`
-- 架构总览：`docs/design/T100-v2-architecture-2.0.md`
+- 任务状态：`docs/tasks.md`
+- 完成定义：`docs/memos/DONE.md`
+- 对外能力矩阵：`docs/reference/cypher_support.md`
 
-### 4.1 Indexing（计划）
-
-- 在 `.ndb` Pager 内引入 **Page-backed B+Tree** 二级索引
-- 初期只做“页布局 + cursor + 有序 key 编码”（T101），避免一口吃成胖子
-- 索引目录 / 多索引管理 / compaction 集成属于后续任务（T102/T103）
-
-### 4.2 Query（计划）
-
-- `EXPLAIN`、`MERGE` 等按任务推进（T104/T105…）
-- 优化器/索引选择属于后续，必须可测试、可回滚
-- **Cypher 兼容（计划）**：
-  - “全量支持”的定义必须可验收：以 `docs/design/T300-cypher-full.md` 为总设计，任务拆解以 `docs/tasks.md` Phase 4（T300+）为准
-  - 发布口径以自动化门禁为准：优先引入 openCypher TCK（先 parse-only gate，再逐步扩展到 exec gate）；未通过门禁不算“支持”
-  - NervusDB 扩展（例如向量检索）必须作为扩展能力单独标注，避免混同于 openCypher 兼容宣称
-
-### 4.3 Lifecycle（计划）
-
-- “Single File at Rest”（Checkpoint-on-Close）属于后续（T106）
-
-## 5. 测试策略（Testing Strategy）
-
-- 单元测试：pager/wal/idmap/memtable/index page layout（T101 相关）
-- 集成测试：storage + query 端到端（最小子集）
-- 崩溃门禁：CI crash-gate（PR 小跑 + 定时大跑）
-- Cypher 兼容门禁：openCypher TCK / 可扩展 harness（T300/T326）+ 关键用户路径黄金用例
-
-## 6. 已知技术债与折衷（Technical Debt & Trade-offs）
-
-- **暂无**：目前主要技术债（如 Vacuum, B-Tree 删除, 执行器动态分发）已在 v2.0 (T204-T207) 阶段解决。
+若四者冲突，以“**代码 + CI 门禁结果 + tasks 当前状态**”为准，并立即修正文档。

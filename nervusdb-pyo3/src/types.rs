@@ -1,4 +1,3 @@
-use nervusdb_v2::InternalNodeId;
 use nervusdb_v2_query::Value;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;

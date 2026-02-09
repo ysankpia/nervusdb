@@ -1,0 +1,32 @@
+name: Soak Stability
+
+on:
+  schedule:
+    - cron: "0 0 * * 6"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1500
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run soak stability
+        run: |
+          mkdir -p artifacts/soak
+          SOAK_OUT_DIR=artifacts/soak SOAK_MINUTES=1440 bash scripts/soak_stability.sh
+
+      - name: Upload soak artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-artifacts
+          path: artifacts/soak/

@@ -1,0 +1,2 @@
+{"nodes":200,"dim":8,"queries":20,"k":5,"m":8,"ef_construction":100,"ef_search":64,"recall_at_k":1.000000,"avg_us":389.736,"p95_us":607.459,"p99_us":710.958,"ndb_bytes":19701760,"wal_bytes":5034,"memory_proxy_bytes":19706794}
+{"nodes":200,"dim":8,"queries":20,"k":5,"m":8,"ef_construction":100,"ef_search":128,"recall_at_k":1.000000,"avg_us":620.223,"p95_us":1537.916,"p99_us":1918.250,"ndb_bytes":19292160,"wal_bytes":5034,"memory_proxy_bytes":19297194}

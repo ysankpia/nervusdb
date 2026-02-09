@@ -1,0 +1,4 @@
+# format: <feature_path>|<scenario_name_optional>
+# expressions tier starts from verified stable baseline
+
+tests/opencypher_tck/tck/features/expressions/literals/Literals1.feature|

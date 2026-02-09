@@ -1,0 +1,5 @@
+# format: <feature_path>|<scenario_name_optional>
+# clauses tier focuses on stable compile-time conflict behaviors
+
+tests/opencypher_tck/tck/features/clauses/match/Match2.feature|Fail when a node has the same variable in a preceding MATCH
+tests/opencypher_tck/tck/features/clauses/match/Match6.feature|Fail when a node has the same variable in a preceding MATCH

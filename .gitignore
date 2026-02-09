@@ -61,3 +61,6 @@ bindings/node/*.tgz
 
 # Test results
 tck_results.txt
+
+# Local generated artifacts
+artifacts/

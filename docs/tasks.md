@@ -1,10 +1,10 @@
-# Task Tracking (v2.0 Roadmap)
+# Task Tracking (v2.1 Execution Board)
 
-> **Focus**: Architecture Parity (Indexes), Cypher Completeness, and Ecosystem.
-> **Source**: `docs/ROADMAP_2.0.md`
+> **Focus**: Full Roadmap close-out（M4 收尾 → M5 交付 → 工业质量门禁）
+> **Source of truth**: `docs/spec.md` + `docs/ROADMAP_2.0.md`
 
 | ID            | Task                                                       | Risk   | Status | Branch                      | Notes                                                    |
-| :------------ | :--------------------------------------------------------- | :----- | :----- | :-------------------------- | :------------------------------------------------------- | ----------------------------------------- |
+| :------------ | :--------------------------------------------------------- | :----- | :----- | :-------------------------- | :------------------------------------------------------- |
 | **Phase 1**   | **Core Architecture**                                      |        |        |                             |                                                          |
 | T101          | [Storage] Implement `PageCursor` & B-Tree Page Layout      | High   | Done   | -                           | Slotted pages + ordered keys + cursor                    |
 | T102          | [Storage] Implement `IndexCatalog` & B-Tree Logic          | High   | Done   | -                           | Insert/Search/Delete on Pager                            |
@@ -54,8 +54,8 @@
 | T313          | [Query] Built-in Functions (String/Math/List/Type)         | High   | Done   | feat/T313-functions         | toUpper/substring/size/coalesce/keys/type/id             |
 | T314          | [Query] Generalize Patterns (multi-hop > 3 elements)       | High   | Done   | feat/T314-pattern-general   | Iterative compiler implemented                           |
 | T315          | [Query] Support `<-` and Undirected `-` Patterns           | High   | Done   | feat/T315-direction         | Incoming/undirected expansion semantics                  |
-| T316          | [Query] Relationship Type Alternation (`:A                 | B`)    | Medium | Done                        | feat/T316-type-alternation                               | Parser+planner+executor support           |
-| T317          | [Query] Multiple MATCH Parts & Join Semantics              | High   | Done   | feat/T317-joins             | 90%                                                      | Inner/left join + cartesian product rules |
+| T316          | [Query] Relationship Type Alternation (`:A / B`)            | Medium | Done   | feat/T316-type-alternation  | Parser + planner + executor support                      |
+| T317          | [Query] Multiple MATCH Parts & Join Semantics              | High   | Done   | feat/T317-joins             | Inner/left join + cartesian product rules                |
 | T318          | [Query] Path Values + Path Functions                       | High   | Done   | feat/T318-path-values       | `p=...`, length(), nodes(), relationships()              |
 | T319          | [Query] CALL { ... } Subquery (Apply)                      | High   | Done   | feat/T319-subquery          | Subquery scope + correlated apply                        |
 | T320          | [Query] Procedure CALL/YIELD (NervusDB Extensions)         | High   | Done   | feat/T320-procedures        | e.g. `CALL vector.search(...) YIELD ...`                 |
@@ -77,15 +77,21 @@
 | M4-04         | [Query] SET/DELETE with Complex Expressions                | High   | Done   | feat/M4-04-expressions      | Support list/var/expressions in writes                   |
 | M4-05         | [Query] Simple CASE Expression                             | Medium | Done   | feat/M4-05-case             | Parser support implemented                               |
 | M4-06         | [Query] Anonymous Node Handling                            | Medium | Done   | feat/M4-06-anon-nodes       | Auto-generated variable names                            |
-| M4-07         | [CI] Expand TCK to clauses/\*                              | High   | WIP    | feat/M4-07-tck-clauses      | Currently running full suite                             |
-| M4-08         | [CI] Expand TCK to expressions/\*                          | High   | WIP    | feat/M4-08-tck-expressions  | Currently running full suite                             |
+| M4-07         | [CI] Expand TCK to clauses/\*                              | High   | Done   | feat/M4-07-tck-clauses      | 覆盖集: `scripts/tck_whitelist/tier1_clauses.txt`；本地 Tier-1 白名单通过率 100% |
+| M4-08         | [CI] Expand TCK to expressions/\*                          | High   | Done   | feat/M4-08-tck-expressions  | 覆盖集: `scripts/tck_whitelist/tier2_expressions.txt`；本地 Tier-2 白名单通过率 100% |
 | M4-09         | [Bug] Ongoing Unicode/String Edge Cases                    | Medium | Done   | -                           | Fixed UTF-8 panic in explain                             |
+| M4-10         | [Query/CI] Merge Core Semantics + TCK Smoke Gate          | High   | Done   | feat/M4-10-merge-core       | Added binding conflict validation + varlen `<-/->/-` + CI smoke gate |
+| M4-11         | [Query] MERGE Regression Hardening                         | High   | Done   | feat/M4-10-merge-core       | Fixed MERGE execution on wrapped plans, rel source indexing, ON CREATE/ON MATCH updates, correlated MATCH binding typing |
 | **M5**        | **Polish & Performance (TCK ≥90%)**                        |        |        |                             |                                                          |
-| M5-01         | [Binding] Complete Python Binding + Examples               | High   | Plan   | feat/M5-01-python           | Error handling, type mapping, docs                       |
-| M5-02         | [Docs] Comprehensive User Guide                            | High   | Plan   | feat/M5-02-user-guide       | Quick start, examples, API reference                     |
-| M5-03         | [Benchmark] Performance vs Neo4j/Memgraph                  | Medium | Plan   | feat/M5-03-benchmark        | Import speed, query latency, memory usage                |
-| M5-04         | [Performance] Concurrent Read Optimization                 | Medium | Plan   | feat/M5-04-concurrency      | Read-write lock, parallel queries                        |
-| M5-05         | [AI] HNSW Index Tuning                                     | Low    | Plan   | feat/M5-05-hnsw             | Parameters, GC, memory management                        |
+| M5-01         | [Binding] Python + Node.js 可用性收敛（PyO3 + N-API）      | High   | Done   | feat/M5-01-bindings         | 异常分层 + `query_stream` + Node 运行时 smoke/事务回归 + 跨语言契约快测已通过 |
+| M5-02         | [Docs] 用户文档与支持矩阵对齐                             | High   | Done   | feat/M5-02-user-guide       | README/README_CN/cypher_support 与 Rust/CLI/Python/Node 最小路径已对齐 |
+| M5-03         | [Benchmark] NervusDB vs Neo4j/Memgraph 对标               | Medium | Done   | feat/M5-03-benchmark        | compare 脚本 + benchmark-nightly workflow + `docs/perf/v2` 报告归档 |
+| M5-04         | [Performance] 并发读热点优化                               | Medium | Done   | feat/M5-04-concurrency      | profile 脚本 + 读路径低风险优化 + `docs/perf/v2/concurrency-latest.md` |
+| M5-05         | [AI] HNSW 参数调优与默认策略                              | Low    | Done   | feat/M5-05-hnsw             | HNSW 参数环境变量化 + sweep 报告 + 默认建议 `hnsw-default-recommendation.md` |
+| **Industrial**| **Industrial Quality (Roadmap Phase 3)**                  |        |        |                             |                                                          |
+| I5-01         | [Quality] `cargo-fuzz` 分层接入                            | High   | Done   | feat/I5-01-fuzz             | query_prepare/query_parse/query_execute targets + nightly workflow + 回归脚本（支持本地 skip） |
+| I5-02         | [Quality] Chaos IO 故障注入门禁                            | High   | Done   | feat/I5-02-chaos            | 权限/路径/文件类型故障 + WAL 恢复校验 + chaos nightly artifacts |
+| I5-03         | [Quality] 24h Soak 稳定性流程                              | High   | Done   | feat/I5-03-soak             | soak summary + history.jsonl + soak nightly artifacts    |
 
 ## Archived (v1/Alpha)
 

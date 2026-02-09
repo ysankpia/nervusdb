@@ -20,6 +20,22 @@ use std::sync::{Arc, Mutex, RwLock};
 
 type NativeHnsw = HnswIndex<PersistentVectorStorage, PersistentGraphStorage>;
 
+fn parse_hnsw_env_usize(name: &str, default_value: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(default_value)
+}
+
+fn load_hnsw_params_from_env() -> HnswParams {
+    HnswParams {
+        m: parse_hnsw_env_usize("NERVUSDB_HNSW_M", 16),
+        ef_construction: parse_hnsw_env_usize("NERVUSDB_HNSW_EF_CONSTRUCTION", 200),
+        ef_search: parse_hnsw_env_usize("NERVUSDB_HNSW_EF_SEARCH", 200),
+    }
+}
+
 #[derive(Debug)]
 pub struct GraphEngine {
     ndb_path: PathBuf,
@@ -65,11 +81,7 @@ impl GraphEngine {
 
         let v_store = PersistentVectorStorage::new(BTree::load(vec_def.root));
         let g_store = PersistentGraphStorage::new(BTree::load(graph_def.root));
-        let params = HnswParams {
-            m: 16,
-            ef_construction: 200,
-            ef_search: 200,
-        };
+        let params = load_hnsw_params_from_env();
         // HnswIndex::load needs generic Ctx = &mut Pager
         let vector_index = HnswIndex::load(params, v_store, g_store, &mut pager)?;
 
@@ -1166,6 +1178,78 @@ fn scan_recovery_state(committed: &[CommittedTx]) -> RecoveryState {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn set_env(name: &str, value: &str) {
+        unsafe { std::env::set_var(name, value) }
+    }
+
+    fn remove_env(name: &str) {
+        unsafe { std::env::remove_var(name) }
+    }
+
+    #[test]
+    fn hnsw_params_use_defaults_when_env_missing() {
+        let _guard = ENV_LOCK.lock().unwrap();
+
+        let m_old = std::env::var("NERVUSDB_HNSW_M").ok();
+        let ec_old = std::env::var("NERVUSDB_HNSW_EF_CONSTRUCTION").ok();
+        let es_old = std::env::var("NERVUSDB_HNSW_EF_SEARCH").ok();
+
+        remove_env("NERVUSDB_HNSW_M");
+        remove_env("NERVUSDB_HNSW_EF_CONSTRUCTION");
+        remove_env("NERVUSDB_HNSW_EF_SEARCH");
+
+        let params = load_hnsw_params_from_env();
+        assert_eq!(params.m, 16);
+        assert_eq!(params.ef_construction, 200);
+        assert_eq!(params.ef_search, 200);
+
+        if let Some(v) = m_old {
+            set_env("NERVUSDB_HNSW_M", &v);
+        }
+        if let Some(v) = ec_old {
+            set_env("NERVUSDB_HNSW_EF_CONSTRUCTION", &v);
+        }
+        if let Some(v) = es_old {
+            set_env("NERVUSDB_HNSW_EF_SEARCH", &v);
+        }
+    }
+
+    #[test]
+    fn hnsw_params_read_valid_env_and_ignore_invalid() {
+        let _guard = ENV_LOCK.lock().unwrap();
+
+        let m_old = std::env::var("NERVUSDB_HNSW_M").ok();
+        let ec_old = std::env::var("NERVUSDB_HNSW_EF_CONSTRUCTION").ok();
+        let es_old = std::env::var("NERVUSDB_HNSW_EF_SEARCH").ok();
+
+        set_env("NERVUSDB_HNSW_M", "32");
+        set_env("NERVUSDB_HNSW_EF_CONSTRUCTION", "0");
+        set_env("NERVUSDB_HNSW_EF_SEARCH", "abc");
+
+        let params = load_hnsw_params_from_env();
+        assert_eq!(params.m, 32);
+        assert_eq!(params.ef_construction, 200);
+        assert_eq!(params.ef_search, 200);
+
+        if let Some(v) = m_old {
+            set_env("NERVUSDB_HNSW_M", &v);
+        } else {
+            remove_env("NERVUSDB_HNSW_M");
+        }
+        if let Some(v) = ec_old {
+            set_env("NERVUSDB_HNSW_EF_CONSTRUCTION", &v);
+        } else {
+            remove_env("NERVUSDB_HNSW_EF_CONSTRUCTION");
+        }
+        if let Some(v) = es_old {
+            set_env("NERVUSDB_HNSW_EF_SEARCH", &v);
+        } else {
+            remove_env("NERVUSDB_HNSW_EF_SEARCH");
+        }
+    }
 
     #[test]
     fn t45_compaction_persists_manifest_and_skips_replay_before_checkpoint() {

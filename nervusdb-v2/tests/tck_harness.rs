@@ -1,17 +1,16 @@
-use cucumber::{given, when, then, World, Parameter};
-use nervusdb_v2::{Db, PropertyValue};
-use nervusdb_v2_query::{prepare, Params, Value};
-use std::collections::{HashMap, HashSet};
+use cucumber::{World, given, then, when};
+use nervusdb_v2::Db;
+use nervusdb_v2_query::{Params, Value, prepare};
+use std::collections::HashMap;
 use std::convert::Infallible;
-use tempfile::TempDir;
 use std::sync::Arc;
-use futures::FutureExt;
+use tempfile::TempDir;
 
 #[derive(Debug, World)]
 #[world(init = Self::new)]
 pub struct GraphWorld {
-    db: Option<Arc<Db>>, 
-    _dir: Option<Arc<TempDir>>, 
+    db: Option<Arc<Db>>,
+    _dir: Option<Arc<TempDir>>,
     last_result: Option<Vec<HashMap<String, Value>>>,
     last_error: Option<String>,
 }
@@ -35,24 +34,32 @@ impl GraphWorld {
 
 #[given("an empty graph")]
 #[given("any graph")]
-async fn empty_graph(world: &mut GraphWorld) {
+async fn empty_graph(_world: &mut GraphWorld) {
     // Already empty on new()
 }
 
 #[then("no side effects")]
-async fn no_side_effects(world: &mut GraphWorld) {
+async fn no_side_effects(_world: &mut GraphWorld) {
     // TODO: Verify no changes were made (check DB stats?)
 }
 
 #[given(regex = r"^having executed:$")]
 async fn having_executed(world: &mut GraphWorld, step: &cucumber::gherkin::Step) {
-    let query = step.docstring.as_ref().expect("Expected docstring for query").trim();
+    let query = step
+        .docstring
+        .as_ref()
+        .expect("Expected docstring for query")
+        .trim();
     execute_write(world, query);
 }
 
 #[when(regex = r"^executing query:$")]
 async fn executing_query(world: &mut GraphWorld, step: &cucumber::gherkin::Step) {
-    let query = step.docstring.as_ref().expect("Expected docstring for query").trim();
+    let query = step
+        .docstring
+        .as_ref()
+        .expect("Expected docstring for query")
+        .trim();
     execute_query_generic(world, query);
 }
 
@@ -69,12 +76,12 @@ fn execute_query_generic(world: &mut GraphWorld, cypher: &str) {
 
             // Try execute_streaming first for read queries
             let rows: Vec<_> = query.execute_streaming(&snapshot, &params).collect();
-            
+
             // Check if there were any errors
             let mut has_error = false;
             let mut error_msg = None;
             let mut results = Vec::new();
-            
+
             for row_res in rows {
                 match row_res {
                     Ok(row) => {
@@ -143,22 +150,20 @@ fn execute_write(world: &mut GraphWorld, cypher: &str) {
     let db = world.get_db(); // Returns Arc<Db>, releases borrow on world
     // Prepare can be done outside transaction? Yes.
     let query_r = prepare(cypher);
-    
+
     let exec_result: Result<(), String> = match query_r {
         Ok(query) => {
-             let mut txn = db.begin_write();
-             let snapshot = db.snapshot();
-             let params = Params::new();
-             match query.execute_write(&snapshot, &mut txn, &params) {
-                 Ok(_) => {
-                     match txn.commit() {
-                         Ok(_) => Ok(()),
-                         Err(e) => Err(e.to_string()),
-                     }
-                 },
-                 Err(e) => Err(e.to_string()),
-             }
-        },
+            let mut txn = db.begin_write();
+            let snapshot = db.snapshot();
+            let params = Params::new();
+            match query.execute_write(&snapshot, &mut txn, &params) {
+                Ok(_) => match txn.commit() {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(e.to_string()),
+                },
+                Err(e) => Err(e.to_string()),
+            }
+        }
         Err(e) => Err(e.to_string()),
     };
 
@@ -168,16 +173,17 @@ fn execute_write(world: &mut GraphWorld, cypher: &str) {
     }
 }
 
+#[allow(dead_code)]
 fn execute_read(world: &mut GraphWorld, cypher: &str) {
     let db = world.get_db();
     let query_r = prepare(cypher);
-    
+
     let exec_result: Result<Vec<HashMap<String, Value>>, String> = match query_r {
         Ok(query) => {
-            let snapshot = db.snapshot(); 
+            let snapshot = db.snapshot();
             let params = Params::new();
             let rows = query.execute_streaming(&snapshot, &params);
-            
+
             let mut results = Vec::new();
             let mut err = None;
             for row in rows {
@@ -188,7 +194,7 @@ fn execute_read(world: &mut GraphWorld, cypher: &str) {
                             map.insert(k, v);
                         }
                         results.push(map);
-                    },
+                    }
                     Err(e) => {
                         err = Some(e.to_string());
                         break;
@@ -200,7 +206,7 @@ fn execute_read(world: &mut GraphWorld, cypher: &str) {
             } else {
                 Ok(results)
             }
-        },
+        }
         Err(e) => Err(e.to_string()),
     };
 
@@ -208,7 +214,7 @@ fn execute_read(world: &mut GraphWorld, cypher: &str) {
         Ok(r) => {
             world.last_result = Some(r);
             world.last_error = None;
-        },
+        }
         Err(e) => world.last_error = Some(e),
     }
 }
@@ -216,20 +222,23 @@ fn execute_read(world: &mut GraphWorld, cypher: &str) {
 #[then(regex = r"^a SyntaxError should be raised at compile time: (.+)$")]
 async fn syntax_error_raised(world: &mut GraphWorld, error_type: String) {
     // Check if we got an error as expected
-    let err = world.last_error.as_ref().expect("Expected a SyntaxError but got success");
+    let err = world
+        .last_error
+        .as_ref()
+        .expect("Expected a SyntaxError but got success");
 
     // For MVP, we check if error contains the expected type or just assert we got an error
     // NervusDB parser currently returns general errors, not specific codes yet
     // We'll do basic matching for common error types
 
     let err_lower = err.to_lowercase();
-    let expected_lower = error_type.to_lowercase();
+    let _expected_lower = error_type.to_lowercase();
 
     // Check for common error patterns
-    let matches = err_lower.contains("error") ||
-                  err_lower.contains("unexpected token") ||
-                  err_lower.contains("syntax") ||
-                  err_lower.contains("parse");
+    let matches = err_lower.contains("error")
+        || err_lower.contains("unexpected token")
+        || err_lower.contains("syntax")
+        || err_lower.contains("parse");
 
     if !matches {
         panic!("Expected error type '{}' but got: {}", error_type, err);
@@ -240,19 +249,26 @@ async fn syntax_error_raised(world: &mut GraphWorld, error_type: String) {
 
 #[then(regex = r"^the result should be, in any order:$")]
 async fn result_should_be_any_order(world: &mut GraphWorld, step: &cucumber::gherkin::Step) {
-    assert!(world.last_error.is_none(), "Query failed: {:?}", world.last_error);
-    
-    let expected_table = step.table.as_ref().expect("Expected table");
-    let actual_results = world.last_result.as_ref().expect("No results from previous query");
+    assert!(
+        world.last_error.is_none(),
+        "Query failed: {:?}",
+        world.last_error
+    );
 
-    // 1. Get headers 
+    let expected_table = step.table.as_ref().expect("Expected table");
+    let actual_results = world
+        .last_result
+        .as_ref()
+        .expect("No results from previous query");
+
+    // 1. Get headers
     // cucumber-rs Table struct only gives us rows. First row is header.
     let rows = &expected_table.rows;
     if rows.is_empty() {
         return;
     }
     let headers = &rows[0];
-    
+
     // 2. Parse expected rows
     let mut expected_rows = Vec::new();
     for row in rows.iter().skip(1) {
@@ -268,22 +284,38 @@ async fn result_should_be_any_order(world: &mut GraphWorld, step: &cucumber::ghe
     }
 
     // 3. Convert to canonical format for comparison
-    let expected_canonical: Vec<Vec<(String, Value)>> = expected_rows.into_iter().map(canonicalize).collect();
-    let actual_canonical: Vec<Vec<(String, Value)>> = actual_results.clone().into_iter().map(canonicalize).collect();
+    let expected_canonical: Vec<Vec<(String, Value)>> =
+        expected_rows.into_iter().map(canonicalize).collect();
+    let actual_canonical: Vec<Vec<(String, Value)>> = actual_results
+        .clone()
+        .into_iter()
+        .map(canonicalize)
+        .collect();
 
     // 4. Compare as multisets
     if expected_canonical.len() != actual_canonical.len() {
-        panic!("Row count mismatch.\nExpected: {} rows\nActual: {} rows\nExpected Data: {:?}\nActual Data: {:?}", 
-               expected_canonical.len(), actual_canonical.len(), expected_canonical, actual_canonical);
+        panic!(
+            "Row count mismatch.\nExpected: {} rows\nActual: {} rows\nExpected Data: {:?}\nActual Data: {:?}",
+            expected_canonical.len(),
+            actual_canonical.len(),
+            expected_canonical,
+            actual_canonical
+        );
     }
-    
+
     let mut actual_remaining = actual_canonical.clone();
-    
+
     for expected_row in &expected_canonical {
-        if let Some(pos) = actual_remaining.iter().position(|r| row_eq(r, expected_row)) {
+        if let Some(pos) = actual_remaining
+            .iter()
+            .position(|r| row_eq(r, expected_row))
+        {
             actual_remaining.remove(pos);
         } else {
-            panic!("Expected row not found in actual results:\nExpected Row: {:?}\nActual Remaining: {:?}", expected_row, actual_remaining);
+            panic!(
+                "Expected row not found in actual results:\nExpected Row: {:?}\nActual Remaining: {:?}",
+                expected_row, actual_remaining
+            );
         }
     }
 }
@@ -295,10 +327,16 @@ fn canonicalize(row: HashMap<String, Value>) -> Vec<(String, Value)> {
 }
 
 fn row_eq(a: &[(String, Value)], b: &[(String, Value)]) -> bool {
-    if a.len() != b.len() { return false; }
+    if a.len() != b.len() {
+        return false;
+    }
     for i in 0..a.len() {
-        if a[i].0 != b[i].0 { return false; }
-        if !value_eq(&a[i].1, &b[i].1) { return false; }
+        if a[i].0 != b[i].0 {
+            return false;
+        }
+        if !value_eq(&a[i].1, &b[i].1) {
+            return false;
+        }
     }
     true
 }
@@ -313,7 +351,9 @@ fn value_eq(a: &Value, b: &Value) -> bool {
         (Value::Float(f), Value::Int(i)) => (*f - *i as f64).abs() < 1e-9,
         (Value::String(a), Value::String(b)) => a == b,
         (Value::List(a), Value::List(b)) => {
-            if a.len() != b.len() { return false; }
+            if a.len() != b.len() {
+                return false;
+            }
             a.iter().zip(b.iter()).all(|(a, b)| value_eq(a, b))
         }
         // Handle Node comparisons - normalize to string representation for TCK
@@ -333,15 +373,21 @@ fn value_eq(a: &Value, b: &Value) -> bool {
 
 fn parse_tck_value(s: &str) -> Value {
     let s = s.trim();
-    if s == "null" { return Value::Null; }
-    if s == "true" { return Value::Bool(true); }
-    if s == "false" { return Value::Bool(false); }
+    if s == "null" {
+        return Value::Null;
+    }
+    if s == "true" {
+        return Value::Bool(true);
+    }
+    if s == "false" {
+        return Value::Bool(false);
+    }
     if (s.starts_with('\'') && s.ends_with('\'')) || (s.starts_with('"') && s.ends_with('"')) {
-        return Value::String(s[1..s.len()-1].to_string());
+        return Value::String(s[1..s.len() - 1].to_string());
     }
     // Handle list format: [1, 2, 3] or ['a', 'b']
     if s.starts_with('[') && s.ends_with(']') {
-        let inner = &s[1..s.len()-1];
+        let inner = &s[1..s.len() - 1];
         if inner.is_empty() {
             return Value::List(vec![]);
         }
@@ -352,13 +398,18 @@ fn parse_tck_value(s: &str) -> Value {
             .collect();
         return Value::List(items);
     }
-    if let Ok(i) = s.parse::<i64>() { return Value::Int(i); }
-    if let Ok(f) = s.parse::<f64>() { return Value::Float(f); }
+    if let Ok(i) = s.parse::<i64>() {
+        return Value::Int(i);
+    }
+    if let Ok(f) = s.parse::<f64>() {
+        return Value::Float(f);
+    }
     // Fallback: treat as unquoted string (for node/rel references like (:Person))
     Value::String(s.to_string())
 }
 
 fn main() {
-    futures::executor::block_on(GraphWorld::cucumber()
-        .run_and_exit("tests/opencypher_tck/tck/features"));
+    futures::executor::block_on(
+        GraphWorld::cucumber().run_and_exit("tests/opencypher_tck/tck/features"),
+    );
 }

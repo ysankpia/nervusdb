@@ -1,93 +1,113 @@
-# NervusDB v2.0 Roadmap: The "Graph SQLite" Initiative
+# NervusDB v2.0 Roadmap（Execution Mode）
 
-> **Vision**: To be the default **Embedded Graph Database** for the AI and Edge Computing era.
+> **Vision**: 成为 AI/Edge 时代默认的 Embedded Graph Database。
 >
-> **Philosophy**:
-> 1.  **Architecture 100%**: Single-file, Crash-safe, Native Indexing.
-> 2.  **Functionality 100%**: Full Cypher CRUD, Vector Search, Multi-language Bindings.
-> 3.  **Quality 100%**: Fuzz-tested, Production-ready reliability.
+> **Execution Principles**:
+> 1. 以门禁定义“支持”（tests as contract）
+> 2. 以阶段收敛推进（M4 → M5 → Industrial）
+> 3. 主线始终可绿、可回滚
 
 ---
 
-## 🏆 Phase 1: The Core (Architecture & Cypher Parity)
-**Timeline**: Month 1 (v2.0.0-beta)
-**Focus**: Completing the database kernel and query engine to support real-world application logic.
+## Phase A：M4 收尾（Cypher/TCK）
 
-### 1.1 Native Indexing (Storage Engine)
-*Goal: Queries should be O(log N), not O(N).*
-- [ ] **Page-Backed B+Tree**: Implement a B+Tree index that lives inside the `.ndb` pager (no external files).
-- [ ] **Snapshot Isolation**: Ensure B-Tree updates utilize Copy-on-Write (CoW) or MVCC so readers always see a consistent state.
-- [ ] **WAL Integration**: Ensure index updates (Insert/Delete) are atomic with data updates via WAL.
-- [ ] **Query Optimizer**: Update `Planner` to automatically use indexes for `WHERE` clauses (Cost-Based Optimization MVP).
+**目标**：把 TCK 从 smoke 升级为分层门禁，持续提高 clauses/expressions 通过率。
 
-### 1.2 Cypher Completeness (Query Engine)
-*Goal: Write once, run anywhere (Cypher compatibility).*
-- [ ] **`EXPLAIN` Clause**: Allow users to inspect the execution plan (scan vs index seek).
-- [ ] **`MERGE` Clause**: Implement idempotent "Create or Match" logic (Critical for data ingestion).
-- [ ] **`OPTIONAL MATCH`**: Support left-outer-join style pattern matching.
-- [ ] **Aggregations**: Complete support for `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` with `GROUP BY` (implicit).
-- [ ] **Functions**: Add standard string/math functions (e.g., `toUpper`, `substring`, `size`).
+### A.1 TCK Tiered Gates
 
-### 1.3 Auto-Management
-*Goal: Zero-config operation.*
-- [ ] **Checkpoint-on-Close**: Automatically merge `.wal` back into `.ndb` and delete the log file on clean shutdown (Portability).
-- [ ] **Auto-Compaction**: Trigger background L0->L1 compaction based on write amplification/tombstone ratio.
-- [ ] **Vacuum**: API to reclaim free pages and shrink the `.ndb` file size.
+- [x] Tier-0：core/extended smoke gate（已落地）
+- [x] Tier-1：clauses 白名单门禁（PR 阻塞）
+- [x] Tier-2：expressions 白名单门禁（PR 阻塞）
+- [x] Tier-3：全量 TCK nightly（非阻塞 + 报告）
+
+### A.2 失败聚类驱动修复
+
+- [x] 自动产出失败聚类（按 feature / error pattern）
+- [x] 每轮 PR 固定“拉入一批白名单 + 修一批失败簇”
+
+### A.3 M4 完成标准
+
+- [x] `M4-07`（clauses）从 WIP → Done
+- [x] `M4-08`（expressions）从 WIP → Done
+- [x] 在 `docs/tasks.md` 记录覆盖集与通过率
 
 ---
 
-## 🚀 Phase 2: The Ecosystem (Bindings & AI)
-**Timeline**: Month 2 (v2.0.0-rc)
-**Focus**: Making NervusDB accessible to Python/JS developers and AI workflows.
+## Phase B：M5 交付（Bindings + Docs + Perf）
 
-### 2.1 Multi-Language Bindings (UniFFI)
-*Goal: `pip install nervusdb` / `npm install nervusdb`.*
-- [ ] **Bulk Import Tool**: High-performance CLI tool to ingest CSV/JSONL files directly into `.ndb` (bypass WAL for speed).
-- [ ] **UniFFI Core**: Create `nervusdb-uniffi` crate to expose a stable C-ABI.
-- [ ] **Python Binding**: Full Python support (sync API first) for Data Science/AI integration.
-- [ ] **Node.js Binding**: TypeScript definitions and N-API bindings for web backends.
+### B.1 M5-01 Bindings（PyO3 + N-API）
 
-### 2.2 Native Vector Search (AI Ready)
-*Goal: The best embedded database for RAG (Retrieval-Augmented Generation).*
-- [ ] **HNSW Index**: Implement Hierarchical Navigable Small World graphs on Pager.
-- [ ] **Vector Storage**: Optimized storage for `Vec<f32>` properties.
-- [ ] **Similarity Search**: Support `CALL vector.search(index, query_vector, k)` in Cypher.
+- [x] Python 异常分层：`NervusError/SyntaxError/ExecutionError/StorageError`
+- [x] Python `Db.query_stream()` 迭代器接口
+- [x] Node N-API scaffold：`open/query/beginWrite/commit/rollback`
+- [x] 跨语言契约快测（Rust/Python/Node）
 
----
+### B.2 M5-02 Docs Alignment
 
-## 🛡 Phase 3: Industrial Quality (Trust)
-**Timeline**: Ongoing (v2.0.0-GA)
-**Focus**: Reliability, Performance, and Security.
+- [x] `README.md` / `README_CN.md` / `docs/reference/cypher_support.md` 对齐门禁事实
+- [x] User Guide 补全 Rust/CLI/Python/Node 最小路径
 
-### 3.1 Extreme Testing
-*Goal: Break it before the user does.*
-- [ ] **Fuzz Testing**: Use `cargo-fuzz` to generate random Cypher queries and graph topologies to find panics.
-- [ ] **Chaos Testing**: Simulate IO errors (disk full, permission denied) during WAL commits to verify recovery.
-- [ ] **Long-Running Tests**: 24h stability tests under high concurrency.
+### B.3 M5-03 Benchmark
 
-### 3.2 Performance & Benchmarking
-*Goal: Proven speed.*
-- [ ] **Benchmark Suite**: Standardized comparison vs SQLite (Relational) and Neo4j (Graph).
-- [ ] **Performance Profile**: Publish P99 latency numbers for common queries (1-hop, 2-hop, shortest path).
+- [x] NervusDB vs Neo4j vs Memgraph 对标入口（Docker）
+- [x] JSON + Markdown 报告产物归档到 `docs/perf/`
+- [x] 手动/定时 workflow（非阻塞主 CI）
+
+### B.4 M5-04 Concurrency
+
+- [x] 并发读热点 profile 与基线
+- [x] 读路径优化（先低风险、再调度）
+- [x] P95/P99 对比报告
+
+### B.5 M5-05 HNSW Tuning
+
+- [x] `M/efConstruction/efSearch` 可配置
+- [x] recall-latency-memory 三维报告
+- [x] 默认参数建议固化
 
 ---
 
-## 📊 Feature Matrix Target (v2.0 GA)
+## Phase C：Industrial Quality（Roadmap Phase 3）
 
-| Feature | SQLite | NervusDB v1 | NervusDB v2 (Goal) |
-| :--- | :---: | :---: | :---: |
-| **Storage Model** | B-Tree (Table) | Redb (KV) | **LSM-CSR (Graph)** |
-| **File Format** | Single File | Single File | **Single File (at rest) / +WAL (runtime)** |
-| **Vector Search** | Plugin (sqlite-vec) | ❌ | **Native (Built-in)** |
-| **Language** | C | Rust | **Rust** |
-| **Query Lang** | SQL | Cypher | **Cypher + Vector** |
-| **Crash Safe** | ✅ | ✅ | **✅ (WAL)** |
-| **Bindings** | All | Py/Node/C | **Py/Node/Rust/C** |
+### C.1 Fuzz
+
+- [x] `cargo-fuzz` 目标接入（parser/planner/executor）
+- [x] 崩溃样例归档与回归
+
+### C.2 Chaos
+
+- [x] IO 故障注入（磁盘满/权限失败）
+- [x] WAL 恢复路径验证
+
+### C.3 Soak
+
+- [x] 24h 稳定性流程（nightly/scheduled）
+- [x] 自动产物与失败复现信息
 
 ---
 
-## 📝 Immediate Next Steps (The "Sprint")
+## 统一门禁矩阵
 
-1.  **Refactor Storage**: Add `Index` trait and `BTree` implementation in `nervusdb-v2-storage`.
-2.  **Update Planner**: Add `Merge` and `OptionalMatch` nodes to `nervusdb-v2-query`.
-3.  **Setup UniFFI**: Initialize `nervusdb-uniffi` crate structure.
+### PR 阻塞
+
+1. `cargo fmt --all -- --check`
+2. `cargo clippy --workspace --exclude nervusdb-pyo3 --all-targets -- -W warnings`
+3. workspace 快速测试
+4. TCK Tier-0/Tier-1/Tier-2
+5. Python/Node smoke + 契约快测
+
+### Nightly / Manual
+
+1. TCK Tier-3 全量
+2. benchmark 对标
+3. chaos
+4. soak
+5. fuzz 长跑
+
+---
+
+## Done 定义（Roadmap 级）
+
+- [x] `docs/tasks.md` 中 M4/M5/Industrial 全部 Done
+- [x] `docs/memos/DONE.md` 全部勾选
+- [x] 主 CI + crash-gate + industrial workflows 持续稳定

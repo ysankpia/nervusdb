@@ -17,6 +17,15 @@ struct Config {
     label: u32,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct NeighborBenchResult {
+    edges_per_sec: f64,
+    edges_total: u64,
+    avg_us: f64,
+    p95_us: f64,
+    p99_us: f64,
+}
+
 impl Config {
     fn from_args() -> Self {
         let mut cfg = Self {
@@ -85,6 +94,37 @@ fn parse_u32(v: Option<String>) -> u32 {
     })
 }
 
+fn percentile_us(mut samples: Vec<f64>, q: f64) -> f64 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let idx = ((samples.len() - 1) as f64 * q).round() as usize;
+    samples[idx]
+}
+
+fn summarize_neighbor_bench(
+    edges_total: u64,
+    total_secs: f64,
+    latencies_us: Vec<f64>,
+) -> NeighborBenchResult {
+    let avg_us = if latencies_us.is_empty() {
+        0.0
+    } else {
+        latencies_us.iter().sum::<f64>() / latencies_us.len() as f64
+    };
+    let p95_us = percentile_us(latencies_us.clone(), 0.95);
+    let p99_us = percentile_us(latencies_us, 0.99);
+
+    NeighborBenchResult {
+        edges_per_sec: edges_total as f64 / total_secs.max(1e-9),
+        edges_total,
+        avg_us,
+        p95_us,
+        p99_us,
+    }
+}
+
 fn main() {
     let cfg = Config::from_args();
 
@@ -101,19 +141,15 @@ fn main() {
     let insert_edges_per_sec = total_edges as f64 / insert_secs.max(1e-9);
     let wal_bytes_per_edge = wal_bytes as f64 / total_edges.max(1) as f64;
 
-    let (m1_hot_edges_per_sec, m1_hot_edges_total) =
-        bench_neighbors_hot(&engine, &nodes, cfg.rel, cfg.iters);
-    let (m1_cold_edges_per_sec, m1_cold_edges_total) =
-        bench_neighbors_cold(&engine, &nodes, cfg.rel, cfg.iters);
+    let m1_hot = bench_neighbors_hot(&engine, &nodes, cfg.rel, cfg.iters);
+    let m1_cold = bench_neighbors_cold(&engine, &nodes, cfg.rel, cfg.iters);
 
     let compact_start = Instant::now();
     engine.compact().unwrap();
     let compact_secs = compact_start.elapsed().as_secs_f64();
 
-    let (m2_hot_edges_per_sec, m2_hot_edges_total) =
-        bench_neighbors_hot(&engine, &nodes, cfg.rel, cfg.iters);
-    let (m2_cold_edges_per_sec, m2_cold_edges_total) =
-        bench_neighbors_cold(&engine, &nodes, cfg.rel, cfg.iters);
+    let m2_hot = bench_neighbors_hot(&engine, &nodes, cfg.rel, cfg.iters);
+    let m2_cold = bench_neighbors_cold(&engine, &nodes, cfg.rel, cfg.iters);
 
     println!("=== NervusDB v2 Bench (M1/M2) ===");
     println!(
@@ -125,28 +161,51 @@ fn main() {
         insert_secs, insert_edges_per_sec, wal_bytes_per_edge
     );
     println!(
-        "neighbors_hot: M1 {:.0} edges/sec ({} edges), M2 {:.0} edges/sec ({} edges)",
-        m1_hot_edges_per_sec, m1_hot_edges_total, m2_hot_edges_per_sec, m2_hot_edges_total
+        "neighbors_hot: M1 {:.0} edges/sec ({} edges, p95={:.2}us, p99={:.2}us), M2 {:.0} edges/sec ({} edges, p95={:.2}us, p99={:.2}us)",
+        m1_hot.edges_per_sec,
+        m1_hot.edges_total,
+        m1_hot.p95_us,
+        m1_hot.p99_us,
+        m2_hot.edges_per_sec,
+        m2_hot.edges_total,
+        m2_hot.p95_us,
+        m2_hot.p99_us
     );
     println!(
-        "neighbors_cold: M1 {:.0} edges/sec ({} edges), M2 {:.0} edges/sec ({} edges)",
-        m1_cold_edges_per_sec, m1_cold_edges_total, m2_cold_edges_per_sec, m2_cold_edges_total
+        "neighbors_cold: M1 {:.0} edges/sec ({} edges, p95={:.2}us, p99={:.2}us), M2 {:.0} edges/sec ({} edges, p95={:.2}us, p99={:.2}us)",
+        m1_cold.edges_per_sec,
+        m1_cold.edges_total,
+        m1_cold.p95_us,
+        m1_cold.p99_us,
+        m2_cold.edges_per_sec,
+        m2_cold.edges_total,
+        m2_cold.p95_us,
+        m2_cold.p99_us
     );
     println!("compact: {:.3}s", compact_secs);
 
-    // Machine-readable single-line JSON (no extra deps).
     println!(
-        "{{\"nodes\":{},\"degree\":{},\"edges\":{},\"iters\":{},\"insert_edges_per_sec\":{:.3},\"wal_bytes_per_edge\":{:.3},\"neighbors_hot_m1_edges_per_sec\":{:.3},\"neighbors_hot_m2_edges_per_sec\":{:.3},\"neighbors_cold_m1_edges_per_sec\":{:.3},\"neighbors_cold_m2_edges_per_sec\":{:.3},\"compact_secs\":{:.6}}}",
+        "{{\"nodes\":{},\"degree\":{},\"edges\":{},\"iters\":{},\"insert_edges_per_sec\":{:.3},\"wal_bytes_per_edge\":{:.3},\"neighbors_hot_m1_edges_per_sec\":{:.3},\"neighbors_hot_m2_edges_per_sec\":{:.3},\"neighbors_cold_m1_edges_per_sec\":{:.3},\"neighbors_cold_m2_edges_per_sec\":{:.3},\"neighbors_hot_m1_p95_us\":{:.3},\"neighbors_hot_m1_p99_us\":{:.3},\"neighbors_hot_m2_p95_us\":{:.3},\"neighbors_hot_m2_p99_us\":{:.3},\"neighbors_cold_m1_p95_us\":{:.3},\"neighbors_cold_m1_p99_us\":{:.3},\"neighbors_cold_m2_p95_us\":{:.3},\"neighbors_cold_m2_p99_us\":{:.3},\"neighbors_hot_m2_avg_us\":{:.3},\"neighbors_cold_m2_avg_us\":{:.3},\"compact_secs\":{:.6}}}",
         cfg.nodes,
         cfg.degree,
         total_edges,
         cfg.iters,
         insert_edges_per_sec,
         wal_bytes_per_edge,
-        m1_hot_edges_per_sec,
-        m2_hot_edges_per_sec,
-        m1_cold_edges_per_sec,
-        m2_cold_edges_per_sec,
+        m1_hot.edges_per_sec,
+        m2_hot.edges_per_sec,
+        m1_cold.edges_per_sec,
+        m2_cold.edges_per_sec,
+        m1_hot.p95_us,
+        m1_hot.p99_us,
+        m2_hot.p95_us,
+        m2_hot.p99_us,
+        m1_cold.p95_us,
+        m1_cold.p99_us,
+        m2_cold.p95_us,
+        m2_cold.p99_us,
+        m2_hot.avg_us,
+        m2_cold.avg_us,
         compact_secs
     );
 }
@@ -175,31 +234,47 @@ fn bench_insert(engine: &GraphEngine, cfg: Config) -> (Vec<u32>, f64) {
     (nodes, start.elapsed().as_secs_f64())
 }
 
-fn bench_neighbors_hot(engine: &GraphEngine, nodes: &[u32], rel: u32, iters: usize) -> (f64, u64) {
+fn bench_neighbors_hot(
+    engine: &GraphEngine,
+    nodes: &[u32],
+    rel: u32,
+    iters: usize,
+) -> NeighborBenchResult {
     let src = nodes[0];
     let snap = engine.begin_read();
 
+    let mut latencies_us = Vec::with_capacity(iters);
     let start = Instant::now();
     let mut edges_total: u64 = 0;
     for _ in 0..iters {
+        let t0 = Instant::now();
         edges_total += snap.neighbors(src, Some(rel)).count() as u64;
+        latencies_us.push(t0.elapsed().as_secs_f64() * 1_000_000.0);
     }
     let secs = start.elapsed().as_secs_f64().max(1e-9);
-    (edges_total as f64 / secs, edges_total)
+    summarize_neighbor_bench(edges_total, secs, latencies_us)
 }
 
-fn bench_neighbors_cold(engine: &GraphEngine, nodes: &[u32], rel: u32, iters: usize) -> (f64, u64) {
+fn bench_neighbors_cold(
+    engine: &GraphEngine,
+    nodes: &[u32],
+    rel: u32,
+    iters: usize,
+) -> NeighborBenchResult {
     let snap = engine.begin_read();
     let mut rng = SplitMix64::new(0x243f_6a88_85a3_08d3);
 
+    let mut latencies_us = Vec::with_capacity(iters);
     let start = Instant::now();
     let mut edges_total: u64 = 0;
     for _ in 0..iters {
         let idx = (rng.next_u64() as usize) % nodes.len();
+        let t0 = Instant::now();
         edges_total += snap.neighbors(nodes[idx], Some(rel)).count() as u64;
+        latencies_us.push(t0.elapsed().as_secs_f64() * 1_000_000.0);
     }
     let secs = start.elapsed().as_secs_f64().max(1e-9);
-    (edges_total as f64 / secs, edges_total)
+    summarize_neighbor_bench(edges_total, secs, latencies_us)
 }
 
 fn file_len(path: &PathBuf) -> u64 {

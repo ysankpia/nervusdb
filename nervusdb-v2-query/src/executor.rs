@@ -1,4 +1,6 @@
-use crate::ast::{AggregateFunction, Direction, Expression, Literal, PathElement, Pattern};
+use crate::ast::{
+    AggregateFunction, Direction, Expression, Literal, PathElement, Pattern, RelationshipDirection,
+};
 use crate::error::{Error, Result};
 use crate::evaluator::evaluate_expression_value;
 pub use nervusdb_v2_api::LabelId;
@@ -607,6 +609,7 @@ pub enum Plan {
         rels: Vec<String>,
         edge_alias: Option<String>,
         dst_alias: String,
+        direction: RelationshipDirection,
         min_hops: u32,
         max_hops: Option<u32>,
         limit: Option<u32>,
@@ -1022,6 +1025,7 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
             rels,
             edge_alias,
             dst_alias,
+            direction,
             min_hops,
             max_hops,
             limit,
@@ -1054,6 +1058,7 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                 rel_ids,
                 edge_alias.as_deref(),
                 dst_alias,
+                direction.clone(),
                 *min_hops,
                 *max_hops,
                 *limit,
@@ -1633,21 +1638,16 @@ fn find_create_plan<'a>(plan: &'a Plan) -> Option<&'a Plan> {
             find_create_plan(left).or(find_create_plan(right))
         }
         Plan::Union { left, right, .. } => find_create_plan(left).or(find_create_plan(right)),
-        Plan::Apply { input, subquery, .. } => {
-            find_create_plan(input).or(find_create_plan(subquery))
-        }
+        Plan::Apply {
+            input, subquery, ..
+        } => find_create_plan(input).or(find_create_plan(subquery)),
         Plan::ProcedureCall { input, .. } => find_create_plan(input),
         Plan::MatchOut { input, .. }
         | Plan::MatchIn { input, .. }
         | Plan::MatchUndirected { input, .. }
-        | Plan::MatchOutVarLen { input, .. }
-         => {
-            input.as_deref().and_then(find_create_plan)
-        }
+        | Plan::MatchOutVarLen { input, .. } => input.as_deref().and_then(find_create_plan),
         Plan::IndexSeek { fallback, .. } => find_create_plan(fallback),
-        Plan::NodeScan { .. }
-        | Plan::Values { .. }
-        | Plan::ReturnOne => None,
+        Plan::NodeScan { .. } | Plan::Values { .. } | Plan::ReturnOne => None,
     }
 }
 
@@ -1659,9 +1659,11 @@ pub(crate) fn execute_merge<S: GraphSnapshot>(
     on_create_items: &[(String, String, Expression)],
     on_match_items: &[(String, String, Expression)],
 ) -> Result<u32> {
-    let Plan::Create { pattern, .. } = plan else {
+    let create_plan = find_create_plan(plan)
+        .ok_or_else(|| Error::Other("MERGE plan must contain a CREATE stage".into()))?;
+    let Plan::Create { pattern, .. } = create_plan else {
         return Err(Error::Other(
-            "MERGE must compile to a CREATE plan in v2 M3".into(),
+            "MERGE CREATE stage is not available in compiled plan".into(),
         ));
     };
 
@@ -1693,18 +1695,14 @@ pub(crate) fn execute_merge<S: GraphSnapshot>(
         iid: InternalNodeId,
     }
 
-    fn eval_non_null_props(
+    fn eval_props(
         props: &crate::ast::PropertyMap,
         params: &crate::query_api::Params,
     ) -> Result<Vec<(String, PropertyValue)>> {
         let mut out = Vec::with_capacity(props.properties.len());
         for prop in &props.properties {
             let v = evaluate_property_value(&prop.value, params)?;
-            if v == PropertyValue::Null {
-                return Err(Error::NotImplemented(
-                    "MERGE with null property values not supported in v2 M3",
-                ));
-            }
+            // NULL values are allowed in MERGE properties
             out.push((prop.key.clone(), v));
         }
         Ok(out)
@@ -1812,23 +1810,21 @@ pub(crate) fn execute_merge<S: GraphSnapshot>(
         overlay: &mut Vec<OverlayNode>,
         params: &crate::query_api::Params,
         created_count: &mut u32,
-    ) -> Result<InternalNodeId> {
+    ) -> Result<(InternalNodeId, bool)> {
         let label = node.labels.first().cloned();
-        let props = node.properties.as_ref().ok_or(Error::NotImplemented(
-            "MERGE requires a non-empty node property map in v2 M3",
-        ))?;
-        if props.properties.is_empty() {
-            return Err(Error::NotImplemented(
-                "MERGE requires a non-empty node property map in v2 M3",
-            ));
-        }
-        let expected = eval_non_null_props(props, params)?;
+        // MERGE can operate with or without properties
+        let props = node.properties.as_ref();
+        let expected = if let Some(props) = props {
+            eval_props(props, params)?
+        } else {
+            Vec::new() // No properties to match on
+        };
 
         if let Some(iid) = overlay_lookup(overlay, &label, &expected) {
-            return Ok(iid);
+            return Ok((iid, false));
         }
         if let Some(iid) = find_existing_node(snapshot, &label, &expected) {
-            return Ok(iid);
+            return Ok((iid, false));
         }
 
         let iid = create_node(txn, &label, &expected, created_count)?;
@@ -1837,101 +1833,150 @@ pub(crate) fn execute_merge<S: GraphSnapshot>(
             props: expected,
             iid,
         });
-        Ok(iid)
+        Ok((iid, true))
     }
 
     let mut created_count = 0u32;
     let mut overlay: Vec<OverlayNode> = Vec::new();
 
-    match pattern.elements.as_slice() {
-        [PathElement::Node(n)] => {
-            let iid =
-                find_or_create_node(snapshot, txn, n, &mut overlay, params, &mut created_count)?;
-            let mut row = Row::default();
-            if let Some(var) = &n.variable {
-                row = row.with(var.clone(), Value::NodeId(iid));
-            }
-            let items = if created_count > 0 {
-                on_create_items
-            } else {
-                on_match_items
-            };
-            apply_merge_set_items(snapshot, txn, &row, items, params)?;
-            Ok(created_count)
-        }
-        [
-            PathElement::Node(src),
-            PathElement::Relationship(rel),
-            PathElement::Node(dst),
-        ] => {
-            if !matches!(
-                rel.direction,
-                crate::ast::RelationshipDirection::LeftToRight
-            ) {
-                return Err(Error::NotImplemented(
-                    "MERGE supports only -> direction in v2 M3",
-                ));
-            }
-            if rel.variable_length.is_some() {
-                return Err(Error::NotImplemented(
-                    "MERGE does not support variable-length relationships in v2 M3",
-                ));
-            }
-            let rel_name = rel
-                .types
-                .first()
-                .ok_or_else(|| Error::Other("MERGE relationship requires a type".into()))?
-                .clone();
-            let rel_type = txn.get_or_create_rel_type_id(&rel_name)?;
+    // Support arbitrary length patterns: single node, single-hop, multi-hop chains
+    // Process pattern elements sequentially: node-rel-node-rel-node...
+    let mut current_iids = Vec::new(); // Track node IDs at each position
+    let mut created_any = false;
+    let mut merge_row = Row::default();
 
-            let src_iid =
-                find_or_create_node(snapshot, txn, src, &mut overlay, params, &mut created_count)?;
-            let dst_iid =
-                find_or_create_node(snapshot, txn, dst, &mut overlay, params, &mut created_count)?;
+    // Iterate through pattern elements
+    let mut i = 0;
+    while i < pattern.elements.len() {
+        match &pattern.elements[i] {
+            PathElement::Node(node_pat) => {
+                // Find or create node
+                let (iid, node_created) = find_or_create_node(
+                    snapshot,
+                    txn,
+                    node_pat,
+                    &mut overlay,
+                    params,
+                    &mut created_count,
+                )?;
+                if node_created {
+                    created_any = true;
+                }
+                // Ensure current_iids has capacity for this index
+                if current_iids.len() <= i {
+                    current_iids.resize(i + 1, None);
+                }
+                current_iids[i] = Some(iid);
+                if let Some(var) = &node_pat.variable {
+                    merge_row = merge_row.with(var.clone(), Value::NodeId(iid));
+                }
+                i += 1;
+            }
+            PathElement::Relationship(rel_pat) => {
+                // Relationship must be followed by a node
+                if i + 1 >= pattern.elements.len() {
+                    return Err(Error::Other("relationship must be followed by node".into()));
+                }
+                if let PathElement::Node(dst_node) = &pattern.elements[i + 1] {
+                    if i == 0 {
+                        return Err(Error::Other(
+                            "relationship cannot be the first element in MERGE pattern".into(),
+                        ));
+                    }
+                    // Get source node ID from previous element (must be a node)
+                    let src_iid = current_iids.get(i - 1).and_then(|x| *x).ok_or_else(|| {
+                        Error::Other("missing source node for relationship".into())
+                    })?;
 
-            let mut exists = false;
-            for edge in snapshot.neighbors(src_iid, Some(rel_type)) {
-                if edge.dst == dst_iid {
-                    exists = true;
-                    break;
+                    // Handle variable-length relationships
+                    if rel_pat.variable_length.is_some() {
+                        return Err(Error::NotImplemented(
+                            "MERGE variable-length relationships need multi-hop expansion",
+                        ));
+                    }
+
+                    // Get/create relationship type
+                    let rel_type_name = rel_pat.types.first().cloned().ok_or_else(|| {
+                        Error::Other("MERGE relationship requires a type for creation".into())
+                    })?;
+                    let rel_type = txn.get_or_create_rel_type_id(&rel_type_name)?;
+
+                    // Find or create destination node
+                    let (dst_iid, dst_created) = find_or_create_node(
+                        snapshot,
+                        txn,
+                        dst_node,
+                        &mut overlay,
+                        params,
+                        &mut created_count,
+                    )?;
+                    if dst_created {
+                        created_any = true;
+                    }
+
+                    // Check if edge already exists
+                    let mut exists = false;
+                    for edge in snapshot.neighbors(src_iid, Some(rel_type)) {
+                        if edge.dst == dst_iid {
+                            exists = true;
+                            break;
+                        }
+                    }
+
+                    if !exists {
+                        txn.create_edge(src_iid, rel_type, dst_iid)?;
+                        created_count += 1;
+                        created_any = true;
+                    }
+
+                    // Extend row bindings for ON CREATE / ON MATCH SET
+                    if let Some(var) = &rel_pat.variable {
+                        merge_row = merge_row.with(
+                            var.clone(),
+                            Value::EdgeKey(EdgeKey {
+                                src: src_iid,
+                                rel: rel_type,
+                                dst: dst_iid,
+                            }),
+                        );
+                    }
+                    // Include source and destination node variables if present
+                    // We can get the source node variable from the previous element in pattern
+                    if let PathElement::Node(src_node) = &pattern.elements[i - 1] {
+                        if let Some(src_var) = &src_node.variable {
+                            merge_row = merge_row.with(src_var.clone(), Value::NodeId(src_iid));
+                        }
+                    }
+                    // Destination node variable
+                    if let Some(dst_var) = &dst_node.variable {
+                        merge_row = merge_row.with(dst_var.clone(), Value::NodeId(dst_iid));
+                    }
+
+                    // Store destination node ID for next hop
+                    if current_iids.len() <= i + 1 {
+                        current_iids.resize(i + 2, None);
+                    }
+                    current_iids[i + 1] = Some(dst_iid);
+
+                    i += 2; // Skip relationship and destination node
+                } else {
+                    return Err(Error::Other("relationship must be followed by node".into()));
                 }
             }
-
-            if !exists {
-                txn.create_edge(src_iid, rel_type, dst_iid)?;
-                created_count += 1;
-            }
-
-            let mut row = Row::default();
-            if let Some(var) = &src.variable {
-                row = row.with(var.clone(), Value::NodeId(src_iid));
-            }
-            if let Some(var) = &dst.variable {
-                row = row.with(var.clone(), Value::NodeId(dst_iid));
-            }
-            if let Some(var) = &rel.variable {
-                row = row.with(
-                    var.clone(),
-                    Value::EdgeKey(EdgeKey {
-                        src: src_iid,
-                        rel: rel_type,
-                        dst: dst_iid,
-                    }),
-                );
-            }
-            let items = if created_count > 0 {
-                on_create_items
-            } else {
-                on_match_items
-            };
-            apply_merge_set_items(snapshot, txn, &row, items, params)?;
-
-            Ok(created_count)
         }
-        _ => Err(Error::NotImplemented(
-            "MERGE supports only single-node or single-hop patterns in v2 M3",
-        )),
     }
+
+    // Apply ON CREATE / ON MATCH updates once per MERGE execution.
+    let set_items = if created_any {
+        on_create_items
+    } else {
+        on_match_items
+    };
+    if !set_items.is_empty() {
+        apply_merge_set_items(snapshot, txn, &merge_row, set_items, params)?;
+    }
+
+    Ok(created_count)
 }
 
 pub trait WriteableGraph {
@@ -2575,6 +2620,7 @@ struct MatchOutVarLenIter<'a, S: GraphSnapshot + 'a> {
     rels: Option<Vec<RelTypeId>>,
     edge_alias: Option<&'a str>,
     dst_alias: &'a str,
+    direction: RelationshipDirection,
     min_hops: u32,
     max_hops: Option<u32>,
     limit: Option<u32>,
@@ -2602,6 +2648,7 @@ impl<'a, S: GraphSnapshot + 'a> MatchOutVarLenIter<'a, S> {
         rels: Option<Vec<RelTypeId>>,
         edge_alias: Option<&'a str>,
         dst_alias: &'a str,
+        direction: RelationshipDirection,
         min_hops: u32,
         max_hops: Option<u32>,
         limit: Option<u32>,
@@ -2622,6 +2669,7 @@ impl<'a, S: GraphSnapshot + 'a> MatchOutVarLenIter<'a, S> {
             rels,
             edge_alias,
             dst_alias,
+            direction,
             min_hops,
             max_hops,
             limit,
@@ -2675,52 +2723,82 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
             {
                 // Expand
                 if depth < max_hops {
-                    if let Some(rels) = &self.rels {
-                        for rel in rels {
-                            for edge in self.snapshot.neighbors(current_node, Some(*rel)) {
-                                let mut next_path = current_path.clone();
-                                if self.path_alias.is_some() {
-                                    // Build next path
-                                    if let Some(p) = &mut next_path {
-                                        p.edges.push(edge);
-                                        p.nodes.push(edge.dst);
-                                    } else {
-                                        next_path = Some(PathValue {
-                                            nodes: vec![edge.src, edge.dst],
-                                            edges: vec![edge],
-                                        });
-                                    }
-                                }
-                                self.stack.push((
-                                    start_node,
-                                    edge.dst,
-                                    depth + 1,
-                                    Some(edge),
-                                    next_path,
-                                ));
+                    let push_edge = |edge: EdgeKey,
+                                     next_node: InternalNodeId,
+                                     stack: &mut Vec<(
+                        InternalNodeId,
+                        InternalNodeId,
+                        u32,
+                        Option<EdgeKey>,
+                        Option<PathValue>,
+                    )>| {
+                        let mut next_path = current_path.clone();
+                        if self.path_alias.is_some() {
+                            if let Some(p) = &mut next_path {
+                                p.edges.push(edge);
+                                p.nodes.push(next_node);
+                            } else {
+                                next_path = Some(PathValue {
+                                    nodes: vec![start_node, next_node],
+                                    edges: vec![edge],
+                                });
                             }
                         }
-                    } else {
-                        for edge in self.snapshot.neighbors(current_node, None) {
-                            let mut next_path = current_path.clone();
-                            if self.path_alias.is_some() {
-                                if let Some(p) = &mut next_path {
-                                    p.edges.push(edge);
-                                    p.nodes.push(edge.dst);
-                                } else {
-                                    next_path = Some(PathValue {
-                                        nodes: vec![edge.src, edge.dst],
-                                        edges: vec![edge],
-                                    });
+                        stack.push((start_node, next_node, depth + 1, Some(edge), next_path));
+                    };
+
+                    match (&self.direction, self.rels.as_ref()) {
+                        (RelationshipDirection::LeftToRight, Some(rels)) => {
+                            for rel in rels {
+                                for edge in self.snapshot.neighbors(current_node, Some(*rel)) {
+                                    push_edge(edge, edge.dst, &mut self.stack);
                                 }
                             }
-                            self.stack.push((
-                                start_node,
-                                edge.dst,
-                                depth + 1,
-                                Some(edge),
-                                next_path,
-                            ));
+                        }
+                        (RelationshipDirection::LeftToRight, None) => {
+                            for edge in self.snapshot.neighbors(current_node, None) {
+                                push_edge(edge, edge.dst, &mut self.stack);
+                            }
+                        }
+
+                        (RelationshipDirection::RightToLeft, Some(rels)) => {
+                            for rel in rels {
+                                for edge in self
+                                    .snapshot
+                                    .incoming_neighbors_erased(current_node, Some(*rel))
+                                {
+                                    push_edge(edge, edge.src, &mut self.stack);
+                                }
+                            }
+                        }
+                        (RelationshipDirection::RightToLeft, None) => {
+                            for edge in self.snapshot.incoming_neighbors_erased(current_node, None)
+                            {
+                                push_edge(edge, edge.src, &mut self.stack);
+                            }
+                        }
+
+                        (RelationshipDirection::Undirected, Some(rels)) => {
+                            for rel in rels {
+                                for edge in self.snapshot.neighbors(current_node, Some(*rel)) {
+                                    push_edge(edge, edge.dst, &mut self.stack);
+                                }
+                                for edge in self
+                                    .snapshot
+                                    .incoming_neighbors_erased(current_node, Some(*rel))
+                                {
+                                    push_edge(edge, edge.src, &mut self.stack);
+                                }
+                            }
+                        }
+                        (RelationshipDirection::Undirected, None) => {
+                            for edge in self.snapshot.neighbors(current_node, None) {
+                                push_edge(edge, edge.dst, &mut self.stack);
+                            }
+                            for edge in self.snapshot.incoming_neighbors_erased(current_node, None)
+                            {
+                                push_edge(edge, edge.src, &mut self.stack);
+                            }
                         }
                     }
                 }

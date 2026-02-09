@@ -1,0 +1,46 @@
+name: TCK Nightly Tier-3
+
+on:
+  schedule:
+    - cron: "15 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tck-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tck-tier3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-tck-nightly-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run full TCK (allow fail)
+        run: |
+          mkdir -p artifacts/tck
+          TCK_ALLOW_FAIL=1 TCK_REPORT_DIR=artifacts/tck bash scripts/tck_tier_gate.sh tier3
+
+      - name: Upload TCK artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tck-nightly-artifacts
+          path: artifacts/tck/

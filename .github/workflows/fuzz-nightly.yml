@@ -1,0 +1,51 @@
+name: Fuzz Nightly
+
+on:
+  schedule:
+    - cron: "20 1 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust (nightly)
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Replay fuzz regressions
+        run: bash scripts/fuzz_regress.sh
+
+      - name: Run fuzz target (query_prepare)
+        run: |
+          cd fuzz
+          cargo +nightly fuzz run query_prepare -- -max_total_time=240
+
+      - name: Run fuzz target (query_parse)
+        run: |
+          cd fuzz
+          cargo +nightly fuzz run query_parse -- -max_total_time=240
+
+      - name: Run fuzz target (query_execute)
+        run: |
+          cd fuzz
+          cargo +nightly fuzz run query_execute -- -max_total_time=240
+
+      - name: Upload fuzz artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: |
+            fuzz/artifacts/
+            fuzz/corpus/
+            fuzz/regressions/

@@ -531,6 +531,7 @@ impl NeighborsIter {
         src: InternalNodeId,
         rel: Option<RelTypeId>,
     ) -> Self {
+        let base_cap = runs.len().saturating_mul(8).saturating_add(16);
         Self {
             runs,
             segments,
@@ -538,13 +539,13 @@ impl NeighborsIter {
             rel,
             run_idx: 0,
             edge_idx: 0,
-            current_edges: Vec::new(),
+            current_edges: Vec::with_capacity(16),
             segment_idx: 0,
             segment_edge_idx: 0,
-            current_segment_edges: Vec::new(),
-            blocked_nodes: HashSet::new(),
-            blocked_edges: HashSet::new(),
-            seen_edges: HashSet::new(),
+            current_segment_edges: Vec::with_capacity(16),
+            blocked_nodes: HashSet::with_capacity(base_cap),
+            blocked_edges: HashSet::with_capacity(base_cap),
+            seen_edges: HashSet::with_capacity(base_cap),
             terminated: false,
         }
     }
@@ -581,7 +582,7 @@ impl NeighborsIter {
         };
 
         self.current_segment_edges
-            .extend(seg.neighbors(self.src, self.rel).collect::<Vec<_>>());
+            .extend(seg.neighbors(self.src, self.rel));
     }
 }
 
@@ -679,6 +680,7 @@ impl IncomingNeighborsIter {
         dst_node: InternalNodeId,
         rel: Option<RelTypeId>,
     ) -> Self {
+        let base_cap = runs.len().saturating_mul(8).saturating_add(16);
         Self {
             runs,
             segments,
@@ -686,13 +688,13 @@ impl IncomingNeighborsIter {
             rel,
             run_idx: 0,
             edge_idx: 0,
-            current_edges: Vec::new(),
+            current_edges: Vec::with_capacity(16),
             segment_idx: 0,
             segment_edge_idx: 0,
-            current_segment_edges: Vec::new(),
-            blocked_nodes: HashSet::new(),
-            blocked_edges: HashSet::new(),
-            seen_edges: HashSet::new(),
+            current_segment_edges: Vec::with_capacity(16),
+            blocked_nodes: HashSet::with_capacity(base_cap),
+            blocked_edges: HashSet::with_capacity(base_cap),
+            seen_edges: HashSet::with_capacity(base_cap),
             terminated: false,
         }
     }
@@ -728,10 +730,8 @@ impl IncomingNeighborsIter {
             return;
         };
 
-        self.current_segment_edges.extend(
-            seg.incoming_neighbors(self.dst_node, self.rel)
-                .collect::<Vec<_>>(),
-        );
+        self.current_segment_edges
+            .extend(seg.incoming_neighbors(self.dst_node, self.rel));
     }
 }
 

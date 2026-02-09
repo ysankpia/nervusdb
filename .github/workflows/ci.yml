@@ -45,8 +45,28 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --exclude nervusdb-pyo3 --all-targets -- -W warnings
 
-      - name: Run tests
-        run: cargo test --workspace --exclude nervusdb-pyo3
+      - name: TCK Tier-0 (smoke)
+        if: runner.os == 'Linux'
+        run: make tck-tier0
+
+      - name: TCK Tier-1 (clauses whitelist)
+        if: runner.os == 'Linux'
+        run: make tck-tier1
+
+      - name: TCK Tier-2 (expressions whitelist)
+        if: runner.os == 'Linux'
+        run: make tck-tier2
+
+      - name: Binding smoke (Python + Node scaffold)
+        if: runner.os == 'Linux'
+        run: bash scripts/binding_smoke.sh
+
+      - name: Cross-language contract smoke
+        if: runner.os == 'Linux'
+        run: bash scripts/contract_smoke.sh
+
+      - name: Run workspace quick tests
+        run: bash scripts/workspace_quick_test.sh
 
       - name: Build release
         run: cargo build --workspace --exclude nervusdb-pyo3 --release

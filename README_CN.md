@@ -1,15 +1,15 @@
-# NervusDB（v2 / Scope Frozen）
+# NervusDB（v2 / Full Roadmap Close-Out）
 
 **一个嵌入式图数据库：像 SQLite 一样“打开路径就能用”，但为图遍历而生。**
 
-> 本仓库进入收尾模式：**冻结范围，不再无限加功能**。完成标准见 `docs/memos/DONE.md`，规格见 `docs/spec.md`。
+> 当前处于 **全量 Roadmap 收尾执行阶段**：按 `M4 → M5 → Industrial` 分阶段推进，以 CI/TCK/质量门禁为发布依据。完成标准见 `docs/memos/DONE.md`。
 
 [![CI](https://github.com/LuQing-Studio/nervusdb/actions/workflows/ci.yml/badge.svg)](https://github.com/LuQing-Studio/nervusdb/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 ## 5 分钟上手（MVP）
 
-当前 MVP 收敛为 **v2（`.ndb + .wal`，Rust-first）**：目标是让陌生开发者用 CLI 跑通写入/查询，并且通过 crash gate。
+### CLI
 
 ```bash
 # 写入：CREATE / DELETE（输出 {"count":...}）
@@ -19,35 +19,74 @@ cargo run -p nervusdb-cli -- v2 write --db ./demo --cypher "CREATE (a {name: 'Al
 cargo run -p nervusdb-cli -- v2 query --db ./demo --cypher "MATCH (a)-[:1]->(b) WHERE a.name = 'Alice' RETURN a, b LIMIT 10"
 ```
 
-v2 的边界（白名单之外必须 fail-fast）以 `docs/reference/cypher_support.md` 为准。
+### Rust
 
-## 这项目“什么时候算完”？
+```rust
+use nervusdb_v2::Db;
 
-别自欺欺人：如果没有终点线，你会一直写下去，直到你厌恶自己。
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let db = Db::open("/tmp/demo")?;
+    db.execute("CREATE (n:Person {name: 'Alice'})", None)?;
+    let rows = db.query("MATCH (n:Person) RETURN n", None)?;
+    println!("rows={}", rows.len());
+    Ok(())
+}
+```
 
-终点线已经写死在：`docs/memos/DONE.md`。
+### Python（PyO3，本地开发模式）
 
-## v2 架构（真实的，不吹牛）
+```bash
+pip install maturin
+maturin develop -m nervusdb-pyo3/Cargo.toml
+
+python - <<'PY'
+import nervusdb
+
+db = nervusdb.open('/tmp/demo-py')
+db.query("CREATE (n:Person {name: 'Alice'})")
+for row in db.query_stream("MATCH (n:Person) RETURN n LIMIT 1"):
+    print(row)
+db.close()
+PY
+```
+
+### Node（N-API 绑定）
+
+```bash
+# 构建 + 运行时 smoke（create/query/txn）
+bash scripts/binding_smoke.sh
+```
+
+v2 当前能力边界以 `docs/reference/cypher_support.md` 为准；是否“支持”以门禁结果为准。
+
+## 执行路线图（收尾版）
+
+- **M4**：TCK 分层门禁（Tier-0/1/2 PR 阻塞 + Tier-3 nightly）
+- **M5**：Bindings（PyO3 + N-API）、文档对齐、对标基准、并发与 HNSW 调优
+- **Industrial**：Fuzz / Chaos / Soak
+
+详见 `docs/ROADMAP_2.0.md` 与 `docs/tasks.md`。
+
+## v2 架构（当前事实）
 
 - **两文件**：`<path>.ndb`（page store / segments / manifest）+ `<path>.wal`（redo log）
 - **事务模型**：Single Writer + Snapshot Readers
 - **存储形态**：MemTable（delta）+ 不可变 runs/segments（CSR）+ 显式 compaction/checkpoint
-- **查询边界**：Query 只能通过 `nervusdb-v2-api::{GraphStore, GraphSnapshot}` 读图，不准摸 pager/WAL
-
-仓库结构见 `docs/reference/project-structure.md`。
+- **查询边界**：Query 通过 `nervusdb-v2-api::{GraphStore, GraphSnapshot}` 访问图层
 
 ## 开发
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -W warnings
-cargo test --workspace
-./scripts/v2_bench.sh
+bash scripts/workspace_quick_test.sh
+bash scripts/binding_smoke.sh
+bash scripts/contract_smoke.sh
 ```
 
 ## Legacy（v1 已归档）
 
-v1（含 redb 与旧绑定）已移到 `_legacy_v1_archive/`，不参与 workspace/CI，也不再维护。
+v1（含 redb 与旧绑定）位于 `_legacy_v1_archive/`，不参与 workspace/CI。
 
 ## 许可证
 

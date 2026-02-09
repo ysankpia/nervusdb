@@ -1,39 +1,51 @@
-# NervusDB 完成标准（Definition of Done）
+# NervusDB 完成标准（Definition of Done, v2.1）
 
-你卡住的根因不是技术，而是没有“终点线”。这个文件就是终点线：满足这些条目就算完成，不再无限扩展。
+本文件定义“全量 Roadmap 收尾”终点。满足即完成，不再无限扩展。
 
-## 1) MVP 是什么？
+## 1) 目标范围
 
-**MVP = v2（`.ndb + .wal`，Rust-first）**：`nervusdb-v2-storage` + `nervusdb-v2-query` + `nervusdb-cli` 跑通最小用户路径，并通过 crash gate。
+当前完成定义覆盖：
 
-现状与边界以：
+- M4：Cypher/TCK 门禁收敛
+- M5：Bindings + Docs + Benchmark + Concurrency + HNSW 调优
+- Industrial：Fuzz + Chaos + Soak
+
+事实来源：
 
 - `docs/spec.md`
-- `docs/reference/cypher_support.md`
+- `docs/tasks.md`
+- `docs/ROADMAP_2.0.md`
 
-为准。
+## 2) 完成标准（全部满足）
 
-## 2) 完成标准（满足即停止）
+### 2.1 用户路径（5~10 分钟可复现）
 
-当以下条目全部满足，就认为项目“完成”，后续不再新增功能（只允许必要的文档修正）。
+- [x] `README.md` 顶部示例可复制粘贴运行
+- [x] `README_CN.md` 与英文 README 口径一致
+- [x] `docs/reference/cypher_support.md` 与实际门禁结果一致
+- [x] Rust/CLI/Python/Node 至少各有一条最小可运行路径
 
-### 2.1 用户路径（5 分钟上手）
+### 2.2 工程门禁
 
-- [ ] `README.md` 顶部示例：复制粘贴可运行（建议用 CLI）
-- [ ] `docs/reference/cypher_support.md` 与实际实现一致（不吹牛、不写反）
-- [ ] 至少一个可运行示例（建议 CLI），并在 README 链接到它
+- [x] 主 CI 全绿（按当前本地同款门禁脚本回归通过）
+- [x] crash-gate 可通过（`scripts/chaos_io_gate.sh` 已验证）
+- [x] TCK Tier-0/Tier-1/Tier-2 为 PR 阻塞且可稳定通过
+- [x] TCK Tier-3 nightly 有持续报告
 
-### 2.2 工程门禁（不靠运气）
+### 2.3 质量门禁（Industrial）
 
-- [ ] CI 全绿（主工作流）
-- [ ] crash-gate（以 CI 配置为准）可通过
+- [x] fuzz 流程可运行且崩溃样例可回归（nightly workflow + regress 脚本；本地可 `FUZZ_ALLOW_SKIP=1`）
+- [x] chaos IO 注入覆盖关键恢复路径
+- [x] 24h soak 流程可运行并产出报告
 
-### 2.3 范围冻结（最关键）
+### 2.4 性能与对标
 
-- [ ] 明确写死 v2 的当前阶段边界（M3/alpha）：超出范围必须 fail-fast
+- [x] NervusDB vs Neo4j/Memgraph 对标流程可执行
+- [x] benchmark 报告（JSON + Markdown）版本化归档
+- [x] 并发读 P95/P99 对比报告可追踪
 
-## 3) 不做什么（写死，防止复发）
+## 3) 不做什么（本轮仍然禁止）
 
-- 不再追求“完整 Cypher/兼容 Neo4j 全量语法”
-- 不再引入新存储格式/新 API 破坏性重构
-- 不再为了“看起来干净”反复大改范围；已经归档的 v1 代码只保留历史，不再维护
+- 不引入新的 v3 破坏性文件格式
+- 不在未过门禁前宣称“已支持”
+- 不把一次性实验脚本当成发布能力

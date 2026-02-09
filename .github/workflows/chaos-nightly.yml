@@ -1,0 +1,32 @@
+name: Chaos IO Gate
+
+on:
+  schedule:
+    - cron: "10 3 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  chaos-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run chaos IO gate
+        run: |
+          mkdir -p artifacts/chaos
+          CHAOS_OUT_DIR=artifacts/chaos bash scripts/chaos_io_gate.sh
+
+      - name: Upload chaos artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chaos-artifacts
+          path: artifacts/chaos/
