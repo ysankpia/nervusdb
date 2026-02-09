@@ -18,7 +18,7 @@ pub struct GraphWorld {
 impl GraphWorld {
     async fn new() -> Result<Self, Infallible> {
         let dir = TempDir::new().expect("failed to create temp dir");
-        let db = Db::open(dir.path()).expect("failed to open db");
+        let db = Db::open(dir.path().join("tck.ndb")).expect("failed to open db");
         Ok(Self {
             db: Some(Arc::new(db)),
             _dir: Some(Arc::new(dir)),
@@ -85,6 +85,7 @@ fn execute_query_generic(world: &mut GraphWorld, cypher: &str) {
             for row_res in rows {
                 match row_res {
                     Ok(row) => {
+                        let row = row.reify(&snapshot).unwrap_or(row);
                         let mut map = std::collections::HashMap::new();
                         for (k, v) in row.columns().iter().cloned() {
                             map.insert(k, v);
@@ -94,7 +95,11 @@ fn execute_query_generic(world: &mut GraphWorld, cypher: &str) {
                     Err(e) => {
                         let err_str = e.to_string();
                         // Check if error is about write operations
-                        if err_str.contains("must be executed via execute_write") {
+                        if err_str.contains("must be executed via execute_write")
+                            || err_str.contains(
+                                "Only CREATE, DELETE, SET, REMOVE and FOREACH plans can be executed with execute_write",
+                            )
+                        {
                             // This is a write-only query, use execute_write
                             execute_write_fallback(world, &query, &snapshot, &params, &mut txn);
                             return;
@@ -342,6 +347,32 @@ fn row_eq(a: &[(String, Value)], b: &[(String, Value)]) -> bool {
 }
 
 fn value_eq(a: &Value, b: &Value) -> bool {
+    if let (Some(sa), Value::String(sb)) = (to_tck_comparable(a), b) {
+        if &sa == sb {
+            return true;
+        }
+    }
+    if let (Value::String(sa), Some(sb)) = (a, to_tck_comparable(b)) {
+        if sa == &sb {
+            return true;
+        }
+    }
+
+    if let (Some(sa), Value::List(lb)) = (to_tck_relationship_inner(a), b)
+        && lb.len() == 1
+        && let Value::String(sb) = &lb[0]
+        && &sa == sb
+    {
+        return true;
+    }
+    if let (Value::List(la), Some(sb)) = (a, to_tck_relationship_inner(b))
+        && la.len() == 1
+        && let Value::String(sa) = &la[0]
+        && sa == &sb
+    {
+        return true;
+    }
+
     match (a, b) {
         (Value::Null, Value::Null) => true,
         (Value::Bool(a), Value::Bool(b)) => a == b,
@@ -368,6 +399,83 @@ fn value_eq(a: &Value, b: &Value) -> bool {
         }
         // Fallback: compare debug representations
         _ => format!("{:?}", a) == format!("{:?}", b),
+    }
+}
+
+fn to_tck_comparable(value: &Value) -> Option<String> {
+    match value {
+        Value::Node(node) => Some(format_node_literal(node)),
+        Value::Relationship(rel) => Some(format_relationship_literal(rel)),
+        _ => None,
+    }
+}
+
+fn to_tck_relationship_inner(value: &Value) -> Option<String> {
+    match value {
+        Value::Relationship(rel) => {
+            let mut s = format!(":{}", rel.rel_type);
+            if !rel.properties.is_empty() {
+                s.push(' ');
+                s.push_str(&format_map(&rel.properties));
+            }
+            Some(s)
+        }
+        _ => None,
+    }
+}
+
+fn format_node_literal(node: &nervusdb_v2_query::executor::NodeValue) -> String {
+    let labels = if node.labels.is_empty() {
+        String::new()
+    } else {
+        format!(":{}", node.labels.join(":"))
+    };
+    let props = if node.properties.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", format_map(&node.properties))
+    };
+    format!("({labels}{props})")
+}
+
+fn format_relationship_literal(rel: &nervusdb_v2_query::executor::RelationshipValue) -> String {
+    let props = if rel.properties.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", format_map(&rel.properties))
+    };
+    format!("[:{}{}]", rel.rel_type, props)
+}
+
+fn format_map(map: &std::collections::BTreeMap<String, Value>) -> String {
+    let mut parts = Vec::new();
+    for (k, v) in map {
+        parts.push(format!("{k}: {}", format_value(v)));
+    }
+    format!("{{{}}}", parts.join(", "))
+}
+
+fn format_value(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Int(i) => i.to_string(),
+        Value::Float(f) => {
+            if f.fract() == 0.0 {
+                format!("{f:.1}")
+            } else {
+                f.to_string()
+            }
+        }
+        Value::String(s) => format!("'{s}'"),
+        Value::List(items) => {
+            let inner: Vec<String> = items.iter().map(format_value).collect();
+            format!("[{}]", inner.join(", "))
+        }
+        Value::Map(m) => format_map(m),
+        Value::Node(node) => format_node_literal(node),
+        Value::Relationship(rel) => format_relationship_literal(rel),
+        _ => format!("{value:?}"),
     }
 }
 

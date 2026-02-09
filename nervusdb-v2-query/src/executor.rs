@@ -1611,6 +1611,36 @@ pub fn execute_write<S: GraphSnapshot>(
             list,
             sub_plan,
         } => execute_foreach(snapshot, input, txn, variable, list, sub_plan, params),
+        Plan::Filter { input, .. }
+        | Plan::Project { input, .. }
+        | Plan::Limit { input, .. }
+        | Plan::Skip { input, .. }
+        | Plan::OrderBy { input, .. }
+        | Plan::Distinct { input }
+        | Plan::Unwind { input, .. }
+        | Plan::Aggregate { input, .. }
+        | Plan::ProcedureCall { input, .. } => execute_write(input, snapshot, txn, params),
+        Plan::IndexSeek { fallback, .. } => execute_write(fallback, snapshot, txn, params),
+        Plan::MatchOut { input, .. }
+        | Plan::MatchIn { input, .. }
+        | Plan::MatchUndirected { input, .. }
+        | Plan::MatchOutVarLen { input, .. } => {
+            if let Some(inner) = input.as_deref() {
+                execute_write(inner, snapshot, txn, params)
+            } else {
+                Err(Error::Other(
+                    "write query plan has no mutable stage under match plan".to_string(),
+                ))
+            }
+        }
+        Plan::Apply {
+            input, subquery, ..
+        } => execute_write(input, snapshot, txn, params)
+            .or_else(|_| execute_write(subquery, snapshot, txn, params)),
+        Plan::CartesianProduct { left, right } | Plan::Union { left, right, .. } => {
+            execute_write(left, snapshot, txn, params)
+                .or_else(|_| execute_write(right, snapshot, txn, params))
+        }
         _ => Err(Error::Other(
             "Only CREATE, DELETE, SET, REMOVE and FOREACH plans can be executed with execute_write"
                 .into(),
@@ -1619,7 +1649,7 @@ pub fn execute_write<S: GraphSnapshot>(
 }
 
 /// Find the CREATE part of a plan (for MERGE support)
-fn find_create_plan<'a>(plan: &'a Plan) -> Option<&'a Plan> {
+fn find_create_plan(plan: &Plan) -> Option<&Plan> {
     match plan {
         Plan::Create { .. } => Some(plan),
         Plan::Filter { input, .. }
@@ -2611,6 +2641,14 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutIter<'a, S> {
 /// Variable-length path iterator using DFS
 const DEFAULT_MAX_VAR_LEN_HOPS: u32 = 5;
 
+type VarLenStackItem = (
+    InternalNodeId,
+    InternalNodeId,
+    u32,
+    Option<EdgeKey>,
+    Option<PathValue>,
+);
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 struct MatchOutVarLenIter<'a, S: GraphSnapshot + 'a> {
     snapshot: &'a S,
@@ -2626,13 +2664,7 @@ struct MatchOutVarLenIter<'a, S: GraphSnapshot + 'a> {
     limit: Option<u32>,
     node_iter: Option<Box<dyn Iterator<Item = InternalNodeId> + 'a>>,
     // DFS state: (start_node, current_node, current_depth, incoming_edge, current_path)
-    stack: Vec<(
-        InternalNodeId,
-        InternalNodeId,
-        u32,
-        Option<EdgeKey>,
-        Option<PathValue>,
-    )>,
+    stack: Vec<VarLenStackItem>,
     emitted: u32,
     yielded_any: bool,
     optional: bool,
@@ -2723,29 +2755,24 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
             {
                 // Expand
                 if depth < max_hops {
-                    let push_edge = |edge: EdgeKey,
-                                     next_node: InternalNodeId,
-                                     stack: &mut Vec<(
-                        InternalNodeId,
-                        InternalNodeId,
-                        u32,
-                        Option<EdgeKey>,
-                        Option<PathValue>,
-                    )>| {
-                        let mut next_path = current_path.clone();
-                        if self.path_alias.is_some() {
-                            if let Some(p) = &mut next_path {
-                                p.edges.push(edge);
-                                p.nodes.push(next_node);
-                            } else {
-                                next_path = Some(PathValue {
-                                    nodes: vec![start_node, next_node],
-                                    edges: vec![edge],
-                                });
+                    let push_edge =
+                        |edge: EdgeKey,
+                         next_node: InternalNodeId,
+                         stack: &mut Vec<VarLenStackItem>| {
+                            let mut next_path = current_path.clone();
+                            if self.path_alias.is_some() {
+                                if let Some(p) = &mut next_path {
+                                    p.edges.push(edge);
+                                    p.nodes.push(next_node);
+                                } else {
+                                    next_path = Some(PathValue {
+                                        nodes: vec![start_node, next_node],
+                                        edges: vec![edge],
+                                    });
+                                }
                             }
-                        }
-                        stack.push((start_node, next_node, depth + 1, Some(edge), next_path));
-                    };
+                            stack.push((start_node, next_node, depth + 1, Some(edge), next_path));
+                        };
 
                     match (&self.direction, self.rels.as_ref()) {
                         (RelationshipDirection::LeftToRight, Some(rels)) => {

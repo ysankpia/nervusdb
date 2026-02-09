@@ -1,17 +1,17 @@
-# NervusDB v2.0 Roadmap（Execution Mode）
+# NervusDB v2.0 Roadmap（SQLite-Beta 收敛模式）
 
-> **Vision**: 成为 AI/Edge 时代默认的 Embedded Graph Database。
+> **Vision**: 在单机嵌入式场景达到“图数据库界 SQLite（Beta）”。
 >
 > **Execution Principles**:
 > 1. 以门禁定义“支持”（tests as contract）
-> 2. 以阶段收敛推进（M4 → M5 → Industrial）
+> 2. 以阶段裁决推进（功能 → 稳定 → 性能）
 > 3. 主线始终可绿、可回滚
 
 ---
 
-## Phase A：M4 收尾（Cypher/TCK）
+## Phase A：功能线（TCK 全量冲 95%）
 
-**目标**：把 TCK 从 smoke 升级为分层门禁，持续提高 clauses/expressions 通过率。
+**目标**：在分层门禁基础上，把 Tier-3 官方全量通过率提升到 **≥95%**。
 
 ### A.1 TCK Tiered Gates
 
@@ -19,6 +19,8 @@
 - [x] Tier-1：clauses 白名单门禁（PR 阻塞）
 - [x] Tier-2：expressions 白名单门禁（PR 阻塞）
 - [x] Tier-3：全量 TCK nightly（非阻塞 + 报告）
+- [x] Tier-3 通过率报告（`scripts/tck_full_rate.sh`）
+- [x] 95% 阈值 gate（`scripts/beta_gate.sh`，manual/nightly 阻断）
 
 ### A.2 失败聚类驱动修复
 
@@ -30,44 +32,37 @@
 - [x] `M4-07`（clauses）从 WIP → Done
 - [x] `M4-08`（expressions）从 WIP → Done
 - [x] 在 `docs/tasks.md` 记录覆盖集与通过率
+- [ ] Tier-3 官方全量通过率 ≥95%
 
 ---
 
-## Phase B：M5 交付（Bindings + Docs + Perf）
+## Phase B：稳定线（冻结 + 7天稳定窗）
 
-### B.1 M5-01 Bindings（PyO3 + N-API）
+### B.1 接口与兼容冻结
 
-- [x] Python 异常分层：`NervusError/SyntaxError/ExecutionError/StorageError`
-- [x] Python `Db.query_stream()` 迭代器接口
-- [x] Node N-API scaffold：`open/query/beginWrite/commit/rollback`
-- [x] 跨语言契约快测（Rust/Python/Node）
+- [x] Python 异常分层：`NervusError/SyntaxError/ExecutionError/StorageError/CompatibilityError`
+- [x] Node 结构化错误 payload（`code/category/message`）
+- [x] `storage_format_epoch` 校验与 `StorageFormatMismatch` 上抛
+- [ ] 冻结后禁止破坏公共 API（Rust/CLI/Python/Node）
 
-### B.2 M5-02 Docs Alignment
+### B.2 稳定门禁
 
-- [x] `README.md` / `README_CN.md` / `docs/reference/cypher_support.md` 对齐门禁事实
-- [x] User Guide 补全 Rust/CLI/Python/Node 最小路径
-
-### B.3 M5-03 Benchmark
-
-- [x] NervusDB vs Neo4j vs Memgraph 对标入口（Docker）
-- [x] JSON + Markdown 报告产物归档到 `docs/perf/`
-- [x] 手动/定时 workflow（非阻塞主 CI）
-
-### B.4 M5-04 Concurrency
-
-- [x] 并发读热点 profile 与基线
-- [x] 读路径优化（先低风险、再调度）
-- [x] P95/P99 对比报告
-
-### B.5 M5-05 HNSW Tuning
-
-- [x] `M/efConstruction/efSearch` 可配置
-- [x] recall-latency-memory 三维报告
-- [x] 默认参数建议固化
+- [ ] 连续 7 天：主 CI 全绿
+- [ ] 连续 7 天：nightly（TCK/benchmark/chaos/soak/fuzz）无阻断失败
+- [ ] 任一阻断失败自动重置稳定窗计数
 
 ---
 
-## Phase C：Industrial Quality（Roadmap Phase 3）
+## Phase C：性能线（大规模 SLO 封板）
+
+- [ ] 读查询 P99 <= 120ms
+- [ ] 写事务 P99 <= 180ms
+- [ ] 向量检索 P99 <= 220ms
+- [ ] 任一不达标则不发布 Beta
+
+---
+
+## Industrial（持续质量护栏）
 
 ### C.1 Fuzz
 
@@ -99,15 +94,16 @@
 ### Nightly / Manual
 
 1. TCK Tier-3 全量
-2. benchmark 对标
-3. chaos
-4. soak
-5. fuzz 长跑
+2. TCK 通过率统计 + 95% gate
+3. benchmark 对标
+4. chaos
+5. soak
+6. fuzz 长跑
 
 ---
 
-## Done 定义（Roadmap 级）
+## Done 定义（SQLite-Beta 级）
 
-- [x] `docs/tasks.md` 中 M4/M5/Industrial 全部 Done
-- [x] `docs/memos/DONE.md` 全部勾选
-- [x] 主 CI + crash-gate + industrial workflows 持续稳定
+- [ ] 官方全量 TCK 通过率 ≥95%
+- [ ] 连续 7 天主 CI + nightly 稳定
+- [ ] 大规模性能 SLO 全达标

@@ -1,25 +1,25 @@
-# 文档导航（当前）
+# 文档导航（v2.2 / SQLite-Beta）
 
-## 单一事实来源
+## 单一事实源（仅保留这四份）
 
-- `docs/spec.md`：技术宪章与质量门禁
-- `docs/tasks.md`：任务状态与阶段执行
-- `docs/ROADMAP_2.0.md`：全量收尾路线图
-- `docs/memos/DONE.md`：Roadmap 完成定义
+- `docs/spec.md`
+- `docs/tasks.md`
+- `docs/ROADMAP_2.0.md`
+- `docs/memos/DONE.md`
 
-## 使用与支持矩阵
+## 使用与支持
 
-- `README.md` / `README_CN.md`：快速开始（Rust/CLI/Python/Node）
-- `docs/user-guide.md`：用户路径与操作说明
-- `docs/reference/cypher_support.md`：Cypher 支持边界与门禁口径
+- `README.md` / `README_CN.md`
+- `docs/user-guide.md`
+- `docs/reference/cypher_support.md`
 
-## 设计与实现记录
+## 设计与实现
 
-- `docs/design/`：高风险任务设计文档（T* / TM* / TI*）
-- `docs/perf/v2/`：对标、并发、HNSW 报告
+- `docs/design/`
+- `docs/perf/v2/`
 
-## 历史文档归档
+## 历史归档
 
-- `docs/archive/legacy-2026Q1/PROJECT_SPECIFICATION.md`
-- `docs/archive/legacy-2026Q1/QUICK_REFERENCE.md`
-- `docs/archive/legacy-2026Q1/DOCUMENTATION_MAP.md`
+- `docs/archive/legacy-2026Q1/`
+- `docs/archive/perf-v2-legacy/`
+

@@ -1,6 +1,6 @@
 # Cypher Support in NervusDB v2
 
-> **Status**: Execution-gated (v2.1 close-out)
+> **Status**: Execution-gated (v2.2 SQLite-Beta convergence)
 > **Contract**: `docs/specs/cypher_compatibility_v2.md`
 
 NervusDB follows a strict rule: **only gate-proven behavior is considered supported**.
@@ -10,14 +10,16 @@ NervusDB follows a strict rule: **only gate-proven behavior is considered suppor
 - **Tier-0**: Smoke regressions (core/extended)
 - **Tier-1**: Clauses whitelist gate
 - **Tier-2**: Expressions whitelist gate
-- **Tier-3**: Full TCK nightly (non-blocking, report artifacts)
+- **Tier-3**: Full TCK nightly (non-blocking run + pass-rate report)
 
 See:
 
 - `scripts/tck_tier_gate.sh`
+- `scripts/tck_full_rate.sh`
+- `scripts/beta_gate.sh`
 - `scripts/tck_whitelist/`
 - `.github/workflows/tck-nightly.yml`
-- Nightly artifacts: `artifacts/tck/tier3-full.log` + `artifacts/tck/tier3-cluster.md`
+- Nightly artifacts: `artifacts/tck/tier3-full.log` + `artifacts/tck/tier3-cluster.md` + `artifacts/tck/tier3-rate.json`
 
 ## Supported Capability Families (Current)
 
@@ -47,6 +49,12 @@ See:
 - Regular expressions (`=~`) are not in current scope
 - List/pattern comprehensions are not in current scope
 - Error code taxonomy still evolving (message-based matching remains in use)
+
+## Beta Release Gate (Hard)
+
+- Official full TCK pass rate >=95%
+- 7-day consecutive stable window for CI + nightly
+- Performance SLOs on large dataset (P99 thresholds)
 
 ## Output Model
 

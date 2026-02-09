@@ -141,6 +141,20 @@ pub fn evaluate_expression_value<S: GraphSnapshot>(
                 }
                 BinaryOperator::EndsWith => string_predicate(&left, &right, |l, r| l.ends_with(r)),
                 BinaryOperator::Contains => string_predicate(&left, &right, |l, r| l.contains(r)),
+                BinaryOperator::HasLabel => match (left, right) {
+                    (Value::NodeId(node_id), Value::String(label)) => {
+                        if let Some(label_id) = snapshot.resolve_label_id(&label) {
+                            let labels = snapshot.resolve_node_labels(node_id).unwrap_or_default();
+                            Value::Bool(labels.contains(&label_id))
+                        } else {
+                            Value::Bool(false)
+                        }
+                    }
+                    (Value::Null, _) => Value::Null,
+                    _ => Value::Bool(false),
+                },
+                BinaryOperator::IsNull => Value::Bool(matches!(left, Value::Null)),
+                BinaryOperator::IsNotNull => Value::Bool(!matches!(left, Value::Null)),
             }
         }
         Expression::Case(case) => {
@@ -158,7 +172,13 @@ pub fn evaluate_expression_value<S: GraphSnapshot>(
                 .map(|e| evaluate_expression_value(e, row, snapshot, params))
                 .unwrap_or(Value::Null)
         }
-        Expression::FunctionCall(call) => evaluate_function(call, row, snapshot, params),
+        Expression::FunctionCall(call) => {
+            if call.name.starts_with("__quant_") {
+                evaluate_quantifier(call, row, snapshot, params)
+            } else {
+                evaluate_function(call, row, snapshot, params)
+            }
+        }
         Expression::Exists(exists_expr) => {
             // EXISTS checks if pattern/subquery returns at least one row
             match exists_expr.as_ref() {
@@ -475,7 +495,249 @@ fn evaluate_function<S: GraphSnapshot>(
                 Value::Null
             }
         }
+        "range" => {
+            if args.len() < 2 || args.len() > 3 {
+                return Value::Null;
+            }
+
+            let start = match args[0] {
+                Value::Int(v) => v,
+                _ => return Value::Null,
+            };
+            let end = match args[1] {
+                Value::Int(v) => v,
+                _ => return Value::Null,
+            };
+            let step = if args.len() == 3 {
+                match args[2] {
+                    Value::Int(v) => v,
+                    _ => return Value::Null,
+                }
+            } else if start <= end {
+                1
+            } else {
+                -1
+            };
+
+            if step == 0 {
+                return Value::Null;
+            }
+
+            let mut out = Vec::new();
+            let mut current = start;
+            if step > 0 {
+                while current <= end {
+                    out.push(Value::Int(current));
+                    current = match current.checked_add(step) {
+                        Some(v) => v,
+                        None => break,
+                    };
+                }
+            } else {
+                while current >= end {
+                    out.push(Value::Int(current));
+                    current = match current.checked_add(step) {
+                        Some(v) => v,
+                        None => break,
+                    };
+                }
+            }
+            Value::List(out)
+        }
+        "__index" => {
+            if args.len() != 2 {
+                return Value::Null;
+            }
+            let index = match args[1] {
+                Value::Int(v) => v,
+                _ => return Value::Null,
+            };
+
+            match &args[0] {
+                Value::List(items) => {
+                    let len = items.len() as i64;
+                    let idx = if index < 0 { len + index } else { index };
+                    if idx < 0 || idx >= len {
+                        Value::Null
+                    } else {
+                        items[idx as usize].clone()
+                    }
+                }
+                Value::String(s) => {
+                    let chars: Vec<char> = s.chars().collect();
+                    let len = chars.len() as i64;
+                    let idx = if index < 0 { len + index } else { index };
+                    if idx < 0 || idx >= len {
+                        Value::Null
+                    } else {
+                        Value::String(chars[idx as usize].to_string())
+                    }
+                }
+                _ => Value::Null,
+            }
+        }
+        "__slice" => {
+            if args.len() != 3 {
+                return Value::Null;
+            }
+
+            let parse_index = |v: &Value| -> Option<i64> {
+                match v {
+                    Value::Null => None,
+                    Value::Int(i) => Some(*i),
+                    _ => None,
+                }
+            };
+
+            let start = parse_index(&args[1]);
+            let end = parse_index(&args[2]);
+
+            match &args[0] {
+                Value::List(items) => {
+                    let len = items.len() as i64;
+                    let normalize = |idx: Option<i64>, default: i64| -> i64 {
+                        match idx {
+                            Some(i) if i < 0 => (len + i).clamp(0, len),
+                            Some(i) => i.clamp(0, len),
+                            None => default,
+                        }
+                    };
+                    let from = normalize(start, 0);
+                    let to = normalize(end, len);
+                    if to < from {
+                        Value::List(vec![])
+                    } else {
+                        Value::List(items[from as usize..to as usize].to_vec())
+                    }
+                }
+                Value::String(s) => {
+                    let chars: Vec<char> = s.chars().collect();
+                    let len = chars.len() as i64;
+                    let normalize = |idx: Option<i64>, default: i64| -> i64 {
+                        match idx {
+                            Some(i) if i < 0 => (len + i).clamp(0, len),
+                            Some(i) => i.clamp(0, len),
+                            None => default,
+                        }
+                    };
+                    let from = normalize(start, 0);
+                    let to = normalize(end, len);
+                    if to < from {
+                        Value::String(String::new())
+                    } else {
+                        Value::String(chars[from as usize..to as usize].iter().collect())
+                    }
+                }
+                _ => Value::Null,
+            }
+        }
         _ => Value::Null, // Unknown function
+    }
+}
+
+fn evaluate_quantifier<S: GraphSnapshot>(
+    call: &crate::ast::FunctionCall,
+    row: &Row,
+    snapshot: &S,
+    params: &Params,
+) -> Value {
+    if call.args.len() != 3 {
+        return Value::Null;
+    }
+
+    let var_name = match &call.args[0] {
+        Expression::Variable(v) => v.clone(),
+        _ => return Value::Null,
+    };
+
+    let list_value = evaluate_expression_value(&call.args[1], row, snapshot, params);
+    let predicate = &call.args[2];
+
+    let items = match list_value {
+        Value::List(items) => items,
+        Value::Null => return Value::Null,
+        _ => return Value::Null,
+    };
+
+    let eval_pred = |item: Value| -> Value {
+        let local_row = row.clone().with(var_name.clone(), item);
+        evaluate_expression_value(predicate, &local_row, snapshot, params)
+    };
+
+    match call.name.as_str() {
+        "__quant_any" => {
+            let mut saw_null = false;
+            for item in items {
+                match eval_pred(item) {
+                    Value::Bool(true) => return Value::Bool(true),
+                    Value::Bool(false) => {}
+                    Value::Null => saw_null = true,
+                    _ => saw_null = true,
+                }
+            }
+            if saw_null {
+                Value::Null
+            } else {
+                Value::Bool(false)
+            }
+        }
+        "__quant_all" => {
+            let mut saw_null = false;
+            for item in items {
+                match eval_pred(item) {
+                    Value::Bool(true) => {}
+                    Value::Bool(false) => return Value::Bool(false),
+                    Value::Null => saw_null = true,
+                    _ => saw_null = true,
+                }
+            }
+            if saw_null {
+                Value::Null
+            } else {
+                Value::Bool(true)
+            }
+        }
+        "__quant_none" => {
+            let mut saw_null = false;
+            for item in items {
+                match eval_pred(item) {
+                    Value::Bool(true) => return Value::Bool(false),
+                    Value::Bool(false) => {}
+                    Value::Null => saw_null = true,
+                    _ => saw_null = true,
+                }
+            }
+            if saw_null {
+                Value::Null
+            } else {
+                Value::Bool(true)
+            }
+        }
+        "__quant_single" => {
+            let mut match_count = 0usize;
+            let mut saw_null = false;
+            for item in items {
+                match eval_pred(item) {
+                    Value::Bool(true) => {
+                        match_count += 1;
+                        if match_count > 1 {
+                            return Value::Bool(false);
+                        }
+                    }
+                    Value::Bool(false) => {}
+                    Value::Null => saw_null = true,
+                    _ => saw_null = true,
+                }
+            }
+            if match_count == 1 {
+                Value::Bool(true)
+            } else if saw_null {
+                Value::Null
+            } else {
+                Value::Bool(false)
+            }
+        }
+        _ => Value::Null,
     }
 }
 
@@ -484,6 +746,12 @@ where
     F: Fn(f64, f64) -> bool,
 {
     match (left, right) {
+        (Value::Null, _) | (_, Value::Null) => Value::Null,
+        (Value::Bool(l), Value::Bool(r)) => {
+            let l = if *l { 1.0 } else { 0.0 };
+            let r = if *r { 1.0 } else { 0.0 };
+            Value::Bool(cmp(l, r))
+        }
         (Value::Float(l), Value::Float(r)) => Value::Bool(cmp(*l, *r)),
         (Value::Int(l), Value::Float(r)) => Value::Bool(cmp(*l as f64, *r)),
         (Value::Float(l), Value::Int(r)) => Value::Bool(cmp(*l, *r as f64)),
@@ -502,10 +770,13 @@ where
                 Value::Null
             }
         }
-        (Value::String(l), Value::String(r)) => Value::Bool(cmp(
-            l.parse::<f64>().unwrap_or(0.0),
-            r.parse::<f64>().unwrap_or(0.0),
-        )),
+        (Value::String(l), Value::String(r)) => {
+            if let (Ok(l_num), Ok(r_num)) = (l.parse::<f64>(), r.parse::<f64>()) {
+                Value::Bool(cmp(l_num, r_num))
+            } else {
+                Value::Null
+            }
+        }
         _ => Value::Null,
     }
 }

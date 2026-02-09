@@ -27,12 +27,14 @@ create_exception!(nervusdb, NervusError, PyException);
 create_exception!(nervusdb, SyntaxError, NervusError);
 create_exception!(nervusdb, ExecutionError, NervusError);
 create_exception!(nervusdb, StorageError, NervusError);
+create_exception!(nervusdb, CompatibilityError, NervusError);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ErrorClass {
     Syntax,
     Execution,
     Storage,
+    Compatibility,
 }
 
 fn classify_error_text(msg: &str) -> ErrorClass {
@@ -45,6 +47,11 @@ fn classify_error_text(msg: &str) -> ErrorClass {
         || lower.contains("variablealreadybound")
     {
         ErrorClass::Syntax
+    } else if lower.contains("storage format mismatch")
+        || lower.contains("compatibility")
+        || lower.contains("epoch")
+    {
+        ErrorClass::Compatibility
     } else if lower.contains("wal")
         || lower.contains("checkpoint")
         || lower.contains("database is closed")
@@ -64,6 +71,7 @@ pub(crate) fn classify_nervus_error(msg: impl ToString) -> PyErr {
     let msg = msg.to_string();
     match classify_error_text(&msg) {
         ErrorClass::Syntax => SyntaxError::new_err(msg),
+        ErrorClass::Compatibility => CompatibilityError::new_err(msg),
         ErrorClass::Storage => StorageError::new_err(msg),
         ErrorClass::Execution => ExecutionError::new_err(msg),
     }
@@ -93,6 +101,10 @@ fn nervusdb_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("SyntaxError", m.py().get_type_bound::<SyntaxError>())?;
     m.add("ExecutionError", m.py().get_type_bound::<ExecutionError>())?;
     m.add("StorageError", m.py().get_type_bound::<StorageError>())?;
+    m.add(
+        "CompatibilityError",
+        m.py().get_type_bound::<CompatibilityError>(),
+    )?;
 
     m.add("__version__", "2.0.0")?;
     Ok(())
@@ -123,6 +135,14 @@ mod tests {
         assert_eq!(
             classify_error_text("wal replay failed"),
             ErrorClass::Storage
+        );
+    }
+
+    #[test]
+    fn classify_maps_compatibility_errors() {
+        assert_eq!(
+            classify_error_text("storage format mismatch: expected epoch 1, found 0"),
+            ErrorClass::Compatibility
         );
     }
 

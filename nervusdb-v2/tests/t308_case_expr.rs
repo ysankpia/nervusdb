@@ -94,3 +94,25 @@ fn test_case_with_property() -> nervusdb_v2::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_simple_case_expression() -> nervusdb_v2::Result<()> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("t308_simple.ndb");
+    let db = Db::open(&db_path)?;
+
+    let query = "RETURN CASE 2 WHEN 1 THEN 'a' WHEN 2 THEN 'b' ELSE 'c' END AS result";
+    let prep = nervusdb_v2::query::prepare(query)?;
+    let snapshot = db.snapshot();
+    let results: Vec<_> = prep
+        .execute_streaming(&snapshot, &Default::default())
+        .collect::<Result<Vec<_>, _>>()?;
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0].get("result").unwrap(),
+        &Value::String("b".to_string())
+    );
+
+    Ok(())
+}

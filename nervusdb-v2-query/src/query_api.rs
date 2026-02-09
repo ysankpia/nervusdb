@@ -1108,20 +1108,18 @@ fn compile_merge_plan(input: Plan, merge_clause: crate::ast::MergeClause) -> Res
     // A more complete implementation would first MATCH then CREATE if not found
 
     // For relationships in MERGE patterns (only applicable for multi-element patterns)
-    if pattern.elements.len() >= 3 {
-        if let Some(rel_pat) = pattern.elements.get(1) {
-            if let crate::ast::PathElement::Relationship(r) = rel_pat {
-                // All directions are supported: ->, <-, -
-                // All relationship type patterns are supported: single, multiple (A|B), any
-                // Variable-length relationships are supported: [r*]
-                // Relationship properties are supported: {k:v}
-                // Note: empty relationship types (undirected) might be allowed in some contexts
-                if r.types.is_empty() && r.variable_length.is_none() {
-                    // Undirected relationship without specific type - this is valid Cypher
-                    // e.g., MERGE (a)-[]->(b) is technically allowed but unusual
-                    // For simplicity, we allow it; executor will treat it as any relationship
-                }
-            }
+    if pattern.elements.len() >= 3
+        && let Some(crate::ast::PathElement::Relationship(r)) = pattern.elements.get(1)
+    {
+        // All directions are supported: ->, <-, -
+        // All relationship type patterns are supported: single, multiple (A|B), any
+        // Variable-length relationships are supported: [r*]
+        // Relationship properties are supported: {k:v}
+        // Note: empty relationship types (undirected) might be allowed in some contexts
+        if r.types.is_empty() && r.variable_length.is_none() {
+            // Undirected relationship without specific type - this is valid Cypher
+            // e.g., MERGE (a)-[]->(b) is technically allowed but unusual
+            // For simplicity, we allow it; executor will treat it as any relationship
         }
     }
 

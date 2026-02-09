@@ -1,64 +1,63 @@
-# NervusDB v2 — 产品规格（Spec v2.1, 解冻执行版）
+# NervusDB v2 — 产品规格（Spec v2.2, SQLite-Beta 收敛版）
 
-> 这份 spec 是 v2 的工程宪法：对齐“已实现事实 + 进行中任务 + 验收门禁”，避免文档与代码打架。
+> 这份 spec 是 v2 的工程宪法：目标不是“看起来完成”，而是以可重复门禁达到 Beta 发布线。
 
 ## 1. 项目定位
 
-- **一句话使命**：做一个纯 Rust 的嵌入式 Property Graph 数据库，像 SQLite 一样“单路径打开即用”，并以图遍历为核心。
-- **核心路径**：打开 DB → 写入 → 查询（含流式消费）→ 崩溃恢复可验证。
+- **一句话使命**：做一个纯 Rust 的单机嵌入式 Property Graph 数据库，提供 SQLite 风格“打开路径即用”的体验。
+- **核心路径**：打开 DB → 写入 → 查询（含流式）→ 崩溃恢复 → 跨语言一致行为。
 
-## 2. 范围声明（解冻）
+## 2. 范围与发布策略（锁定）
 
-- v2 继续保持：**新 crate / 新磁盘格式 / 不兼容 v1**。
-- 与“冻结范围”不同，当前阶段进入 **全量 Roadmap 收尾执行**：
-  - M4：Cypher 兼容门禁扩展（TCK clauses/expressions）
-  - M5：绑定、文档、基准、并发优化、HNSW 调优
-  - Industrial：Fuzz / Chaos / Soak
-- 对外口径仍坚持：**通过自动化门禁才算支持**。
+- 范围：仅单机嵌入（Rust + CLI + Python + Node）。
+- 不做：远程服务、分布式、迁移兼容承诺。
+- 允许：在 Beta 收敛期进行破坏性变更；但必须显式版本化存储格式 epoch。
 
-## 3. 当前事实（已实现）
+## 3. Beta 硬门槛（必须同时满足）
 
-- 存储：`.ndb + .wal`，页大小 `8KB`，支持 checkpoint/vacuum/backup。
-- 并发：Single Writer + Snapshot Readers。
-- 恢复：WAL replay + checkpoint/crash gate。
-- 查询：已完成 T300~T331 与 M4-01~M4-11 的主体能力（详见 `docs/tasks.md`）。
+1. 官方全量 openCypher TCK 通过率 **≥95%**（Tier-3 全量口径）。
+2. warnings 视为阻断（fmt/clippy/tests/bindings 链路）。
+3. 冻结阶段连续 **7 天** 主 CI + nightly 稳定。
 
-## 4. 核心约束
+> 未满足任一项，即视为“尚未达到图数据库界 SQLite（Beta）”。
 
-- **安全**：不得硬编码密钥；崩溃一致性是硬门槛。
-- **复杂度**：优先可读、可回滚、可测试的最小实现。
-- **兼容**：不以“口头支持”替代验收；未通过门禁视为未支持。
-- **发布**：主干必须可构建、可测试、可回归。
+## 4. 存储兼容与错误模型
 
-## 5. 技术路线（本轮锁定）
+- 引入并强制校验 `storage_format_epoch`。
+- epoch 不匹配时，统一返回 `StorageFormatMismatch`（Compatibility 语义）。
+- 错误分类统一为：`Syntax / Execution / Storage / Compatibility`。
 
-- **TCK 策略**：分层门禁（Tier-0/Tier-1/Tier-2 阻塞；Tier-3 nightly）。
-- **绑定策略**：`PyO3 + N-API`，不迁移 UniFFI。
-- **交付节奏**：分阶段串行推进，阶段内保持 CI 可绿。
+跨语言映射约束：
+- Python：`NervusError/SyntaxError/ExecutionError/StorageError/CompatibilityError`
+- Node：结构化错误 payload（`code/category/message`）
 
-## 6. 质量与门禁
+## 5. 质量与门禁矩阵
 
-### 6.1 PR 阻塞门禁
+### 5.1 PR 阻塞门禁
 
 1. `cargo fmt --all -- --check`
 2. `cargo clippy --workspace --exclude nervusdb-pyo3 --all-targets -- -W warnings`
-3. workspace 快速测试
-4. TCK Tier-0/Tier-1/Tier-2
-5. Python/Node smoke + 跨语言契约快测
+3. `bash scripts/workspace_quick_test.sh`
+4. `bash scripts/tck_tier_gate.sh tier0|tier1|tier2`
+5. `bash scripts/binding_smoke.sh && bash scripts/contract_smoke.sh`
 
-### 6.2 Nightly / Manual 门禁
+### 5.2 Nightly / Manual 门禁
 
-1. TCK Tier-3 全量回归 + 失败聚类报告
-2. benchmark 对标（含 Neo4j/Memgraph）
-3. chaos 测试
-4. 24h soak 稳定性测试
-5. fuzz 长跑
+1. Tier-3 全量 + 失败聚类 + 通过率报告（`scripts/tck_full_rate.sh`）
+2. Beta 阈值 gate（`scripts/beta_gate.sh`，默认 95%）
+3. benchmark / chaos / soak / fuzz
 
-## 7. 文档与任务单一事实源
+## 6. 执行节奏
 
+- Phase A：TCK 功能线（先冲到 95%）
+- Phase B：稳定冻结线（7 天稳定窗）
+- Phase C：性能封板线（大规模 SLO）
+
+## 7. 文档单一事实源
+
+- 规范：`docs/spec.md`
+- 任务：`docs/tasks.md`
 - 路线图：`docs/ROADMAP_2.0.md`
-- 任务状态：`docs/tasks.md`
 - 完成定义：`docs/memos/DONE.md`
-- 对外能力矩阵：`docs/reference/cypher_support.md`
 
-若四者冲突，以“**代码 + CI 门禁结果 + tasks 当前状态**”为准，并立即修正文档。
+若四者冲突，以“**代码 + CI/Nightly 门禁结果 + tasks 当前状态**”为准，并立即修正文档。

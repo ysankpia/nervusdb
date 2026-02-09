@@ -2,7 +2,7 @@
 
 **Rust-native, crash-safe embedded property graph database.**
 
-> Current mode: **Full Roadmap close-out** (`M4 -> M5 -> Industrial`).
+> Current mode: **SQLite-Beta convergence** (`TCK>=95% -> 7-day stability -> SLO gates`).
 > Feature claims are gated by CI/TCK evidence, not intent.
 
 [![CI](https://github.com/LuQing-Studio/nervusdb/actions/workflows/ci.yml/badge.svg)](https://github.com/LuQing-Studio/nervusdb/actions/workflows/ci.yml)
@@ -67,16 +67,22 @@ bash scripts/binding_smoke.sh
 
 If CI/TCK gate does not pass, the feature is considered **not supported**.
 
-## Tiered TCK Gates
+## Tiered TCK & Beta Gates
 
 ```bash
 make tck-tier0   # smoke
 make tck-tier1   # clauses whitelist
 make tck-tier2   # expressions whitelist
 make tck-tier3   # full run (typically nightly)
+
+# tier3 pass-rate report + beta threshold gate
+TCK_FULL_LOG_FILE=tck_latest.log bash scripts/tck_full_rate.sh
+TCK_MIN_PASS_RATE=95 bash scripts/beta_gate.sh
 ```
 
 Nightly artifacts are published from `.github/workflows/tck-nightly.yml` to `artifacts/tck/` (`tier3-full.log` + `tier3-cluster.md`).
+
+Current Beta line also requires `artifacts/tck/tier3-rate.json` pass-rate evidence.
 
 ## Bindings Status
 

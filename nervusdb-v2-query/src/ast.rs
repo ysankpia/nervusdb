@@ -261,6 +261,9 @@ pub enum BinaryOperator {
     StartsWith,
     EndsWith,
     Contains,
+    HasLabel,
+    IsNull,
+    IsNotNull,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -294,6 +297,7 @@ pub enum AggregateFunction {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CaseExpression {
+    pub expression: Option<Expression>,
     pub when_clauses: Vec<(Expression, Expression)>,
     pub else_expression: Option<Expression>,
 }
