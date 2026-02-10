@@ -200,7 +200,6 @@ async fn syntax_error_raised(world: &mut GraphWorld, error_type: String) {
     if err_lower.trim().is_empty() {
         panic!("Expected error type '{}' but got empty error", error_type);
     }
-
 }
 
 #[then(regex = r"^the result should be, in any order:$")]
