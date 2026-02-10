@@ -1,5 +1,5 @@
 use nervusdb_v2::{Db, GraphSnapshot};
-use nervusdb_v2_query::prepare;
+use nervusdb_v2_query::{Value, prepare};
 use tempfile::tempdir;
 
 #[test]
@@ -255,6 +255,68 @@ fn test_delete_multiple_nodes() {
 }
 
 #[test]
+fn test_execute_mixed_create_returns_rows() {
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path()).unwrap();
+    let snapshot = db.snapshot();
+
+    let query = prepare("CREATE (n {p: 'foo'}) RETURN n.p AS p").unwrap();
+    let mut txn = db.begin_write();
+    let (rows, count) = query
+        .execute_mixed(&snapshot, &mut txn, &nervusdb_v2_query::Params::new())
+        .unwrap();
+    txn.commit().unwrap();
+
+    assert_eq!(count, 1);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("p"), Some(&Value::String("foo".to_string())));
+}
+
+#[test]
+fn test_execute_mixed_create_with_unwind_skip_limit() {
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path()).unwrap();
+    let snapshot = db.snapshot();
+
+    let query = prepare(
+        "UNWIND [42, 42, 42, 42, 42] AS x CREATE (n:N {num: x}) RETURN n.num AS num SKIP 2 LIMIT 2",
+    )
+    .unwrap();
+    let mut txn = db.begin_write();
+    let (rows, count) = query
+        .execute_mixed(&snapshot, &mut txn, &nervusdb_v2_query::Params::new())
+        .unwrap();
+    txn.commit().unwrap();
+
+    assert_eq!(count, 5);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].get("num"), Some(&Value::Int(42)));
+    assert_eq!(rows[1].get("num"), Some(&Value::Int(42)));
+}
+
+#[test]
+fn test_execute_mixed_create_relationship_with_unwind_skip_limit() {
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path()).unwrap();
+    let snapshot = db.snapshot();
+
+    let query = prepare(
+        "UNWIND [42, 42, 42, 42, 42] AS x CREATE ()-[r:R {num: x}]->() RETURN r.num AS num SKIP 2 LIMIT 2",
+    )
+    .unwrap();
+    let mut txn = db.begin_write();
+    let (rows, count) = query
+        .execute_mixed(&snapshot, &mut txn, &nervusdb_v2_query::Params::new())
+        .unwrap();
+    txn.commit().unwrap();
+
+    assert_eq!(count, 15);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].get("num"), Some(&Value::Int(42)));
+    assert_eq!(rows[1].get("num"), Some(&Value::Int(42)));
+}
+
+#[test]
 fn test_delete_edge_variable() {
     let dir = tempdir().unwrap();
     let db = Db::open(dir.path()).unwrap();
@@ -290,4 +352,43 @@ fn test_delete_edge_variable() {
         total_edges += snap.neighbors(n, None).count();
     }
     assert_eq!(total_edges, 0);
+}
+
+#[test]
+fn test_create_reuses_bound_variables_across_create_clauses() {
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path()).unwrap();
+
+    let snapshot = db.snapshot();
+    let create_query = prepare(
+        "CREATE (a:A {name: 'n0'}), (b:B {name: 'n1'})
+         CREATE (a)-[:LIKES]->(b)",
+    )
+    .unwrap();
+
+    let mut txn = db.begin_write();
+    let created = create_query
+        .execute_write(&snapshot, &mut txn, &nervusdb_v2_query::Params::new())
+        .unwrap();
+    txn.commit().unwrap();
+
+    assert_eq!(created, 3);
+
+    let snapshot = db.snapshot();
+    let read_query =
+        prepare("MATCH (a:A)-[:LIKES]->(b) RETURN a.name AS a_name, b.name AS b_name").unwrap();
+    let rows: Vec<_> = read_query
+        .execute_streaming(&snapshot, &nervusdb_v2_query::Params::new())
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].get("a_name"),
+        Some(&Value::String("n0".to_string()))
+    );
+    assert_eq!(
+        rows[0].get("b_name"),
+        Some(&Value::String("n1".to_string()))
+    );
 }

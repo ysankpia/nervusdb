@@ -1,5 +1,13 @@
 export type ScalarValue = null | boolean | number | string
 
+export type ErrorCategory = 'syntax' | 'execution' | 'storage' | 'compatibility'
+
+export interface NervusErrorPayload {
+  code: string
+  category: ErrorCategory
+  message: string
+}
+
 export interface NodeValue {
   type: 'node'
   id: number

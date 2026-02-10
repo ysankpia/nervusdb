@@ -2,11 +2,56 @@ use napi::bindgen_prelude::Result;
 use napi::Error;
 use napi_derive::napi;
 use nervusdb_v2::Db as RustDb;
+use nervusdb_v2::Error as V2Error;
 use nervusdb_v2_query::{Params, Value};
 use serde_json::{json, Map as JsonMap, Value as JsonValue};
 
+fn error_payload(code: &str, category: &str, message: impl ToString) -> String {
+    json!({
+        "code": code,
+        "category": category,
+        "message": message.to_string(),
+    })
+    .to_string()
+}
+
+fn classify_err_message(msg: &str) -> (&'static str, &'static str) {
+    let lower = msg.to_lowercase();
+    if lower.contains("storage format mismatch") || lower.contains("compatibility") {
+        ("NERVUS_COMPATIBILITY", "compatibility")
+    } else if lower.contains("syntax")
+        || lower.contains("parse")
+        || lower.contains("unexpected token")
+    {
+        ("NERVUS_SYNTAX", "syntax")
+    } else if lower.contains("wal")
+        || lower.contains("checkpoint")
+        || lower.contains("io error")
+        || lower.contains("database is closed")
+    {
+        ("NERVUS_STORAGE", "storage")
+    } else {
+        ("NERVUS_EXECUTION", "execution")
+    }
+}
+
 fn napi_err(err: impl ToString) -> Error {
-    Error::from_reason(err.to_string())
+    let message = err.to_string();
+    let (code, category) = classify_err_message(&message);
+    Error::from_reason(error_payload(code, category, message))
+}
+
+fn napi_err_v2(err: V2Error) -> Error {
+    let payload = match err {
+        V2Error::Compatibility(message) => {
+            error_payload("NERVUS_COMPATIBILITY", "compatibility", message)
+        }
+        V2Error::Storage(message) => error_payload("NERVUS_STORAGE", "storage", message),
+        V2Error::Query(message) => error_payload("NERVUS_EXECUTION", "execution", message),
+        V2Error::Other(message) => error_payload("NERVUS_EXECUTION", "execution", message),
+        V2Error::Io(io_err) => error_payload("NERVUS_STORAGE", "storage", io_err),
+    };
+    Error::from_reason(payload)
 }
 
 fn value_to_json(v: Value) -> JsonValue {
@@ -101,7 +146,7 @@ pub struct Db {
 impl Db {
     #[napi(factory)]
     pub fn open(path: String) -> Result<Self> {
-        let inner = RustDb::open(&path).map_err(napi_err)?;
+        let inner = RustDb::open(&path).map_err(napi_err_v2)?;
         Ok(Self {
             inner: Some(inner),
             path,
@@ -175,7 +220,7 @@ impl WriteTxn {
 
     #[napi]
     pub fn commit(&mut self) -> Result<u32> {
-        let db = RustDb::open(&self.db_path).map_err(napi_err)?;
+        let db = RustDb::open(&self.db_path).map_err(napi_err_v2)?;
         let snapshot = db.snapshot();
         let mut txn = db.begin_write();
 
@@ -189,5 +234,18 @@ impl WriteTxn {
 
         txn.commit().map_err(napi_err)?;
         Ok(total)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::napi_err;
+
+    #[test]
+    fn napi_err_uses_structured_compatibility_payload() {
+        let err = napi_err("storage format mismatch: expected epoch 1, found 0");
+        let reason = err.reason;
+        assert!(reason.contains("\"category\":\"compatibility\""));
+        assert!(reason.contains("\"code\":\"NERVUS_COMPATIBILITY\""));
     }
 }

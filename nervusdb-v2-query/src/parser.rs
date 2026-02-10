@@ -37,14 +37,16 @@ struct TokenParser {
 
 impl TokenParser {
     // Pratt parser binding powers (higher = tighter binding).
-    const BP_OR: u8 = 1;
-    const BP_XOR: u8 = 2;
-    const BP_AND: u8 = 3;
-    const BP_CMP: u8 = 4;
-    const BP_ADD: u8 = 5;
-    const BP_MUL: u8 = 6;
-    const BP_POW: u8 = 7;
-    const BP_PREFIX: u8 = 8;
+    const BP_OR: u8 = 10;
+    const BP_XOR: u8 = 20;
+    const BP_AND: u8 = 30;
+    const BP_CMP: u8 = 40;
+    const BP_PRED: u8 = 45;
+    const BP_ADD: u8 = 50;
+    const BP_MUL: u8 = 60;
+    const BP_POW: u8 = 70;
+    const BP_PREFIX: u8 = 80;
+    const BP_NOT: u8 = 40;
 
     fn new(tokens: Vec<Token>) -> Self {
         Self {
@@ -230,8 +232,12 @@ impl TokenParser {
     }
 
     fn parse_create(&mut self) -> Result<CreateClause, Error> {
-        let pattern = self.parse_pattern()?;
-        Ok(CreateClause { pattern })
+        let mut patterns = Vec::new();
+        patterns.push(self.parse_pattern()?);
+        while self.match_token(&TokenType::Comma) {
+            patterns.push(self.parse_pattern()?);
+        }
+        Ok(CreateClause { patterns })
     }
 
     fn parse_merge(&mut self) -> Result<MergeClause, Error> {
@@ -482,6 +488,10 @@ impl TokenParser {
                     }
                     labels.push(format!("{}", n as u64));
                 }
+                TokenType::End => {
+                    labels.push("End".to_string());
+                    self.advance();
+                }
                 _ => return Err(Error::Other("Expected label identifier".to_string())),
             }
         }
@@ -562,12 +572,11 @@ impl TokenParser {
         }
 
         if self.match_token(&TokenType::RightArrow) {
-            if direction == RelationshipDirection::RightToLeft {
-                return Err(Error::Other(
-                    "Invalid relationship direction <->".to_string(),
-                ));
-            }
-            direction = RelationshipDirection::LeftToRight;
+            direction = if direction == RelationshipDirection::RightToLeft {
+                RelationshipDirection::Undirected
+            } else {
+                RelationshipDirection::LeftToRight
+            };
         } else if self.match_token(&TokenType::Dash) {
             // Keep current direction
         } else if direction == RelationshipDirection::RightToLeft {
@@ -612,7 +621,7 @@ impl TokenParser {
         let mut properties = Vec::new();
 
         while !self.check(&TokenType::RightBrace) {
-            let key = self.parse_identifier("property key")?;
+            let key = self.parse_property_key()?;
             self.consume(&TokenType::Colon, "Expected ':' in property map")?;
             let value = self.parse_expression()?;
             properties.push(PropertyPair { key, value });
@@ -704,6 +713,18 @@ impl TokenParser {
         }
     }
 
+    fn parse_property_key(&mut self) -> Result<String, Error> {
+        match &self.advance().token_type {
+            TokenType::Identifier(name) => Ok(name.clone()),
+            TokenType::Boolean(true) => Ok("true".to_string()),
+            TokenType::Boolean(false) => Ok("false".to_string()),
+            TokenType::Null => Ok("null".to_string()),
+            _ => Err(Error::Other(
+                "Expected identifier for property key".to_string(),
+            )),
+        }
+    }
+
     fn parse_identifier(&mut self, ctx: &'static str) -> Result<String, Error> {
         match &self.advance().token_type {
             TokenType::Identifier(name) => Ok(name.clone()),
@@ -717,6 +738,25 @@ impl TokenParser {
 
     fn parse_expression_bp(&mut self, min_bp: u8) -> Result<Expression, Error> {
         let mut lhs = self.parse_prefix_expression()?;
+
+        // Postfix null predicates: <expr> IS [NOT] NULL
+        loop {
+            if !self.match_token(&TokenType::Is) {
+                break;
+            }
+            let op = if self.match_token(&TokenType::Not) {
+                self.consume(&TokenType::Null, "Expected NULL after IS NOT")?;
+                BinaryOperator::IsNotNull
+            } else {
+                self.consume(&TokenType::Null, "Expected NULL after IS")?;
+                BinaryOperator::IsNull
+            };
+            lhs = Expression::Binary(Box::new(BinaryExpression {
+                left: lhs,
+                operator: op,
+                right: Expression::Literal(Literal::Null),
+            }));
+        }
 
         loop {
             let Some((op, lbp, rbp, needs_with)) = self.peek_infix_operator() else {
@@ -745,7 +785,7 @@ impl TokenParser {
 
     fn parse_prefix_expression(&mut self) -> Result<Expression, Error> {
         if self.match_token(&TokenType::Not) {
-            let operand = self.parse_expression_bp(Self::BP_PREFIX)?;
+            let operand = self.parse_expression_bp(Self::BP_NOT)?;
             return Ok(Expression::Unary(Box::new(UnaryExpression {
                 operator: UnaryOperator::Not,
                 operand,
@@ -771,36 +811,36 @@ impl TokenParser {
     }
 
     fn parse_primary_expression(&mut self) -> Result<Expression, Error> {
-        match &self.peek().token_type {
+        let mut expr = match &self.peek().token_type {
             TokenType::LeftParen => {
                 self.advance(); // '('
                 let expr = self.parse_expression_bp(0)?;
                 self.consume(&TokenType::RightParen, "Expected ')'")?;
-                Ok(expr)
+                expr
             }
             TokenType::Number(n) => {
                 let n = *n;
                 self.advance();
-                Ok(Expression::Literal(Literal::Number(n)))
+                Expression::Literal(Literal::Number(n))
             }
             TokenType::String(s) => {
                 let s = s.clone();
                 self.advance();
-                Ok(Expression::Literal(Literal::String(s)))
+                Expression::Literal(Literal::String(s))
             }
             TokenType::Boolean(b) => {
                 let b = *b;
                 self.advance();
-                Ok(Expression::Literal(Literal::Boolean(b)))
+                Expression::Literal(Literal::Boolean(b))
             }
             TokenType::Null => {
                 self.advance();
-                Ok(Expression::Literal(Literal::Null))
+                Expression::Literal(Literal::Null)
             }
             TokenType::Variable(name) => {
                 let name = name.clone();
                 self.advance();
-                Ok(Expression::Parameter(name))
+                Expression::Parameter(name)
             }
             TokenType::Identifier(name) => {
                 let name = name.clone();
@@ -809,47 +849,154 @@ impl TokenParser {
                 // Function call: foo(...)
                 if self.check(&TokenType::LeftParen) {
                     self.advance(); // '('
+
+                    // Quantifiers: any/all/none/single (x IN list WHERE pred)
+                    let quant_name = name.to_lowercase();
+                    if matches!(quant_name.as_str(), "any" | "all" | "none" | "single") {
+                        let variable = self.parse_identifier("quantifier variable")?;
+                        self.consume(&TokenType::In, "Expected IN in quantifier")?;
+                        let list_expr = self.parse_expression()?;
+                        let pred_expr = if self.match_token(&TokenType::Where) {
+                            self.parse_expression()?
+                        } else {
+                            Expression::Literal(Literal::Boolean(true))
+                        };
+                        self.consume(
+                            &TokenType::RightParen,
+                            "Expected ')' after quantifier arguments",
+                        )?;
+                        return Ok(Expression::FunctionCall(FunctionCall {
+                            name: format!("__quant_{quant_name}"),
+                            args: vec![Expression::Variable(variable), list_expr, pred_expr],
+                        }));
+                    }
+
                     let args = self.parse_function_arguments()?;
-                    return Ok(Expression::FunctionCall(FunctionCall { name, args }));
+                    Expression::FunctionCall(FunctionCall { name, args })
+                } else {
+                    Expression::Variable(name)
                 }
+            }
+            TokenType::All => {
+                let name = "all".to_string();
+                self.advance();
 
-                // Property access: n.prop
-                if self.check(&TokenType::Dot) {
-                    self.advance(); // '.'
-                    return Ok(Expression::PropertyAccess(PropertyAccess {
-                        variable: name,
-                        property: self.parse_identifier("property name")?,
-                    }));
+                if self.check(&TokenType::LeftParen) {
+                    self.advance(); // '('
+
+                    let variable = self.parse_identifier("quantifier variable")?;
+                    self.consume(&TokenType::In, "Expected IN in quantifier")?;
+                    let list_expr = self.parse_expression()?;
+                    let pred_expr = if self.match_token(&TokenType::Where) {
+                        self.parse_expression()?
+                    } else {
+                        Expression::Literal(Literal::Boolean(true))
+                    };
+                    self.consume(
+                        &TokenType::RightParen,
+                        "Expected ')' after quantifier arguments",
+                    )?;
+                    Expression::FunctionCall(FunctionCall {
+                        name: format!("__quant_{name}"),
+                        args: vec![Expression::Variable(variable), list_expr, pred_expr],
+                    })
+                } else {
+                    Expression::Variable(name)
                 }
-
-                Ok(Expression::Variable(name))
             }
             TokenType::LeftBracket => {
                 // List literal: [a, b, c]
                 self.advance(); // '['
-                Ok(Expression::List(self.parse_list()?))
+                self.parse_list_or_comprehension()?
             }
             TokenType::LeftBrace => {
                 // Map literal: {k: v, ...}
-                Ok(Expression::Map(self.parse_property_map()?))
+                Expression::Map(self.parse_property_map()?)
             }
             TokenType::Asterisk => {
                 // Used for COUNT(*). We encode it as a string literal "*" for the aggregate parser.
                 self.advance();
-                Ok(Expression::Literal(Literal::String("*".to_string())))
+                Expression::Literal(Literal::String("*".to_string()))
             }
             TokenType::Case => {
                 self.advance(); // 'CASE'
-                Ok(Expression::Case(Box::new(self.parse_case_expression()?)))
+                Expression::Case(Box::new(self.parse_case_expression()?))
             }
             TokenType::Exists => {
                 self.advance(); // 'EXISTS'
-                Ok(Expression::Exists(Box::new(
-                    self.parse_exists_expression()?,
-                )))
+                Expression::Exists(Box::new(self.parse_exists_expression()?))
             }
-            _ => Err(Error::NotImplemented("expression")),
+            _ => return Err(Error::NotImplemented("expression")),
+        };
+
+        // Postfix operators: property access, indexing/slicing, label predicates.
+        loop {
+            if self.match_token(&TokenType::Dot) {
+                let property = self.parse_identifier("property name")?;
+                let variable = match expr {
+                    Expression::Variable(var) => var,
+                    _ => {
+                        return Err(Error::Other(
+                            "Expected identifier before '.' in property access".to_string(),
+                        ));
+                    }
+                };
+                expr = Expression::PropertyAccess(PropertyAccess { variable, property });
+                continue;
+            }
+
+            if self.match_token(&TokenType::LeftBracket) {
+                // Parse index/slice: expr[idx] / expr[start..end]
+                let start_expr =
+                    if self.check(&TokenType::RangeDots) || self.check(&TokenType::RightBracket) {
+                        None
+                    } else {
+                        Some(self.parse_expression()?)
+                    };
+
+                if self.match_token(&TokenType::RangeDots) {
+                    let end_expr = if self.check(&TokenType::RightBracket) {
+                        None
+                    } else {
+                        Some(self.parse_expression()?)
+                    };
+                    self.consume(&TokenType::RightBracket, "Expected ']' after slice")?;
+                    expr = Expression::FunctionCall(FunctionCall {
+                        name: "__slice".to_string(),
+                        args: vec![
+                            expr,
+                            start_expr.unwrap_or(Expression::Literal(Literal::Null)),
+                            end_expr.unwrap_or(Expression::Literal(Literal::Null)),
+                        ],
+                    });
+                    continue;
+                }
+
+                let index_expr = start_expr.ok_or_else(|| {
+                    Error::Other("Expected index expression before ']'".to_string())
+                })?;
+                self.consume(&TokenType::RightBracket, "Expected ']' after index")?;
+                expr = Expression::FunctionCall(FunctionCall {
+                    name: "__index".to_string(),
+                    args: vec![expr, index_expr],
+                });
+                continue;
+            }
+
+            if self.match_token(&TokenType::Colon) {
+                let label = self.parse_identifier("label identifier")?;
+                expr = Expression::Binary(Box::new(BinaryExpression {
+                    left: expr,
+                    operator: BinaryOperator::HasLabel,
+                    right: Expression::Literal(Literal::String(label)),
+                }));
+                continue;
+            }
+
+            break;
         }
+
+        Ok(expr)
     }
 
     fn parse_exists_expression(&mut self) -> Result<ExistsExpression, Error> {
@@ -865,22 +1012,31 @@ impl TokenParser {
     }
 
     fn parse_case_expression(&mut self) -> Result<CaseExpression, Error> {
-        // Supported form:
-        //
-        // CASE
-        //   WHEN <cond> THEN <expr>
-        //   [WHEN ... THEN ...]*
-        //   [ELSE <expr>]?
-        // END
-        if !self.check(&TokenType::When) {
-            return Err(Error::NotImplemented("simple CASE expression"));
-        }
+        // Supported forms:
+        // 1) Searched CASE:
+        //    CASE WHEN <cond> THEN <expr> ... [ELSE <expr>] END
+        // 2) Simple CASE:
+        //    CASE <expr> WHEN <value> THEN <expr> ... [ELSE <expr>] END
+        let case_operand = if self.check(&TokenType::When) {
+            None
+        } else {
+            Some(self.parse_expression_bp(0)?)
+        };
 
         let mut when_clauses = Vec::new();
         while self.match_token(&TokenType::When) {
-            let cond = self.parse_expression_bp(0)?;
+            let raw_cond = self.parse_expression_bp(0)?;
             self.consume(&TokenType::Then, "Expected THEN after CASE WHEN condition")?;
             let value = self.parse_expression_bp(0)?;
+            let cond = if let Some(ref operand) = case_operand {
+                Expression::Binary(Box::new(BinaryExpression {
+                    left: operand.clone(),
+                    operator: BinaryOperator::Equals,
+                    right: raw_cond,
+                }))
+            } else {
+                raw_cond
+            };
             when_clauses.push((cond, value));
         }
 
@@ -893,6 +1049,7 @@ impl TokenParser {
         self.consume(&TokenType::End, "Expected END to close CASE expression")?;
 
         Ok(CaseExpression {
+            expression: case_operand,
             when_clauses,
             else_expression,
         })
@@ -942,19 +1099,19 @@ impl TokenParser {
                 Self::BP_CMP + 1,
                 false,
             )),
-            TokenType::In => Some((BinaryOperator::In, Self::BP_CMP, Self::BP_CMP + 1, false)),
+            TokenType::In => Some((BinaryOperator::In, Self::BP_PRED, Self::BP_PRED + 1, false)),
             TokenType::Contains => Some((
                 BinaryOperator::Contains,
-                Self::BP_CMP,
-                Self::BP_CMP + 1,
+                Self::BP_PRED,
+                Self::BP_PRED + 1,
                 false,
             )),
             TokenType::Starts => {
                 if self.check_next(&TokenType::With) {
                     Some((
                         BinaryOperator::StartsWith,
-                        Self::BP_CMP,
-                        Self::BP_CMP + 1,
+                        Self::BP_PRED,
+                        Self::BP_PRED + 1,
                         true,
                     ))
                 } else {
@@ -965,8 +1122,8 @@ impl TokenParser {
                 if self.check_next(&TokenType::With) {
                     Some((
                         BinaryOperator::EndsWith,
-                        Self::BP_CMP,
-                        Self::BP_CMP + 1,
+                        Self::BP_PRED,
+                        Self::BP_PRED + 1,
                         true,
                     ))
                 } else {
@@ -1034,6 +1191,47 @@ impl TokenParser {
             "Expected ')' after function arguments",
         )?;
         Ok(args)
+    }
+
+    fn parse_list_or_comprehension(&mut self) -> Result<Expression, Error> {
+        if self.check(&TokenType::RightBracket) {
+            self.advance();
+            return Ok(Expression::List(vec![]));
+        }
+
+        if self.peek_is_identifier() && self.check_next(&TokenType::In) {
+            let variable = self.parse_identifier("list comprehension variable")?;
+            self.consume(&TokenType::In, "Expected IN in list comprehension")?;
+
+            let list_expr = self.parse_expression()?;
+            let predicate_expr = if self.match_token(&TokenType::Where) {
+                self.parse_expression()?
+            } else {
+                Expression::Literal(Literal::Boolean(true))
+            };
+
+            let projection_expr = if self.match_token(&TokenType::Pipe) {
+                self.parse_expression()?
+            } else {
+                Expression::Variable(variable.clone())
+            };
+
+            self.consume(
+                &TokenType::RightBracket,
+                "Expected ']' after list comprehension",
+            )?;
+            return Ok(Expression::FunctionCall(FunctionCall {
+                name: "__list_comp".to_string(),
+                args: vec![
+                    Expression::Variable(variable),
+                    list_expr,
+                    predicate_expr,
+                    projection_expr,
+                ],
+            }));
+        }
+
+        Ok(Expression::List(self.parse_list()?))
     }
 
     fn parse_list(&mut self) -> Result<Vec<Expression>, Error> {

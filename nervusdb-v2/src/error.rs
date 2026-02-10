@@ -7,6 +7,8 @@ pub enum Error {
     Io(std::io::Error),
     /// Error returned by the storage engine.
     Storage(String),
+    /// Compatibility error returned by storage/query format checks.
+    Compatibility(String),
     /// Error during query execution.
     Query(String),
     /// Other errors.
@@ -18,6 +20,7 @@ impl fmt::Display for Error {
         match self {
             Error::Io(e) => write!(f, "IO error: {}", e),
             Error::Storage(e) => write!(f, "Storage error: {}", e),
+            Error::Compatibility(e) => write!(f, "Compatibility error: {}", e),
             Error::Query(e) => write!(f, "Query error: {}", e),
             Error::Other(e) => write!(f, "Error: {}", e),
         }
@@ -44,6 +47,11 @@ impl From<nervusdb_v2_storage::Error> for Error {
     fn from(e: nervusdb_v2_storage::Error) -> Self {
         match e {
             nervusdb_v2_storage::Error::Io(e) => Error::Io(e),
+            nervusdb_v2_storage::Error::StorageFormatMismatch { expected, found } => {
+                Error::Compatibility(format!(
+                    "storage format mismatch: expected epoch {expected}, found {found}"
+                ))
+            }
             _ => Error::Storage(e.to_string()),
         }
     }
@@ -61,3 +69,25 @@ impl From<nervusdb_v2_query::Error> for Error {
 
 /// A specialized Result type for NervusDB operations.
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+
+    #[test]
+    fn map_storage_format_mismatch_to_compatibility_error() {
+        let storage_err = nervusdb_v2_storage::Error::StorageFormatMismatch {
+            expected: 1,
+            found: 0,
+        };
+
+        let err: Error = storage_err.into();
+        match err {
+            Error::Compatibility(msg) => {
+                assert!(msg.contains("expected epoch 1"));
+                assert!(msg.contains("found 0"));
+            }
+            other => panic!("expected compatibility error, got: {other:?}"),
+        }
+    }
+}

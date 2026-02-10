@@ -1,6 +1,6 @@
-# Task Tracking (v2.1 Execution Board)
+# Task Tracking (v2.2 SQLite-Beta Board)
 
-> **Focus**: Full Roadmap close-out（M4 收尾 → M5 交付 → 工业质量门禁）
+> **Focus**: SQLite-Beta 收敛（TCK≥95% → 7天稳定窗 → 性能封板）
 > **Source of truth**: `docs/spec.md` + `docs/ROADMAP_2.0.md`
 
 | ID            | Task                                                       | Risk   | Status | Branch                      | Notes                                                    |
@@ -70,28 +70,35 @@
 | T329          | [Refactor] Evaluator Snapshot Access (Fix `keys()`)        | Medium | Done   | feat/T329-eval-snapshot     | Pass Snapshot to evaluator, un-ignore `keys()` tests     |
 | T330          | [Refactor] Evaluator Schema Access (Fix `type()`)          | Medium | Done   | feat/T330-eval-schema       | Pass Schema/Txn to evaluator, un-ignore `type()` tests   |
 | T331          | [Bug] Fix `id()` Lookup / Node Scan Consistency            | Medium | Done   | feat/T331-fix-id-lookup     | Resolved issue with `create_node` test arguments         |
-| **M4**        | **Cypher Completeness (TCK ≥70%)**                         |        |        |                             |                                                          |
+| **M4**        | **Cypher Completeness (Tiered Gate Baseline)**             |        |        |                             |                                                          |
 | M4-01         | [Query] Fix NotImplemented in query_api.rs                 | High   | Done   | feat/M4-01-query-api        | 16 occurrences resolved                                  |
 | M4-02         | [Query] Fix NotImplemented in executor.rs                  | High   | Done   | feat/M4-02-executor         | 11 occurrences resolved                                  |
 | M4-03         | [Query] Complete MERGE Semantics                           | High   | Done   | feat/M4-03-merge            | Chained MERGE, multi-label patterns                      |
 | M4-04         | [Query] SET/DELETE with Complex Expressions                | High   | Done   | feat/M4-04-expressions      | Support list/var/expressions in writes                   |
 | M4-05         | [Query] Simple CASE Expression                             | Medium | Done   | feat/M4-05-case             | Parser support implemented                               |
 | M4-06         | [Query] Anonymous Node Handling                            | Medium | Done   | feat/M4-06-anon-nodes       | Auto-generated variable names                            |
-| M4-07         | [CI] Expand TCK to clauses/\*                              | High   | Done   | feat/M4-07-tck-clauses      | 覆盖集: `scripts/tck_whitelist/tier1_clauses.txt`；本地 Tier-1 白名单通过率 100% |
-| M4-08         | [CI] Expand TCK to expressions/\*                          | High   | Done   | feat/M4-08-tck-expressions  | 覆盖集: `scripts/tck_whitelist/tier2_expressions.txt`；本地 Tier-2 白名单通过率 100% |
+| M4-07         | [CI] Expand TCK to clauses/\*                              | High   | Done   | feat/M4-07-tck-clauses      | 覆盖集: `scripts/tck_whitelist/tier1_clauses.txt`；Tier-1 白名单通过 |
+| M4-08         | [CI] Expand TCK to expressions/\*                          | High   | Done   | feat/M4-08-tck-expressions  | 覆盖集: `scripts/tck_whitelist/tier2_expressions.txt`；Tier-2 白名单通过 |
 | M4-09         | [Bug] Ongoing Unicode/String Edge Cases                    | Medium | Done   | -                           | Fixed UTF-8 panic in explain                             |
 | M4-10         | [Query/CI] Merge Core Semantics + TCK Smoke Gate          | High   | Done   | feat/M4-10-merge-core       | Added binding conflict validation + varlen `<-/->/-` + CI smoke gate |
 | M4-11         | [Query] MERGE Regression Hardening                         | High   | Done   | feat/M4-10-merge-core       | Fixed MERGE execution on wrapped plans, rel source indexing, ON CREATE/ON MATCH updates, correlated MATCH binding typing |
-| **M5**        | **Polish & Performance (TCK ≥90%)**                        |        |        |                             |                                                          |
-| M5-01         | [Binding] Python + Node.js 可用性收敛（PyO3 + N-API）      | High   | Done   | feat/M5-01-bindings         | 异常分层 + `query_stream` + Node 运行时 smoke/事务回归 + 跨语言契约快测已通过 |
-| M5-02         | [Docs] 用户文档与支持矩阵对齐                             | High   | Done   | feat/M5-02-user-guide       | README/README_CN/cypher_support 与 Rust/CLI/Python/Node 最小路径已对齐 |
-| M5-03         | [Benchmark] NervusDB vs Neo4j/Memgraph 对标               | Medium | Done   | feat/M5-03-benchmark        | compare 脚本 + benchmark-nightly workflow + `docs/perf/v2` 报告归档 |
-| M5-04         | [Performance] 并发读热点优化                               | Medium | Done   | feat/M5-04-concurrency      | profile 脚本 + 读路径低风险优化 + `docs/perf/v2/concurrency-latest.md` |
-| M5-05         | [AI] HNSW 参数调优与默认策略                              | Low    | Done   | feat/M5-05-hnsw             | HNSW 参数环境变量化 + sweep 报告 + 默认建议 `hnsw-default-recommendation.md` |
-| **Industrial**| **Industrial Quality (Roadmap Phase 3)**                  |        |        |                             |                                                          |
-| I5-01         | [Quality] `cargo-fuzz` 分层接入                            | High   | Done   | feat/I5-01-fuzz             | query_prepare/query_parse/query_execute targets + nightly workflow + 回归脚本（支持本地 skip） |
-| I5-02         | [Quality] Chaos IO 故障注入门禁                            | High   | Done   | feat/I5-02-chaos            | 权限/路径/文件类型故障 + WAL 恢复校验 + chaos nightly artifacts |
-| I5-03         | [Quality] 24h Soak 稳定性流程                              | High   | Done   | feat/I5-03-soak             | soak summary + history.jsonl + soak nightly artifacts    |
+| **M5**        | **Bindings + Docs + Perf 基础设施**                        |        |        |                             |                                                          |
+| M5-01         | [Binding] Python + Node.js 可用性收敛（PyO3 + N-API）      | High   | WIP    | feat/M5-01-bindings         | 本轮新增 Compatibility 错误语义与结构化 payload，需继续补跨语言契约覆盖 |
+| M5-02         | [Docs] 用户文档与支持矩阵对齐                             | High   | WIP    | feat/M5-02-user-guide       | 已切换到 Beta 收敛口径；待补 95%/7天稳定窗发布说明与日报模板 |
+| M5-03         | [Benchmark] NervusDB vs Neo4j/Memgraph 对标               | Medium | WIP    | feat/M5-03-benchmark        | 已有流程；待绑定 Beta 发布 SLO 阻断 |
+| M5-04         | [Performance] 并发读热点优化                               | Medium | WIP    | feat/M5-04-concurrency      | 已有基线；待收敛到 Beta P99 门槛 |
+| M5-05         | [AI] HNSW 参数调优与默认策略                              | Low    | WIP    | feat/M5-05-hnsw             | 已有参数面与报告；待收敛到 recall/latency 发布门槛 |
+| **Industrial**| **Industrial Quality (Nightly Gates)**                    |        |        |                             |                                                          |
+| I5-01         | [Quality] `cargo-fuzz` 分层接入                            | High   | WIP    | feat/I5-01-fuzz             | 已 nightly；待接入“7天稳定窗”统一统计 |
+| I5-02         | [Quality] Chaos IO 故障注入门禁                            | High   | WIP    | feat/I5-02-chaos            | 已 nightly；待接入“7天稳定窗”统一统计 |
+| I5-03         | [Quality] 24h Soak 稳定性流程                              | High   | WIP    | feat/I5-03-soak             | 已 nightly；待接入“7天稳定窗”统一统计 |
+
+| **Beta Gate** | **SQLite-Beta 必达门槛**                                   |        |        |                             |                                                          |
+| BETA-01       | [Storage] 强制 `storage_format_epoch` 校验                 | High   | Done   | feat/TB1-beta-gate          | `StorageFormatMismatch` + Compatibility 映射已落地 |
+| BETA-02       | [CI] Tier-3 全量通过率统计与 95% 阈值阻断                  | High   | Done   | feat/TB1-beta-gate          | `scripts/tck_full_rate.sh` + `scripts/beta_gate.sh` + nightly/manual workflow |
+| BETA-03       | [TCK] 官方全量通过率冲刺至 ≥95%                            | High   | WIP    | feat/TB1-tck-95             | 2026-02-10 全量基线 50.14%（1954/3897，skipped 446）；本轮分簇回归：Create2 24/24、Create6 14/14（skipped）、Delete6 14/14（skipped）、Match6 96/97（仅场景14失败）、Create1 19/20（仅大整数精度场景失败） |
+| BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | Plan   | feat/TB1-stability-window   | 任一阻断失败即重置计数 |
+| BETA-05       | [Perf] 大规模 SLO 封板（读120/写180/向量220 ms P99）       | High   | Plan   | feat/TB1-perf-slo           | 达标后方可发布 Beta |
 
 ## Archived (v1/Alpha)
 

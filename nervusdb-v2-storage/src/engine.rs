@@ -201,6 +201,7 @@ impl GraphEngine {
             _guard: guard,
             txid,
             created_nodes: Vec::new(),
+            pending_label_additions: Vec::new(),
             created_external_ids: std::collections::HashSet::new(),
             memtable: MemTable::default(),
         }
@@ -661,6 +662,7 @@ pub struct WriteTxn<'a> {
     _guard: std::sync::MutexGuard<'a, ()>,
     txid: u64,
     created_nodes: Vec<(ExternalId, LabelId, InternalNodeId)>,
+    pending_label_additions: Vec<(InternalNodeId, LabelId)>,
     created_external_ids: std::collections::HashSet<ExternalId>,
     memtable: MemTable,
 }
@@ -688,6 +690,11 @@ impl<'a> WriteTxn<'a> {
         self.created_nodes
             .push((external_id, label_id, internal_id));
         Ok(internal_id)
+    }
+
+    pub fn add_node_label(&mut self, node: InternalNodeId, label_id: LabelId) -> Result<()> {
+        self.pending_label_additions.push((node, label_id));
+        Ok(())
     }
 
     pub fn create_edge(&mut self, src: InternalNodeId, rel: RelTypeId, dst: InternalNodeId) {
@@ -769,6 +776,12 @@ impl<'a> WriteTxn<'a> {
                     external_id: *external_id,
                     label_id: *label_id,
                     internal_id: *internal_id,
+                })?;
+            }
+            for (node, label_id) in &self.pending_label_additions {
+                wal.append(&WalRecord::AddNodeLabel {
+                    node: *node,
+                    label_id: *label_id,
                 })?;
             }
 
@@ -1005,6 +1018,9 @@ impl<'a> WriteTxn<'a> {
             for (external_id, label_id, internal_id) in self.created_nodes {
                 idmap.apply_create_node(&mut pager, external_id, label_id, internal_id)?;
             }
+            for (node, label_id) in self.pending_label_additions {
+                idmap.apply_add_label(&mut pager, node, label_id)?;
+            }
         }
 
         if has_new_nodes {
@@ -1049,6 +1065,9 @@ fn replay_graph_transactions(
                         continue;
                     }
                     idmap.apply_create_node(pager, external_id, label_id, internal_id)?;
+                }
+                WalRecord::AddNodeLabel { node, label_id } => {
+                    idmap.apply_add_label(pager, node, label_id)?;
                 }
                 WalRecord::CreateEdge { src, rel, dst } => memtable.create_edge(src, rel, dst),
                 WalRecord::TombstoneNode { node } => memtable.tombstone_node(node),

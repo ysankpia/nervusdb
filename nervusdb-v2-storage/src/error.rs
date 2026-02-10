@@ -13,6 +13,9 @@ pub enum Error {
     #[error("unsupported page size: {0}")]
     UnsupportedPageSize(u64),
 
+    #[error("storage format mismatch: expected epoch {expected}, found {found}")]
+    StorageFormatMismatch { expected: u64, found: u64 },
+
     #[error("page id {0} out of range")]
     PageIdOutOfRange(u64),
 

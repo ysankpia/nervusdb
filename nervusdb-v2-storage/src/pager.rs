@@ -1,4 +1,6 @@
-use crate::{Error, FILE_MAGIC, PAGE_SIZE, Result, VERSION_MAJOR, VERSION_MINOR};
+use crate::{
+    Error, FILE_MAGIC, PAGE_SIZE, Result, STORAGE_FORMAT_EPOCH, VERSION_MAJOR, VERSION_MINOR,
+};
 use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -40,6 +42,7 @@ struct Meta {
     next_internal_id: u64,
     index_catalog_root: u64,
     next_index_id: u32,
+    storage_format_epoch: u64,
 }
 
 impl Meta {
@@ -55,6 +58,7 @@ impl Meta {
             next_internal_id: 0,
             index_catalog_root: 0,
             next_index_id: 0,
+            storage_format_epoch: STORAGE_FORMAT_EPOCH,
         }
     }
 
@@ -71,6 +75,7 @@ impl Meta {
         page[64..72].copy_from_slice(&self.next_internal_id.to_le_bytes());
         page[72..80].copy_from_slice(&self.index_catalog_root.to_le_bytes());
         page[80..84].copy_from_slice(&self.next_index_id.to_le_bytes());
+        page[84..92].copy_from_slice(&self.storage_format_epoch.to_le_bytes());
         page
     }
 
@@ -89,9 +94,17 @@ impl Meta {
         let next_internal_id = u64::from_le_bytes(page[64..72].try_into().unwrap());
         let index_catalog_root = u64::from_le_bytes(page[72..80].try_into().unwrap());
         let next_index_id = u32::from_le_bytes(page[80..84].try_into().unwrap());
+        let storage_format_epoch = u64::from_le_bytes(page[84..92].try_into().unwrap());
 
         if page_size != PAGE_SIZE as u64 {
             return Err(Error::UnsupportedPageSize(page_size));
+        }
+
+        if storage_format_epoch != STORAGE_FORMAT_EPOCH {
+            return Err(Error::StorageFormatMismatch {
+                expected: STORAGE_FORMAT_EPOCH,
+                found: storage_format_epoch,
+            });
         }
 
         let next_internal_id = if next_internal_id == 0 && i2e_len > 0 {
@@ -104,6 +117,7 @@ impl Meta {
             version_major,
             version_minor,
             page_size,
+            storage_format_epoch,
             bitmap_page_id,
             next_page_id,
             i2e_start_page_id,
@@ -520,6 +534,7 @@ fn write_at(file: &File, offset: u64, buf: &[u8]) -> io::Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::tempdir;
 
     #[test]
@@ -538,5 +553,27 @@ mod tests {
         let got = pager.read_page(pid).unwrap();
         assert_eq!(got[0], 0xAB);
         assert_eq!(got[PAGE_SIZE - 1], 0xCD);
+    }
+
+    #[test]
+    fn reject_storage_format_epoch_mismatch() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("epoch_mismatch.ndb");
+
+        {
+            let _pager = Pager::open(&path).unwrap();
+        }
+
+        let mut bytes = fs::read(&path).unwrap();
+        bytes[84..92].copy_from_slice(&0u64.to_le_bytes());
+        fs::write(&path, bytes).unwrap();
+
+        let err = Pager::open(&path).unwrap_err();
+        assert!(
+            err.to_string()
+                .to_lowercase()
+                .contains("storage format mismatch"),
+            "unexpected error: {err}"
+        );
     }
 }

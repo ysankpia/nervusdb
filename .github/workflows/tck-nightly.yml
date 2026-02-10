@@ -38,9 +38,44 @@ jobs:
           mkdir -p artifacts/tck
           TCK_ALLOW_FAIL=1 TCK_REPORT_DIR=artifacts/tck bash scripts/tck_tier_gate.sh tier3
 
+      - name: Build full pass-rate report
+        if: always()
+        run: |
+          chmod +x scripts/tck_full_rate.sh
+          TCK_REPORT_DIR=artifacts/tck TCK_ALLOW_FAIL=1 bash scripts/tck_full_rate.sh
+
       - name: Upload TCK artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: tck-nightly-artifacts
+          path: artifacts/tck/
+
+  beta-gate-manual:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run Tier-3 and compute pass rate
+        run: |
+          mkdir -p artifacts/tck
+          TCK_ALLOW_FAIL=1 TCK_REPORT_DIR=artifacts/tck bash scripts/tck_tier_gate.sh tier3
+          TCK_REPORT_DIR=artifacts/tck TCK_ALLOW_FAIL=1 bash scripts/tck_full_rate.sh
+
+      - name: Enforce beta threshold (>=95%)
+        run: |
+          TCK_REPORT_DIR=artifacts/tck TCK_MIN_PASS_RATE=95 bash scripts/beta_gate.sh
+
+      - name: Upload beta gate artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beta-gate-artifacts
           path: artifacts/tck/

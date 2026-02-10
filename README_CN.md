@@ -67,6 +67,18 @@ v2 当前能力边界以 `docs/reference/cypher_support.md` 为准；是否“�
 
 详见 `docs/ROADMAP_2.0.md` 与 `docs/tasks.md`。
 
+## Tier-3 全量通过率与 Beta 门禁
+
+```bash
+# 基于 Tier-3 全量日志生成通过率报告
+TCK_FULL_LOG_FILE=tck_latest.log bash scripts/tck_full_rate.sh
+
+# 按 Beta 阈值（默认 95%）阻断
+TCK_MIN_PASS_RATE=95 bash scripts/beta_gate.sh
+```
+
+发布 Beta 前必须同时满足：官方全量 TCK ≥95% + 连续 7 天稳定窗 + 性能 SLO。
+
 ## v2 架构（当前事实）
 
 - **两文件**：`<path>.ndb`（page store / segments / manifest）+ `<path>.wal`（redo log）

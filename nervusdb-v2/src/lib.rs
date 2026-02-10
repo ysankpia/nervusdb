@@ -234,6 +234,10 @@ impl GraphSnapshot for DbSnapshot {
         self.0.node_label(iid)
     }
 
+    fn resolve_node_labels(&self, iid: InternalNodeId) -> Option<Vec<LabelId>> {
+        self.0.resolve_node_labels(iid)
+    }
+
     fn is_tombstoned_node(&self, iid: InternalNodeId) -> bool {
         self.0.is_tombstoned_node(iid)
     }
@@ -484,6 +488,16 @@ impl nervusdb_v2_query::WriteableGraph for WriteTxn<'_> {
     ) -> nervusdb_v2_query::Result<InternalNodeId> {
         self.inner
             .create_node(external_id, label_id)
+            .map_err(|e| nervusdb_v2_query::Error::Other(e.to_string()))
+    }
+
+    fn add_node_label(
+        &mut self,
+        node: InternalNodeId,
+        label_id: LabelId,
+    ) -> nervusdb_v2_query::Result<()> {
+        self.inner
+            .add_node_label(node, label_id)
             .map_err(|e| nervusdb_v2_query::Error::Other(e.to_string()))
     }
 
