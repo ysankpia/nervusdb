@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
+const UNLABELED_LABEL_ID: LabelId = LabelId::MAX;
+
 pub trait Procedure: Send + Sync {
     fn execute(&self, snapshot: &dyn ErasedSnapshot, args: Vec<Value>) -> Result<Vec<Row>>;
 }
@@ -501,6 +503,7 @@ impl Row {
             if k == name {
                 match v {
                     Value::NodeId(iid) => Some(*iid),
+                    Value::Node(node) => Some(node.id),
                     _ => None,
                 }
             } else {
@@ -514,6 +517,7 @@ impl Row {
             if k == name {
                 match v {
                     Value::EdgeKey(e) => Some(*e),
+                    Value::Relationship(rel) => Some(rel.key),
                     _ => None,
                 }
             } else {
@@ -586,6 +590,7 @@ pub enum Plan {
     NodeScan {
         alias: String,
         label: Option<String>,
+        optional: bool,
     },
     /// `MATCH (a)-[:rel]->(b) RETURN ...`
     MatchOut {
@@ -594,12 +599,15 @@ pub enum Plan {
         rels: Vec<String>,
         edge_alias: Option<String>,
         dst_alias: String,
+        dst_labels: Vec<String>,
+        src_prebound: bool,
         limit: Option<u32>,
         // Note: project is kept for backward compatibility but projection
         // should happen after filtering (see Plan::Project)
         project: Vec<String>,
         project_external: bool,
         optional: bool,
+        optional_unbind: Vec<String>,
         path_alias: Option<String>,
     },
     /// `MATCH (a)-[:rel*min..max]->(b) RETURN ...` (variable length)
@@ -609,6 +617,8 @@ pub enum Plan {
         rels: Vec<String>,
         edge_alias: Option<String>,
         dst_alias: String,
+        dst_labels: Vec<String>,
+        src_prebound: bool,
         direction: RelationshipDirection,
         min_hops: u32,
         max_hops: Option<u32>,
@@ -616,6 +626,7 @@ pub enum Plan {
         project: Vec<String>,
         project_external: bool,
         optional: bool,
+        optional_unbind: Vec<String>,
         path_alias: Option<String>,
     },
     MatchIn {
@@ -624,8 +635,11 @@ pub enum Plan {
         rels: Vec<String>,
         edge_alias: Option<String>,
         dst_alias: String,
+        dst_labels: Vec<String>,
+        src_prebound: bool,
         limit: Option<u32>,
         optional: bool,
+        optional_unbind: Vec<String>,
         path_alias: Option<String>,
     },
     MatchUndirected {
@@ -634,14 +648,36 @@ pub enum Plan {
         rels: Vec<String>,
         edge_alias: Option<String>,
         dst_alias: String,
+        dst_labels: Vec<String>,
+        src_prebound: bool,
         limit: Option<u32>,
         optional: bool,
+        optional_unbind: Vec<String>,
+        path_alias: Option<String>,
+    },
+    MatchBoundRel {
+        input: Box<Plan>,
+        rel_alias: String,
+        src_alias: String,
+        dst_alias: String,
+        dst_labels: Vec<String>,
+        src_prebound: bool,
+        rels: Vec<String>,
+        direction: RelationshipDirection,
+        optional: bool,
+        optional_unbind: Vec<String>,
         path_alias: Option<String>,
     },
     /// `MATCH ... WHERE ... RETURN ...` (with filter)
     Filter {
         input: Box<Plan>,
         predicate: Expression,
+    },
+    /// 修复 OPTIONAL MATCH + WHERE 语义：按外层行回填 null 行
+    OptionalWhereFixup {
+        outer: Box<Plan>,
+        filtered: Box<Plan>,
+        null_aliases: Vec<String>,
     },
     /// Project expressions to new variables
     Project {
@@ -742,6 +778,81 @@ pub enum Plan {
         input: Box<Plan>,
         pattern: Pattern,
     },
+}
+
+fn apply_optional_unbinds_row(mut row: Row, optional_unbind: &[String]) -> Row {
+    for alias in optional_unbind {
+        row = row.with(alias.clone(), Value::Null);
+    }
+    row
+}
+
+fn value_node_id(value: &Value) -> Option<InternalNodeId> {
+    match value {
+        Value::NodeId(id) => Some(*id),
+        Value::Node(node) => Some(node.id),
+        _ => None,
+    }
+}
+
+fn row_matches_node_binding(row: &Row, alias: &str, candidate: InternalNodeId) -> bool {
+    match row.get(alias) {
+        None => true,
+        Some(Value::Null) => false,
+        Some(value) => value_node_id(value).is_some_and(|id| id == candidate),
+    }
+}
+
+fn row_contains_all_bindings(candidate: &Row, outer: &Row) -> bool {
+    outer
+        .cols
+        .iter()
+        .all(|(key, value)| candidate.get(key).is_some_and(|v| v == value))
+}
+
+fn path_alias_contains_edge(row: &Row, path_alias: Option<&str>, edge: EdgeKey) -> bool {
+    if let Some(alias) = path_alias
+        && let Some(Value::Path(path)) = row.get(alias)
+    {
+        return path.edges.contains(&edge);
+    }
+    false
+}
+
+#[derive(Debug, Clone)]
+enum LabelConstraint {
+    Any,
+    Required(Vec<LabelId>),
+    Impossible,
+}
+
+fn resolve_label_constraint<S: GraphSnapshot>(snapshot: &S, labels: &[String]) -> LabelConstraint {
+    if labels.is_empty() {
+        return LabelConstraint::Any;
+    }
+
+    let mut ids = Vec::with_capacity(labels.len());
+    for label in labels {
+        let Some(id) = snapshot.resolve_label_id(label) else {
+            return LabelConstraint::Impossible;
+        };
+        ids.push(id);
+    }
+    LabelConstraint::Required(ids)
+}
+
+fn node_matches_label_constraint<S: GraphSnapshot>(
+    snapshot: &S,
+    node: InternalNodeId,
+    constraint: &LabelConstraint,
+) -> bool {
+    match constraint {
+        LabelConstraint::Any => true,
+        LabelConstraint::Impossible => false,
+        LabelConstraint::Required(required) => snapshot
+            .resolve_node_labels(node)
+            .is_some_and(|labels| required.iter().all(|id| labels.contains(id))),
+    }
 }
 
 pub enum PlanIterator<'a, S: GraphSnapshot> {
@@ -938,22 +1049,46 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                 "FOREACH must be executed via execute_write".into(),
             )))))
         }
-        Plan::NodeScan { alias, label } => {
+        Plan::NodeScan {
+            alias,
+            label,
+            optional,
+        } => {
             let label_id = if let Some(l) = label {
                 match snapshot.resolve_label_id(l) {
                     Some(id) => Some(id),
-                    None => return PlanIterator::Dynamic(Box::new(std::iter::empty())),
+                    None => {
+                        if *optional {
+                            let row = Row::new(vec![(alias.clone(), Value::Null)]);
+                            return PlanIterator::Dynamic(Box::new(std::iter::once(Ok(row))));
+                        }
+                        return PlanIterator::Dynamic(Box::new(std::iter::empty()));
+                    }
                 }
             } else {
                 None
             };
 
-            PlanIterator::NodeScan(NodeScanIter {
+            let mut iter = NodeScanIter {
                 snapshot,
                 node_iter: Box::new(snapshot.nodes()), // Logic moved to NodeScanIter
                 alias: alias.clone(),
                 label_id,
-            })
+            };
+
+            if *optional {
+                match iter.next() {
+                    Some(first) => {
+                        PlanIterator::Dynamic(Box::new(std::iter::once(first).chain(iter)))
+                    }
+                    None => {
+                        let row = Row::new(vec![(alias.clone(), Value::Null)]);
+                        PlanIterator::Dynamic(Box::new(std::iter::once(Ok(row))))
+                    }
+                }
+            } else {
+                PlanIterator::NodeScan(iter)
+            }
         }
         Plan::MatchOut {
             input,
@@ -961,10 +1096,13 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
             rels,
             edge_alias,
             dst_alias,
+            dst_labels,
+            src_prebound,
             limit,
             project: _,
             project_external: _,
             optional,
+            optional_unbind,
             path_alias,
         } => {
             let rel_ids = if rels.is_empty() {
@@ -976,12 +1114,9 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                         ids.push(id);
                     }
                 }
-                if ids.is_empty() {
-                    // None of the requested types exist
-                    return PlanIterator::Dynamic(Box::new(std::iter::empty()));
-                }
                 Some(ids)
             };
+            let dst_label_constraint = resolve_label_constraint(snapshot, dst_labels);
 
             if let Some(input_plan) = input {
                 let input_iter = execute_plan(snapshot, input_plan, params);
@@ -993,6 +1128,9 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                     edge_alias: edge_alias.as_deref(),
                     dst_alias,
                     optional: *optional,
+                    emit_on_miss: *optional && *src_prebound,
+                    optional_unbind: optional_unbind.clone(),
+                    dst_label_constraint: dst_label_constraint.clone(),
                     cur_row: None,
                     cur_edges: None,
                     yielded_any: false,
@@ -1012,10 +1150,19 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                     dst_alias,
                     path_alias.as_deref(),
                 );
+                let filtered = base.filter(move |result| match result {
+                    Ok(row) => row
+                        .get(dst_alias)
+                        .and_then(value_node_id)
+                        .is_some_and(|id| {
+                            node_matches_label_constraint(snapshot, id, &dst_label_constraint)
+                        }),
+                    Err(_) => true,
+                });
                 if let Some(n) = limit {
-                    PlanIterator::Dynamic(Box::new(base.take(*n as usize)))
+                    PlanIterator::Dynamic(Box::new(filtered.take(*n as usize)))
                 } else {
-                    PlanIterator::Dynamic(Box::new(base))
+                    PlanIterator::Dynamic(Box::new(filtered))
                 }
             }
         }
@@ -1025,6 +1172,8 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
             rels,
             edge_alias,
             dst_alias,
+            dst_labels,
+            src_prebound,
             direction,
             min_hops,
             max_hops,
@@ -1032,6 +1181,7 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
             project: _,
             project_external: _,
             optional,
+            optional_unbind,
             path_alias,
         } => {
             let input_iter = input.as_ref().map(|p| execute_plan(snapshot, p, params));
@@ -1045,11 +1195,9 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                         ids.push(id);
                     }
                 }
-                if ids.is_empty() {
-                    return PlanIterator::Dynamic(Box::new(std::iter::empty()));
-                }
                 Some(ids)
             };
+            let dst_label_constraint = resolve_label_constraint(snapshot, dst_labels);
 
             let base = MatchOutVarLenIter::new(
                 snapshot,
@@ -1058,11 +1206,14 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                 rel_ids,
                 edge_alias.as_deref(),
                 dst_alias,
+                dst_label_constraint,
                 direction.clone(),
                 *min_hops,
                 *max_hops,
                 *limit,
                 *optional,
+                *src_prebound,
+                optional_unbind.clone(),
                 path_alias.as_deref(),
             );
             if let Some(n) = limit {
@@ -1077,8 +1228,11 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
             rels,
             edge_alias,
             dst_alias,
+            dst_labels,
+            src_prebound,
             limit: _,
             optional,
+            optional_unbind,
             path_alias,
         } => {
             let rel_ids = if rels.is_empty() {
@@ -1090,11 +1244,9 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                         ids.push(id);
                     }
                 }
-                if ids.is_empty() {
-                    return PlanIterator::Dynamic(Box::new(std::iter::empty()));
-                }
                 Some(ids)
             };
+            let dst_label_constraint = resolve_label_constraint(snapshot, dst_labels);
 
             let input_iter: Box<dyn Iterator<Item = Result<Row>>> = if let Some(input_plan) = input
             {
@@ -1107,6 +1259,7 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
             let dst_alias = dst_alias.clone();
             let edge_alias = edge_alias.clone();
             let optional = *optional;
+            let optional_unbind = optional_unbind.clone();
 
             PlanIterator::Dynamic(Box::new(input_iter.flat_map(move |result| {
                 match result {
@@ -1114,6 +1267,12 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                         let node_val = row.get(&src_alias).cloned();
                         let target_iid = match node_val {
                             Some(Value::NodeId(id)) => id,
+                            Some(Value::Null) | None if optional => {
+                                let new_row =
+                                    apply_optional_unbinds_row(row.clone(), &optional_unbind);
+                                return Box::new(std::iter::once(Ok(new_row)))
+                                    as Box<dyn Iterator<Item = Result<Row>>>;
+                            }
                             _ => {
                                 return Box::new(std::iter::empty())
                                     as Box<dyn Iterator<Item = Result<Row>>>;
@@ -1139,8 +1298,24 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                         let edge_alias_binding = edge_alias.clone();
                         let path_alias = path_alias.clone();
                         let row_for_map = row.clone();
+                        let dst_label_constraint = dst_label_constraint.clone();
 
-                        let mapped = candidates.map(move |edge| {
+                        let mapped = candidates.filter_map(move |edge| {
+                            if path_alias_contains_edge(&row_for_map, path_alias.as_deref(), edge) {
+                                return None;
+                            }
+                            if !row_matches_node_binding(&row_for_map, &dst_alias_binding, edge.src)
+                            {
+                                return None;
+                            }
+                            if !node_matches_label_constraint(
+                                snapshot,
+                                edge.src,
+                                &dst_label_constraint,
+                            ) {
+                                return None;
+                            }
+
                             let mut new_row = row_for_map.clone();
                             new_row =
                                 new_row.with(dst_alias_binding.clone(), Value::NodeId(edge.src));
@@ -1150,17 +1325,18 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                             if let Some(pa) = &path_alias {
                                 new_row.join_path(pa, edge.dst, edge, edge.src);
                             }
-                            Ok(new_row)
+                            Some(Ok(new_row))
                         });
 
                         if optional {
                             let results: Vec<_> = mapped.collect();
                             if results.is_empty() {
-                                let mut new_row = row.clone();
-                                new_row = new_row.with(dst_alias.clone(), Value::Null);
-                                if let Some(ea) = &edge_alias {
-                                    new_row = new_row.with(ea.clone(), Value::Null);
+                                if !*src_prebound {
+                                    return Box::new(std::iter::empty())
+                                        as Box<dyn Iterator<Item = Result<Row>>>;
                                 }
+                                let new_row =
+                                    apply_optional_unbinds_row(row.clone(), &optional_unbind);
                                 Box::new(std::iter::once(Ok(new_row)))
                                     as Box<dyn Iterator<Item = Result<Row>>>
                             } else {
@@ -1183,8 +1359,11 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
             rels,
             edge_alias,
             dst_alias,
+            dst_labels,
+            src_prebound,
             limit,
             optional,
+            optional_unbind,
             path_alias,
         } => {
             let rel_ids = if rels.is_empty() {
@@ -1196,11 +1375,9 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                         ids.push(id);
                     }
                 }
-                if ids.is_empty() {
-                    return PlanIterator::Dynamic(Box::new(std::iter::empty()));
-                }
                 Some(ids)
             };
+            let dst_label_constraint = resolve_label_constraint(snapshot, dst_labels);
 
             let input_iter: Box<dyn Iterator<Item = Result<Row>>> = if let Some(input_plan) = input
             {
@@ -1209,127 +1386,278 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                 Box::new(std::iter::once(Ok(Row::default())))
             };
 
-            // Collect successfully to avoid cloning Error
-            let rows_result: Result<Vec<Row>> = input_iter.collect();
-            let rows = match rows_result {
-                Ok(r) => r,
-                Err(e) => return PlanIterator::Dynamic(Box::new(std::iter::once(Err(e)))),
-            };
-
             let src_alias = src_alias.clone();
             let dst_alias = dst_alias.clone();
             let edge_alias = edge_alias.clone();
-            let _optional = *optional;
-            let rel_ids_out = rel_ids.clone();
+            let optional = *optional;
+            let optional_unbind = optional_unbind.clone();
+            let path_alias = path_alias.clone();
 
-            // Outgoing Iterator
-            let rows_out = rows.clone();
-            let src_alias_out = src_alias.clone();
-            let dst_alias_out = dst_alias.clone();
-            let edge_alias_out = edge_alias.clone();
-
-            let out_iter = rows_out.into_iter().map(Ok).flat_map(move |res| match res {
+            let expanded = input_iter.flat_map(move |res| match res {
                 Ok(row) => {
-                    let node_val = row.get(&src_alias_out).cloned();
-                    let src_iid = match node_val {
+                    let src_iid = match row.get(&src_alias).cloned() {
                         Some(Value::NodeId(id)) => id,
+                        Some(Value::Null) | None if optional => {
+                            let null_row =
+                                apply_optional_unbinds_row(row.clone(), &optional_unbind);
+                            return Box::new(std::iter::once(Ok(null_row)))
+                                as Box<dyn Iterator<Item = Result<Row>>>;
+                        }
                         _ => {
                             return Box::new(std::iter::empty())
                                 as Box<dyn Iterator<Item = Result<Row>>>;
                         }
                     };
 
-                    let neighbors: Box<dyn Iterator<Item = EdgeKey>> = if let Some(rids) =
-                        &rel_ids_out
-                    {
-                        let mut iter: Box<dyn Iterator<Item = EdgeKey>> =
-                            Box::new(std::iter::empty());
+                    let mut rows: Vec<Result<Row>> = Vec::new();
+
+                    if let Some(rids) = &rel_ids {
                         for rid in rids {
-                            iter = Box::new(iter.chain(snapshot.neighbors(src_iid, Some(*rid))));
+                            for edge in snapshot.neighbors(src_iid, Some(*rid)) {
+                                if path_alias_contains_edge(&row, path_alias.as_deref(), edge) {
+                                    continue;
+                                }
+                                if !row_matches_node_binding(&row, &dst_alias, edge.dst) {
+                                    continue;
+                                }
+                                if !node_matches_label_constraint(
+                                    snapshot,
+                                    edge.dst,
+                                    &dst_label_constraint,
+                                ) {
+                                    continue;
+                                }
+                                let mut new_row = row.clone();
+                                new_row = new_row.with(dst_alias.clone(), Value::NodeId(edge.dst));
+                                if let Some(ea) = &edge_alias {
+                                    new_row = new_row.with(ea.clone(), Value::EdgeKey(edge));
+                                }
+                                if let Some(pa) = &path_alias {
+                                    new_row.join_path(pa, edge.src, edge, edge.dst);
+                                }
+                                rows.push(Ok(new_row));
+                            }
+                            for edge in snapshot.incoming_neighbors_erased(src_iid, Some(*rid)) {
+                                if path_alias_contains_edge(&row, path_alias.as_deref(), edge) {
+                                    continue;
+                                }
+                                if edge.src == edge.dst {
+                                    continue;
+                                }
+                                if !row_matches_node_binding(&row, &dst_alias, edge.src) {
+                                    continue;
+                                }
+                                if !node_matches_label_constraint(
+                                    snapshot,
+                                    edge.src,
+                                    &dst_label_constraint,
+                                ) {
+                                    continue;
+                                }
+                                let mut new_row = row.clone();
+                                new_row = new_row.with(dst_alias.clone(), Value::NodeId(edge.src));
+                                if let Some(ea) = &edge_alias {
+                                    new_row = new_row.with(ea.clone(), Value::EdgeKey(edge));
+                                }
+                                if let Some(pa) = &path_alias {
+                                    new_row.join_path(pa, edge.dst, edge, edge.src);
+                                }
+                                rows.push(Ok(new_row));
+                            }
                         }
-                        iter
                     } else {
-                        Box::new(snapshot.neighbors(src_iid, None))
-                    };
-
-                    let dst_alias_inner = dst_alias_out.clone();
-                    let edge_alias_inner = edge_alias_out.clone();
-
-                    let mapped = neighbors.map(move |edge| {
-                        let mut new_row = row.clone();
-                        new_row = new_row.with(dst_alias_inner.clone(), Value::NodeId(edge.dst));
-                        if let Some(ea) = &edge_alias_inner {
-                            new_row = new_row.with(ea.clone(), Value::EdgeKey(edge));
+                        for edge in snapshot.neighbors(src_iid, None) {
+                            if path_alias_contains_edge(&row, path_alias.as_deref(), edge) {
+                                continue;
+                            }
+                            if !row_matches_node_binding(&row, &dst_alias, edge.dst) {
+                                continue;
+                            }
+                            if !node_matches_label_constraint(
+                                snapshot,
+                                edge.dst,
+                                &dst_label_constraint,
+                            ) {
+                                continue;
+                            }
+                            let mut new_row = row.clone();
+                            new_row = new_row.with(dst_alias.clone(), Value::NodeId(edge.dst));
+                            if let Some(ea) = &edge_alias {
+                                new_row = new_row.with(ea.clone(), Value::EdgeKey(edge));
+                            }
+                            if let Some(pa) = &path_alias {
+                                new_row.join_path(pa, edge.src, edge, edge.dst);
+                            }
+                            rows.push(Ok(new_row));
                         }
-                        Ok(new_row)
-                    });
-                    Box::new(mapped) as Box<dyn Iterator<Item = Result<Row>>>
-                }
-                Err(e) => {
-                    Box::new(std::iter::once(Err(e))) as Box<dyn Iterator<Item = Result<Row>>>
-                }
-            });
+                        for edge in snapshot.incoming_neighbors_erased(src_iid, None) {
+                            if path_alias_contains_edge(&row, path_alias.as_deref(), edge) {
+                                continue;
+                            }
+                            if edge.src == edge.dst {
+                                continue;
+                            }
+                            if !row_matches_node_binding(&row, &dst_alias, edge.src) {
+                                continue;
+                            }
+                            if !node_matches_label_constraint(
+                                snapshot,
+                                edge.src,
+                                &dst_label_constraint,
+                            ) {
+                                continue;
+                            }
+                            let mut new_row = row.clone();
+                            new_row = new_row.with(dst_alias.clone(), Value::NodeId(edge.src));
+                            if let Some(ea) = &edge_alias {
+                                new_row = new_row.with(ea.clone(), Value::EdgeKey(edge));
+                            }
+                            if let Some(pa) = &path_alias {
+                                new_row.join_path(pa, edge.dst, edge, edge.src);
+                            }
+                            rows.push(Ok(new_row));
+                        }
+                    }
 
-            let rows_in = rows;
-            // src_alias, dst_alias, edge_alias are still owned by this function scope (mostly),
-            // but were cloned for out_iter. Original vars can be moved into in_iter.
-            // Actually, `src_alias.clone()` above didn't consume `src_alias`.
-
-            let in_iter = rows_in.into_iter().map(Ok).flat_map(move |res| match res {
-                Ok(row) => {
-                    let node_val = row.get(&src_alias).cloned();
-                    let target_iid = match node_val {
-                        Some(Value::NodeId(id)) => id,
-                        _ => {
+                    if optional && rows.is_empty() {
+                        if !*src_prebound {
                             return Box::new(std::iter::empty())
                                 as Box<dyn Iterator<Item = Result<Row>>>;
                         }
-                    };
-
-                    let rel_ids_in = rel_ids.clone();
-                    let candidates: Box<dyn Iterator<Item = EdgeKey>> =
-                        if let Some(rids) = &rel_ids_in {
-                            let mut iter: Box<dyn Iterator<Item = EdgeKey>> =
-                                Box::new(std::iter::empty());
-                            for rid in rids {
-                                iter = Box::new(iter.chain(
-                                    snapshot.incoming_neighbors_erased(target_iid, Some(*rid)),
-                                ));
-                            }
-                            iter
-                        } else {
-                            snapshot.incoming_neighbors_erased(target_iid, None)
-                        };
-
-                    let dst_alias_inner = dst_alias.clone();
-                    let edge_alias_inner = edge_alias.clone();
-                    let path_alias_inner = path_alias.clone();
-
-                    let mapped = candidates.map(move |edge| {
-                        let mut new_row = row.clone();
-                        new_row = new_row.with(dst_alias_inner.clone(), Value::NodeId(edge.src));
-                        if let Some(ea) = &edge_alias_inner {
-                            new_row = new_row.with(ea.clone(), Value::EdgeKey(edge));
-                        }
-                        if let Some(pa) = &path_alias_inner {
-                            new_row.join_path(pa, edge.dst, edge, edge.src);
-                        }
-                        Ok(new_row)
-                    });
-                    Box::new(mapped) as Box<dyn Iterator<Item = Result<Row>>>
+                        let null_row = apply_optional_unbinds_row(row.clone(), &optional_unbind);
+                        Box::new(std::iter::once(Ok(null_row)))
+                            as Box<dyn Iterator<Item = Result<Row>>>
+                    } else {
+                        Box::new(rows.into_iter()) as Box<dyn Iterator<Item = Result<Row>>>
+                    }
                 }
                 Err(e) => {
                     Box::new(std::iter::once(Err(e))) as Box<dyn Iterator<Item = Result<Row>>>
                 }
             });
-
-            let combined = out_iter.chain(in_iter);
 
             if let Some(n) = limit {
-                PlanIterator::Dynamic(Box::new(combined.take(*n as usize)))
+                PlanIterator::Dynamic(Box::new(expanded.take(*n as usize)))
             } else {
-                PlanIterator::Dynamic(Box::new(combined))
+                PlanIterator::Dynamic(Box::new(expanded))
             }
+        }
+        Plan::MatchBoundRel {
+            input,
+            rel_alias,
+            src_alias,
+            dst_alias,
+            dst_labels,
+            src_prebound,
+            rels,
+            direction,
+            optional,
+            optional_unbind,
+            path_alias,
+        } => {
+            let rel_ids = if rels.is_empty() {
+                None
+            } else {
+                let mut ids = Vec::new();
+                for r in rels {
+                    if let Some(id) = snapshot.resolve_rel_type_id(r) {
+                        ids.push(id);
+                    }
+                }
+                Some(ids)
+            };
+            let dst_label_constraint = resolve_label_constraint(snapshot, dst_labels);
+
+            let input_iter = execute_plan(snapshot, input, params);
+            let rel_alias = rel_alias.clone();
+            let src_alias = src_alias.clone();
+            let dst_alias = dst_alias.clone();
+            let direction = direction.clone();
+            let optional = *optional;
+            let optional_unbind = optional_unbind.clone();
+            let path_alias = path_alias.clone();
+
+            PlanIterator::Dynamic(Box::new(input_iter.flat_map(move |res| match res {
+                Ok(row) => {
+                    let bound_edge = row.get_edge(&rel_alias);
+                    let mut out: Vec<Result<Row>> = Vec::new();
+
+                    if let Some(edge) = bound_edge {
+                        if rel_ids
+                            .as_ref()
+                            .is_none_or(|ids| ids.iter().any(|id| *id == edge.rel))
+                        {
+                            let orientations: Vec<(InternalNodeId, InternalNodeId)> =
+                                match direction {
+                                    RelationshipDirection::LeftToRight => {
+                                        vec![(edge.src, edge.dst)]
+                                    }
+                                    RelationshipDirection::RightToLeft => {
+                                        vec![(edge.dst, edge.src)]
+                                    }
+                                    RelationshipDirection::Undirected => {
+                                        if edge.src == edge.dst {
+                                            vec![(edge.src, edge.dst)]
+                                        } else {
+                                            vec![(edge.src, edge.dst), (edge.dst, edge.src)]
+                                        }
+                                    }
+                                };
+
+                            for (src_id, dst_id) in orientations {
+                                let src_ok = match row.get(&src_alias) {
+                                    Some(Value::NodeId(id)) => *id == src_id,
+                                    Some(Value::Null) => false,
+                                    Some(_) => false,
+                                    None => true,
+                                };
+                                if !src_ok {
+                                    continue;
+                                }
+
+                                let dst_ok = match row.get(&dst_alias) {
+                                    Some(Value::NodeId(id)) => *id == dst_id,
+                                    Some(Value::Null) => false,
+                                    Some(_) => false,
+                                    None => true,
+                                };
+                                if !dst_ok {
+                                    continue;
+                                }
+                                if !node_matches_label_constraint(
+                                    snapshot,
+                                    dst_id,
+                                    &dst_label_constraint,
+                                ) {
+                                    continue;
+                                }
+
+                                let mut new_row = row.clone();
+                                new_row = new_row.with(src_alias.clone(), Value::NodeId(src_id));
+                                new_row = new_row.with(dst_alias.clone(), Value::NodeId(dst_id));
+                                if let Some(pa) = &path_alias {
+                                    new_row.join_path(pa, src_id, edge, dst_id);
+                                }
+                                out.push(Ok(new_row));
+                            }
+                        }
+                    }
+
+                    if out.is_empty() && optional {
+                        if !*src_prebound {
+                            return Box::new(std::iter::empty())
+                                as Box<dyn Iterator<Item = Result<Row>>>;
+                        }
+                        let null_row = apply_optional_unbinds_row(row.clone(), &optional_unbind);
+                        out.push(Ok(null_row));
+                    }
+
+                    Box::new(out.into_iter()) as Box<dyn Iterator<Item = Result<Row>>>
+                }
+                Err(e) => {
+                    Box::new(std::iter::once(Err(e))) as Box<dyn Iterator<Item = Result<Row>>>
+                }
+            })))
         }
         Plan::Filter { input, predicate } => {
             let input_iter = execute_plan(snapshot, input, params);
@@ -1339,6 +1667,40 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                 predicate,
                 params,
             })
+        }
+        Plan::OptionalWhereFixup {
+            outer,
+            filtered,
+            null_aliases,
+        } => {
+            let outer_rows: Vec<Row> = match execute_plan(snapshot, outer, params).collect() {
+                Ok(rows) => rows,
+                Err(err) => return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err)))),
+            };
+            let filtered_rows: Vec<Row> = match execute_plan(snapshot, filtered, params).collect() {
+                Ok(rows) => rows,
+                Err(err) => return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err)))),
+            };
+
+            let mut out: Vec<Result<Row>> = Vec::new();
+            for outer_row in outer_rows {
+                let mut matched = false;
+                for row in &filtered_rows {
+                    if row_contains_all_bindings(row, &outer_row) {
+                        out.push(Ok(row.clone()));
+                        matched = true;
+                    }
+                }
+                if !matched {
+                    let mut null_row = outer_row;
+                    for alias in null_aliases {
+                        null_row = null_row.with(alias.clone(), Value::Null);
+                    }
+                    out.push(Ok(null_row));
+                }
+            }
+
+            PlanIterator::Dynamic(Box::new(out.into_iter()))
         }
         Plan::Project { input, projections } => {
             let input_iter = execute_plan(snapshot, input, params);
@@ -1400,17 +1762,15 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
 
             sortable.sort_by(|a, b| {
                 for ((val_a, dir_a), (val_b, _)) in a.1.iter().zip(b.1.iter()) {
-                    match val_a.partial_cmp(val_b) {
-                        Some(std::cmp::Ordering::Equal) => continue,
-                        Some(order) => {
-                            return if *dir_a == Direction::Ascending {
-                                order
-                            } else {
-                                order.reverse()
-                            };
-                        }
-                        None => return std::cmp::Ordering::Equal,
+                    let order = crate::evaluator::order_compare(val_a, val_b);
+                    if order == std::cmp::Ordering::Equal {
+                        continue;
                     }
+                    return if *dir_a == Direction::Ascending {
+                        order
+                    } else {
+                        order.reverse()
+                    };
                 }
                 std::cmp::Ordering::Equal
             });
@@ -1620,6 +1980,10 @@ pub fn execute_write<S: GraphSnapshot>(
         | Plan::Unwind { input, .. }
         | Plan::Aggregate { input, .. }
         | Plan::ProcedureCall { input, .. } => execute_write(input, snapshot, txn, params),
+        Plan::OptionalWhereFixup {
+            outer, filtered, ..
+        } => execute_write(outer, snapshot, txn, params)
+            .or_else(|_| execute_write(filtered, snapshot, txn, params)),
         Plan::IndexSeek { fallback, .. } => execute_write(fallback, snapshot, txn, params),
         Plan::MatchOut { input, .. }
         | Plan::MatchIn { input, .. }
@@ -1633,6 +1997,7 @@ pub fn execute_write<S: GraphSnapshot>(
                 ))
             }
         }
+        Plan::MatchBoundRel { input, .. } => execute_write(input, snapshot, txn, params),
         Plan::Apply {
             input, subquery, ..
         } => execute_write(input, snapshot, txn, params)
@@ -1648,6 +2013,352 @@ pub fn execute_write<S: GraphSnapshot>(
     }
 }
 
+pub fn execute_write_with_rows<S: GraphSnapshot>(
+    plan: &Plan,
+    snapshot: &S,
+    txn: &mut dyn WriteableGraph,
+    params: &crate::query_api::Params,
+) -> Result<(u32, Vec<Row>)> {
+    match plan {
+        Plan::Create { .. } | Plan::Delete { .. } => {
+            execute_create_write_rows(plan, snapshot, txn, params)
+        }
+        Plan::SetProperty { input, items } => {
+            let (prefix_mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
+            let values_plan = Plan::Values { rows: rows.clone() };
+            let updated = execute_set(snapshot, &values_plan, txn, items, params)?;
+            Ok((prefix_mods + updated, rows))
+        }
+        Plan::RemoveProperty { input, items } => {
+            let (prefix_mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
+            let values_plan = Plan::Values { rows: rows.clone() };
+            let removed = execute_remove(snapshot, &values_plan, txn, items, params)?;
+            Ok((prefix_mods + removed, rows))
+        }
+        Plan::Foreach {
+            input,
+            variable,
+            list,
+            sub_plan,
+        } => {
+            let (prefix_mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
+            let values_plan = Plan::Values { rows: rows.clone() };
+            let changed = execute_foreach(
+                snapshot,
+                &values_plan,
+                txn,
+                variable,
+                list,
+                sub_plan,
+                params,
+            )?;
+            Ok((prefix_mods + changed, rows))
+        }
+        Plan::Filter { input, predicate } => {
+            let (mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
+            let staged = Plan::Filter {
+                input: Box::new(Plan::Values { rows }),
+                predicate: predicate.clone(),
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::Project { input, projections } => {
+            let (mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
+            let staged = Plan::Project {
+                input: Box::new(Plan::Values { rows }),
+                projections: projections.clone(),
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::Aggregate {
+            input,
+            group_by,
+            aggregates,
+        } => {
+            let (mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
+            let staged = Plan::Aggregate {
+                input: Box::new(Plan::Values { rows }),
+                group_by: group_by.clone(),
+                aggregates: aggregates.clone(),
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::OrderBy { input, items } => {
+            let (mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
+            let staged = Plan::OrderBy {
+                input: Box::new(Plan::Values { rows }),
+                items: items.clone(),
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::Skip { input, skip } => {
+            let (mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
+            let staged = Plan::Skip {
+                input: Box::new(Plan::Values { rows }),
+                skip: *skip,
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::Limit { input, limit } => {
+            let (mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
+            let staged = Plan::Limit {
+                input: Box::new(Plan::Values { rows }),
+                limit: *limit,
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::Distinct { input } => {
+            let (mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
+            let staged = Plan::Distinct {
+                input: Box::new(Plan::Values { rows }),
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::Unwind {
+            input,
+            expression,
+            alias,
+        } => {
+            let (mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
+            let staged = Plan::Unwind {
+                input: Box::new(Plan::Values { rows }),
+                expression: expression.clone(),
+                alias: alias.clone(),
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::ProcedureCall {
+            input,
+            name,
+            args,
+            yields,
+        } => {
+            let (mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
+            let staged = Plan::ProcedureCall {
+                input: Box::new(Plan::Values { rows }),
+                name: name.clone(),
+                args: args.clone(),
+                yields: yields.clone(),
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::MatchOut {
+            input,
+            src_alias,
+            rels,
+            edge_alias,
+            dst_alias,
+            dst_labels,
+            src_prebound,
+            limit,
+            project,
+            project_external,
+            optional,
+            optional_unbind,
+            path_alias,
+        } => {
+            if let Some(inner) = input {
+                let (mods, rows) = execute_write_with_rows(inner, snapshot, txn, params)?;
+                let staged = Plan::MatchOut {
+                    input: Some(Box::new(Plan::Values { rows })),
+                    src_alias: src_alias.clone(),
+                    rels: rels.clone(),
+                    edge_alias: edge_alias.clone(),
+                    dst_alias: dst_alias.clone(),
+                    dst_labels: dst_labels.clone(),
+                    src_prebound: *src_prebound,
+                    limit: *limit,
+                    project: project.clone(),
+                    project_external: *project_external,
+                    optional: *optional,
+                    optional_unbind: optional_unbind.clone(),
+                    path_alias: path_alias.clone(),
+                };
+                let out_rows =
+                    execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+                Ok((mods, out_rows))
+            } else {
+                let out_rows = execute_plan(snapshot, plan, params).collect::<Result<Vec<_>>>()?;
+                Ok((0, out_rows))
+            }
+        }
+        Plan::MatchOutVarLen {
+            input,
+            src_alias,
+            rels,
+            edge_alias,
+            dst_alias,
+            dst_labels,
+            src_prebound,
+            direction,
+            min_hops,
+            max_hops,
+            limit,
+            project,
+            project_external,
+            optional,
+            optional_unbind,
+            path_alias,
+        } => {
+            if let Some(inner) = input {
+                let (mods, rows) = execute_write_with_rows(inner, snapshot, txn, params)?;
+                let staged = Plan::MatchOutVarLen {
+                    input: Some(Box::new(Plan::Values { rows })),
+                    src_alias: src_alias.clone(),
+                    rels: rels.clone(),
+                    edge_alias: edge_alias.clone(),
+                    dst_alias: dst_alias.clone(),
+                    dst_labels: dst_labels.clone(),
+                    src_prebound: *src_prebound,
+                    direction: direction.clone(),
+                    min_hops: *min_hops,
+                    max_hops: *max_hops,
+                    limit: *limit,
+                    project: project.clone(),
+                    project_external: *project_external,
+                    optional: *optional,
+                    optional_unbind: optional_unbind.clone(),
+                    path_alias: path_alias.clone(),
+                };
+                let out_rows =
+                    execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+                Ok((mods, out_rows))
+            } else {
+                let out_rows = execute_plan(snapshot, plan, params).collect::<Result<Vec<_>>>()?;
+                Ok((0, out_rows))
+            }
+        }
+        Plan::MatchIn {
+            input,
+            src_alias,
+            rels,
+            edge_alias,
+            dst_alias,
+            dst_labels,
+            src_prebound,
+            limit,
+            optional,
+            optional_unbind,
+            path_alias,
+        } => {
+            if let Some(inner) = input {
+                let (mods, rows) = execute_write_with_rows(inner, snapshot, txn, params)?;
+                let staged = Plan::MatchIn {
+                    input: Some(Box::new(Plan::Values { rows })),
+                    src_alias: src_alias.clone(),
+                    rels: rels.clone(),
+                    edge_alias: edge_alias.clone(),
+                    dst_alias: dst_alias.clone(),
+                    dst_labels: dst_labels.clone(),
+                    src_prebound: *src_prebound,
+                    limit: *limit,
+                    optional: *optional,
+                    optional_unbind: optional_unbind.clone(),
+                    path_alias: path_alias.clone(),
+                };
+                let out_rows =
+                    execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+                Ok((mods, out_rows))
+            } else {
+                let out_rows = execute_plan(snapshot, plan, params).collect::<Result<Vec<_>>>()?;
+                Ok((0, out_rows))
+            }
+        }
+        Plan::MatchUndirected {
+            input,
+            src_alias,
+            rels,
+            edge_alias,
+            dst_alias,
+            dst_labels,
+            src_prebound,
+            limit,
+            optional,
+            optional_unbind,
+            path_alias,
+        } => {
+            if let Some(inner) = input {
+                let (mods, rows) = execute_write_with_rows(inner, snapshot, txn, params)?;
+                let staged = Plan::MatchUndirected {
+                    input: Some(Box::new(Plan::Values { rows })),
+                    src_alias: src_alias.clone(),
+                    rels: rels.clone(),
+                    edge_alias: edge_alias.clone(),
+                    dst_alias: dst_alias.clone(),
+                    dst_labels: dst_labels.clone(),
+                    src_prebound: *src_prebound,
+                    limit: *limit,
+                    optional: *optional,
+                    optional_unbind: optional_unbind.clone(),
+                    path_alias: path_alias.clone(),
+                };
+                let out_rows =
+                    execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+                Ok((mods, out_rows))
+            } else {
+                let out_rows = execute_plan(snapshot, plan, params).collect::<Result<Vec<_>>>()?;
+                Ok((0, out_rows))
+            }
+        }
+        Plan::MatchBoundRel {
+            input,
+            rel_alias,
+            src_alias,
+            dst_alias,
+            dst_labels,
+            src_prebound,
+            rels,
+            direction,
+            optional,
+            optional_unbind,
+            path_alias,
+        } => {
+            let (mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
+            let staged = Plan::MatchBoundRel {
+                input: Box::new(Plan::Values { rows }),
+                rel_alias: rel_alias.clone(),
+                src_alias: src_alias.clone(),
+                dst_alias: dst_alias.clone(),
+                dst_labels: dst_labels.clone(),
+                src_prebound: *src_prebound,
+                rels: rels.clone(),
+                direction: direction.clone(),
+                optional: *optional,
+                optional_unbind: optional_unbind.clone(),
+                path_alias: path_alias.clone(),
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::Apply {
+            input,
+            subquery,
+            alias,
+        } => {
+            let (mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
+            let staged = Plan::Apply {
+                input: Box::new(Plan::Values { rows }),
+                subquery: subquery.clone(),
+                alias: alias.clone(),
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        _ => {
+            let out_rows = execute_plan(snapshot, plan, params).collect::<Result<Vec<_>>>()?;
+            Ok((0, out_rows))
+        }
+    }
+}
 /// Find the CREATE part of a plan (for MERGE support)
 fn find_create_plan(plan: &Plan) -> Option<&Plan> {
     match plan {
@@ -1664,6 +2375,9 @@ fn find_create_plan(plan: &Plan) -> Option<&Plan> {
         | Plan::SetProperty { input, .. }
         | Plan::RemoveProperty { input, .. }
         | Plan::Foreach { input, .. } => find_create_plan(input),
+        Plan::OptionalWhereFixup {
+            outer, filtered, ..
+        } => find_create_plan(filtered).or(find_create_plan(outer)),
         Plan::CartesianProduct { left, right } => {
             find_create_plan(left).or(find_create_plan(right))
         }
@@ -1676,6 +2390,7 @@ fn find_create_plan(plan: &Plan) -> Option<&Plan> {
         | Plan::MatchIn { input, .. }
         | Plan::MatchUndirected { input, .. }
         | Plan::MatchOutVarLen { input, .. } => input.as_deref().and_then(find_create_plan),
+        Plan::MatchBoundRel { input, .. } => find_create_plan(input),
         Plan::IndexSeek { fallback, .. } => find_create_plan(fallback),
         Plan::NodeScan { .. } | Plan::Values { .. } | Plan::ReturnOne => None,
     }
@@ -1812,20 +2527,24 @@ pub(crate) fn execute_merge<S: GraphSnapshot>(
 
     fn create_node(
         txn: &mut dyn WriteableGraph,
-        label: &Option<String>,
+        labels: &[String],
         props: &[(String, PropertyValue)],
         created_count: &mut u32,
     ) -> Result<InternalNodeId> {
         let external_id = ExternalId::from(
             *created_count as u64 + chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64,
         );
-        let label_id = if let Some(l) = label {
+        let label_id = if let Some(l) = labels.first() {
             txn.get_or_create_label_id(l)?
         } else {
-            0
+            UNLABELED_LABEL_ID
         };
 
         let iid = txn.create_node(external_id, label_id)?;
+        for extra_label in labels.iter().skip(1) {
+            let extra_label_id = txn.get_or_create_label_id(extra_label)?;
+            txn.add_node_label(iid, extra_label_id)?;
+        }
         *created_count += 1;
         for (k, v) in props {
             txn.set_node_property(iid, k.clone(), v.clone())?;
@@ -1841,7 +2560,8 @@ pub(crate) fn execute_merge<S: GraphSnapshot>(
         params: &crate::query_api::Params,
         created_count: &mut u32,
     ) -> Result<(InternalNodeId, bool)> {
-        let label = node.labels.first().cloned();
+        let labels = node.labels.clone();
+        let label = labels.first().cloned();
         // MERGE can operate with or without properties
         let props = node.properties.as_ref();
         let expected = if let Some(props) = props {
@@ -1857,7 +2577,7 @@ pub(crate) fn execute_merge<S: GraphSnapshot>(
             return Ok((iid, false));
         }
 
-        let iid = create_node(txn, &label, &expected, created_count)?;
+        let iid = create_node(txn, &labels, &expected, created_count)?;
         overlay.push(OverlayNode {
             label,
             props: expected,
@@ -2012,6 +2732,7 @@ pub(crate) fn execute_merge<S: GraphSnapshot>(
 pub trait WriteableGraph {
     fn create_node(&mut self, external_id: ExternalId, label_id: LabelId)
     -> Result<InternalNodeId>;
+    fn add_node_label(&mut self, node: InternalNodeId, label_id: LabelId) -> Result<()>;
     fn create_edge(
         &mut self,
         src: InternalNodeId,
@@ -2068,6 +2789,11 @@ mod txn_engine_impl {
             label_id: LabelId,
         ) -> Result<InternalNodeId> {
             EngineWriteTxn::create_node(self, external_id, label_id)
+                .map_err(|e| Error::Other(e.to_string()))
+        }
+
+        fn add_node_label(&mut self, node: InternalNodeId, label_id: LabelId) -> Result<()> {
+            EngineWriteTxn::add_node_label(self, node, label_id)
                 .map_err(|e| Error::Other(e.to_string()))
         }
 
@@ -2186,16 +2912,16 @@ fn execute_foreach<S: GraphSnapshot>(
     Ok(total_mods)
 }
 
-fn execute_create<S: GraphSnapshot>(
+fn execute_create_from_rows<S: GraphSnapshot>(
     snapshot: &S,
-    input: &Plan,
+    input_rows: Vec<Row>,
     txn: &mut dyn WriteableGraph,
     pattern: &Pattern,
     params: &crate::query_api::Params,
-) -> Result<u32> {
+) -> Result<(u32, Vec<Row>)> {
     let mut created_count = 0u32;
+    let mut output_rows = Vec::with_capacity(input_rows.len());
 
-    // First pass: collect all node patterns and relationship patterns with their indices
     let mut node_patterns: Vec<(usize, &crate::ast::NodePattern)> = Vec::new();
     let mut rel_patterns: Vec<(usize, &crate::ast::RelationshipPattern)> = Vec::new();
 
@@ -2206,77 +2932,286 @@ fn execute_create<S: GraphSnapshot>(
         }
     }
 
-    // Iterate over input rows
-    for row in execute_plan(snapshot, input, params) {
-        let row = row?;
-
-        // Scope: IDs created in this row's context
-        // Maps pattern index -> InternalNodeId
+    for mut row in input_rows {
         let mut row_node_ids: std::collections::HashMap<usize, InternalNodeId> =
             std::collections::HashMap::new();
 
-        // Create all nodes first
         for (idx, node_pat) in &node_patterns {
+            if let Some(var) = &node_pat.variable
+                && let Some(existing_iid) = row.get_node(var)
+            {
+                row_node_ids.insert(*idx, existing_iid);
+                continue;
+            }
+
             let external_id = ExternalId::from(
                 created_count as u64 + chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64,
             );
 
-            // Resolve or create label
             let label_id = if let Some(label) = node_pat.labels.first() {
                 txn.get_or_create_label_id(label)?
             } else {
-                0
+                UNLABELED_LABEL_ID
             };
 
             let node_id = txn.create_node(external_id, label_id)?;
+            for extra_label in node_pat.labels.iter().skip(1) {
+                let extra_label_id = txn.get_or_create_label_id(extra_label)?;
+                txn.add_node_label(node_id, extra_label_id)?;
+            }
             created_count += 1;
             row_node_ids.insert(*idx, node_id);
 
-            // Set properties if any
+            if let Some(var) = &node_pat.variable {
+                row = row.with(var.clone(), Value::NodeId(node_id));
+            }
+
+            let mut node_props = std::collections::BTreeMap::new();
             if let Some(props) = &node_pat.properties {
                 for prop in &props.properties {
-                    // Use evaluate_expression_value to support variables
                     let val = evaluate_expression_value(&prop.value, &row, snapshot, params);
                     let prop_val = convert_executor_value_to_property(&val)?;
                     txn.set_node_property(node_id, prop.key.clone(), prop_val)?;
+                    node_props.insert(prop.key.clone(), val);
                 }
+            }
+
+            if let Some(var) = &node_pat.variable {
+                row = row.with(
+                    var.clone(),
+                    Value::Node(NodeValue {
+                        id: node_id,
+                        labels: node_pat.labels.clone(),
+                        properties: node_props,
+                    }),
+                );
             }
         }
 
-        // Now create all relationships
         for (idx, rel_pat) in &rel_patterns {
             let rel_type_name = rel_pat
                 .types
                 .first()
                 .ok_or_else(|| Error::Other("CREATE relationship requires a type".into()))?;
-
             let rel_type = txn.get_or_create_rel_type_id(rel_type_name)?;
 
-            // Find src and dst
-            let src_id = *row_node_ids
-                .get(&(idx - 1))
-                .ok_or(Error::Other("CREATE relationship src node missing".into()))?;
+            let left_node_id = if let Some(src) = row_node_ids.get(&(idx - 1)).copied() {
+                src
+            } else if let Some(src_var) = pattern.elements.get(idx - 1).and_then(|el| match el {
+                PathElement::Node(n) => n.variable.as_ref(),
+                _ => None,
+            }) {
+                row.get_node(src_var)
+                    .ok_or(Error::Other("CREATE relationship src node missing".into()))?
+            } else {
+                return Err(Error::Other("CREATE relationship src node missing".into()));
+            };
 
-            let dst_id = *row_node_ids
-                .get(&(idx + 1))
-                .ok_or(Error::Other("CREATE relationship dst node missing".into()))?;
+            let right_node_id = if let Some(dst) = row_node_ids.get(&(idx + 1)).copied() {
+                dst
+            } else if let Some(dst_var) = pattern.elements.get(idx + 1).and_then(|el| match el {
+                PathElement::Node(n) => n.variable.as_ref(),
+                _ => None,
+            }) {
+                row.get_node(dst_var)
+                    .ok_or(Error::Other("CREATE relationship dst node missing".into()))?
+            } else {
+                return Err(Error::Other("CREATE relationship dst node missing".into()));
+            };
 
-            // Create the edge
+            let (src_id, dst_id) = match rel_pat.direction {
+                crate::ast::RelationshipDirection::LeftToRight
+                | crate::ast::RelationshipDirection::Undirected => (left_node_id, right_node_id),
+                crate::ast::RelationshipDirection::RightToLeft => (right_node_id, left_node_id),
+            };
+
             txn.create_edge(src_id, rel_type, dst_id)?;
             created_count += 1;
 
-            // Set properties if any
+            let edge_key = EdgeKey {
+                src: src_id,
+                rel: rel_type,
+                dst: dst_id,
+            };
+
+            if let Some(var) = &rel_pat.variable {
+                row = row.with(var.clone(), Value::EdgeKey(edge_key));
+            }
+
+            let mut rel_props = std::collections::BTreeMap::new();
             if let Some(props) = &rel_pat.properties {
                 for prop in &props.properties {
                     let val = evaluate_expression_value(&prop.value, &row, snapshot, params);
                     let prop_val = convert_executor_value_to_property(&val)?;
                     txn.set_edge_property(src_id, rel_type, dst_id, prop.key.clone(), prop_val)?;
+                    rel_props.insert(prop.key.clone(), val);
+                }
+            }
+
+            if let Some(var) = &rel_pat.variable {
+                row = row.with(
+                    var.clone(),
+                    Value::Relationship(RelationshipValue {
+                        key: edge_key,
+                        rel_type: rel_type_name.clone(),
+                        properties: rel_props,
+                    }),
+                );
+            }
+        }
+
+        output_rows.push(row);
+    }
+
+    Ok((created_count, output_rows))
+}
+
+fn execute_delete_on_rows<S: GraphSnapshot>(
+    snapshot: &S,
+    rows: &[Row],
+    txn: &mut dyn WriteableGraph,
+    detach: bool,
+    expressions: &[Expression],
+    _params: &crate::query_api::Params,
+) -> Result<u32> {
+    const MAX_DELETE_TARGETS: usize = 100_000;
+
+    let mut deleted_count = 0u32;
+    let mut nodes_to_delete: Vec<InternalNodeId> = Vec::new();
+    let mut seen_nodes: std::collections::HashSet<InternalNodeId> =
+        std::collections::HashSet::new();
+    let mut edges_to_delete: Vec<EdgeKey> = Vec::new();
+    let mut seen_edges: std::collections::HashSet<EdgeKey> = std::collections::HashSet::new();
+
+    for row in rows {
+        for expr in expressions {
+            match expr {
+                Expression::Variable(var_name) => {
+                    if let Some(node_id) = row.get_node(var_name) {
+                        if seen_nodes.insert(node_id) {
+                            nodes_to_delete.push(node_id);
+                        }
+                    } else if let Some(edge) = row.get_edge(var_name) {
+                        if seen_edges.insert(edge) {
+                            edges_to_delete.push(edge);
+                        }
+                    } else {
+                        return Err(Error::Other(format!(
+                            "Variable {} not found in row",
+                            var_name
+                        )));
+                    }
+
+                    if nodes_to_delete.len() + edges_to_delete.len() > MAX_DELETE_TARGETS {
+                        return Err(Error::Other(format!(
+                            "DELETE target limit exceeded ({MAX_DELETE_TARGETS}); batch your deletes"
+                        )));
+                    }
+                }
+                Expression::PropertyAccess(_pa) => {
+                    return Err(Error::NotImplemented(
+                        "DELETE property not implemented in v2 M3",
+                    ));
+                }
+                _ => {
+                    return Err(Error::Other(
+                        "DELETE only supports variable expressions in v2 M3".to_string(),
+                    ));
                 }
             }
         }
     }
 
-    Ok(created_count)
+    if detach {
+        for &node_id in &nodes_to_delete {
+            for edge in snapshot.neighbors(node_id, None) {
+                txn.tombstone_edge(edge.src, edge.rel, edge.dst)?;
+                deleted_count += 1;
+            }
+        }
+    }
+
+    for edge in edges_to_delete {
+        txn.tombstone_edge(edge.src, edge.rel, edge.dst)?;
+        deleted_count += 1;
+    }
+
+    for node_id in nodes_to_delete {
+        txn.tombstone_node(node_id)?;
+        deleted_count += 1;
+    }
+
+    Ok(deleted_count)
+}
+
+fn execute_create_write_rows<S: GraphSnapshot>(
+    plan: &Plan,
+    snapshot: &S,
+    txn: &mut dyn WriteableGraph,
+    params: &crate::query_api::Params,
+) -> Result<(u32, Vec<Row>)> {
+    match plan {
+        Plan::Create { input, pattern } => {
+            let (prefix_mods, input_rows) =
+                execute_create_write_rows(input, snapshot, txn, params)?;
+            let (created, out_rows) =
+                execute_create_from_rows(snapshot, input_rows, txn, pattern, params)?;
+            Ok((prefix_mods + created, out_rows))
+        }
+        Plan::Delete {
+            input,
+            detach,
+            expressions,
+        } => {
+            let (prefix_mods, rows) = execute_create_write_rows(input, snapshot, txn, params)?;
+            let deleted =
+                execute_delete_on_rows(snapshot, &rows, txn, *detach, expressions, params)?;
+            Ok((prefix_mods + deleted, rows))
+        }
+        Plan::Values { rows } => Ok((0, rows.clone())),
+        Plan::ReturnOne => Ok((0, vec![Row::default()])),
+        _ => {
+            let rows: Vec<Row> =
+                execute_plan(snapshot, plan, params).collect::<Result<Vec<_>>>()?;
+            Ok((0, rows))
+        }
+    }
+}
+
+fn execute_create<S: GraphSnapshot>(
+    snapshot: &S,
+    input: &Plan,
+    txn: &mut dyn WriteableGraph,
+    pattern: &Pattern,
+    params: &crate::query_api::Params,
+) -> Result<u32> {
+    let mut prefix_mod_count = 0u32;
+    let mut input_rows = Vec::new();
+
+    let mut input_iter = execute_plan(snapshot, input, params);
+    match input_iter.next() {
+        Some(Ok(row)) => {
+            input_rows.push(row);
+            for row in input_iter {
+                input_rows.push(row?);
+            }
+        }
+        Some(Err(err)) => {
+            let msg = err.to_string();
+            if msg.contains("must be executed via execute_write") {
+                let (mods, rows) = execute_create_write_rows(input, snapshot, txn, params)?;
+                prefix_mod_count = mods;
+                input_rows = rows;
+            } else {
+                return Err(err);
+            }
+        }
+        None => {}
+    }
+
+    let (created_count, _output_rows) =
+        execute_create_from_rows(snapshot, input_rows, txn, pattern, params)?;
+    Ok(created_count + prefix_mod_count)
 }
 
 fn execute_delete<S: GraphSnapshot>(
@@ -2519,6 +3454,7 @@ fn inject_rows(plan: &mut Plan, rows: Vec<Row>) {
         | Plan::Filter { input, .. }
         | Plan::Project { input, .. }
         | Plan::Limit { input, .. }
+        | Plan::OptionalWhereFixup { outer: input, .. }
         | Plan::Skip { input, .. }
         | Plan::OrderBy { input, .. }
         | Plan::Distinct { input }
@@ -2647,6 +3583,7 @@ type VarLenStackItem = (
     u32,
     Option<EdgeKey>,
     Option<PathValue>,
+    Vec<EdgeKey>,
 );
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -2658,6 +3595,7 @@ struct MatchOutVarLenIter<'a, S: GraphSnapshot + 'a> {
     rels: Option<Vec<RelTypeId>>,
     edge_alias: Option<&'a str>,
     dst_alias: &'a str,
+    dst_label_constraint: LabelConstraint,
     direction: RelationshipDirection,
     min_hops: u32,
     max_hops: Option<u32>,
@@ -2668,6 +3606,8 @@ struct MatchOutVarLenIter<'a, S: GraphSnapshot + 'a> {
     emitted: u32,
     yielded_any: bool,
     optional: bool,
+    emit_on_miss: bool,
+    optional_unbind: Vec<String>,
     path_alias: Option<&'a str>,
 }
 
@@ -2680,11 +3620,14 @@ impl<'a, S: GraphSnapshot + 'a> MatchOutVarLenIter<'a, S> {
         rels: Option<Vec<RelTypeId>>,
         edge_alias: Option<&'a str>,
         dst_alias: &'a str,
+        dst_label_constraint: LabelConstraint,
         direction: RelationshipDirection,
         min_hops: u32,
         max_hops: Option<u32>,
         limit: Option<u32>,
         optional: bool,
+        emit_on_miss: bool,
+        optional_unbind: Vec<String>,
         path_alias: Option<&'a str>,
     ) -> Self {
         let node_iter = if input.is_none() {
@@ -2701,6 +3644,7 @@ impl<'a, S: GraphSnapshot + 'a> MatchOutVarLenIter<'a, S> {
             rels,
             edge_alias,
             dst_alias,
+            dst_label_constraint,
             direction,
             min_hops,
             max_hops,
@@ -2710,28 +3654,36 @@ impl<'a, S: GraphSnapshot + 'a> MatchOutVarLenIter<'a, S> {
             emitted: 0,
             yielded_any: false,
             optional,
+            emit_on_miss,
+            optional_unbind,
             path_alias,
         }
     }
 
     /// Start DFS from a node
     fn start_dfs(&mut self, start_node: InternalNodeId) {
-        let initial_path = if let Some(alias) = self.path_alias
+        let (initial_path, initial_used_edges) = if let Some(alias) = self.path_alias
             && let Some(row) = &self.cur_row
         {
             match row.get(alias) {
-                Some(Value::Path(p)) => Some(p.clone()),
-                _ => None,
+                Some(Value::Path(p)) => (Some(p.clone()), p.edges.clone()),
+                _ => (None, Vec::new()),
             }
         } else {
-            None
+            (None, Vec::new())
         };
 
         // If it's a new path (not continuation), initialize it with the first node.
         // Actually, join_path will do that if we pass None initial_path.
         // But for DFS stack, we need to hold it.
-        self.stack
-            .push((start_node, start_node, 0, None, initial_path));
+        self.stack.push((
+            start_node,
+            start_node,
+            0,
+            None,
+            initial_path,
+            initial_used_edges,
+        ));
     }
 }
 
@@ -2750,8 +3702,14 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
 
         loop {
             // 1. Process Stack (DFS)
-            if let Some((start_node, current_node, depth, incoming_edge, current_path)) =
-                self.stack.pop()
+            if let Some((
+                start_node,
+                current_node,
+                depth,
+                incoming_edge,
+                current_path,
+                used_edges,
+            )) = self.stack.pop()
             {
                 // Expand
                 if depth < max_hops {
@@ -2759,6 +3717,9 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
                         |edge: EdgeKey,
                          next_node: InternalNodeId,
                          stack: &mut Vec<VarLenStackItem>| {
+                            if used_edges.contains(&edge) {
+                                return;
+                            }
                             let mut next_path = current_path.clone();
                             if self.path_alias.is_some() {
                                 if let Some(p) = &mut next_path {
@@ -2771,7 +3732,16 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
                                     });
                                 }
                             }
-                            stack.push((start_node, next_node, depth + 1, Some(edge), next_path));
+                            let mut next_used = used_edges.clone();
+                            next_used.push(edge);
+                            stack.push((
+                                start_node,
+                                next_node,
+                                depth + 1,
+                                Some(edge),
+                                next_path,
+                                next_used,
+                            ));
                         };
 
                     match (&self.direction, self.rels.as_ref()) {
@@ -2794,6 +3764,9 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
                                     .snapshot
                                     .incoming_neighbors_erased(current_node, Some(*rel))
                                 {
+                                    if edge.src == edge.dst {
+                                        continue;
+                                    }
                                     push_edge(edge, edge.src, &mut self.stack);
                                 }
                             }
@@ -2801,6 +3774,9 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
                         (RelationshipDirection::RightToLeft, None) => {
                             for edge in self.snapshot.incoming_neighbors_erased(current_node, None)
                             {
+                                if edge.src == edge.dst {
+                                    continue;
+                                }
                                 push_edge(edge, edge.src, &mut self.stack);
                             }
                         }
@@ -2814,6 +3790,9 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
                                     .snapshot
                                     .incoming_neighbors_erased(current_node, Some(*rel))
                                 {
+                                    if edge.src == edge.dst {
+                                        continue;
+                                    }
                                     push_edge(edge, edge.src, &mut self.stack);
                                 }
                             }
@@ -2824,6 +3803,9 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
                             }
                             for edge in self.snapshot.incoming_neighbors_erased(current_node, None)
                             {
+                                if edge.src == edge.dst {
+                                    continue;
+                                }
                                 push_edge(edge, edge.src, &mut self.stack);
                             }
                         }
@@ -2832,7 +3814,19 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
 
                 // Emit check
                 if depth >= self.min_hops {
-                    let mut row = self.cur_row.clone().unwrap_or_default();
+                    let base_row = self.cur_row.clone().unwrap_or_default();
+                    if !row_matches_node_binding(&base_row, self.dst_alias, current_node) {
+                        continue;
+                    }
+                    if !node_matches_label_constraint(
+                        self.snapshot,
+                        current_node,
+                        &self.dst_label_constraint,
+                    ) {
+                        continue;
+                    }
+
+                    let mut row = base_row;
                     row = row.with(self.src_alias, Value::NodeId(start_node));
 
                     if let Some(edge_alias) = self.edge_alias {
@@ -2870,15 +3864,12 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
             // 2. Stack Empty: Check Optional Null emission
             if let Some(row) = &self.cur_row
                 && self.optional
+                && self.emit_on_miss
                 && !self.yielded_any
                 && self.input.is_some()
             {
                 self.yielded_any = true;
-                let mut null_row = row.clone();
-                null_row = null_row.with(self.dst_alias, Value::Null);
-                if let Some(ea) = self.edge_alias {
-                    null_row = null_row.with(ea, Value::Null);
-                }
+                let null_row = apply_optional_unbinds_row(row.clone(), &self.optional_unbind);
                 self.emitted += 1;
                 return Some(Ok(null_row));
             }
@@ -3073,6 +4064,9 @@ struct ExpandIter<'a, S: GraphSnapshot + 'a> {
     edge_alias: Option<&'a str>,
     dst_alias: &'a str,
     optional: bool,
+    emit_on_miss: bool,
+    optional_unbind: Vec<String>,
+    dst_label_constraint: LabelConstraint,
     cur_row: Option<Row>,
     cur_edges: Option<Box<dyn Iterator<Item = EdgeKey> + 'a>>,
     yielded_any: bool,
@@ -3113,11 +4107,10 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for ExpandIter<'a, S> {
                                 // Source is Null (e.g. from previous optional match)
                                 if self.optional {
                                     // Propagate Nulls
-                                    let mut row = row.clone();
-                                    if let Some(ea) = self.edge_alias {
-                                        row = row.with(ea, Value::Null);
-                                    }
-                                    row = row.with(self.dst_alias, Value::Null);
+                                    let row = apply_optional_unbinds_row(
+                                        row.clone(),
+                                        &self.optional_unbind,
+                                    );
                                     self.cur_row = None; // Done with this row
                                     return Some(Ok(row));
                                 } else {
@@ -3147,6 +4140,23 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for ExpandIter<'a, S> {
 
             let edges = self.cur_edges.as_mut().unwrap();
             if let Some(edge) = edges.next() {
+                if path_alias_contains_edge(self.cur_row.as_ref().unwrap(), self.path_alias, edge) {
+                    continue;
+                }
+                if !row_matches_node_binding(
+                    self.cur_row.as_ref().unwrap(),
+                    self.dst_alias,
+                    edge.dst,
+                ) {
+                    continue;
+                }
+                if !node_matches_label_constraint(
+                    self.snapshot,
+                    edge.dst,
+                    &self.dst_label_constraint,
+                ) {
+                    continue;
+                }
                 self.yielded_any = true;
                 let mut row = self.cur_row.as_ref().unwrap().clone();
                 if let Some(ea) = self.edge_alias {
@@ -3160,13 +4170,12 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for ExpandIter<'a, S> {
 
                 return Some(Ok(row));
             } else {
-                if self.optional && !self.yielded_any {
+                if self.optional && self.emit_on_miss && !self.yielded_any {
                     self.yielded_any = true;
-                    let mut row = self.cur_row.take().unwrap();
-                    if let Some(ea) = self.edge_alias {
-                        row = row.with(ea, Value::Null);
-                    }
-                    row = row.with(self.dst_alias, Value::Null);
+                    let row = apply_optional_unbinds_row(
+                        self.cur_row.take().unwrap(),
+                        &self.optional_unbind,
+                    );
                     self.cur_edges = None;
                     return Some(Ok(row));
                 }

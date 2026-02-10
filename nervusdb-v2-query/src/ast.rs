@@ -30,7 +30,7 @@ pub struct MatchClause {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CreateClause {
-    pub pattern: Pattern,
+    pub patterns: Vec<Pattern>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

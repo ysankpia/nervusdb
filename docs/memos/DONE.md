@@ -32,7 +32,7 @@
 - [x] TCK Tier-0/Tier-1/Tier-2 为 PR 阻塞且可稳定通过
 - [x] TCK Tier-3 nightly 有持续报告
 - [x] Tier-3 通过率统计与 95% gate 已接入（`scripts/tck_full_rate.sh` + `scripts/beta_gate.sh`）
-- [ ] 官方全量 TCK 通过率 ≥95%（当前基线见 `artifacts/tck/tier3-rate.json`）
+- [ ] 官方全量 TCK 通过率 ≥95%（当前基线：2026-02-09 为 42.83%，见 `artifacts/tck/tier3-rate.json`）
 
 ### 2.3 质量门禁（Industrial）
 

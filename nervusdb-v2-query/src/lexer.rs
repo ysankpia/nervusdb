@@ -157,8 +157,17 @@ impl<'a> Lexer<'a> {
             return Ok(Some(self.read_string(char, start_line, start_column)?));
         }
 
-        // Number literals
-        if char.is_ascii_digit() {
+        // Backtick-escaped identifiers
+        if char == '`' {
+            return Ok(Some(
+                self.read_backtick_identifier(start_line, start_column)?,
+            ));
+        }
+
+        // Number literals (supports leading dot: .1)
+        if char.is_ascii_digit()
+            || (char == '.' && self.chars.peek().is_some_and(|c| c.is_ascii_digit()))
+        {
             return Ok(Some(self.read_number(char, start_line, start_column)?));
         }
 
@@ -298,50 +307,151 @@ impl<'a> Lexer<'a> {
 
     fn read_string(&mut self, quote: char, line: usize, column: usize) -> Result<Token, String> {
         let mut value = String::new();
-        while let Some(&char) = self.chars.peek() {
-            if char == quote {
+
+        while let Some(&ch) = self.chars.peek() {
+            if ch == quote {
                 self.advance();
-                break;
+                if let Some(&next_ch) = self.chars.peek()
+                    && next_ch == quote
+                {
+                    self.advance();
+                    value.push(quote);
+                    continue;
+                }
+                return Ok(Token {
+                    token_type: TokenType::String(value),
+                    line,
+                    column,
+                });
             }
-            value.push(char);
+
+            if ch == '\\' {
+                self.advance();
+                match self.chars.peek().copied() {
+                    Some('u') => {
+                        self.advance(); // consume 'u'
+                        let mut hex = String::new();
+                        for _ in 0..4 {
+                            let Some(hex_char) = self.advance() else {
+                                return Err(
+                                    "syntax error: Invalid unicode escape in string literal"
+                                        .to_string(),
+                                );
+                            };
+                            hex.push(hex_char);
+                        }
+                        let code = u32::from_str_radix(&hex, 16).map_err(|_| {
+                            "syntax error: Invalid unicode escape in string literal".to_string()
+                        })?;
+                        let Some(decoded) = char::from_u32(code) else {
+                            return Err(
+                                "syntax error: Invalid unicode codepoint in string literal"
+                                    .to_string(),
+                            );
+                        };
+                        value.push(decoded);
+                    }
+                    Some(next) => {
+                        if next == '\\' {
+                            value.push('\\');
+                            value.push('\\');
+                            value.push('\\');
+                            value.push('\\');
+                            self.advance();
+                        } else {
+                            value.push('\\');
+                            value.push(next);
+                            self.advance();
+                        }
+                    }
+                    None => {
+                        return Err("Unterminated string literal".to_string());
+                    }
+                }
+                continue;
+            }
+
+            value.push(ch);
             self.advance();
         }
-        Ok(Token {
-            token_type: TokenType::String(value),
-            line,
-            column,
-        })
+
+        Err("Unterminated string literal".to_string())
     }
 
     fn read_number(&mut self, first: char, line: usize, column: usize) -> Result<Token, String> {
         let mut value = String::new();
         value.push(first);
-        let mut has_dot = false;
-        while let Some(&char) = self.chars.peek() {
-            if char.is_ascii_digit() {
-                value.push(char);
+        let mut has_dot = first == '.';
+
+        while let Some(&ch) = self.chars.peek() {
+            if ch.is_ascii_digit() {
+                value.push(ch);
                 self.advance();
-            } else if char == '.' && !has_dot {
-                // Peek ahead to see if this is a range operator (..) or float (2.5)
+            } else if ch == '.' && !has_dot {
                 let mut chars = self.chars.clone();
-                chars.next(); // consume the '.'
+                chars.next();
                 if let Some(&next_char) = chars.peek()
                     && next_char == '.'
                 {
-                    // This is a range operator, not a float
                     break;
                 }
-                // It's a float
                 has_dot = true;
-                value.push(char);
+                value.push(ch);
                 self.advance();
             } else {
                 break;
             }
         }
+
+        if let Some(&exp_char) = self.chars.peek()
+            && (exp_char == 'e' || exp_char == 'E')
+        {
+            let mut probe = self.chars.clone();
+            probe.next();
+
+            let has_exponent = match probe.peek().copied() {
+                Some('+') | Some('-') => {
+                    probe.next();
+                    probe.peek().is_some_and(|c| c.is_ascii_digit())
+                }
+                Some(c) => c.is_ascii_digit(),
+                None => false,
+            };
+
+            if has_exponent {
+                value.push(exp_char);
+                self.advance();
+
+                if let Some(&sign) = self.chars.peek()
+                    && (sign == '+' || sign == '-')
+                {
+                    value.push(sign);
+                    self.advance();
+                }
+
+                let mut has_exp_digits = false;
+                while let Some(&digit) = self.chars.peek() {
+                    if digit.is_ascii_digit() {
+                        has_exp_digits = true;
+                        value.push(digit);
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+
+                if !has_exp_digits {
+                    return Err(format!("syntax error: Invalid number: {value}"));
+                }
+            }
+        }
+
         let number = value
             .parse::<f64>()
-            .map_err(|_| format!("Invalid number: {value}"))?;
+            .map_err(|_| format!("syntax error: Invalid number: {value}"))?;
+        if !number.is_finite() {
+            return Err(format!("syntax error: Invalid number: {value}"));
+        }
         Ok(Token {
             token_type: TokenType::Number(number),
             line,
@@ -361,6 +471,32 @@ impl<'a> Lexer<'a> {
         }
         Ok(Token {
             token_type: TokenType::Variable(value),
+            line,
+            column,
+        })
+    }
+
+    fn read_backtick_identifier(&mut self, line: usize, column: usize) -> Result<Token, String> {
+        let mut value = String::new();
+        loop {
+            let Some(ch) = self.advance() else {
+                return Err("Unterminated escaped identifier".to_string());
+            };
+
+            if ch == '`' {
+                if let Some(&'`') = self.chars.peek() {
+                    self.advance();
+                    value.push('`');
+                    continue;
+                }
+                break;
+            }
+
+            value.push(ch);
+        }
+
+        Ok(Token {
+            token_type: TokenType::Identifier(value),
             line,
             column,
         })

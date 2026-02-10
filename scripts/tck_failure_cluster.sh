@@ -21,6 +21,9 @@ fi
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+CLEAN_LOG="$TMP_DIR/clean.log"
+tr -d '\000' < "$LOG_FILE" > "$CLEAN_LOG"
+
 FEATURE_FILE="$TMP_DIR/feature_failures.txt"
 ERROR_FILE="$TMP_DIR/error_patterns.txt"
 SUMMARY_FILE="$TMP_DIR/summary.txt"
@@ -33,14 +36,14 @@ END{
     printf "%d\t%s\n", fail[f], f
   }
 }
-' "$LOG_FILE" | sort -nr > "$FEATURE_FILE"
+' "$CLEAN_LOG" | sort -nr > "$FEATURE_FILE"
 
-grep -o "Step panicked\\. Captured output: .*" "$LOG_FILE" \
+grep -a -o "Step panicked\\. Captured output: .*" "$CLEAN_LOG" \
   | sed 's/Step panicked\\. Captured output: //' \
   | sed 's/[0-9][0-9]*/N/g' \
   | sort | uniq -c | sort -nr > "$ERROR_FILE" || true
 
-grep -E "^\[Summary\]|^[0-9]+ features|^[0-9]+ scenarios|^[0-9]+ steps|parsing error" "$LOG_FILE" > "$SUMMARY_FILE" || true
+grep -aE "^\[Summary\]|^[0-9]+ features|^[0-9]+ scenarios|^[0-9]+ steps|parsing error|Failed to parse" "$CLEAN_LOG" > "$SUMMARY_FILE" || true
 
 {
   echo "# TCK Failure Cluster Report"

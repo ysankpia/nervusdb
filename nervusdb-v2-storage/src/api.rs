@@ -159,6 +159,10 @@ impl GraphSnapshot for StorageSnapshot {
         self.i2e.get(iid as usize).map(|r| r.label_id)
     }
 
+    fn resolve_node_labels(&self, iid: InternalNodeId) -> Option<Vec<LabelId>> {
+        self.inner.node_labels(iid)
+    }
+
     fn is_tombstoned_node(&self, iid: InternalNodeId) -> bool {
         self.tombstoned_nodes.contains(&iid)
     }

@@ -232,8 +232,12 @@ impl TokenParser {
     }
 
     fn parse_create(&mut self) -> Result<CreateClause, Error> {
-        let pattern = self.parse_pattern()?;
-        Ok(CreateClause { pattern })
+        let mut patterns = Vec::new();
+        patterns.push(self.parse_pattern()?);
+        while self.match_token(&TokenType::Comma) {
+            patterns.push(self.parse_pattern()?);
+        }
+        Ok(CreateClause { patterns })
     }
 
     fn parse_merge(&mut self) -> Result<MergeClause, Error> {
@@ -484,6 +488,10 @@ impl TokenParser {
                     }
                     labels.push(format!("{}", n as u64));
                 }
+                TokenType::End => {
+                    labels.push("End".to_string());
+                    self.advance();
+                }
                 _ => return Err(Error::Other("Expected label identifier".to_string())),
             }
         }
@@ -564,12 +572,11 @@ impl TokenParser {
         }
 
         if self.match_token(&TokenType::RightArrow) {
-            if direction == RelationshipDirection::RightToLeft {
-                return Err(Error::Other(
-                    "Invalid relationship direction <->".to_string(),
-                ));
-            }
-            direction = RelationshipDirection::LeftToRight;
+            direction = if direction == RelationshipDirection::RightToLeft {
+                RelationshipDirection::Undirected
+            } else {
+                RelationshipDirection::LeftToRight
+            };
         } else if self.match_token(&TokenType::Dash) {
             // Keep current direction
         } else if direction == RelationshipDirection::RightToLeft {
@@ -614,7 +621,7 @@ impl TokenParser {
         let mut properties = Vec::new();
 
         while !self.check(&TokenType::RightBrace) {
-            let key = self.parse_identifier("property key")?;
+            let key = self.parse_property_key()?;
             self.consume(&TokenType::Colon, "Expected ':' in property map")?;
             let value = self.parse_expression()?;
             properties.push(PropertyPair { key, value });
@@ -703,6 +710,18 @@ impl TokenParser {
         match &self.advance().token_type {
             TokenType::Number(n) if *n >= 0.0 => Ok(*n as u32),
             _ => Err(Error::Other(format!("Expected integer after {ctx}"))),
+        }
+    }
+
+    fn parse_property_key(&mut self) -> Result<String, Error> {
+        match &self.advance().token_type {
+            TokenType::Identifier(name) => Ok(name.clone()),
+            TokenType::Boolean(true) => Ok("true".to_string()),
+            TokenType::Boolean(false) => Ok("false".to_string()),
+            TokenType::Null => Ok("null".to_string()),
+            _ => Err(Error::Other(
+                "Expected identifier for property key".to_string(),
+            )),
         }
     }
 
@@ -848,11 +867,7 @@ impl TokenParser {
                         )?;
                         return Ok(Expression::FunctionCall(FunctionCall {
                             name: format!("__quant_{quant_name}"),
-                            args: vec![
-                                Expression::Variable(variable),
-                                list_expr,
-                                pred_expr,
-                            ],
+                            args: vec![Expression::Variable(variable), list_expr, pred_expr],
                         }));
                     }
 
@@ -892,7 +907,7 @@ impl TokenParser {
             TokenType::LeftBracket => {
                 // List literal: [a, b, c]
                 self.advance(); // '['
-                Expression::List(self.parse_list()?)
+                self.parse_list_or_comprehension()?
             }
             TokenType::LeftBrace => {
                 // Map literal: {k: v, ...}
@@ -932,13 +947,12 @@ impl TokenParser {
 
             if self.match_token(&TokenType::LeftBracket) {
                 // Parse index/slice: expr[idx] / expr[start..end]
-                let start_expr = if self.check(&TokenType::RangeDots)
-                    || self.check(&TokenType::RightBracket)
-                {
-                    None
-                } else {
-                    Some(self.parse_expression()?)
-                };
+                let start_expr =
+                    if self.check(&TokenType::RangeDots) || self.check(&TokenType::RightBracket) {
+                        None
+                    } else {
+                        Some(self.parse_expression()?)
+                    };
 
                 if self.match_token(&TokenType::RangeDots) {
                     let end_expr = if self.check(&TokenType::RightBracket) {
@@ -1177,6 +1191,47 @@ impl TokenParser {
             "Expected ')' after function arguments",
         )?;
         Ok(args)
+    }
+
+    fn parse_list_or_comprehension(&mut self) -> Result<Expression, Error> {
+        if self.check(&TokenType::RightBracket) {
+            self.advance();
+            return Ok(Expression::List(vec![]));
+        }
+
+        if self.peek_is_identifier() && self.check_next(&TokenType::In) {
+            let variable = self.parse_identifier("list comprehension variable")?;
+            self.consume(&TokenType::In, "Expected IN in list comprehension")?;
+
+            let list_expr = self.parse_expression()?;
+            let predicate_expr = if self.match_token(&TokenType::Where) {
+                self.parse_expression()?
+            } else {
+                Expression::Literal(Literal::Boolean(true))
+            };
+
+            let projection_expr = if self.match_token(&TokenType::Pipe) {
+                self.parse_expression()?
+            } else {
+                Expression::Variable(variable.clone())
+            };
+
+            self.consume(
+                &TokenType::RightBracket,
+                "Expected ']' after list comprehension",
+            )?;
+            return Ok(Expression::FunctionCall(FunctionCall {
+                name: "__list_comp".to_string(),
+                args: vec![
+                    Expression::Variable(variable),
+                    list_expr,
+                    predicate_expr,
+                    projection_expr,
+                ],
+            }));
+        }
+
+        Ok(Expression::List(self.parse_list()?))
     }
 
     fn parse_list(&mut self) -> Result<Vec<Expression>, Error> {
