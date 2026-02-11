@@ -240,3 +240,103 @@ fn test_large_integer_literal_keeps_precision_in_match() -> nervusdb_v2::Result<
 
     Ok(())
 }
+
+#[test]
+fn test_range_comparison_cross_type_returns_null_except_numbers() -> nervusdb_v2::Result<()> {
+    let dir = tempdir()?;
+    let db = Db::open(dir.path().join("t301_range_types.ndb"))?;
+    let snapshot = db.snapshot();
+
+    let q =
+        "RETURN '1' < 1 AS s_lt_i, '1.0' < 1.0 AS s_lt_f, 1 < 3.14 AS i_lt_f, 3.14 > 1 AS f_gt_i";
+    let rows: Vec<_> = nervusdb_v2::query::prepare(q)?
+        .execute_streaming(&snapshot, &Params::default())
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(rows.len(), 1);
+    assert!(matches!(rows[0].get("s_lt_i"), Some(Value::Null)));
+    assert!(matches!(rows[0].get("s_lt_f"), Some(Value::Null)));
+    assert!(matches!(rows[0].get("i_lt_f"), Some(Value::Bool(true))));
+    assert!(matches!(rows[0].get("f_gt_i"), Some(Value::Bool(true))));
+
+    Ok(())
+}
+
+#[test]
+fn test_range_comparison_list_and_nan_semantics() -> nervusdb_v2::Result<()> {
+    let dir = tempdir()?;
+    let db = Db::open(dir.path().join("t301_range_list_nan.ndb"))?;
+    let snapshot = db.snapshot();
+
+    let q = "RETURN [1, 0] >= [1] AS list_gt_shorter, [1, 2] >= [1, null] AS list_vs_null, [1, 2] >= [3, null] AS list_first_cmp, 0.0 / 0.0 > 1 AS nan_gt_num, 0.0 / 0.0 > 'a' AS nan_gt_str";
+    let rows: Vec<_> = nervusdb_v2::query::prepare(q)?
+        .execute_streaming(&snapshot, &Params::default())
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(rows.len(), 1);
+    assert!(matches!(
+        rows[0].get("list_gt_shorter"),
+        Some(Value::Bool(true))
+    ));
+    assert!(matches!(rows[0].get("list_vs_null"), Some(Value::Null)));
+    assert!(matches!(
+        rows[0].get("list_first_cmp"),
+        Some(Value::Bool(false))
+    ));
+    assert!(matches!(
+        rows[0].get("nan_gt_num"),
+        Some(Value::Bool(false))
+    ));
+    assert!(matches!(rows[0].get("nan_gt_str"), Some(Value::Null)));
+
+    Ok(())
+}
+
+#[test]
+fn test_range_comparison_unwind_numeric_pairs() -> nervusdb_v2::Result<()> {
+    let dir = tempdir()?;
+    let db = Db::open(dir.path().join("t301_range_unwind.ndb"))?;
+    let params = Params::new();
+
+    let mut txn = db.begin_write();
+    nervusdb_v2::query::prepare("CREATE ()-[:T]->()")?.execute_write(
+        &db.snapshot(),
+        &mut txn,
+        &params,
+    )?;
+    txn.commit()?;
+
+    let snapshot = db.snapshot();
+    let direct_rows: Vec<_> = nervusdb_v2::query::prepare(
+        "RETURN 1 < 3.14 AS lt, [1, 3.14][0] < [1, 3.14][1] AS idx_lt",
+    )?
+    .execute_streaming(&snapshot, &params)
+    .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(direct_rows.len(), 1);
+    assert!(matches!(direct_rows[0].get("lt"), Some(Value::Bool(true))));
+    assert!(matches!(
+        direct_rows[0].get("idx_lt"),
+        Some(Value::Bool(true))
+    ));
+
+    let q = "MATCH p = (n)-[r]->() \
+             WITH [n, r, p, '', 1, 3.14, true, null, [], {}] AS types \
+             UNWIND range(0, size(types) - 1) AS i \
+             UNWIND range(0, size(types) - 1) AS j \
+             WITH types[i] AS lhs, types[j] AS rhs \
+             WHERE i <> j \
+             WITH lhs, rhs, lhs < rhs AS result \
+             WHERE result \
+             RETURN lhs, rhs";
+    let rows: Vec<_> = nervusdb_v2::query::prepare(q)?
+        .execute_streaming(&snapshot, &params)
+        .collect::<Result<Vec<_>, _>>()?;
+    let expected_rhs = 157.0_f64 / 50.0_f64;
+    assert!(
+        rows.iter().any(|row| {
+            matches!(row.get("lhs"), Some(Value::Int(1)))
+                && matches!(row.get("rhs"), Some(Value::Float(v)) if (*v - expected_rhs).abs() < 1e-12)
+        }),
+        "expected to find lhs=1, rhs=3.14 in rows: {rows:?}"
+    );
+
+    Ok(())
+}
