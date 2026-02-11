@@ -187,18 +187,7 @@ pub fn evaluate_expression_value<S: GraphSnapshot>(
                 }
                 BinaryOperator::EndsWith => string_predicate(&left, &right, |l, r| l.ends_with(r)),
                 BinaryOperator::Contains => string_predicate(&left, &right, |l, r| l.contains(r)),
-                BinaryOperator::HasLabel => match (left, right) {
-                    (Value::NodeId(node_id), Value::String(label)) => {
-                        if let Some(label_id) = snapshot.resolve_label_id(&label) {
-                            let labels = snapshot.resolve_node_labels(node_id).unwrap_or_default();
-                            Value::Bool(labels.contains(&label_id))
-                        } else {
-                            Value::Bool(false)
-                        }
-                    }
-                    (Value::Null, _) => Value::Null,
-                    _ => Value::Bool(false),
-                },
+                BinaryOperator::HasLabel => evaluate_has_label(&left, &right, snapshot),
                 BinaryOperator::IsNull => Value::Bool(matches!(left, Value::Null)),
                 BinaryOperator::IsNotNull => Value::Bool(!matches!(left, Value::Null)),
             }
@@ -243,6 +232,34 @@ pub fn evaluate_expression_value<S: GraphSnapshot>(
             evaluate_pattern_comprehension(pattern_comp, row, snapshot, params)
         }
         _ => Value::Null, // Not supported yet
+    }
+}
+
+fn evaluate_has_label<S: GraphSnapshot>(left: &Value, right: &Value, snapshot: &S) -> Value {
+    let Value::String(label) = right else {
+        return if matches!(left, Value::Null) || matches!(right, Value::Null) {
+            Value::Null
+        } else {
+            Value::Bool(false)
+        };
+    };
+
+    match left {
+        Value::NodeId(node_id) => {
+            if let Some(label_id) = snapshot.resolve_label_id(label) {
+                let labels = snapshot.resolve_node_labels(*node_id).unwrap_or_default();
+                Value::Bool(labels.contains(&label_id))
+            } else {
+                Value::Bool(false)
+            }
+        }
+        Value::Node(node) => Value::Bool(node.labels.iter().any(|node_label| node_label == label)),
+        Value::EdgeKey(edge_key) => {
+            Value::Bool(snapshot.resolve_rel_type_name(edge_key.rel).as_deref() == Some(label))
+        }
+        Value::Relationship(rel) => Value::Bool(rel.rel_type == *label),
+        Value::Null => Value::Null,
+        _ => Value::Bool(false),
     }
 }
 

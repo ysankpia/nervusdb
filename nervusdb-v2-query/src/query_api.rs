@@ -1847,11 +1847,13 @@ fn expression_alias_fragment(expr: &Expression) -> String {
                     binary_operator_symbol(&b.operator)
                 )
             }
-            BinaryOperator::HasLabel => format!(
-                "{}:{}",
-                expression_alias_fragment(&b.left),
-                expression_alias_fragment(&b.right)
-            ),
+            BinaryOperator::HasLabel => {
+                let rhs = match &b.right {
+                    Expression::Literal(Literal::String(label)) => label.clone(),
+                    _ => expression_alias_fragment(&b.right),
+                };
+                format!("{}:{}", expression_alias_fragment(&b.left), rhs)
+            }
             _ => format!(
                 "{} {} {}",
                 expression_alias_fragment(&b.left),
