@@ -893,10 +893,14 @@ impl TokenParser {
     fn parse_primary_expression(&mut self) -> Result<Expression, Error> {
         let mut expr = match &self.peek().token_type {
             TokenType::LeftParen => {
-                self.advance(); // '('
-                let expr = self.parse_expression_bp(0)?;
-                self.consume(&TokenType::RightParen, "Expected ')'")?;
-                expr
+                if let Some(pattern) = self.try_parse_relationship_pattern_predicate() {
+                    Expression::Exists(Box::new(ExistsExpression::Pattern(pattern)))
+                } else {
+                    self.advance(); // '('
+                    let expr = self.parse_expression_bp(0)?;
+                    self.consume(&TokenType::RightParen, "Expected ')'")?;
+                    expr
+                }
             }
             TokenType::Number(n) => {
                 let n = *n;
@@ -1108,6 +1112,21 @@ impl TokenParser {
         }
 
         Ok(expr)
+    }
+
+    fn try_parse_relationship_pattern_predicate(&mut self) -> Option<Pattern> {
+        if !self.check(&TokenType::LeftParen) {
+            return None;
+        }
+
+        let checkpoint = self.position;
+        match self.parse_pattern() {
+            Ok(pattern) if pattern.elements.len() >= 3 => Some(pattern),
+            _ => {
+                self.position = checkpoint;
+                None
+            }
+        }
     }
 
     fn parse_exists_expression(&mut self) -> Result<ExistsExpression, Error> {

@@ -195,7 +195,7 @@ impl PreparedQuery {
                     Ok((results, write_count))
                 }
                 WriteSemantics::Merge => {
-                    let write_count = crate::executor::execute_merge(
+                    let (write_count, write_rows) = crate::executor::execute_merge_with_rows(
                         &self.plan,
                         snapshot,
                         txn,
@@ -203,7 +203,18 @@ impl PreparedQuery {
                         &self.merge_on_create_items,
                         &self.merge_on_match_items,
                     )?;
-                    Ok((Vec::new(), write_count))
+                    let results: Vec<std::collections::HashMap<String, crate::executor::Value>> =
+                        write_rows
+                            .into_iter()
+                            .map(|row| {
+                                let mut map = std::collections::HashMap::new();
+                                for (k, v) in row.columns().iter().cloned() {
+                                    map.insert(k, v);
+                                }
+                                map
+                            })
+                            .collect();
+                    Ok((results, write_count))
                 }
             };
         }
@@ -750,7 +761,13 @@ fn compile_m3_plan(
                     return Err(Error::Other("WHERE cannot be the first clause".into()));
                 }
 
+                let mut where_bindings: BTreeMap<String, BindingKind> = BTreeMap::new();
+                if let Some(current_plan) = &plan {
+                    extract_output_var_kinds(current_plan, &mut where_bindings);
+                }
+
                 validate_expression_types(&w.expression)?;
+                validate_where_expression_bindings(&w.expression, &where_bindings)?;
 
                 let filtered = Plan::Filter {
                     input: Box::new(plan.unwrap()),
@@ -1115,6 +1132,225 @@ fn validate_expression_types(expr: &Expression) -> Result<()> {
             Ok(())
         }
         _ => Ok(()),
+    }
+}
+
+fn validate_where_expression_bindings(
+    expr: &Expression,
+    known_bindings: &BTreeMap<String, BindingKind>,
+) -> Result<()> {
+    if let Expression::Variable(var) = expr
+        && !known_bindings.contains_key(var)
+    {
+        return Err(Error::Other(format!(
+            "syntax error: UndefinedVariable ({})",
+            var
+        )));
+    }
+
+    validate_pattern_predicate_bindings(expr, known_bindings)?;
+    if matches!(
+        infer_expression_binding_kind(expr, known_bindings),
+        BindingKind::Node | BindingKind::Relationship | BindingKind::Path
+    ) {
+        return Err(Error::Other(
+            "syntax error: InvalidArgumentType".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_pattern_predicate_bindings(
+    expr: &Expression,
+    known_bindings: &BTreeMap<String, BindingKind>,
+) -> Result<()> {
+    match expr {
+        Expression::Exists(exists_expr) => match exists_expr.as_ref() {
+            crate::ast::ExistsExpression::Pattern(pattern) => {
+                if pattern.elements.len() < 3 {
+                    return Err(Error::Other(
+                        "syntax error: InvalidArgumentType".to_string(),
+                    ));
+                }
+                if let Some(path_var) = &pattern.variable
+                    && !known_bindings.contains_key(path_var)
+                {
+                    return Err(Error::Other(format!(
+                        "syntax error: UndefinedVariable ({})",
+                        path_var
+                    )));
+                }
+                for element in &pattern.elements {
+                    match element {
+                        crate::ast::PathElement::Node(node) => {
+                            if let Some(var) = &node.variable
+                                && !known_bindings.contains_key(var)
+                            {
+                                return Err(Error::Other(format!(
+                                    "syntax error: UndefinedVariable ({})",
+                                    var
+                                )));
+                            }
+                            if let Some(props) = &node.properties {
+                                for pair in &props.properties {
+                                    validate_pattern_predicate_bindings(
+                                        &pair.value,
+                                        known_bindings,
+                                    )?;
+                                }
+                            }
+                        }
+                        crate::ast::PathElement::Relationship(rel) => {
+                            if let Some(var) = &rel.variable
+                                && !known_bindings.contains_key(var)
+                            {
+                                return Err(Error::Other(format!(
+                                    "syntax error: UndefinedVariable ({})",
+                                    var
+                                )));
+                            }
+                            if let Some(props) = &rel.properties {
+                                for pair in &props.properties {
+                                    validate_pattern_predicate_bindings(
+                                        &pair.value,
+                                        known_bindings,
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            crate::ast::ExistsExpression::Subquery(subquery) => {
+                for clause in &subquery.clauses {
+                    match clause {
+                        Clause::Where(w) => {
+                            validate_pattern_predicate_bindings(&w.expression, known_bindings)?
+                        }
+                        Clause::With(w) => {
+                            for item in &w.items {
+                                validate_pattern_predicate_bindings(
+                                    &item.expression,
+                                    known_bindings,
+                                )?;
+                            }
+                            if let Some(where_clause) = &w.where_clause {
+                                validate_pattern_predicate_bindings(
+                                    &where_clause.expression,
+                                    known_bindings,
+                                )?;
+                            }
+                        }
+                        Clause::Return(r) => {
+                            for item in &r.items {
+                                validate_pattern_predicate_bindings(
+                                    &item.expression,
+                                    known_bindings,
+                                )?;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        },
+        Expression::Unary(u) => validate_pattern_predicate_bindings(&u.operand, known_bindings)?,
+        Expression::Binary(b) => {
+            validate_pattern_predicate_bindings(&b.left, known_bindings)?;
+            validate_pattern_predicate_bindings(&b.right, known_bindings)?;
+        }
+        Expression::FunctionCall(call) => {
+            for arg in &call.args {
+                validate_pattern_predicate_bindings(arg, known_bindings)?;
+            }
+        }
+        Expression::List(items) => {
+            for item in items {
+                validate_pattern_predicate_bindings(item, known_bindings)?;
+            }
+        }
+        Expression::ListComprehension(list_comp) => {
+            validate_pattern_predicate_bindings(&list_comp.list, known_bindings)?;
+            if let Some(where_expr) = &list_comp.where_expression {
+                validate_pattern_predicate_bindings(where_expr, known_bindings)?;
+            }
+            if let Some(map_expr) = &list_comp.map_expression {
+                validate_pattern_predicate_bindings(map_expr, known_bindings)?;
+            }
+        }
+        Expression::Map(map) => {
+            for pair in &map.properties {
+                validate_pattern_predicate_bindings(&pair.value, known_bindings)?;
+            }
+        }
+        Expression::Case(case_expr) => {
+            if let Some(test_expr) = &case_expr.expression {
+                validate_pattern_predicate_bindings(test_expr, known_bindings)?;
+            }
+            for (when_expr, then_expr) in &case_expr.when_clauses {
+                validate_pattern_predicate_bindings(when_expr, known_bindings)?;
+                validate_pattern_predicate_bindings(then_expr, known_bindings)?;
+            }
+            if let Some(else_expr) = &case_expr.else_expression {
+                validate_pattern_predicate_bindings(else_expr, known_bindings)?;
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+fn ensure_no_pattern_predicate(expr: &Expression) -> Result<()> {
+    if contains_pattern_predicate(expr) {
+        return Err(Error::Other("syntax error: UnexpectedSyntax".to_string()));
+    }
+    Ok(())
+}
+
+fn contains_pattern_predicate(expr: &Expression) -> bool {
+    match expr {
+        Expression::Exists(exists_expr) => {
+            matches!(
+                exists_expr.as_ref(),
+                crate::ast::ExistsExpression::Pattern(_)
+            )
+        }
+        Expression::Unary(u) => contains_pattern_predicate(&u.operand),
+        Expression::Binary(b) => {
+            contains_pattern_predicate(&b.left) || contains_pattern_predicate(&b.right)
+        }
+        Expression::FunctionCall(call) => call.args.iter().any(contains_pattern_predicate),
+        Expression::List(items) => items.iter().any(contains_pattern_predicate),
+        Expression::ListComprehension(list_comp) => {
+            contains_pattern_predicate(&list_comp.list)
+                || list_comp
+                    .where_expression
+                    .as_ref()
+                    .is_some_and(contains_pattern_predicate)
+                || list_comp
+                    .map_expression
+                    .as_ref()
+                    .is_some_and(contains_pattern_predicate)
+        }
+        Expression::Map(map) => map
+            .properties
+            .iter()
+            .any(|pair| contains_pattern_predicate(&pair.value)),
+        Expression::Case(case_expr) => {
+            case_expr
+                .expression
+                .as_ref()
+                .is_some_and(contains_pattern_predicate)
+                || case_expr.when_clauses.iter().any(|(when_expr, then_expr)| {
+                    contains_pattern_predicate(when_expr) || contains_pattern_predicate(then_expr)
+                })
+                || case_expr
+                    .else_expression
+                    .as_ref()
+                    .is_some_and(contains_pattern_predicate)
+        }
+        _ => false,
     }
 }
 
@@ -1835,6 +2071,7 @@ fn compile_projection_aggregation(
     items: &[crate::ast::ReturnItem],
 ) -> Result<(Plan, Vec<String>)> {
     for item in items {
+        ensure_no_pattern_predicate(&item.expression)?;
         validate_expression_types(&item.expression)?;
     }
 
@@ -2127,6 +2364,7 @@ fn compile_set_plan_v2(input: Plan, set: crate::ast::SetClause) -> Result<Plan> 
 
     let mut prop_items = Vec::new();
     for item in set.items {
+        ensure_no_pattern_predicate(&item.value)?;
         prop_items.push((item.property.variable, item.property.property, item.value));
     }
     if !prop_items.is_empty() {
@@ -2304,27 +2542,60 @@ fn compile_merge_plan(input: Plan, merge_clause: crate::ast::MergeClause) -> Res
     if pattern.elements.is_empty() {
         return Err(Error::Other("MERGE pattern cannot be empty".into()));
     }
-    // Support any pattern length (single node, single-hop, multi-hop, etc.)
-    // Note: For multi-hop patterns, MERGE semantics may become complex
-    // but TCK requires full pattern support.
 
-    // Multiple labels on nodes are allowed
-    // For MERGE without properties, it will still create (or match if exists)
-    // A more complete implementation would first MATCH then CREATE if not found
+    let mut known_bindings: BTreeMap<String, BindingKind> = BTreeMap::new();
+    extract_output_var_kinds(&input, &mut known_bindings);
 
-    // For relationships in MERGE patterns (only applicable for multi-element patterns)
-    if pattern.elements.len() >= 3
-        && let Some(crate::ast::PathElement::Relationship(r)) = pattern.elements.get(1)
-    {
-        // All directions are supported: ->, <-, -
-        // All relationship type patterns are supported: single, multiple (A|B), any
-        // Variable-length relationships are supported: [r*]
-        // Relationship properties are supported: {k:v}
-        // Note: empty relationship types (undirected) might be allowed in some contexts
-        if r.types.is_empty() && r.variable_length.is_none() {
-            // Undirected relationship without specific type - this is valid Cypher
-            // e.g., MERGE (a)-[]->(b) is technically allowed but unusual
-            // For simplicity, we allow it; executor will treat it as any relationship
+    let rel_count = pattern
+        .elements
+        .iter()
+        .filter(|el| matches!(el, crate::ast::PathElement::Relationship(_)))
+        .count();
+
+    for element in &pattern.elements {
+        match element {
+            crate::ast::PathElement::Node(node) => {
+                if let Some(var) = &node.variable {
+                    let already_bound = known_bindings.contains_key(var);
+                    let has_new_constraints = !node.labels.is_empty() || node.properties.is_some();
+
+                    if already_bound {
+                        if has_new_constraints || rel_count == 0 {
+                            return Err(variable_already_bound_error(var));
+                        }
+                    } else {
+                        known_bindings.insert(var.clone(), BindingKind::Node);
+                    }
+                }
+
+                validate_create_property_vars(&node.properties, &known_bindings)?;
+            }
+            crate::ast::PathElement::Relationship(rel) => {
+                if rel.variable_length.is_some() {
+                    return Err(Error::Other("syntax error: CreatingVarLength".into()));
+                }
+
+                if rel.types.len() != 1 {
+                    return Err(Error::Other(
+                        "syntax error: NoSingleRelationshipType".into(),
+                    ));
+                }
+
+                if let Some(var) = &rel.variable {
+                    if known_bindings.contains_key(var) {
+                        return Err(variable_already_bound_error(var));
+                    }
+                    known_bindings.insert(var.clone(), BindingKind::Relationship);
+                }
+
+                validate_create_property_vars(&rel.properties, &known_bindings)?;
+            }
+        }
+    }
+
+    if let Some(path_var) = &pattern.variable {
+        if known_bindings.contains_key(path_var) {
+            return Err(variable_already_bound_error(path_var));
         }
     }
 

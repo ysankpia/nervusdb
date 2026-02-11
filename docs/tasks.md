@@ -96,7 +96,7 @@
 | **Beta Gate** | **SQLite-Beta 必达门槛**                                   |        |        |                             |                                                          |
 | BETA-01       | [Storage] 强制 `storage_format_epoch` 校验                 | High   | Done   | feat/TB1-beta-gate          | `StorageFormatMismatch` + Compatibility 映射已落地 |
 | BETA-02       | [CI] Tier-3 全量通过率统计与 95% 阈值阻断                  | High   | Done   | feat/TB1-beta-gate          | `scripts/tck_full_rate.sh` + `scripts/beta_gate.sh` + nightly/manual workflow |
-| BETA-03       | [TCK] 官方全量通过率冲刺至 ≥95%                            | High   | WIP    | feat/TB1-tck-95             | 2026-02-11 最新 Tier-3：3038/3897=77.96%（较 2026-02-10 的 2989/3897 提升 +49 场，+1.26pp；failed 434→385）；Wave 1B 已清零 Temporal3(183/183) 与 Temporal10(131/131)；当前主簇：Pattern1(22)、Merge5(20)、Comparison1(17)、List5(12)、Temporal6(11) |
+| BETA-03       | [TCK] 官方全量通过率冲刺至 ≥95%                            | High   | WIP    | feat/TB1-tck-95             | 2026-02-11 最新 Tier-3：3076/3897=78.93%（较 2026-02-10 的 2989/3897 提升 +87 场，+2.23pp；failed 434→322）；Wave 1B 已清零 Temporal3(183/183) 与 Temporal10(131/131)，Wave 2 已清零 Pattern1(39/39) 与 Merge5(14 pass/15 skipped/0 fail)；当前主簇：Comparison1(17)、List5(12)、Temporal6(11)、Literals3(11)、Comparison2(11) |
 | BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | Plan   | feat/TB1-stability-window   | 任一阻断失败即重置计数 |
 | BETA-05       | [Perf] 大规模 SLO 封板（读120/写180/向量220 ms P99）       | High   | Plan   | feat/TB1-perf-slo           | 达标后方可发布 Beta |
 

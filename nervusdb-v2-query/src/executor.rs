@@ -2421,6 +2421,1201 @@ pub fn execute_write_with_rows<S: GraphSnapshot>(
         }
     }
 }
+
+#[derive(Clone)]
+struct MergeOverlayNode {
+    iid: InternalNodeId,
+    labels: Vec<String>,
+    props: std::collections::BTreeMap<String, PropertyValue>,
+}
+
+#[derive(Clone)]
+struct MergeOverlayEdge {
+    key: EdgeKey,
+    props: std::collections::BTreeMap<String, PropertyValue>,
+}
+
+#[derive(Default)]
+struct MergeOverlayState {
+    nodes: Vec<MergeOverlayNode>,
+    edges: Vec<MergeOverlayEdge>,
+}
+
+pub fn execute_merge_with_rows<S: GraphSnapshot>(
+    plan: &Plan,
+    snapshot: &S,
+    txn: &mut dyn WriteableGraph,
+    params: &crate::query_api::Params,
+    on_create_items: &[(String, String, Expression)],
+    on_match_items: &[(String, String, Expression)],
+) -> Result<(u32, Vec<Row>)> {
+    let mut overlay = MergeOverlayState::default();
+    execute_merge_with_rows_inner(
+        plan,
+        snapshot,
+        txn,
+        params,
+        on_create_items,
+        on_match_items,
+        &mut overlay,
+    )
+}
+
+fn execute_merge_with_rows_inner<S: GraphSnapshot>(
+    plan: &Plan,
+    snapshot: &S,
+    txn: &mut dyn WriteableGraph,
+    params: &crate::query_api::Params,
+    on_create_items: &[(String, String, Expression)],
+    on_match_items: &[(String, String, Expression)],
+    overlay: &mut MergeOverlayState,
+) -> Result<(u32, Vec<Row>)> {
+    match plan {
+        Plan::Create { input, pattern } => {
+            let (prefix_mods, input_rows) = execute_merge_with_rows_inner(
+                input,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            let (created, out_rows) = execute_merge_create_from_rows(
+                snapshot,
+                input_rows,
+                txn,
+                pattern,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            Ok((prefix_mods + created, out_rows))
+        }
+        Plan::Delete {
+            input,
+            detach,
+            expressions,
+        } => {
+            let (prefix_mods, rows) = execute_merge_with_rows_inner(
+                input,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            let deleted =
+                execute_delete_on_rows(snapshot, &rows, txn, *detach, expressions, params)?;
+            Ok((prefix_mods + deleted, rows))
+        }
+        Plan::SetProperty { input, items } => {
+            let (prefix_mods, rows) = execute_merge_with_rows_inner(
+                input,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            let values_plan = Plan::Values { rows: rows.clone() };
+            let updated = execute_set(snapshot, &values_plan, txn, items, params)?;
+            Ok((prefix_mods + updated, rows))
+        }
+        Plan::SetLabels { input, items } => {
+            let (prefix_mods, rows) = execute_merge_with_rows_inner(
+                input,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            let values_plan = Plan::Values { rows: rows.clone() };
+            let updated = execute_set_labels(snapshot, &values_plan, txn, items, params)?;
+            let rows = apply_label_overlay_to_rows(snapshot, rows, items, true);
+            Ok((prefix_mods + updated, rows))
+        }
+        Plan::RemoveProperty { input, items } => {
+            let (prefix_mods, rows) = execute_merge_with_rows_inner(
+                input,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            let values_plan = Plan::Values { rows: rows.clone() };
+            let removed = execute_remove(snapshot, &values_plan, txn, items, params)?;
+            Ok((prefix_mods + removed, rows))
+        }
+        Plan::RemoveLabels { input, items } => {
+            let (prefix_mods, rows) = execute_merge_with_rows_inner(
+                input,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            let values_plan = Plan::Values { rows: rows.clone() };
+            let removed = execute_remove_labels(snapshot, &values_plan, txn, items, params)?;
+            let rows = apply_label_overlay_to_rows(snapshot, rows, items, false);
+            Ok((prefix_mods + removed, rows))
+        }
+        Plan::Foreach {
+            input,
+            variable,
+            list,
+            sub_plan,
+        } => {
+            let (prefix_mods, rows) = execute_merge_with_rows_inner(
+                input,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            let values_plan = Plan::Values { rows: rows.clone() };
+            let changed = execute_foreach(
+                snapshot,
+                &values_plan,
+                txn,
+                variable,
+                list,
+                sub_plan,
+                params,
+            )?;
+            Ok((prefix_mods + changed, rows))
+        }
+        Plan::Filter { input, predicate } => {
+            let (mods, rows) = execute_merge_with_rows_inner(
+                input,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            let staged = Plan::Filter {
+                input: Box::new(Plan::Values { rows }),
+                predicate: predicate.clone(),
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::Project { input, projections } => {
+            let (mods, rows) = execute_merge_with_rows_inner(
+                input,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            let staged = Plan::Project {
+                input: Box::new(Plan::Values { rows }),
+                projections: projections.clone(),
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::Aggregate {
+            input,
+            group_by,
+            aggregates,
+        } => {
+            let (mods, rows) = execute_merge_with_rows_inner(
+                input,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            let staged = Plan::Aggregate {
+                input: Box::new(Plan::Values { rows }),
+                group_by: group_by.clone(),
+                aggregates: aggregates.clone(),
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::OrderBy { input, items } => {
+            let (mods, rows) = execute_merge_with_rows_inner(
+                input,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            let staged = Plan::OrderBy {
+                input: Box::new(Plan::Values { rows }),
+                items: items.clone(),
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::Skip { input, skip } => {
+            let (mods, rows) = execute_merge_with_rows_inner(
+                input,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            let staged = Plan::Skip {
+                input: Box::new(Plan::Values { rows }),
+                skip: *skip,
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::Limit { input, limit } => {
+            let (mods, rows) = execute_merge_with_rows_inner(
+                input,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            let staged = Plan::Limit {
+                input: Box::new(Plan::Values { rows }),
+                limit: *limit,
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::Distinct { input } => {
+            let (mods, rows) = execute_merge_with_rows_inner(
+                input,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            let staged = Plan::Distinct {
+                input: Box::new(Plan::Values { rows }),
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::Unwind {
+            input,
+            expression,
+            alias,
+        } => {
+            let (mods, rows) = execute_merge_with_rows_inner(
+                input,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            let staged = Plan::Unwind {
+                input: Box::new(Plan::Values { rows }),
+                expression: expression.clone(),
+                alias: alias.clone(),
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::ProcedureCall {
+            input,
+            name,
+            args,
+            yields,
+        } => {
+            let (mods, rows) = execute_merge_with_rows_inner(
+                input,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            let staged = Plan::ProcedureCall {
+                input: Box::new(Plan::Values { rows }),
+                name: name.clone(),
+                args: args.clone(),
+                yields: yields.clone(),
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::MatchOut {
+            input,
+            src_alias,
+            rels,
+            edge_alias,
+            dst_alias,
+            dst_labels,
+            src_prebound,
+            limit,
+            project,
+            project_external,
+            optional,
+            optional_unbind,
+            path_alias,
+        } => {
+            if let Some(inner) = input {
+                let (mods, rows) = execute_merge_with_rows_inner(
+                    inner,
+                    snapshot,
+                    txn,
+                    params,
+                    on_create_items,
+                    on_match_items,
+                    overlay,
+                )?;
+                let staged = Plan::MatchOut {
+                    input: Some(Box::new(Plan::Values { rows })),
+                    src_alias: src_alias.clone(),
+                    rels: rels.clone(),
+                    edge_alias: edge_alias.clone(),
+                    dst_alias: dst_alias.clone(),
+                    dst_labels: dst_labels.clone(),
+                    src_prebound: *src_prebound,
+                    limit: *limit,
+                    project: project.clone(),
+                    project_external: *project_external,
+                    optional: *optional,
+                    optional_unbind: optional_unbind.clone(),
+                    path_alias: path_alias.clone(),
+                };
+                let out_rows =
+                    execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+                Ok((mods, out_rows))
+            } else {
+                let out_rows = execute_plan(snapshot, plan, params).collect::<Result<Vec<_>>>()?;
+                Ok((0, out_rows))
+            }
+        }
+        Plan::MatchOutVarLen {
+            input,
+            src_alias,
+            rels,
+            edge_alias,
+            dst_alias,
+            dst_labels,
+            src_prebound,
+            direction,
+            min_hops,
+            max_hops,
+            limit,
+            project,
+            project_external,
+            optional,
+            optional_unbind,
+            path_alias,
+        } => {
+            if let Some(inner) = input {
+                let (mods, rows) = execute_merge_with_rows_inner(
+                    inner,
+                    snapshot,
+                    txn,
+                    params,
+                    on_create_items,
+                    on_match_items,
+                    overlay,
+                )?;
+                let staged = Plan::MatchOutVarLen {
+                    input: Some(Box::new(Plan::Values { rows })),
+                    src_alias: src_alias.clone(),
+                    rels: rels.clone(),
+                    edge_alias: edge_alias.clone(),
+                    dst_alias: dst_alias.clone(),
+                    dst_labels: dst_labels.clone(),
+                    src_prebound: *src_prebound,
+                    direction: direction.clone(),
+                    min_hops: *min_hops,
+                    max_hops: *max_hops,
+                    limit: *limit,
+                    project: project.clone(),
+                    project_external: *project_external,
+                    optional: *optional,
+                    optional_unbind: optional_unbind.clone(),
+                    path_alias: path_alias.clone(),
+                };
+                let out_rows =
+                    execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+                Ok((mods, out_rows))
+            } else {
+                let out_rows = execute_plan(snapshot, plan, params).collect::<Result<Vec<_>>>()?;
+                Ok((0, out_rows))
+            }
+        }
+        Plan::MatchIn {
+            input,
+            src_alias,
+            rels,
+            edge_alias,
+            dst_alias,
+            dst_labels,
+            src_prebound,
+            limit,
+            optional,
+            optional_unbind,
+            path_alias,
+        } => {
+            if let Some(inner) = input {
+                let (mods, rows) = execute_merge_with_rows_inner(
+                    inner,
+                    snapshot,
+                    txn,
+                    params,
+                    on_create_items,
+                    on_match_items,
+                    overlay,
+                )?;
+                let staged = Plan::MatchIn {
+                    input: Some(Box::new(Plan::Values { rows })),
+                    src_alias: src_alias.clone(),
+                    rels: rels.clone(),
+                    edge_alias: edge_alias.clone(),
+                    dst_alias: dst_alias.clone(),
+                    dst_labels: dst_labels.clone(),
+                    src_prebound: *src_prebound,
+                    limit: *limit,
+                    optional: *optional,
+                    optional_unbind: optional_unbind.clone(),
+                    path_alias: path_alias.clone(),
+                };
+                let out_rows =
+                    execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+                Ok((mods, out_rows))
+            } else {
+                let out_rows = execute_plan(snapshot, plan, params).collect::<Result<Vec<_>>>()?;
+                Ok((0, out_rows))
+            }
+        }
+        Plan::MatchUndirected {
+            input,
+            src_alias,
+            rels,
+            edge_alias,
+            dst_alias,
+            dst_labels,
+            src_prebound,
+            limit,
+            optional,
+            optional_unbind,
+            path_alias,
+        } => {
+            if let Some(inner) = input {
+                let (mods, rows) = execute_merge_with_rows_inner(
+                    inner,
+                    snapshot,
+                    txn,
+                    params,
+                    on_create_items,
+                    on_match_items,
+                    overlay,
+                )?;
+                let staged = Plan::MatchUndirected {
+                    input: Some(Box::new(Plan::Values { rows })),
+                    src_alias: src_alias.clone(),
+                    rels: rels.clone(),
+                    edge_alias: edge_alias.clone(),
+                    dst_alias: dst_alias.clone(),
+                    dst_labels: dst_labels.clone(),
+                    src_prebound: *src_prebound,
+                    limit: *limit,
+                    optional: *optional,
+                    optional_unbind: optional_unbind.clone(),
+                    path_alias: path_alias.clone(),
+                };
+                let out_rows =
+                    execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+                Ok((mods, out_rows))
+            } else {
+                let out_rows = execute_plan(snapshot, plan, params).collect::<Result<Vec<_>>>()?;
+                Ok((0, out_rows))
+            }
+        }
+        Plan::MatchBoundRel {
+            input,
+            rel_alias,
+            src_alias,
+            dst_alias,
+            dst_labels,
+            src_prebound,
+            rels,
+            direction,
+            optional,
+            optional_unbind,
+            path_alias,
+        } => {
+            let (mods, rows) = execute_merge_with_rows_inner(
+                input,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            let staged = Plan::MatchBoundRel {
+                input: Box::new(Plan::Values { rows }),
+                rel_alias: rel_alias.clone(),
+                src_alias: src_alias.clone(),
+                dst_alias: dst_alias.clone(),
+                dst_labels: dst_labels.clone(),
+                src_prebound: *src_prebound,
+                rels: rels.clone(),
+                direction: direction.clone(),
+                optional: *optional,
+                optional_unbind: optional_unbind.clone(),
+                path_alias: path_alias.clone(),
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        Plan::Apply {
+            input,
+            subquery,
+            alias,
+        } => {
+            let (mods, rows) = execute_merge_with_rows_inner(
+                input,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            let staged = Plan::Apply {
+                input: Box::new(Plan::Values { rows }),
+                subquery: subquery.clone(),
+                alias: alias.clone(),
+            };
+            let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
+        _ => {
+            let out_rows = execute_plan(snapshot, plan, params).collect::<Result<Vec<_>>>()?;
+            Ok((0, out_rows))
+        }
+    }
+}
+
+fn merge_apply_set_items<S: GraphSnapshot>(
+    snapshot: &S,
+    txn: &mut dyn WriteableGraph,
+    row: &Row,
+    items: &[(String, String, Expression)],
+    params: &crate::query_api::Params,
+) -> Result<()> {
+    for (var, key, expr) in items {
+        let val = evaluate_expression_value(expr, row, snapshot, params);
+        let prop_val = convert_executor_value_to_property(&val)?;
+        if let Some(node_id) = row.get_node(var) {
+            txn.set_node_property(node_id, key.clone(), prop_val)?;
+        } else if let Some(edge) = row.get_edge(var) {
+            txn.set_edge_property(edge.src, edge.rel, edge.dst, key.clone(), prop_val)?;
+        } else {
+            return Err(Error::Other(format!("Variable {} not found in row", var)));
+        }
+    }
+    Ok(())
+}
+
+fn merge_eval_props_on_row<S: GraphSnapshot>(
+    snapshot: &S,
+    row: &Row,
+    props: &Option<crate::ast::PropertyMap>,
+    params: &crate::query_api::Params,
+) -> Result<std::collections::BTreeMap<String, PropertyValue>> {
+    let mut out = std::collections::BTreeMap::new();
+    if let Some(props) = props {
+        for pair in &props.properties {
+            let v = evaluate_expression_value(&pair.value, row, snapshot, params);
+            out.insert(pair.key.clone(), convert_executor_value_to_property(&v)?);
+        }
+    }
+    Ok(out)
+}
+
+fn merge_props_to_values(
+    props: &std::collections::BTreeMap<String, PropertyValue>,
+) -> std::collections::BTreeMap<String, Value> {
+    props
+        .iter()
+        .map(|(k, v)| (k.clone(), merge_storage_property_to_value(v)))
+        .collect()
+}
+
+fn merge_storage_property_to_api(v: &PropertyValue) -> nervusdb_v2_api::PropertyValue {
+    match v {
+        PropertyValue::Null => nervusdb_v2_api::PropertyValue::Null,
+        PropertyValue::Bool(b) => nervusdb_v2_api::PropertyValue::Bool(*b),
+        PropertyValue::Int(i) => nervusdb_v2_api::PropertyValue::Int(*i),
+        PropertyValue::Float(f) => nervusdb_v2_api::PropertyValue::Float(*f),
+        PropertyValue::String(s) => nervusdb_v2_api::PropertyValue::String(s.clone()),
+        PropertyValue::DateTime(i) => nervusdb_v2_api::PropertyValue::DateTime(*i),
+        PropertyValue::Blob(b) => nervusdb_v2_api::PropertyValue::Blob(b.clone()),
+        PropertyValue::List(l) => nervusdb_v2_api::PropertyValue::List(
+            l.iter().map(merge_storage_property_to_api).collect(),
+        ),
+        PropertyValue::Map(m) => nervusdb_v2_api::PropertyValue::Map(
+            m.iter()
+                .map(|(k, vv)| (k.clone(), merge_storage_property_to_api(vv)))
+                .collect(),
+        ),
+    }
+}
+
+fn merge_storage_property_to_value(v: &PropertyValue) -> Value {
+    match v {
+        PropertyValue::Null => Value::Null,
+        PropertyValue::Bool(b) => Value::Bool(*b),
+        PropertyValue::Int(i) => Value::Int(*i),
+        PropertyValue::Float(f) => Value::Float(*f),
+        PropertyValue::String(s) => Value::String(s.clone()),
+        PropertyValue::DateTime(i) => Value::DateTime(*i),
+        PropertyValue::Blob(b) => Value::Blob(b.clone()),
+        PropertyValue::List(l) => {
+            Value::List(l.iter().map(merge_storage_property_to_value).collect())
+        }
+        PropertyValue::Map(m) => Value::Map(
+            m.iter()
+                .map(|(k, vv)| (k.clone(), merge_storage_property_to_value(vv)))
+                .collect(),
+        ),
+    }
+}
+
+fn merge_node_matches_snapshot<S: GraphSnapshot>(
+    snapshot: &S,
+    iid: InternalNodeId,
+    labels: &[String],
+    props: &std::collections::BTreeMap<String, PropertyValue>,
+) -> bool {
+    if snapshot.is_tombstoned_node(iid) {
+        return false;
+    }
+
+    if !labels.is_empty() {
+        let mut node_labels = Vec::new();
+        if let Some(ids) = snapshot.resolve_node_labels(iid) {
+            for id in ids {
+                if let Some(name) = snapshot.resolve_label_name(id) {
+                    node_labels.push(name);
+                }
+            }
+        } else if let Some(id) = snapshot.node_label(iid)
+            && let Some(name) = snapshot.resolve_label_name(id)
+        {
+            node_labels.push(name);
+        }
+
+        for required in labels {
+            if !node_labels.iter().any(|actual| actual == required) {
+                return false;
+            }
+        }
+    }
+
+    for (k, v) in props {
+        if snapshot.node_property(iid, k) != Some(merge_storage_property_to_api(v)) {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn merge_node_matches_overlay(
+    node: &MergeOverlayNode,
+    labels: &[String],
+    props: &std::collections::BTreeMap<String, PropertyValue>,
+) -> bool {
+    for required in labels {
+        if !node.labels.iter().any(|actual| actual == required) {
+            return false;
+        }
+    }
+    for (k, v) in props {
+        if node.props.get(k) != Some(v) {
+            return false;
+        }
+    }
+    true
+}
+
+fn merge_find_node_candidates<S: GraphSnapshot>(
+    snapshot: &S,
+    overlay: &MergeOverlayState,
+    labels: &[String],
+    props: &std::collections::BTreeMap<String, PropertyValue>,
+) -> Vec<InternalNodeId> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for n in &overlay.nodes {
+        if merge_node_matches_overlay(n, labels, props) && seen.insert(n.iid) {
+            out.push(n.iid);
+        }
+    }
+
+    for iid in snapshot.nodes() {
+        if merge_node_matches_snapshot(snapshot, iid, labels, props) && seen.insert(iid) {
+            out.push(iid);
+        }
+    }
+
+    out
+}
+
+fn merge_materialize_node_value<S: GraphSnapshot>(
+    snapshot: &S,
+    overlay: &MergeOverlayState,
+    iid: InternalNodeId,
+) -> Value {
+    if let Some(node) = overlay.nodes.iter().find(|n| n.iid == iid) {
+        return Value::Node(NodeValue {
+            id: iid,
+            labels: node.labels.clone(),
+            properties: merge_props_to_values(&node.props),
+        });
+    }
+
+    let labels = snapshot
+        .resolve_node_labels(iid)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|lid| snapshot.resolve_label_name(lid))
+        .collect::<Vec<_>>();
+
+    let properties = snapshot
+        .node_properties(iid)
+        .unwrap_or_default()
+        .iter()
+        .map(|(k, v)| (k.clone(), convert_api_property_to_value(v)))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    Value::Node(NodeValue {
+        id: iid,
+        labels,
+        properties,
+    })
+}
+
+fn merge_edge_matches_snapshot<S: GraphSnapshot>(
+    snapshot: &S,
+    edge: EdgeKey,
+    props: &std::collections::BTreeMap<String, PropertyValue>,
+) -> bool {
+    for (k, v) in props {
+        if snapshot.edge_property(edge, k) != Some(merge_storage_property_to_api(v)) {
+            return false;
+        }
+    }
+    true
+}
+
+fn merge_edge_matches_overlay(
+    edge: &MergeOverlayEdge,
+    props: &std::collections::BTreeMap<String, PropertyValue>,
+) -> bool {
+    for (k, v) in props {
+        if edge.props.get(k) != Some(v) {
+            return false;
+        }
+    }
+    true
+}
+
+fn merge_collect_edges_between<S: GraphSnapshot>(
+    snapshot: &S,
+    overlay: &MergeOverlayState,
+    left: InternalNodeId,
+    right: InternalNodeId,
+    rel_type: RelTypeId,
+    direction: &crate::ast::RelationshipDirection,
+    rel_props: &std::collections::BTreeMap<String, PropertyValue>,
+) -> Vec<EdgeKey> {
+    let mut out = Vec::new();
+    let dedup_by_key = !rel_props.is_empty();
+    let mut seen = std::collections::HashSet::new();
+
+    let mut collect_dir = |src: InternalNodeId, dst: InternalNodeId| {
+        for edge in snapshot.neighbors(src, Some(rel_type)) {
+            if edge.dst == dst
+                && merge_edge_matches_snapshot(snapshot, edge, rel_props)
+                && (!dedup_by_key || seen.insert(edge))
+            {
+                out.push(edge);
+            }
+        }
+        for edge in &overlay.edges {
+            if edge.key.src == src
+                && edge.key.dst == dst
+                && edge.key.rel == rel_type
+                && merge_edge_matches_overlay(edge, rel_props)
+                && (!dedup_by_key || seen.insert(edge.key))
+            {
+                out.push(edge.key);
+            }
+        }
+    };
+
+    match direction {
+        crate::ast::RelationshipDirection::LeftToRight => collect_dir(left, right),
+        crate::ast::RelationshipDirection::RightToLeft => collect_dir(right, left),
+        crate::ast::RelationshipDirection::Undirected => {
+            collect_dir(left, right);
+            collect_dir(right, left);
+        }
+    }
+
+    out
+}
+
+fn merge_create_node(
+    txn: &mut dyn WriteableGraph,
+    node_pat: &crate::ast::NodePattern,
+    props: &std::collections::BTreeMap<String, PropertyValue>,
+    created_count: &mut u32,
+) -> Result<InternalNodeId> {
+    let external_id = ExternalId::from(
+        *created_count as u64 + chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64,
+    );
+    let label_id = if let Some(label) = node_pat.labels.first() {
+        txn.get_or_create_label_id(label)?
+    } else {
+        UNLABELED_LABEL_ID
+    };
+
+    let iid = txn.create_node(external_id, label_id)?;
+    for extra_label in node_pat.labels.iter().skip(1) {
+        let extra_label_id = txn.get_or_create_label_id(extra_label)?;
+        txn.add_node_label(iid, extra_label_id)?;
+    }
+    for (k, v) in props {
+        txn.set_node_property(iid, k.clone(), v.clone())?;
+    }
+    *created_count += 1;
+    Ok(iid)
+}
+
+fn execute_merge_create_from_rows<S: GraphSnapshot>(
+    snapshot: &S,
+    input_rows: Vec<Row>,
+    txn: &mut dyn WriteableGraph,
+    pattern: &Pattern,
+    params: &crate::query_api::Params,
+    on_create_items: &[(String, String, Expression)],
+    on_match_items: &[(String, String, Expression)],
+    overlay: &mut MergeOverlayState,
+) -> Result<(u32, Vec<Row>)> {
+    let mut created_count = 0u32;
+    let mut output_rows = Vec::new();
+
+    if pattern.elements.is_empty() {
+        return Err(Error::Other("MERGE pattern cannot be empty".into()));
+    }
+
+    if pattern.elements.len() == 1 {
+        let node_pat = match &pattern.elements[0] {
+            PathElement::Node(n) => n,
+            _ => return Err(Error::Other("MERGE pattern must start with a node".into())),
+        };
+
+        for row in input_rows {
+            let node_props = merge_eval_props_on_row(snapshot, &row, &node_pat.properties, params)?;
+            let mut was_created = false;
+            let mut candidates = if let Some(var) = &node_pat.variable {
+                row.get_node(var).map(|iid| vec![iid]).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+
+            if candidates.is_empty() {
+                candidates =
+                    merge_find_node_candidates(snapshot, overlay, &node_pat.labels, &node_props);
+            }
+
+            if candidates.is_empty() {
+                let iid = merge_create_node(txn, node_pat, &node_props, &mut created_count)?;
+                overlay.nodes.push(MergeOverlayNode {
+                    iid,
+                    labels: node_pat.labels.clone(),
+                    props: node_props.clone(),
+                });
+                candidates.push(iid);
+                was_created = true;
+            }
+
+            for iid in candidates {
+                let mut out_row = row.clone();
+                if let Some(var) = &node_pat.variable {
+                    out_row = out_row.with(
+                        var.clone(),
+                        merge_materialize_node_value(snapshot, overlay, iid),
+                    );
+                }
+                if was_created {
+                    if !on_create_items.is_empty() {
+                        merge_apply_set_items(snapshot, txn, &out_row, on_create_items, params)?;
+                    }
+                } else if !on_match_items.is_empty() {
+                    merge_apply_set_items(snapshot, txn, &out_row, on_match_items, params)?;
+                }
+                output_rows.push(out_row);
+            }
+        }
+
+        return Ok((created_count, output_rows));
+    }
+
+    if pattern.elements.len() != 3 {
+        return Err(Error::NotImplemented(
+            "MERGE patterns with more than one relationship are not supported in execute_mixed",
+        ));
+    }
+
+    let src_node = match &pattern.elements[0] {
+        PathElement::Node(n) => n,
+        _ => return Err(Error::Other("MERGE pattern must start with a node".into())),
+    };
+    let rel_pat = match &pattern.elements[1] {
+        PathElement::Relationship(r) => r,
+        _ => {
+            return Err(Error::Other(
+                "MERGE pattern middle element must be a relationship".into(),
+            ));
+        }
+    };
+    let dst_node = match &pattern.elements[2] {
+        PathElement::Node(n) => n,
+        _ => return Err(Error::Other("MERGE pattern must end with a node".into())),
+    };
+
+    let rel_type_name = rel_pat
+        .types
+        .first()
+        .ok_or_else(|| Error::Other("MERGE relationship requires a type".into()))?
+        .clone();
+
+    for row in input_rows {
+        let src_props = merge_eval_props_on_row(snapshot, &row, &src_node.properties, params)?;
+        let dst_props = merge_eval_props_on_row(snapshot, &row, &dst_node.properties, params)?;
+        let rel_props = merge_eval_props_on_row(snapshot, &row, &rel_pat.properties, params)?;
+
+        let mut src_candidates = if let Some(var) = &src_node.variable {
+            row.get_node(var).map(|iid| vec![iid]).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let mut dst_candidates = if let Some(var) = &dst_node.variable {
+            row.get_node(var).map(|iid| vec![iid]).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        let mut created_src = None;
+        let mut created_dst = None;
+
+        if src_candidates.is_empty() {
+            src_candidates =
+                merge_find_node_candidates(snapshot, overlay, &src_node.labels, &src_props);
+        }
+        if src_candidates.is_empty() {
+            let iid = merge_create_node(txn, src_node, &src_props, &mut created_count)?;
+            overlay.nodes.push(MergeOverlayNode {
+                iid,
+                labels: src_node.labels.clone(),
+                props: src_props.clone(),
+            });
+            src_candidates.push(iid);
+            created_src = Some(iid);
+        }
+
+        if dst_candidates.is_empty() {
+            dst_candidates =
+                merge_find_node_candidates(snapshot, overlay, &dst_node.labels, &dst_props);
+        }
+        if dst_candidates.is_empty() {
+            let iid = merge_create_node(txn, dst_node, &dst_props, &mut created_count)?;
+            overlay.nodes.push(MergeOverlayNode {
+                iid,
+                labels: dst_node.labels.clone(),
+                props: dst_props.clone(),
+            });
+            dst_candidates.push(iid);
+            created_dst = Some(iid);
+        }
+
+        let rel_type = txn.get_or_create_rel_type_id(&rel_type_name)?;
+        let mut matched_rows = Vec::new();
+
+        for &src_iid in &src_candidates {
+            for &dst_iid in &dst_candidates {
+                let edges = merge_collect_edges_between(
+                    snapshot,
+                    overlay,
+                    src_iid,
+                    dst_iid,
+                    rel_type,
+                    &rel_pat.direction,
+                    &rel_props,
+                );
+
+                for edge in edges {
+                    let mut out_row = row.clone();
+                    if let Some(var) = &src_node.variable {
+                        if out_row.get(var).is_none() {
+                            out_row = out_row.with(
+                                var.clone(),
+                                merge_materialize_node_value(snapshot, overlay, src_iid),
+                            );
+                        }
+                    }
+                    if let Some(var) = &dst_node.variable {
+                        if out_row.get(var).is_none() {
+                            out_row = out_row.with(
+                                var.clone(),
+                                merge_materialize_node_value(snapshot, overlay, dst_iid),
+                            );
+                        }
+                    }
+                    if let Some(var) = &rel_pat.variable {
+                        if let Some(overlay_edge) =
+                            overlay.edges.iter().rev().find(|e| {
+                                e.key == edge && merge_edge_matches_overlay(e, &rel_props)
+                            })
+                        {
+                            out_row = out_row.with(
+                                var.clone(),
+                                Value::Relationship(RelationshipValue {
+                                    key: edge,
+                                    rel_type: rel_type_name.clone(),
+                                    properties: merge_props_to_values(&overlay_edge.props),
+                                }),
+                            );
+                        } else {
+                            out_row = out_row.with(var.clone(), Value::EdgeKey(edge));
+                        }
+                    }
+                    if let Some(path_var) = &pattern.variable {
+                        out_row.join_path(path_var, edge.src, edge, edge.dst);
+                    }
+                    if !on_match_items.is_empty() {
+                        merge_apply_set_items(snapshot, txn, &out_row, on_match_items, params)?;
+                    }
+                    matched_rows.push(out_row);
+                }
+            }
+        }
+
+        if !matched_rows.is_empty() {
+            output_rows.extend(matched_rows);
+            continue;
+        }
+
+        let src_iid = *src_candidates
+            .first()
+            .ok_or_else(|| Error::Other("missing source node for MERGE relationship".into()))?;
+        let dst_iid = *dst_candidates.first().ok_or_else(|| {
+            Error::Other("missing destination node for MERGE relationship".into())
+        })?;
+
+        let (edge_src, edge_dst) = match rel_pat.direction {
+            crate::ast::RelationshipDirection::LeftToRight
+            | crate::ast::RelationshipDirection::Undirected => (src_iid, dst_iid),
+            crate::ast::RelationshipDirection::RightToLeft => (dst_iid, src_iid),
+        };
+
+        txn.create_edge(edge_src, rel_type, edge_dst)?;
+        created_count += 1;
+        let edge_key = EdgeKey {
+            src: edge_src,
+            rel: rel_type,
+            dst: edge_dst,
+        };
+
+        for (k, v) in &rel_props {
+            txn.set_edge_property(edge_src, rel_type, edge_dst, k.clone(), v.clone())?;
+        }
+        overlay.edges.push(MergeOverlayEdge {
+            key: edge_key,
+            props: rel_props.clone(),
+        });
+
+        let mut out_row = row.clone();
+        if let Some(var) = &src_node.variable {
+            if out_row.get(var).is_none() {
+                let value = if Some(src_iid) == created_src {
+                    Value::Node(NodeValue {
+                        id: src_iid,
+                        labels: src_node.labels.clone(),
+                        properties: merge_props_to_values(&src_props),
+                    })
+                } else {
+                    merge_materialize_node_value(snapshot, overlay, src_iid)
+                };
+                out_row = out_row.with(var.clone(), value);
+            }
+        }
+        if let Some(var) = &dst_node.variable {
+            if out_row.get(var).is_none() {
+                let value = if Some(dst_iid) == created_dst {
+                    Value::Node(NodeValue {
+                        id: dst_iid,
+                        labels: dst_node.labels.clone(),
+                        properties: merge_props_to_values(&dst_props),
+                    })
+                } else {
+                    merge_materialize_node_value(snapshot, overlay, dst_iid)
+                };
+                out_row = out_row.with(var.clone(), value);
+            }
+        }
+        if let Some(var) = &rel_pat.variable {
+            out_row = out_row.with(
+                var.clone(),
+                Value::Relationship(RelationshipValue {
+                    key: edge_key,
+                    rel_type: rel_type_name.clone(),
+                    properties: merge_props_to_values(&rel_props),
+                }),
+            );
+        }
+        if let Some(path_var) = &pattern.variable {
+            out_row.join_path(path_var, edge_src, edge_key, edge_dst);
+        }
+        if !on_create_items.is_empty() {
+            merge_apply_set_items(snapshot, txn, &out_row, on_create_items, params)?;
+        }
+        output_rows.push(out_row);
+    }
+
+    Ok((created_count, output_rows))
+}
 /// Find the CREATE part of a plan (for MERGE support)
 fn find_create_plan(plan: &Plan) -> Option<&Plan> {
     match plan {

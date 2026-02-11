@@ -1139,3 +1139,91 @@ fn test_temporal10_inseconds_no_diff_with_now_functions_is_zero() {
         Some("PT0S".to_string())
     );
 }
+
+#[test]
+fn test_pattern_predicate_directed_and_undirected_filters() {
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path().join("test.ndb")).unwrap();
+    let params = Params::new();
+
+    let mut txn = db.begin_write();
+    prepare(
+        "CREATE (a {name: 'A'})-[:REL1]->(b {name: 'B'}), \
+                (b)-[:REL2]->(a), \
+                (a)-[:REL3]->(:X {name: 'C'}), \
+                (a)-[:REL1]->(:X {name: 'D'})",
+    )
+    .unwrap()
+    .execute_write(&db.snapshot(), &mut txn, &params)
+    .unwrap();
+    txn.commit().unwrap();
+    let snapshot = db.snapshot();
+
+    let out_q = prepare(
+        "MATCH (n) \
+         WHERE (n)-[]->() \
+         RETURN n.name AS name \
+         ORDER BY name",
+    )
+    .unwrap();
+    let out_rows: Vec<_> = out_q
+        .execute_streaming(&snapshot, &params)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let out_names: Vec<String> = out_rows
+        .iter()
+        .filter_map(|r| match r.get("name") {
+            Some(Value::String(s)) => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(out_names, vec!["A".to_string(), "B".to_string()]);
+
+    let in_q = prepare(
+        "MATCH (n) \
+         WHERE (n)<-[]-() \
+         RETURN n.name AS name \
+         ORDER BY name",
+    )
+    .unwrap();
+    let in_rows: Vec<_> = in_q
+        .execute_streaming(&snapshot, &params)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let in_names: Vec<String> = in_rows
+        .iter()
+        .filter_map(|r| match r.get("name") {
+            Some(Value::String(s)) => Some(s.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        in_names,
+        vec![
+            "A".to_string(),
+            "B".to_string(),
+            "C".to_string(),
+            "D".to_string()
+        ]
+    );
+}
+
+#[test]
+fn test_pattern_predicate_rejects_unbound_variable() {
+    let err = prepare("MATCH (n) WHERE (n)-[r]->() RETURN n")
+        .expect_err("pattern predicate should reject introducing unbound variables");
+    assert!(
+        err.to_string().contains("UndefinedVariable"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_pattern_predicate_rejects_self_node_pattern() {
+    let err = prepare("MATCH (n) WHERE (n) RETURN n")
+        .expect_err("single-node pattern predicate should be invalid");
+    assert!(
+        err.to_string().contains("InvalidArgumentType"),
+        "unexpected error: {err}"
+    );
+}
