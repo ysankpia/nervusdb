@@ -394,6 +394,22 @@ impl<'a> Lexer<'a> {
     }
 
     fn read_number(&mut self, first: char, line: usize, column: usize) -> Result<Token, String> {
+        // Integer literals with base prefix (0x / 0o) are parsed as integer tokens
+        // with decimal `raw` so downstream parser/evaluator can keep a single integer path.
+        if first == '0'
+            && let Some(&prefix) = self.chars.peek()
+        {
+            let radix = match prefix {
+                'x' | 'X' => Some(16),
+                'o' | 'O' => Some(8),
+                _ => None,
+            };
+            if let Some(radix) = radix {
+                self.advance(); // consume base marker
+                return self.read_prefixed_integer(radix, line, column);
+            }
+        }
+
         let mut value = String::new();
         value.push(first);
         let mut has_dot = first == '.';
@@ -472,6 +488,55 @@ impl<'a> Lexer<'a> {
                 raw: value,
                 value: number,
             }),
+            line,
+            column,
+        })
+    }
+
+    fn read_prefixed_integer(
+        &mut self,
+        radix: u32,
+        line: usize,
+        column: usize,
+    ) -> Result<Token, String> {
+        let mut digits = String::new();
+        while let Some(&ch) = self.chars.peek() {
+            if ch.is_digit(radix) {
+                digits.push(ch);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        if digits.is_empty() {
+            return Err("syntax error: InvalidNumberLiteral".to_string());
+        }
+
+        // Reject `0x1foo` / `0o7bar` style literals as invalid number literals.
+        if let Some(&ch) = self.chars.peek()
+            && (ch.is_ascii_alphanumeric() || ch == '_')
+        {
+            return Err("syntax error: InvalidNumberLiteral".to_string());
+        }
+
+        let magnitude = u128::from_str_radix(&digits, radix)
+            .map_err(|_| "syntax error: IntegerOverflow".to_string())?;
+        let max_signed_magnitude = i64::MAX as u128 + 1;
+        if magnitude > max_signed_magnitude {
+            return Err("syntax error: IntegerOverflow".to_string());
+        }
+
+        let raw = magnitude.to_string();
+        let value = raw
+            .parse::<f64>()
+            .map_err(|_| format!("syntax error: Invalid number: {raw}"))?;
+        if !value.is_finite() {
+            return Err(format!("syntax error: Invalid number: {raw}"));
+        }
+
+        Ok(Token {
+            token_type: TokenType::Number(NumericLiteral { raw, value }),
             line,
             column,
         })

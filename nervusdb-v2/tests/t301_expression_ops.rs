@@ -389,3 +389,66 @@ fn test_range_comparison_unwind_numeric_pairs() -> nervusdb_v2::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_hex_and_octal_integer_literals_roundtrip() -> nervusdb_v2::Result<()> {
+    let dir = tempdir()?;
+    let db = Db::open(dir.path().join("t301_hex_octal_literals.ndb"))?;
+    let snapshot = db.snapshot();
+
+    let q = "RETURN \
+             0x1 AS h1, \
+             0x7FFFFFFFFFFFFFFF AS hmax, \
+             -0x8000000000000000 AS hmin, \
+             0o1 AS o1, \
+             0o777777777777777777777 AS omax, \
+             -0o1000000000000000000000 AS omin";
+    let rows: Vec<_> = nervusdb_v2::query::prepare(q)?
+        .execute_streaming(&snapshot, &Params::default())
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(rows.len(), 1);
+
+    assert!(matches!(rows[0].get("h1"), Some(Value::Int(1))));
+    assert!(matches!(rows[0].get("hmax"), Some(Value::Int(i64::MAX))));
+    assert!(matches!(rows[0].get("hmin"), Some(Value::Int(i64::MIN))));
+    assert!(matches!(rows[0].get("o1"), Some(Value::Int(1))));
+    assert!(matches!(rows[0].get("omax"), Some(Value::Int(i64::MAX))));
+    assert!(matches!(rows[0].get("omin"), Some(Value::Int(i64::MIN))));
+
+    Ok(())
+}
+
+#[test]
+fn test_hex_octal_invalid_and_overflow_compile_errors() {
+    let invalid_cases = [
+        "RETURN 0x AS literal",
+        "RETURN 0x1A2b3j4D5E6f7 AS literal",
+        "RETURN 0o AS literal",
+        "RETURN 0o9 AS literal",
+    ];
+    for query in invalid_cases {
+        let err = nervusdb_v2::query::prepare(query)
+            .expect_err("prepare should fail on invalid prefixed integer literal")
+            .to_string();
+        assert!(
+            err.contains("InvalidNumberLiteral") || err.contains("Invalid number"),
+            "unexpected compile error for `{query}`: {err}"
+        );
+    }
+
+    let overflow_cases = [
+        "RETURN 0x8000000000000000 AS literal",
+        "RETURN -0x8000000000000001 AS literal",
+        "RETURN 0o1000000000000000000000 AS literal",
+        "RETURN -0o1000000000000000000001 AS literal",
+    ];
+    for query in overflow_cases {
+        let err = nervusdb_v2::query::prepare(query)
+            .expect_err("prepare should fail on overflow prefixed integer literal")
+            .to_string();
+        assert!(
+            err.contains("IntegerOverflow"),
+            "unexpected compile error for `{query}`: {err}"
+        );
+    }
+}
