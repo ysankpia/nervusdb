@@ -733,6 +733,11 @@ pub enum Plan {
         input: Box<Plan>,
         items: Vec<(String, String, Expression)>, // (variable, key, value_expression)
     },
+    /// `SET n = {...}` / `SET n += {...}` - replace or append properties from map expression
+    SetPropertiesFromMap {
+        input: Box<Plan>,
+        items: Vec<(String, Expression, bool)>, // (variable, map_expression, append)
+    },
     /// `SET n:Label` - add labels on nodes
     SetLabels {
         input: Box<Plan>,
@@ -1932,7 +1937,7 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                 "DELETE must be executed via execute_write".into(),
             )))))
         }
-        Plan::SetProperty { .. } | Plan::SetLabels { .. } => {
+        Plan::SetProperty { .. } | Plan::SetPropertiesFromMap { .. } | Plan::SetLabels { .. } => {
             PlanIterator::Dynamic(Box::new(std::iter::once(Err(Error::Other(
                 "SET must be executed via execute_write".into(),
             )))))
@@ -2006,6 +2011,9 @@ pub fn execute_write<S: GraphSnapshot>(
             expressions,
         } => execute_delete(snapshot, input, txn, *detach, expressions, params),
         Plan::SetProperty { input, items } => execute_set(snapshot, input, txn, items, params),
+        Plan::SetPropertiesFromMap { input, items } => {
+            execute_set_from_maps(snapshot, input, txn, items, params)
+        }
         Plan::SetLabels { input, items } => execute_set_labels(snapshot, input, txn, items, params),
         Plan::RemoveProperty { input, items } => {
             execute_remove(snapshot, input, txn, items, params)
@@ -2076,6 +2084,13 @@ pub fn execute_write_with_rows<S: GraphSnapshot>(
             let values_plan = Plan::Values { rows: rows.clone() };
             let updated = execute_set(snapshot, &values_plan, txn, items, params)?;
             let rows = apply_set_property_overlay_to_rows(snapshot, rows, items, params);
+            Ok((prefix_mods + updated, rows))
+        }
+        Plan::SetPropertiesFromMap { input, items } => {
+            let (prefix_mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
+            let values_plan = Plan::Values { rows: rows.clone() };
+            let updated = execute_set_from_maps(snapshot, &values_plan, txn, items, params)?;
+            let rows = apply_set_map_overlay_to_rows(snapshot, rows, items, params);
             Ok((prefix_mods + updated, rows))
         }
         Plan::SetLabels { input, items } => {
@@ -2526,6 +2541,21 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
             let values_plan = Plan::Values { rows: rows.clone() };
             let updated = execute_set(snapshot, &values_plan, txn, items, params)?;
             let rows = apply_set_property_overlay_to_rows(snapshot, rows, items, params);
+            Ok((prefix_mods + updated, rows))
+        }
+        Plan::SetPropertiesFromMap { input, items } => {
+            let (prefix_mods, rows) = execute_merge_with_rows_inner(
+                input,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                overlay,
+            )?;
+            let values_plan = Plan::Values { rows: rows.clone() };
+            let updated = execute_set_from_maps(snapshot, &values_plan, txn, items, params)?;
+            let rows = apply_set_map_overlay_to_rows(snapshot, rows, items, params);
             Ok((prefix_mods + updated, rows))
         }
         Plan::SetLabels { input, items } => {
@@ -3101,6 +3131,34 @@ fn merge_storage_property_to_api(v: &PropertyValue) -> nervusdb_v2_api::Property
     }
 }
 
+fn api_property_to_storage(v: &nervusdb_v2_api::PropertyValue) -> PropertyValue {
+    match v {
+        nervusdb_v2_api::PropertyValue::Null => PropertyValue::Null,
+        nervusdb_v2_api::PropertyValue::Bool(b) => PropertyValue::Bool(*b),
+        nervusdb_v2_api::PropertyValue::Int(i) => PropertyValue::Int(*i),
+        nervusdb_v2_api::PropertyValue::Float(f) => PropertyValue::Float(*f),
+        nervusdb_v2_api::PropertyValue::String(s) => PropertyValue::String(s.clone()),
+        nervusdb_v2_api::PropertyValue::DateTime(i) => PropertyValue::DateTime(*i),
+        nervusdb_v2_api::PropertyValue::Blob(b) => PropertyValue::Blob(b.clone()),
+        nervusdb_v2_api::PropertyValue::List(l) => {
+            PropertyValue::List(l.iter().map(api_property_to_storage).collect())
+        }
+        nervusdb_v2_api::PropertyValue::Map(m) => PropertyValue::Map(
+            m.iter()
+                .map(|(k, vv)| (k.clone(), api_property_to_storage(vv)))
+                .collect(),
+        ),
+    }
+}
+
+fn api_property_map_to_storage(
+    map: &std::collections::BTreeMap<String, nervusdb_v2_api::PropertyValue>,
+) -> std::collections::BTreeMap<String, PropertyValue> {
+    map.iter()
+        .map(|(k, v)| (k.clone(), api_property_to_storage(v)))
+        .collect()
+}
+
 fn merge_storage_property_to_value(v: &PropertyValue) -> Value {
     match v {
         PropertyValue::Null => Value::Null,
@@ -3643,6 +3701,7 @@ fn find_create_plan(plan: &Plan) -> Option<&Plan> {
         | Plan::Aggregate { input, .. }
         | Plan::Delete { input, .. }
         | Plan::SetProperty { input, .. }
+        | Plan::SetPropertiesFromMap { input, .. }
         | Plan::SetLabels { input, .. }
         | Plan::RemoveProperty { input, .. }
         | Plan::RemoveLabels { input, .. }
@@ -4667,6 +4726,125 @@ fn execute_set<S: GraphSnapshot>(
     Ok(count)
 }
 
+fn value_map_to_property_map(
+    map: &std::collections::BTreeMap<String, Value>,
+) -> Result<std::collections::BTreeMap<String, PropertyValue>> {
+    let mut out = std::collections::BTreeMap::new();
+    for (k, v) in map {
+        out.insert(k.clone(), convert_executor_value_to_property(v)?);
+    }
+    Ok(out)
+}
+
+fn execute_set_from_maps<S: GraphSnapshot>(
+    snapshot: &S,
+    input: &Plan,
+    txn: &mut dyn WriteableGraph,
+    items: &[(String, Expression, bool)],
+    params: &crate::query_api::Params,
+) -> Result<u32> {
+    let mut count = 0;
+
+    for row in execute_plan(snapshot, input, params) {
+        let row = row?;
+        for (var, expr, append) in items {
+            let evaluated = evaluate_expression_value(expr, &row, snapshot, params);
+            if matches!(evaluated, Value::Null) {
+                continue;
+            }
+            let Value::Map(map_values) = evaluated else {
+                return Err(Error::Other(
+                    "SET map operation expects a map expression".to_string(),
+                ));
+            };
+
+            if let Some(node_id) = row.get_node(var) {
+                let existing: std::collections::BTreeMap<String, PropertyValue> = match row.get(var)
+                {
+                    Some(Value::Node(node)) => value_map_to_property_map(&node.properties)?,
+                    _ => snapshot
+                        .node_properties(node_id)
+                        .map(|props| api_property_map_to_storage(&props))
+                        .unwrap_or_default(),
+                };
+                let mut target = if *append {
+                    existing.clone()
+                } else {
+                    std::collections::BTreeMap::new()
+                };
+
+                for (key, value) in &map_values {
+                    if matches!(value, Value::Null) {
+                        target.remove(key);
+                    } else {
+                        target.insert(key.clone(), convert_executor_value_to_property(value)?);
+                    }
+                }
+
+                for key in existing.keys() {
+                    if !target.contains_key(key) {
+                        txn.remove_node_property(node_id, key)?;
+                        count += 1;
+                    }
+                }
+                for (key, value) in target {
+                    if existing.get(&key) != Some(&value) {
+                        txn.set_node_property(node_id, key, value)?;
+                        count += 1;
+                    }
+                }
+                continue;
+            }
+
+            if let Some(edge) = row.get_edge(var) {
+                let existing: std::collections::BTreeMap<String, PropertyValue> = match row.get(var)
+                {
+                    Some(Value::Relationship(rel)) => value_map_to_property_map(&rel.properties)?,
+                    _ => snapshot
+                        .edge_properties(edge)
+                        .map(|props| api_property_map_to_storage(&props))
+                        .unwrap_or_default(),
+                };
+                let mut target = if *append {
+                    existing.clone()
+                } else {
+                    std::collections::BTreeMap::new()
+                };
+
+                for (key, value) in &map_values {
+                    if matches!(value, Value::Null) {
+                        target.remove(key);
+                    } else {
+                        target.insert(key.clone(), convert_executor_value_to_property(value)?);
+                    }
+                }
+
+                for key in existing.keys() {
+                    if !target.contains_key(key) {
+                        txn.remove_edge_property(edge.src, edge.rel, edge.dst, key)?;
+                        count += 1;
+                    }
+                }
+                for (key, value) in target {
+                    if existing.get(&key) != Some(&value) {
+                        txn.set_edge_property(edge.src, edge.rel, edge.dst, key, value)?;
+                        count += 1;
+                    }
+                }
+                continue;
+            }
+
+            if matches!(row.get(var), Some(Value::Null)) {
+                continue;
+            }
+
+            return Err(Error::Other(format!("Variable {} not found in row", var)));
+        }
+    }
+
+    Ok(count)
+}
+
 fn execute_remove<S: GraphSnapshot>(
     snapshot: &S,
     input: &Plan,
@@ -4856,6 +5034,129 @@ fn apply_set_property_overlay_to_rows<S: GraphSnapshot>(
                             properties.remove(key);
                         } else {
                             properties.insert(key.clone(), val);
+                        }
+                        row = row.with(
+                            var.clone(),
+                            Value::Relationship(RelationshipValue {
+                                key: edge,
+                                rel_type,
+                                properties,
+                            }),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+
+            row
+        })
+        .collect()
+}
+
+fn apply_set_map_overlay_to_rows<S: GraphSnapshot>(
+    snapshot: &S,
+    rows: Vec<Row>,
+    items: &[(String, Expression, bool)],
+    params: &crate::query_api::Params,
+) -> Vec<Row> {
+    rows.into_iter()
+        .map(|mut row| {
+            // Keep evaluation semantics aligned with execute_set_from_maps.
+            let source_row = row.clone();
+
+            for (var, expr, append) in items {
+                let Some(current) = row.get(var).cloned() else {
+                    continue;
+                };
+
+                let evaluated = evaluate_expression_value(expr, &source_row, snapshot, params);
+                if matches!(evaluated, Value::Null) {
+                    continue;
+                }
+                let Value::Map(map_values) = evaluated else {
+                    continue;
+                };
+
+                match current {
+                    Value::Node(mut node) => {
+                        if !append {
+                            node.properties.clear();
+                        }
+                        for (key, value) in map_values {
+                            if matches!(value, Value::Null) {
+                                node.properties.remove(&key);
+                            } else {
+                                node.properties.insert(key, value);
+                            }
+                        }
+                        row = row.with(var.clone(), Value::Node(node));
+                    }
+                    Value::NodeId(node_id) => {
+                        let labels = snapshot
+                            .resolve_node_labels(node_id)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter_map(|id| snapshot.resolve_label_name(id))
+                            .collect();
+                        let mut properties: std::collections::BTreeMap<String, Value> = if *append {
+                            snapshot
+                                .node_properties(node_id)
+                                .unwrap_or_default()
+                                .iter()
+                                .map(|(k, v)| (k.clone(), convert_api_property_to_value(v)))
+                                .collect()
+                        } else {
+                            std::collections::BTreeMap::new()
+                        };
+                        for (key, value) in map_values {
+                            if matches!(value, Value::Null) {
+                                properties.remove(&key);
+                            } else {
+                                properties.insert(key, value);
+                            }
+                        }
+                        row = row.with(
+                            var.clone(),
+                            Value::Node(NodeValue {
+                                id: node_id,
+                                labels,
+                                properties,
+                            }),
+                        );
+                    }
+                    Value::Relationship(mut rel) => {
+                        if !append {
+                            rel.properties.clear();
+                        }
+                        for (key, value) in map_values {
+                            if matches!(value, Value::Null) {
+                                rel.properties.remove(&key);
+                            } else {
+                                rel.properties.insert(key, value);
+                            }
+                        }
+                        row = row.with(var.clone(), Value::Relationship(rel));
+                    }
+                    Value::EdgeKey(edge) => {
+                        let rel_type = snapshot
+                            .resolve_rel_type_name(edge.rel)
+                            .unwrap_or_else(|| format!("<{}>", edge.rel));
+                        let mut properties: std::collections::BTreeMap<String, Value> = if *append {
+                            snapshot
+                                .edge_properties(edge)
+                                .unwrap_or_default()
+                                .iter()
+                                .map(|(k, v)| (k.clone(), convert_api_property_to_value(v)))
+                                .collect()
+                        } else {
+                            std::collections::BTreeMap::new()
+                        };
+                        for (key, value) in map_values {
+                            if matches!(value, Value::Null) {
+                                properties.remove(&key);
+                            } else {
+                                properties.insert(key, value);
+                            }
                         }
                         row = row.with(
                             var.clone(),
@@ -5066,6 +5367,7 @@ fn inject_rows(plan: &mut Plan, rows: Vec<Row>) {
         Plan::Create { input, .. }
         | Plan::Delete { input, .. }
         | Plan::SetProperty { input, .. }
+        | Plan::SetPropertiesFromMap { input, .. }
         | Plan::SetLabels { input, .. }
         | Plan::RemoveProperty { input, .. }
         | Plan::RemoveLabels { input, .. }

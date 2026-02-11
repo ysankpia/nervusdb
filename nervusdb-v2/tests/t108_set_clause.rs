@@ -301,3 +301,135 @@ fn test_set_undefined_variable_in_expression_rejected_at_compile_time() {
         "unexpected compile error: {err}"
     );
 }
+
+#[test]
+fn test_set_overwrite_with_map_replaces_properties() -> nervusdb_v2::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("t108_set_map_replace.ndb");
+    let db = Db::open(&db_path)?;
+
+    let node_id = {
+        let mut txn = db.begin_write();
+        let x = txn.get_or_create_label("X")?;
+        let node_id = txn.create_node(1, x)?;
+        txn.set_node_property(
+            node_id,
+            "name".to_string(),
+            PropertyValue::String("A".to_string()),
+        )?;
+        txn.set_node_property(
+            node_id,
+            "name2".to_string(),
+            PropertyValue::String("B".to_string()),
+        )?;
+        txn.commit()?;
+        node_id
+    };
+
+    {
+        let snapshot = db.snapshot();
+        let mut txn = db.begin_write();
+        let q = "MATCH (n:X) SET n = {name: 'B', name2: null, baz: 'C'} RETURN n";
+        let (rows, count) = nervusdb_v2::query::prepare(q)?.execute_mixed(
+            &snapshot,
+            &mut txn,
+            &Default::default(),
+        )?;
+        txn.commit()?;
+        assert_eq!(rows.len(), 1);
+        assert!(count > 0);
+    }
+
+    let snapshot = db.snapshot();
+    assert_eq!(
+        snapshot.node_property(node_id, "name"),
+        Some(PropertyValue::String("B".to_string()))
+    );
+    assert_eq!(snapshot.node_property(node_id, "name2"), None);
+    assert_eq!(
+        snapshot.node_property(node_id, "baz"),
+        Some(PropertyValue::String("C".to_string()))
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_set_append_with_map_merges_and_removes_nulls() -> nervusdb_v2::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("t108_set_map_append.ndb");
+    let db = Db::open(&db_path)?;
+
+    let node_id = {
+        let mut txn = db.begin_write();
+        let x = txn.get_or_create_label("X")?;
+        let node_id = txn.create_node(2, x)?;
+        txn.set_node_property(
+            node_id,
+            "name".to_string(),
+            PropertyValue::String("A".to_string()),
+        )?;
+        txn.set_node_property(
+            node_id,
+            "name2".to_string(),
+            PropertyValue::String("B".to_string()),
+        )?;
+        txn.set_node_property(
+            node_id,
+            "keep".to_string(),
+            PropertyValue::String("Z".to_string()),
+        )?;
+        txn.commit()?;
+        node_id
+    };
+
+    {
+        let snapshot = db.snapshot();
+        let mut txn = db.begin_write();
+        let q =
+            "MATCH (n:X) WHERE n.name = 'A' SET n += {name: 'C', name2: null, newk: 42} RETURN n";
+        let (rows, count) = nervusdb_v2::query::prepare(q)?.execute_mixed(
+            &snapshot,
+            &mut txn,
+            &Default::default(),
+        )?;
+        txn.commit()?;
+        assert_eq!(rows.len(), 1);
+        assert!(count > 0);
+    }
+
+    let snapshot = db.snapshot();
+    assert_eq!(
+        snapshot.node_property(node_id, "name"),
+        Some(PropertyValue::String("C".to_string()))
+    );
+    assert_eq!(snapshot.node_property(node_id, "name2"), None);
+    assert_eq!(
+        snapshot.node_property(node_id, "keep"),
+        Some(PropertyValue::String("Z".to_string()))
+    );
+    assert_eq!(
+        snapshot.node_property(node_id, "newk"),
+        Some(PropertyValue::Int(42))
+    );
+
+    {
+        let snapshot = db.snapshot();
+        let mut txn = db.begin_write();
+        let q = "OPTIONAL MATCH (a:DoesNotExist) SET a += {num: 42} RETURN a";
+        let (rows, count) = nervusdb_v2::query::prepare(q)?.execute_mixed(
+            &snapshot,
+            &mut txn,
+            &Default::default(),
+        )?;
+        txn.commit()?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(count, 0);
+        assert!(matches!(
+            rows[0].get("a"),
+            Some(nervusdb_v2::query::Value::Null)
+        ));
+    }
+
+    Ok(())
+}

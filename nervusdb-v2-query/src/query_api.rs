@@ -184,6 +184,7 @@ impl PreparedQuery {
                         crate::executor::Plan::Create { .. }
                             | crate::executor::Plan::Delete { .. }
                             | crate::executor::Plan::SetProperty { .. }
+                            | crate::executor::Plan::SetPropertiesFromMap { .. }
                             | crate::executor::Plan::SetLabels { .. }
                             | crate::executor::Plan::RemoveProperty { .. }
                             | crate::executor::Plan::RemoveLabels { .. }
@@ -249,6 +250,7 @@ fn plan_contains_write(plan: &Plan) -> bool {
         Plan::Create { .. }
         | Plan::Delete { .. }
         | Plan::SetProperty { .. }
+        | Plan::SetPropertiesFromMap { .. }
         | Plan::SetLabels { .. }
         | Plan::RemoveProperty { .. }
         | Plan::RemoveLabels { .. }
@@ -643,6 +645,10 @@ fn render_plan(plan: &Plan) -> String {
             }
             Plan::SetProperty { input, items } => {
                 let _ = writeln!(out, "{pad}SetProperty(items={items:?})");
+                go(out, input, depth + 1);
+            }
+            Plan::SetPropertiesFromMap { input, items } => {
+                let _ = writeln!(out, "{pad}SetPropertiesFromMap(items={items:?})");
                 go(out, input, depth + 1);
             }
             Plan::SetLabels { input, items } => {
@@ -2683,6 +2689,36 @@ fn compile_set_plan_v2(input: Plan, set: crate::ast::SetClause) -> Result<Plan> 
         };
     }
 
+    let mut map_items = Vec::new();
+    for item in set.map_items {
+        if !known_bindings.contains_key(&item.variable) {
+            return Err(Error::Other(format!(
+                "syntax error: UndefinedVariable ({})",
+                item.variable
+            )));
+        }
+
+        let mut refs = std::collections::HashSet::new();
+        extract_variables_from_expr(&item.value, &mut refs);
+        for var in refs {
+            if !known_bindings.contains_key(&var) {
+                return Err(Error::Other(format!(
+                    "syntax error: UndefinedVariable ({})",
+                    var
+                )));
+            }
+        }
+
+        ensure_no_pattern_predicate(&item.value)?;
+        map_items.push((item.variable, item.value, item.append));
+    }
+    if !map_items.is_empty() {
+        plan = Plan::SetPropertiesFromMap {
+            input: Box::new(plan),
+            items: map_items,
+        };
+    }
+
     let mut label_items = Vec::new();
     for item in set.labels {
         if !known_bindings.contains_key(&item.variable) {
@@ -3804,6 +3840,7 @@ fn extract_output_var_kinds(plan: &Plan, vars: &mut BTreeMap<String, BindingKind
         }
         Plan::Delete { input, .. }
         | Plan::SetProperty { input, .. }
+        | Plan::SetPropertiesFromMap { input, .. }
         | Plan::SetLabels { input, .. }
         | Plan::RemoveProperty { input, .. }
         | Plan::RemoveLabels { input, .. } => {

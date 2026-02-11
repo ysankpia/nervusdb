@@ -390,6 +390,7 @@ impl TokenParser {
 
     fn parse_set(&mut self) -> Result<SetClause, Error> {
         let mut items = Vec::new();
+        let mut map_items = Vec::new();
         let mut labels = Vec::new();
 
         loop {
@@ -408,9 +409,24 @@ impl TokenParser {
                     variable,
                     labels: label_names,
                 });
+            } else if self.match_token(&TokenType::Equals) {
+                let value = self.parse_expression()?;
+                map_items.push(MapSetItem {
+                    variable,
+                    value,
+                    append: false,
+                });
+            } else if self.match_token(&TokenType::Plus) {
+                self.consume(&TokenType::Equals, "Expected '=' after '+' in SET clause")?;
+                let value = self.parse_expression()?;
+                map_items.push(MapSetItem {
+                    variable,
+                    value,
+                    append: true,
+                });
             } else {
                 return Err(Error::Other(
-                    "Expected '.' or ':' after variable in SET clause".to_string(),
+                    "Expected '.', ':', '=' or '+=' after variable in SET clause".to_string(),
                 ));
             }
 
@@ -419,7 +435,11 @@ impl TokenParser {
             }
         }
 
-        Ok(SetClause { items, labels })
+        Ok(SetClause {
+            items,
+            map_items,
+            labels,
+        })
     }
 
     fn parse_set_target_variable(&mut self) -> Result<String, Error> {

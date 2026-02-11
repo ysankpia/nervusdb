@@ -126,6 +126,7 @@ pub enum Direction {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SetClause {
     pub items: Vec<SetItem>,
+    pub map_items: Vec<MapSetItem>,
     pub labels: Vec<LabelSetItem>,
 }
 
@@ -139,6 +140,13 @@ pub struct RemoveClause {
 pub struct SetItem {
     pub property: PropertyAccess,
     pub value: Expression,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MapSetItem {
+    pub variable: String,
+    pub value: Expression,
+    pub append: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
