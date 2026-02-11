@@ -2088,6 +2088,7 @@ pub fn execute_write_with_rows<S: GraphSnapshot>(
             let (prefix_mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
             let values_plan = Plan::Values { rows: rows.clone() };
             let removed = execute_remove(snapshot, &values_plan, txn, items, params)?;
+            let rows = apply_removed_property_overlay_to_rows(snapshot, rows, items);
             Ok((prefix_mods + removed, rows))
         }
         Plan::RemoveLabels { input, items } => {
@@ -2552,6 +2553,7 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
             )?;
             let values_plan = Plan::Values { rows: rows.clone() };
             let removed = execute_remove(snapshot, &values_plan, txn, items, params)?;
+            let rows = apply_removed_property_overlay_to_rows(snapshot, rows, items);
             Ok((prefix_mods + removed, rows))
         }
         Plan::RemoveLabels { input, items } => {
@@ -4634,16 +4636,39 @@ fn execute_remove<S: GraphSnapshot>(
     for row in execute_plan(snapshot, input, params) {
         let row = row?;
         for (var, key) in items {
-            if let Some(node_id) = row.get_node(var) {
-                txn.remove_node_property(node_id, key)?;
-                count += 1;
-            } else if let Some(edge) = row.get_edge(var) {
-                txn.remove_edge_property(edge.src, edge.rel, edge.dst, key)?;
-                count += 1;
-            } else if matches!(row.get(var), Some(Value::Null)) {
-                continue;
-            } else {
-                return Err(Error::Other(format!("Variable {} not found in row", var)));
+            match row.get(var) {
+                Some(Value::Node(node)) => {
+                    let existed = node.properties.contains_key(key);
+                    txn.remove_node_property(node.id, key)?;
+                    if existed {
+                        count += 1;
+                    }
+                }
+                Some(Value::NodeId(node_id)) => {
+                    let existed = snapshot.node_property(*node_id, key).is_some();
+                    txn.remove_node_property(*node_id, key)?;
+                    if existed {
+                        count += 1;
+                    }
+                }
+                Some(Value::Relationship(rel)) => {
+                    let existed = rel.properties.contains_key(key);
+                    txn.remove_edge_property(rel.key.src, rel.key.rel, rel.key.dst, key)?;
+                    if existed {
+                        count += 1;
+                    }
+                }
+                Some(Value::EdgeKey(edge)) => {
+                    let existed = snapshot.edge_property(*edge, key).is_some();
+                    txn.remove_edge_property(edge.src, edge.rel, edge.dst, key)?;
+                    if existed {
+                        count += 1;
+                    }
+                }
+                Some(Value::Null) => continue,
+                Some(_) | None => {
+                    return Err(Error::Other(format!("Variable {} not found in row", var)));
+                }
             }
         }
     }
@@ -4759,6 +4784,78 @@ fn apply_label_overlay_to_rows<S: GraphSnapshot>(
                         properties,
                     }),
                 );
+            }
+            row
+        })
+        .collect()
+}
+
+fn apply_removed_property_overlay_to_rows<S: GraphSnapshot>(
+    snapshot: &S,
+    rows: Vec<Row>,
+    items: &[(String, String)],
+) -> Vec<Row> {
+    rows.into_iter()
+        .map(|mut row| {
+            for (var, key) in items {
+                let Some(current) = row.get(var).cloned() else {
+                    continue;
+                };
+
+                match current {
+                    Value::Node(mut node) => {
+                        node.properties.remove(key);
+                        row = row.with(var.clone(), Value::Node(node));
+                    }
+                    Value::NodeId(node_id) => {
+                        let labels = snapshot
+                            .resolve_node_labels(node_id)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter_map(|id| snapshot.resolve_label_name(id))
+                            .collect();
+                        let mut properties: std::collections::BTreeMap<String, Value> = snapshot
+                            .node_properties(node_id)
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), convert_api_property_to_value(v)))
+                            .collect();
+                        properties.remove(key);
+                        row = row.with(
+                            var.clone(),
+                            Value::Node(NodeValue {
+                                id: node_id,
+                                labels,
+                                properties,
+                            }),
+                        );
+                    }
+                    Value::Relationship(mut rel) => {
+                        rel.properties.remove(key);
+                        row = row.with(var.clone(), Value::Relationship(rel));
+                    }
+                    Value::EdgeKey(edge) => {
+                        let rel_type = snapshot
+                            .resolve_rel_type_name(edge.rel)
+                            .unwrap_or_else(|| format!("<{}>", edge.rel));
+                        let mut properties: std::collections::BTreeMap<String, Value> = snapshot
+                            .edge_properties(edge)
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), convert_api_property_to_value(v)))
+                            .collect();
+                        properties.remove(key);
+                        row = row.with(
+                            var.clone(),
+                            Value::Relationship(RelationshipValue {
+                                key: edge,
+                                rel_type,
+                                properties,
+                            }),
+                        );
+                    }
+                    _ => {}
+                }
             }
             row
         })

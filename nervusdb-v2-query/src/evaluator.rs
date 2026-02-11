@@ -49,24 +49,18 @@ pub fn evaluate_expression_value<S: GraphSnapshot>(
         }
         Expression::PropertyAccess(pa) => {
             if let Some(Value::Node(node)) = row.get(&pa.variable) {
-                if let Some(value) = node.properties.get(&pa.property) {
-                    return value.clone();
-                }
-                return snapshot
-                    .node_property(node.id, &pa.property)
-                    .as_ref()
-                    .map(convert_api_property_to_value)
+                return node
+                    .properties
+                    .get(&pa.property)
+                    .cloned()
                     .unwrap_or(Value::Null);
             }
 
             if let Some(Value::Relationship(rel)) = row.get(&pa.variable) {
-                if let Some(value) = rel.properties.get(&pa.property) {
-                    return value.clone();
-                }
-                return snapshot
-                    .edge_property(rel.key, &pa.property)
-                    .as_ref()
-                    .map(convert_api_property_to_value)
+                return rel
+                    .properties
+                    .get(&pa.property)
+                    .cloned()
                     .unwrap_or(Value::Null);
             }
 
@@ -965,6 +959,22 @@ fn evaluate_function<S: GraphSnapshot>(
             match args.first() {
                 Some(Value::Map(m)) => {
                     let keys: Vec<Value> = m.keys().map(|k| Value::String(k.clone())).collect();
+                    Value::List(keys)
+                }
+                Some(Value::Node(node)) => {
+                    let keys: Vec<Value> = node
+                        .properties
+                        .keys()
+                        .map(|k| Value::String(k.clone()))
+                        .collect();
+                    Value::List(keys)
+                }
+                Some(Value::Relationship(rel)) => {
+                    let keys: Vec<Value> = rel
+                        .properties
+                        .keys()
+                        .map(|k| Value::String(k.clone()))
+                        .collect();
                     Value::List(keys)
                 }
                 Some(Value::NodeId(id)) => {

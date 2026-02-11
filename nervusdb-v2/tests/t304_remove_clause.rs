@@ -1,4 +1,4 @@
-use nervusdb_v2::query::{Params, WriteableGraph};
+use nervusdb_v2::query::{Params, Value, WriteableGraph};
 use nervusdb_v2::{Db, GraphSnapshot, PropertyValue};
 use tempfile::tempdir;
 
@@ -121,6 +121,106 @@ fn test_remove_node_label() -> nervusdb_v2::Result<()> {
     let bar = snapshot.resolve_label_id("Bar").expect("Bar should exist");
     assert!(!labels.contains(&foo));
     assert!(labels.contains(&bar));
+
+    Ok(())
+}
+
+#[test]
+fn test_remove_node_property_is_visible_in_same_query() -> nervusdb_v2::Result<()> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("t304_remove_visible_node.ndb");
+    let db = Db::open(&db_path)?;
+
+    {
+        let mut txn = db.begin_write();
+        let person = txn.get_or_create_label("Person")?;
+        let alice = txn.create_node(1, person)?;
+        txn.set_node_property(
+            alice,
+            "name".to_string(),
+            PropertyValue::String("Alice".to_string()),
+        )?;
+        txn.set_node_property(alice, "temp_flag".to_string(), PropertyValue::Bool(true))?;
+        txn.commit()?;
+    }
+
+    let snapshot = db.snapshot();
+    let mut txn = db.begin_write();
+    let q = "MATCH (n:Person) REMOVE n.temp_flag RETURN n.temp_flag IS NOT NULL AS still_there, size(keys(n)) AS props";
+    let prep = nervusdb_v2::query::prepare(q)?;
+    let (rows, removed) = prep.execute_mixed(&snapshot, &mut txn, &Params::default())?;
+    assert_eq!(removed, 1);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("still_there"), Some(&Value::Bool(false)));
+    assert_eq!(rows[0].get("props"), Some(&Value::Int(1)));
+    txn.commit()?;
+
+    Ok(())
+}
+
+#[test]
+fn test_remove_missing_node_property_reports_zero_side_effects() -> nervusdb_v2::Result<()> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("t304_remove_missing.ndb");
+    let db = Db::open(&db_path)?;
+
+    {
+        let mut txn = db.begin_write();
+        let person = txn.get_or_create_label("Person")?;
+        let alice = txn.create_node(1, person)?;
+        txn.set_node_property(
+            alice,
+            "name".to_string(),
+            PropertyValue::String("Alice".to_string()),
+        )?;
+        txn.commit()?;
+    }
+
+    let snapshot = db.snapshot();
+    let mut txn = db.begin_write();
+    let q = "MATCH (n:Person) REMOVE n.temp_flag";
+    let prep = nervusdb_v2::query::prepare(q)?;
+    let removed = prep.execute_write(&snapshot, &mut txn, &Params::default())?;
+    assert_eq!(removed, 0);
+    txn.commit()?;
+
+    Ok(())
+}
+
+#[test]
+fn test_remove_relationship_property_is_visible_in_same_query() -> nervusdb_v2::Result<()> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("t304_remove_visible_rel.ndb");
+    let db = Db::open(&db_path)?;
+
+    {
+        let mut txn = db.begin_write();
+        let person = txn.get_or_create_label("Person")?;
+        let rel = txn.get_or_create_rel_type_id("1")?;
+        let a = txn.create_node(1, person)?;
+        let b = txn.create_node(2, person)?;
+        txn.create_edge(a, rel, b);
+        txn.set_edge_property(a, rel, b, "since".to_string(), PropertyValue::Int(2024))?;
+        txn.set_edge_property(
+            a,
+            rel,
+            b,
+            "other".to_string(),
+            PropertyValue::String("x".to_string()),
+        )?;
+        txn.commit()?;
+    }
+
+    let snapshot = db.snapshot();
+    let mut txn = db.begin_write();
+    let q = "MATCH ()-[r:1]->() REMOVE r.since RETURN r.since IS NOT NULL AS still_there, size(keys(r)) AS props";
+    let prep = nervusdb_v2::query::prepare(q)?;
+    let (rows, removed) = prep.execute_mixed(&snapshot, &mut txn, &Params::default())?;
+    assert_eq!(removed, 1);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("still_there"), Some(&Value::Bool(false)));
+    assert_eq!(rows[0].get("props"), Some(&Value::Int(1)));
+    txn.commit()?;
 
     Ok(())
 }
