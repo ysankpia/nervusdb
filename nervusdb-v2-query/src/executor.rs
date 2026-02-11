@@ -4571,13 +4571,8 @@ fn evaluate_property_value(
         Expression::Literal(lit) => match lit {
             Literal::Null => Ok(PropertyValue::Null),
             Literal::Boolean(b) => Ok(PropertyValue::Bool(*b)),
-            Literal::Number(n) => {
-                if n.fract() == 0.0 {
-                    Ok(PropertyValue::Int(*n as i64))
-                } else {
-                    Ok(PropertyValue::Float(*n))
-                }
-            }
+            Literal::Integer(n) => Ok(PropertyValue::Int(*n)),
+            Literal::Float(n) => Ok(PropertyValue::Float(*n)),
             Literal::String(s) => Ok(PropertyValue::String(s.clone())),
         },
         Expression::Parameter(name) => {

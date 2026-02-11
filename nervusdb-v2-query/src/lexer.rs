@@ -2,6 +2,21 @@ use std::iter::Peekable;
 use std::str::Chars;
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct NumericLiteral {
+    pub raw: String,
+    pub value: f64,
+}
+
+impl NumericLiteral {
+    pub fn is_integer(&self) -> bool {
+        !self
+            .raw
+            .chars()
+            .any(|ch| ch == '.' || ch == 'e' || ch == 'E')
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
     // Keywords
     Match,
@@ -79,7 +94,7 @@ pub enum TokenType {
 
     // Literals
     String(String),
-    Number(f64),
+    Number(NumericLiteral),
     Boolean(bool),
     Null,
 
@@ -453,7 +468,10 @@ impl<'a> Lexer<'a> {
             return Err(format!("syntax error: Invalid number: {value}"));
         }
         Ok(Token {
-            token_type: TokenType::Number(number),
+            token_type: TokenType::Number(NumericLiteral {
+                raw: value,
+                value: number,
+            }),
             line,
             column,
         })

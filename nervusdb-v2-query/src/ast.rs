@@ -325,7 +325,8 @@ pub struct CaseExpression {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Literal {
     String(String),
-    Number(f64),
+    Integer(i64),
+    Float(f64),
     Boolean(bool),
     Null,
 }
