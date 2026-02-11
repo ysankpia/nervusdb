@@ -170,3 +170,134 @@ fn test_set_clause_add_node_label() -> nervusdb_v2::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_set_null_removes_existing_property() -> nervusdb_v2::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("t108_set_null.ndb");
+    let db = Db::open(&db_path)?;
+
+    let node_id = {
+        let mut txn = db.begin_write();
+        let a = txn.get_or_create_label("A")?;
+        let node_id = txn.create_node(1, a)?;
+        txn.set_node_property(node_id, "property1".to_string(), PropertyValue::Int(23))?;
+        txn.set_node_property(node_id, "property2".to_string(), PropertyValue::Int(46))?;
+        txn.commit()?;
+        node_id
+    };
+
+    {
+        let snapshot = db.snapshot();
+        let mut txn = db.begin_write();
+        let prepared = nervusdb_v2::query::prepare("MATCH (n:A) SET n.property1 = null")?;
+        let count = prepared.execute_write(&snapshot, &mut txn, &Default::default())?;
+        assert_eq!(count, 1);
+        txn.commit()?;
+    }
+
+    let snapshot = db.snapshot();
+    assert_eq!(snapshot.node_property(node_id, "property1"), None);
+    assert_eq!(
+        snapshot.node_property(node_id, "property2"),
+        Some(PropertyValue::Int(46))
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_set_updates_are_visible_to_following_with_and_limit() -> nervusdb_v2::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("t108_set_visibility.ndb");
+    let db = Db::open(&db_path)?;
+
+    {
+        let mut txn = db.begin_write();
+        let n = txn.get_or_create_label("N")?;
+        for i in 1..=5 {
+            let node_id = txn.create_node(i as u64, n)?;
+            txn.set_node_property(node_id, "num".to_string(), PropertyValue::Int(i as i64))?;
+        }
+        txn.commit()?;
+    }
+
+    {
+        let snapshot = db.snapshot();
+        let mut txn = db.begin_write();
+        let q = "MATCH (n:N) SET n.num = n.num + 1 WITH sum(n.num) AS sum RETURN sum";
+        let (rows, _) = nervusdb_v2::query::prepare(q)?.execute_mixed(
+            &snapshot,
+            &mut txn,
+            &Default::default(),
+        )?;
+        txn.commit()?;
+
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(
+            rows[0].get("sum"),
+            Some(nervusdb_v2::query::Value::Int(20))
+        ));
+    }
+
+    {
+        let snapshot = db.snapshot();
+        let mut txn = db.begin_write();
+        let q = "MATCH (n:N) SET n.num = 42 RETURN n.num AS num SKIP 2 LIMIT 2";
+        let (rows, _) = nervusdb_v2::query::prepare(q)?.execute_mixed(
+            &snapshot,
+            &mut txn,
+            &Default::default(),
+        )?;
+        txn.commit()?;
+
+        assert_eq!(rows.len(), 2);
+        assert!(
+            rows.iter()
+                .all(|row| matches!(row.get("num"), Some(nervusdb_v2::query::Value::Int(42))))
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_set_parenthesized_target_variable() -> nervusdb_v2::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("t108_set_parenthesized.ndb");
+    let db = Db::open(&db_path)?;
+
+    {
+        let mut txn = db.begin_write();
+        let a = txn.get_or_create_label("A")?;
+        txn.create_node(1, a)?;
+        txn.commit()?;
+    }
+
+    let snapshot = db.snapshot();
+    let mut txn = db.begin_write();
+    let q = "MATCH (n:A) SET (n).name = 'neo4j' RETURN n.name AS name";
+    let (rows, count) =
+        nervusdb_v2::query::prepare(q)?.execute_mixed(&snapshot, &mut txn, &Default::default())?;
+    txn.commit()?;
+
+    assert_eq!(count, 1);
+    assert_eq!(rows.len(), 1);
+    assert!(matches!(
+        rows[0].get("name"),
+        Some(nervusdb_v2::query::Value::String(s)) if s == "neo4j"
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn test_set_undefined_variable_in_expression_rejected_at_compile_time() {
+    let err = nervusdb_v2::query::prepare("MATCH (a) SET a.name = missing RETURN a")
+        .expect_err("prepare should fail on undefined variable in SET expression")
+        .to_string();
+    assert!(
+        err.contains("UndefinedVariable"),
+        "unexpected compile error: {err}"
+    );
+}

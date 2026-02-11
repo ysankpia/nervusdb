@@ -2075,6 +2075,7 @@ pub fn execute_write_with_rows<S: GraphSnapshot>(
             let (prefix_mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
             let values_plan = Plan::Values { rows: rows.clone() };
             let updated = execute_set(snapshot, &values_plan, txn, items, params)?;
+            let rows = apply_set_property_overlay_to_rows(snapshot, rows, items, params);
             Ok((prefix_mods + updated, rows))
         }
         Plan::SetLabels { input, items } => {
@@ -2524,6 +2525,7 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
             )?;
             let values_plan = Plan::Values { rows: rows.clone() };
             let updated = execute_set(snapshot, &values_plan, txn, items, params)?;
+            let rows = apply_set_property_overlay_to_rows(snapshot, rows, items, params);
             Ok((prefix_mods + updated, rows))
         }
         Plan::SetLabels { input, items } => {
@@ -3034,10 +3036,19 @@ fn merge_apply_set_items<S: GraphSnapshot>(
     for (var, key, expr) in items {
         let val = evaluate_expression_value(expr, row, snapshot, params);
         let prop_val = convert_executor_value_to_property(&val)?;
+        let is_remove = matches!(prop_val, PropertyValue::Null);
         if let Some(node_id) = row.get_node(var) {
-            txn.set_node_property(node_id, key.clone(), prop_val)?;
+            if is_remove {
+                txn.remove_node_property(node_id, key)?;
+            } else {
+                txn.set_node_property(node_id, key.clone(), prop_val)?;
+            }
         } else if let Some(edge) = row.get_edge(var) {
-            txn.set_edge_property(edge.src, edge.rel, edge.dst, key.clone(), prop_val)?;
+            if is_remove {
+                txn.remove_edge_property(edge.src, edge.rel, edge.dst, key)?;
+            } else {
+                txn.set_edge_property(edge.src, edge.rel, edge.dst, key.clone(), prop_val)?;
+            }
         } else {
             return Err(Error::Other(format!("Variable {} not found in row", var)));
         }
@@ -3683,10 +3694,19 @@ pub(crate) fn execute_merge<S: GraphSnapshot>(
         for (var, key, expr) in items {
             let val = evaluate_expression_value(expr, row, snapshot, params);
             let prop_val = convert_executor_value_to_property(&val)?;
+            let is_remove = matches!(prop_val, PropertyValue::Null);
             if let Some(node_id) = row.get_node(var) {
-                txn.set_node_property(node_id, key.clone(), prop_val)?;
+                if is_remove {
+                    txn.remove_node_property(node_id, key)?;
+                } else {
+                    txn.set_node_property(node_id, key.clone(), prop_val)?;
+                }
             } else if let Some(edge) = row.get_edge(var) {
-                txn.set_edge_property(edge.src, edge.rel, edge.dst, key.clone(), prop_val)?;
+                if is_remove {
+                    txn.remove_edge_property(edge.src, edge.rel, edge.dst, key)?;
+                } else {
+                    txn.set_edge_property(edge.src, edge.rel, edge.dst, key.clone(), prop_val)?;
+                }
             } else {
                 return Err(Error::Other(format!("Variable {} not found in row", var)));
             }
@@ -4607,14 +4627,36 @@ fn execute_set<S: GraphSnapshot>(
 
             // Convert value to PropertyValue
             let prop_val = convert_executor_value_to_property(&val)?;
+            let is_remove = matches!(prop_val, PropertyValue::Null);
 
-            // Set property (node or edge)
             if let Some(node_id) = row.get_node(var) {
-                txn.set_node_property(node_id, key.clone(), prop_val)?;
-                count += 1;
+                if is_remove {
+                    let existed = match row.get(var) {
+                        Some(Value::Node(node)) => node.properties.contains_key(key),
+                        _ => snapshot.node_property(node_id, key).is_some(),
+                    };
+                    txn.remove_node_property(node_id, key)?;
+                    if existed {
+                        count += 1;
+                    }
+                } else {
+                    txn.set_node_property(node_id, key.clone(), prop_val)?;
+                    count += 1;
+                }
             } else if let Some(edge) = row.get_edge(var) {
-                txn.set_edge_property(edge.src, edge.rel, edge.dst, key.clone(), prop_val)?;
-                count += 1;
+                if is_remove {
+                    let existed = match row.get(var) {
+                        Some(Value::Relationship(rel)) => rel.properties.contains_key(key),
+                        _ => snapshot.edge_property(edge, key).is_some(),
+                    };
+                    txn.remove_edge_property(edge.src, edge.rel, edge.dst, key)?;
+                    if existed {
+                        count += 1;
+                    }
+                } else {
+                    txn.set_edge_property(edge.src, edge.rel, edge.dst, key.clone(), prop_val)?;
+                    count += 1;
+                }
             } else if matches!(row.get(var), Some(Value::Null)) {
                 continue;
             } else {
@@ -4734,6 +4776,103 @@ fn execute_remove_labels<S: GraphSnapshot>(
         }
     }
     Ok(count)
+}
+
+fn apply_set_property_overlay_to_rows<S: GraphSnapshot>(
+    snapshot: &S,
+    rows: Vec<Row>,
+    items: &[(String, String, Expression)],
+    params: &crate::query_api::Params,
+) -> Vec<Row> {
+    rows.into_iter()
+        .map(|mut row| {
+            // Keep expression evaluation semantics aligned with execute_set:
+            // expressions are evaluated against the pre-SET row values.
+            let source_row = row.clone();
+
+            for (var, key, expr) in items {
+                let Some(current) = row.get(var).cloned() else {
+                    continue;
+                };
+
+                let val = evaluate_expression_value(expr, &source_row, snapshot, params);
+                let is_remove = matches!(val, Value::Null);
+
+                match current {
+                    Value::Node(mut node) => {
+                        if is_remove {
+                            node.properties.remove(key);
+                        } else {
+                            node.properties.insert(key.clone(), val);
+                        }
+                        row = row.with(var.clone(), Value::Node(node));
+                    }
+                    Value::NodeId(node_id) => {
+                        let labels = snapshot
+                            .resolve_node_labels(node_id)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter_map(|id| snapshot.resolve_label_name(id))
+                            .collect();
+                        let mut properties: std::collections::BTreeMap<String, Value> = snapshot
+                            .node_properties(node_id)
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), convert_api_property_to_value(v)))
+                            .collect();
+                        if is_remove {
+                            properties.remove(key);
+                        } else {
+                            properties.insert(key.clone(), val);
+                        }
+                        row = row.with(
+                            var.clone(),
+                            Value::Node(NodeValue {
+                                id: node_id,
+                                labels,
+                                properties,
+                            }),
+                        );
+                    }
+                    Value::Relationship(mut rel) => {
+                        if is_remove {
+                            rel.properties.remove(key);
+                        } else {
+                            rel.properties.insert(key.clone(), val);
+                        }
+                        row = row.with(var.clone(), Value::Relationship(rel));
+                    }
+                    Value::EdgeKey(edge) => {
+                        let rel_type = snapshot
+                            .resolve_rel_type_name(edge.rel)
+                            .unwrap_or_else(|| format!("<{}>", edge.rel));
+                        let mut properties: std::collections::BTreeMap<String, Value> = snapshot
+                            .edge_properties(edge)
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), convert_api_property_to_value(v)))
+                            .collect();
+                        if is_remove {
+                            properties.remove(key);
+                        } else {
+                            properties.insert(key.clone(), val);
+                        }
+                        row = row.with(
+                            var.clone(),
+                            Value::Relationship(RelationshipValue {
+                                key: edge,
+                                rel_type,
+                                properties,
+                            }),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+
+            row
+        })
+        .collect()
 }
 
 fn apply_label_overlay_to_rows<S: GraphSnapshot>(

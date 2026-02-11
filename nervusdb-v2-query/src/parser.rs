@@ -393,7 +393,7 @@ impl TokenParser {
         let mut labels = Vec::new();
 
         loop {
-            let variable = self.parse_identifier("SET variable")?;
+            let variable = self.parse_set_target_variable()?;
             if self.match_token(&TokenType::Dot) {
                 let property = self.parse_identifier("property name")?;
                 self.consume(&TokenType::Equals, "Expected '=' in SET clause")?;
@@ -420,6 +420,19 @@ impl TokenParser {
         }
 
         Ok(SetClause { items, labels })
+    }
+
+    fn parse_set_target_variable(&mut self) -> Result<String, Error> {
+        if self.match_token(&TokenType::LeftParen) {
+            let variable = self.parse_identifier("SET variable")?;
+            self.consume(
+                &TokenType::RightParen,
+                "Expected ')' after SET variable expression",
+            )?;
+            Ok(variable)
+        } else {
+            self.parse_identifier("SET variable")
+        }
     }
 
     fn parse_remove(&mut self) -> Result<RemoveClause, Error> {

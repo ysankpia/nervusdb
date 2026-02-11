@@ -2497,9 +2497,29 @@ fn compile_order_by_items(
 // Adapters for SET/REMOVE/DELETE since we changed signature to take input
 fn compile_set_plan_v2(input: Plan, set: crate::ast::SetClause) -> Result<Plan> {
     let mut plan = input;
+    let mut known_bindings: BTreeMap<String, BindingKind> = BTreeMap::new();
+    extract_output_var_kinds(&plan, &mut known_bindings);
 
     let mut prop_items = Vec::new();
     for item in set.items {
+        if !known_bindings.contains_key(&item.property.variable) {
+            return Err(Error::Other(format!(
+                "syntax error: UndefinedVariable ({})",
+                item.property.variable
+            )));
+        }
+
+        let mut refs = std::collections::HashSet::new();
+        extract_variables_from_expr(&item.value, &mut refs);
+        for var in refs {
+            if !known_bindings.contains_key(&var) {
+                return Err(Error::Other(format!(
+                    "syntax error: UndefinedVariable ({})",
+                    var
+                )));
+            }
+        }
+
         ensure_no_pattern_predicate(&item.value)?;
         prop_items.push((item.property.variable, item.property.property, item.value));
     }
@@ -2512,6 +2532,12 @@ fn compile_set_plan_v2(input: Plan, set: crate::ast::SetClause) -> Result<Plan> 
 
     let mut label_items = Vec::new();
     for item in set.labels {
+        if !known_bindings.contains_key(&item.variable) {
+            return Err(Error::Other(format!(
+                "syntax error: UndefinedVariable ({})",
+                item.variable
+            )));
+        }
         label_items.push((item.variable, item.labels));
     }
     if !label_items.is_empty() {
