@@ -202,6 +202,7 @@ impl GraphEngine {
             txid,
             created_nodes: Vec::new(),
             pending_label_additions: Vec::new(),
+            pending_label_removals: Vec::new(),
             created_external_ids: std::collections::HashSet::new(),
             memtable: MemTable::default(),
         }
@@ -659,6 +660,7 @@ pub struct WriteTxn<'a> {
     txid: u64,
     created_nodes: Vec<(ExternalId, LabelId, InternalNodeId)>,
     pending_label_additions: Vec<(InternalNodeId, LabelId)>,
+    pending_label_removals: Vec<(InternalNodeId, LabelId)>,
     created_external_ids: std::collections::HashSet<ExternalId>,
     memtable: MemTable,
 }
@@ -690,6 +692,11 @@ impl<'a> WriteTxn<'a> {
 
     pub fn add_node_label(&mut self, node: InternalNodeId, label_id: LabelId) -> Result<()> {
         self.pending_label_additions.push((node, label_id));
+        Ok(())
+    }
+
+    pub fn remove_node_label(&mut self, node: InternalNodeId, label_id: LabelId) -> Result<()> {
+        self.pending_label_removals.push((node, label_id));
         Ok(())
     }
 
@@ -776,6 +783,12 @@ impl<'a> WriteTxn<'a> {
             }
             for (node, label_id) in &self.pending_label_additions {
                 wal.append(&WalRecord::AddNodeLabel {
+                    node: *node,
+                    label_id: *label_id,
+                })?;
+            }
+            for (node, label_id) in &self.pending_label_removals {
+                wal.append(&WalRecord::RemoveNodeLabel {
                     node: *node,
                     label_id: *label_id,
                 })?;
@@ -1006,6 +1019,8 @@ impl<'a> WriteTxn<'a> {
         }
 
         let has_new_nodes = !self.created_nodes.is_empty();
+        let has_label_additions = !self.pending_label_additions.is_empty();
+        let has_label_removals = !self.pending_label_removals.is_empty();
 
         // 3. Apply created nodes to IdMap / Node Index
         {
@@ -1017,9 +1032,13 @@ impl<'a> WriteTxn<'a> {
             for (node, label_id) in self.pending_label_additions {
                 idmap.apply_add_label(&mut pager, node, label_id)?;
             }
+            for (node, label_id) in self.pending_label_removals {
+                idmap.apply_remove_label(&mut pager, node, label_id)?;
+            }
         }
 
-        if has_new_nodes {
+        let has_label_mutations = has_new_nodes || has_label_additions || has_label_removals;
+        if has_label_mutations {
             self.engine.update_published_node_labels();
         }
 
@@ -1064,6 +1083,9 @@ fn replay_graph_transactions(
                 }
                 WalRecord::AddNodeLabel { node, label_id } => {
                     idmap.apply_add_label(pager, node, label_id)?;
+                }
+                WalRecord::RemoveNodeLabel { node, label_id } => {
+                    idmap.apply_remove_label(pager, node, label_id)?;
                 }
                 WalRecord::CreateEdge { src, rel, dst } => memtable.create_edge(src, rel, dst),
                 WalRecord::TombstoneNode { node } => memtable.tombstone_node(node),

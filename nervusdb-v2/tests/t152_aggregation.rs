@@ -191,3 +191,57 @@ fn test_aggregation_functions() -> nervusdb_v2::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_return6_count_plus_arithmetic_expression() -> nervusdb_v2::Result<()> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("t152_return6_expr.ndb");
+    let db = Db::open(&db_path)?;
+
+    {
+        let mut txn = db.begin_write();
+        nervusdb_v2::query::prepare("CREATE ({id: 42})")?.execute_write(
+            &db.snapshot(),
+            &mut txn,
+            &Default::default(),
+        )?;
+        txn.commit()?;
+    }
+
+    let snapshot = db.snapshot();
+    let query = nervusdb_v2::query::prepare("MATCH (a) RETURN a, count(a) + 3")?;
+    let results: Vec<_> = query
+        .execute_streaming(&snapshot, &Default::default())
+        .collect::<Result<Vec<_>, _>>()?;
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get("count(a) + 3"), Some(&Value::Int(4)));
+    Ok(())
+}
+
+#[test]
+fn test_return6_count_division_still_aggregates() -> nervusdb_v2::Result<()> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("t152_return6_div.ndb");
+    let db = Db::open(&db_path)?;
+
+    {
+        let mut txn = db.begin_write();
+        nervusdb_v2::query::prepare("UNWIND range(0, 7250) AS i CREATE ()")?.execute_write(
+            &db.snapshot(),
+            &mut txn,
+            &Default::default(),
+        )?;
+        txn.commit()?;
+    }
+
+    let snapshot = db.snapshot();
+    let query = nervusdb_v2::query::prepare("MATCH (n) RETURN count(n) / 60 / 60 AS count")?;
+    let results: Vec<_> = query
+        .execute_streaming(&snapshot, &Default::default())
+        .collect::<Result<Vec<_>, _>>()?;
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get("count"), Some(&Value::Int(2)));
+    Ok(())
+}

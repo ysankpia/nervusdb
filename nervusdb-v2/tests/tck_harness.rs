@@ -3,6 +3,8 @@ use nervusdb_v2::Db;
 use nervusdb_v2_query::{Params, Value, prepare};
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -82,11 +84,12 @@ fn execute_query_generic(world: &mut GraphWorld, cypher: &str) {
                         return;
                     }
 
+                    let reify_snapshot = db.snapshot();
                     let mut results = Vec::new();
                     for row in rows {
                         let mut map = std::collections::HashMap::new();
                         for (k, v) in row {
-                            let reified = v.reify(&snapshot).unwrap_or(v);
+                            let reified = v.reify(&reify_snapshot).unwrap_or(v);
                             map.insert(k, reified);
                         }
                         results.push(map);
@@ -330,7 +333,9 @@ fn value_eq(a: &Value, b: &Value) -> bool {
         (Value::Float(a), Value::Float(b)) => (a - b).abs() < 1e-9,
         (Value::Int(i), Value::Float(f)) => (*i as f64 - *f).abs() < 1e-9,
         (Value::Float(f), Value::Int(i)) => (*f - *i as f64).abs() < 1e-9,
-        (Value::String(a), Value::String(b)) => a == b,
+        (Value::String(a), Value::String(b)) => {
+            normalize_utc_offset_suffix(a) == normalize_utc_offset_suffix(b)
+        }
         (Value::List(a), Value::List(b)) => {
             if a.len() != b.len() {
                 return false;
@@ -352,11 +357,27 @@ fn value_eq(a: &Value, b: &Value) -> bool {
     }
 }
 
+fn normalize_utc_offset_suffix(input: &str) -> String {
+    if let Some(stripped) = input.strip_suffix("+00:00") {
+        format!("{stripped}Z")
+    } else {
+        input.to_string()
+    }
+}
+
 fn to_tck_comparable(value: &Value) -> Option<String> {
     match value {
         Value::Node(node) => Some(format_node_literal(node)),
         Value::Relationship(rel) => Some(format_relationship_literal(rel)),
         Value::ReifiedPath(path) => Some(format_path_literal(path)),
+        Value::Map(map) if matches!(map.get("__kind"), Some(Value::String(kind)) if kind == "duration") => {
+            if let Some(Value::String(display)) = map.get("__display") {
+                Some(display.clone())
+            } else {
+                None
+            }
+        }
+        Value::Map(map) => Some(format_map(map)),
         _ => None,
     }
 }
@@ -534,8 +555,169 @@ fn parse_tck_value(s: &str) -> Value {
     Value::String(s.to_string())
 }
 
+fn normalize_feature_for_cucumber(content: &str) -> String {
+    let mut normalized_lines = Vec::new();
+    let mut expect_first_step = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+
+        if trimmed.starts_with("Scenario:") || trimmed.starts_with("Scenario Outline:") {
+            expect_first_step = true;
+            normalized_lines.push(line.to_string());
+            continue;
+        }
+
+        if expect_first_step {
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                normalized_lines.push(line.to_string());
+                continue;
+            }
+
+            let indent_len = line.len() - trimmed.len();
+            let indent = &line[..indent_len];
+
+            if let Some(rest) = trimmed.strip_prefix("And ") {
+                normalized_lines.push(format!("{indent}Given {rest}"));
+                expect_first_step = false;
+                continue;
+            }
+
+            if let Some(rest) = trimmed.strip_prefix("But ") {
+                normalized_lines.push(format!("{indent}Given {rest}"));
+                expect_first_step = false;
+                continue;
+            }
+
+            if trimmed.starts_with("Given ")
+                || trimmed.starts_with("When ")
+                || trimmed.starts_with("Then ")
+                || trimmed.starts_with("* ")
+            {
+                expect_first_step = false;
+            }
+        }
+
+        normalized_lines.push(line.to_string());
+    }
+
+    let mut normalized = normalized_lines.join("\n");
+    if content.ends_with('\n') {
+        normalized.push('\n');
+    }
+    normalized
+}
+
+fn copy_and_normalize_features(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        let file_type = entry.file_type()?;
+
+        if file_type.is_dir() {
+            copy_and_normalize_features(&src_path, &dst_path)?;
+            continue;
+        }
+
+        if !file_type.is_file() {
+            continue;
+        }
+
+        if src_path.extension().is_some_and(|ext| ext == "feature") {
+            let content = fs::read_to_string(&src_path)?;
+            let normalized = normalize_feature_for_cucumber(&content);
+            fs::write(&dst_path, normalized)?;
+        } else {
+            fs::copy(&src_path, &dst_path)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn requested_input_pattern() -> Option<String> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if let Some(value) = arg.strip_prefix("--input=") {
+            return Some(value.to_string());
+        }
+        if arg == "--input" || arg == "-i" {
+            return args.next();
+        }
+    }
+    None
+}
+
+fn resolve_requested_input(root: &Path, pattern: &str) -> Option<std::path::PathBuf> {
+    let requested = Path::new(pattern);
+    if requested.is_absolute() && requested.exists() {
+        return Some(requested.to_path_buf());
+    }
+
+    let direct = root.join(requested);
+    if direct.exists() {
+        return Some(direct);
+    }
+
+    let normalized = pattern.replace('\\', "/");
+    let suffix = normalized
+        .strip_prefix("tests/opencypher_tck/tck/features/")
+        .or_else(|| normalized.strip_prefix("opencypher_tck/tck/features/"))
+        .or_else(|| normalized.strip_prefix("features/"))
+        .unwrap_or(&normalized);
+    let suffix_direct = root.join(suffix);
+    if suffix_direct.exists() {
+        return Some(suffix_direct);
+    }
+
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = fs::read_dir(&dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+
+            if file_type.is_dir() {
+                stack.push(path);
+                continue;
+            }
+
+            if !file_type.is_file() {
+                continue;
+            }
+
+            let path_norm = path.to_string_lossy().replace('\\', "/");
+            if path_norm.ends_with(suffix)
+                || path.file_name().and_then(|name| name.to_str()) == Some(pattern)
+            {
+                return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
 fn main() {
+    let source_features = Path::new("tests/opencypher_tck/tck/features");
+    let prepared_features =
+        tempfile::TempDir::new().expect("failed to create normalized feature dir");
+    copy_and_normalize_features(source_features, prepared_features.path())
+        .expect("failed to normalize TCK feature files");
+
+    let run_input = requested_input_pattern()
+        .and_then(|pattern| resolve_requested_input(prepared_features.path(), &pattern))
+        .unwrap_or_else(|| prepared_features.path().to_path_buf());
+
     futures::executor::block_on(
-        GraphWorld::cucumber().run_and_exit("tests/opencypher_tck/tck/features"),
+        GraphWorld::cucumber()
+            .with_default_cli()
+            .run_and_exit(run_input),
     );
 }

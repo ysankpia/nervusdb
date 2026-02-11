@@ -728,15 +728,25 @@ pub enum Plan {
         detach: bool,
         expressions: Vec<Expression>,
     },
-    /// `SetProperty` - update properties on nodes
+    /// `SetProperty` - update properties on nodes/edges
     SetProperty {
         input: Box<Plan>,
         items: Vec<(String, String, Expression)>, // (variable, key, value_expression)
+    },
+    /// `SET n:Label` - add labels on nodes
+    SetLabels {
+        input: Box<Plan>,
+        items: Vec<(String, Vec<String>)>, // (variable, labels)
     },
     /// `REMOVE n.prop` - remove properties from nodes/edges
     RemoveProperty {
         input: Box<Plan>,
         items: Vec<(String, String)>, // (variable, key)
+    },
+    /// `REMOVE n:Label` - remove labels from nodes
+    RemoveLabels {
+        input: Box<Plan>,
+        items: Vec<(String, Vec<String>)>, // (variable, labels)
     },
     /// `IndexSeek` - optimize scan using index if available, else fallback
     IndexSeek {
@@ -1019,9 +1029,7 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
     match plan {
-        Plan::ReturnOne => {
-            PlanIterator::ReturnOne(std::iter::once(Ok(Row::default().with("1", Value::Int(1)))))
-        }
+        Plan::ReturnOne => PlanIterator::ReturnOne(std::iter::once(Ok(Row::default()))),
         Plan::CartesianProduct { left, right } => {
             let left_iter = execute_plan(snapshot, left, params);
             PlanIterator::CartesianProduct(Box::new(CartesianProductIter {
@@ -1924,14 +1932,12 @@ pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
                 "DELETE must be executed via execute_write".into(),
             )))))
         }
-        Plan::SetProperty { .. } => {
-            // SET should be executed via execute_write, not execute_plan
+        Plan::SetProperty { .. } | Plan::SetLabels { .. } => {
             PlanIterator::Dynamic(Box::new(std::iter::once(Err(Error::Other(
                 "SET must be executed via execute_write".into(),
             )))))
         }
-        Plan::RemoveProperty { .. } => {
-            // REMOVE should be executed via execute_write, not execute_plan
+        Plan::RemoveProperty { .. } | Plan::RemoveLabels { .. } => {
             PlanIterator::Dynamic(Box::new(std::iter::once(Err(Error::Other(
                 "REMOVE must be executed via execute_write".into(),
             )))))
@@ -2000,8 +2006,12 @@ pub fn execute_write<S: GraphSnapshot>(
             expressions,
         } => execute_delete(snapshot, input, txn, *detach, expressions, params),
         Plan::SetProperty { input, items } => execute_set(snapshot, input, txn, items, params),
+        Plan::SetLabels { input, items } => execute_set_labels(snapshot, input, txn, items, params),
         Plan::RemoveProperty { input, items } => {
             execute_remove(snapshot, input, txn, items, params)
+        }
+        Plan::RemoveLabels { input, items } => {
+            execute_remove_labels(snapshot, input, txn, items, params)
         }
         Plan::Foreach {
             input,
@@ -2067,10 +2077,24 @@ pub fn execute_write_with_rows<S: GraphSnapshot>(
             let updated = execute_set(snapshot, &values_plan, txn, items, params)?;
             Ok((prefix_mods + updated, rows))
         }
+        Plan::SetLabels { input, items } => {
+            let (prefix_mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
+            let values_plan = Plan::Values { rows: rows.clone() };
+            let updated = execute_set_labels(snapshot, &values_plan, txn, items, params)?;
+            let rows = apply_label_overlay_to_rows(snapshot, rows, items, true);
+            Ok((prefix_mods + updated, rows))
+        }
         Plan::RemoveProperty { input, items } => {
             let (prefix_mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
             let values_plan = Plan::Values { rows: rows.clone() };
             let removed = execute_remove(snapshot, &values_plan, txn, items, params)?;
+            Ok((prefix_mods + removed, rows))
+        }
+        Plan::RemoveLabels { input, items } => {
+            let (prefix_mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
+            let values_plan = Plan::Values { rows: rows.clone() };
+            let removed = execute_remove_labels(snapshot, &values_plan, txn, items, params)?;
+            let rows = apply_label_overlay_to_rows(snapshot, rows, items, false);
             Ok((prefix_mods + removed, rows))
         }
         Plan::Foreach {
@@ -2411,7 +2435,9 @@ fn find_create_plan(plan: &Plan) -> Option<&Plan> {
         | Plan::Aggregate { input, .. }
         | Plan::Delete { input, .. }
         | Plan::SetProperty { input, .. }
+        | Plan::SetLabels { input, .. }
         | Plan::RemoveProperty { input, .. }
+        | Plan::RemoveLabels { input, .. }
         | Plan::Foreach { input, .. } => find_create_plan(input),
         Plan::OptionalWhereFixup {
             outer, filtered, ..
@@ -2771,6 +2797,7 @@ pub trait WriteableGraph {
     fn create_node(&mut self, external_id: ExternalId, label_id: LabelId)
     -> Result<InternalNodeId>;
     fn add_node_label(&mut self, node: InternalNodeId, label_id: LabelId) -> Result<()>;
+    fn remove_node_label(&mut self, node: InternalNodeId, label_id: LabelId) -> Result<()>;
     fn create_edge(
         &mut self,
         src: InternalNodeId,
@@ -2832,6 +2859,11 @@ mod txn_engine_impl {
 
         fn add_node_label(&mut self, node: InternalNodeId, label_id: LabelId) -> Result<()> {
             EngineWriteTxn::add_node_label(self, node, label_id)
+                .map_err(|e| Error::Other(e.to_string()))
+        }
+
+        fn remove_node_label(&mut self, node: InternalNodeId, label_id: LabelId) -> Result<()> {
+            EngineWriteTxn::remove_node_label(self, node, label_id)
                 .map_err(|e| Error::Other(e.to_string()))
         }
 
@@ -3387,12 +3419,15 @@ fn execute_set<S: GraphSnapshot>(
             // Set property (node or edge)
             if let Some(node_id) = row.get_node(var) {
                 txn.set_node_property(node_id, key.clone(), prop_val)?;
+                count += 1;
             } else if let Some(edge) = row.get_edge(var) {
                 txn.set_edge_property(edge.src, edge.rel, edge.dst, key.clone(), prop_val)?;
+                count += 1;
+            } else if matches!(row.get(var), Some(Value::Null)) {
+                continue;
             } else {
                 return Err(Error::Other(format!("Variable {} not found in row", var)));
             }
-            count += 1;
         }
     }
     Ok(count)
@@ -3411,15 +3446,133 @@ fn execute_remove<S: GraphSnapshot>(
         for (var, key) in items {
             if let Some(node_id) = row.get_node(var) {
                 txn.remove_node_property(node_id, key)?;
+                count += 1;
             } else if let Some(edge) = row.get_edge(var) {
                 txn.remove_edge_property(edge.src, edge.rel, edge.dst, key)?;
+                count += 1;
+            } else if matches!(row.get(var), Some(Value::Null)) {
+                continue;
             } else {
                 return Err(Error::Other(format!("Variable {} not found in row", var)));
             }
-            count += 1;
         }
     }
     Ok(count)
+}
+
+fn execute_set_labels<S: GraphSnapshot>(
+    snapshot: &S,
+    input: &Plan,
+    txn: &mut dyn WriteableGraph,
+    items: &[(String, Vec<String>)],
+    params: &crate::query_api::Params,
+) -> Result<u32> {
+    let mut count = 0;
+    for row in execute_plan(snapshot, input, params) {
+        let row = row?;
+        for (var, labels) in items {
+            if let Some(node_id) = row.get_node(var) {
+                for label in labels {
+                    let label_id = txn.get_or_create_label_id(label)?;
+                    txn.add_node_label(node_id, label_id)?;
+                    count += 1;
+                }
+                continue;
+            }
+
+            if matches!(row.get(var), Some(Value::Null)) {
+                continue;
+            }
+
+            return Err(Error::Other(format!("Variable {} not found in row", var)));
+        }
+    }
+    Ok(count)
+}
+
+fn execute_remove_labels<S: GraphSnapshot>(
+    snapshot: &S,
+    input: &Plan,
+    txn: &mut dyn WriteableGraph,
+    items: &[(String, Vec<String>)],
+    params: &crate::query_api::Params,
+) -> Result<u32> {
+    let mut count = 0;
+    for row in execute_plan(snapshot, input, params) {
+        let row = row?;
+        for (var, labels) in items {
+            if let Some(node_id) = row.get_node(var) {
+                for label in labels {
+                    if let Some(label_id) = snapshot.resolve_label_id(label) {
+                        txn.remove_node_label(node_id, label_id)?;
+                        count += 1;
+                    }
+                }
+                continue;
+            }
+
+            if matches!(row.get(var), Some(Value::Null)) {
+                continue;
+            }
+
+            return Err(Error::Other(format!("Variable {} not found in row", var)));
+        }
+    }
+    Ok(count)
+}
+
+fn apply_label_overlay_to_rows<S: GraphSnapshot>(
+    snapshot: &S,
+    rows: Vec<Row>,
+    items: &[(String, Vec<String>)],
+    is_add: bool,
+) -> Vec<Row> {
+    rows.into_iter()
+        .map(|mut row| {
+            for (var, labels) in items {
+                let Some(node_id) = row.get_node(var) else {
+                    continue;
+                };
+
+                let mut current_labels: Vec<String> = match row.get(var) {
+                    Some(Value::Node(node)) => node.labels.clone(),
+                    _ => snapshot
+                        .resolve_node_labels(node_id)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter_map(|id| snapshot.resolve_label_name(id))
+                        .collect(),
+                };
+
+                if is_add {
+                    for label in labels {
+                        if !current_labels.iter().any(|existing| existing == label) {
+                            current_labels.push(label.clone());
+                        }
+                    }
+                } else {
+                    current_labels.retain(|existing| !labels.iter().any(|label| label == existing));
+                }
+
+                let properties = snapshot
+                    .node_properties(node_id)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), convert_api_property_to_value(v)))
+                    .collect();
+
+                row = row.with(
+                    var.clone(),
+                    Value::Node(NodeValue {
+                        id: node_id,
+                        labels: current_labels,
+                        properties,
+                    }),
+                );
+            }
+            row
+        })
+        .collect()
 }
 
 fn convert_executor_value_to_property(value: &Value) -> Result<PropertyValue> {
@@ -3487,7 +3640,9 @@ fn inject_rows(plan: &mut Plan, rows: Vec<Row>) {
         Plan::Create { input, .. }
         | Plan::Delete { input, .. }
         | Plan::SetProperty { input, .. }
+        | Plan::SetLabels { input, .. }
         | Plan::RemoveProperty { input, .. }
+        | Plan::RemoveLabels { input, .. }
         | Plan::Foreach { input, .. }
         | Plan::Filter { input, .. }
         | Plan::Project { input, .. }
@@ -4034,6 +4189,19 @@ fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
                             .count();
                         Value::Int(count as i64)
                     }
+                    AggregateFunction::CountDistinct(expr) => {
+                        let mut distinct_values: Vec<Value> = Vec::new();
+                        for row in &rows {
+                            let value = evaluate_expression_value(expr, row, snapshot, params);
+                            if value == Value::Null {
+                                continue;
+                            }
+                            if !distinct_values.iter().any(|existing| existing == &value) {
+                                distinct_values.push(value);
+                            }
+                        }
+                        Value::Int(distinct_values.len() as i64)
+                    }
                     AggregateFunction::Sum(expr) => {
                         let mut saw_float = false;
                         let mut int_sum: i128 = 0;
@@ -4041,6 +4209,41 @@ fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
 
                         for row in &rows {
                             match evaluate_expression_value(expr, row, snapshot, params) {
+                                Value::Int(i) => {
+                                    int_sum += i as i128;
+                                    float_sum += i as f64;
+                                }
+                                Value::Float(f) => {
+                                    saw_float = true;
+                                    float_sum += f;
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        if saw_float {
+                            Value::Float(float_sum)
+                        } else {
+                            Value::Int(int_sum as i64)
+                        }
+                    }
+                    AggregateFunction::SumDistinct(expr) => {
+                        let mut distinct_values: Vec<Value> = Vec::new();
+                        for row in &rows {
+                            let value = evaluate_expression_value(expr, row, snapshot, params);
+                            if value == Value::Null {
+                                continue;
+                            }
+                            if !distinct_values.iter().any(|existing| existing == &value) {
+                                distinct_values.push(value);
+                            }
+                        }
+
+                        let mut saw_float = false;
+                        let mut int_sum: i128 = 0;
+                        let mut float_sum: f64 = 0.0;
+                        for value in distinct_values {
+                            match value {
                                 Value::Int(i) => {
                                     int_sum += i as i128;
                                     float_sum += i as f64;
@@ -4076,6 +4279,33 @@ fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
                             Value::Float(values.iter().sum::<f64>() / values.len() as f64)
                         }
                     }
+                    AggregateFunction::AvgDistinct(expr) => {
+                        let mut distinct_values: Vec<Value> = Vec::new();
+                        for row in &rows {
+                            let value = evaluate_expression_value(expr, row, snapshot, params);
+                            if value == Value::Null {
+                                continue;
+                            }
+                            if !distinct_values.iter().any(|existing| existing == &value) {
+                                distinct_values.push(value);
+                            }
+                        }
+
+                        let numeric: Vec<f64> = distinct_values
+                            .into_iter()
+                            .filter_map(|value| match value {
+                                Value::Float(f) => Some(f),
+                                Value::Int(i) => Some(i as f64),
+                                _ => None,
+                            })
+                            .collect();
+
+                        if numeric.is_empty() {
+                            Value::Null
+                        } else {
+                            Value::Float(numeric.iter().sum::<f64>() / numeric.len() as f64)
+                        }
+                    }
                     AggregateFunction::Min(expr) => {
                         let min_val = rows
                             .iter()
@@ -4085,6 +4315,23 @@ fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
                             })
                             .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                         min_val.unwrap_or(Value::Null)
+                    }
+                    AggregateFunction::MinDistinct(expr) => {
+                        let mut distinct_values: Vec<Value> = Vec::new();
+                        for row in &rows {
+                            let value = evaluate_expression_value(expr, row, snapshot, params);
+                            if value == Value::Null {
+                                continue;
+                            }
+                            if !distinct_values.iter().any(|existing| existing == &value) {
+                                distinct_values.push(value);
+                            }
+                        }
+
+                        distinct_values
+                            .into_iter()
+                            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                            .unwrap_or(Value::Null)
                     }
                     AggregateFunction::Max(expr) => {
                         let max_val = rows
@@ -4096,6 +4343,23 @@ fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
                             .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
                         max_val.unwrap_or(Value::Null)
                     }
+                    AggregateFunction::MaxDistinct(expr) => {
+                        let mut distinct_values: Vec<Value> = Vec::new();
+                        for row in &rows {
+                            let value = evaluate_expression_value(expr, row, snapshot, params);
+                            if value == Value::Null {
+                                continue;
+                            }
+                            if !distinct_values.iter().any(|existing| existing == &value) {
+                                distinct_values.push(value);
+                            }
+                        }
+
+                        distinct_values
+                            .into_iter()
+                            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                            .unwrap_or(Value::Null)
+                    }
                     AggregateFunction::Collect(expr) => {
                         let values: Vec<Value> = rows
                             .iter()
@@ -4103,6 +4367,19 @@ fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
                             .filter(|v| *v != Value::Null)
                             .collect();
                         Value::List(values)
+                    }
+                    AggregateFunction::CollectDistinct(expr) => {
+                        let mut distinct_values: Vec<Value> = Vec::new();
+                        for row in &rows {
+                            let value = evaluate_expression_value(expr, row, snapshot, params);
+                            if value == Value::Null {
+                                continue;
+                            }
+                            if !distinct_values.iter().any(|existing| existing == &value) {
+                                distinct_values.push(value);
+                            }
+                        }
+                        Value::List(distinct_values)
                     }
                 };
                 result = result.with(alias, value);

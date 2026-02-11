@@ -137,3 +137,36 @@ fn test_set_clause_on_relationship() -> nervusdb_v2::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_set_clause_add_node_label() -> nervusdb_v2::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("t108_set_label.ndb");
+    let db = Db::open(&db_path)?;
+
+    let node_id = {
+        let mut txn = db.begin_write();
+        let a = txn.get_or_create_label("A")?;
+        let node_id = txn.create_node(1, a)?;
+        txn.commit()?;
+        node_id
+    };
+
+    {
+        let snapshot = db.snapshot();
+        let mut txn = db.begin_write();
+        let prepared = nervusdb_v2::query::prepare("MATCH (n:A) SET n:Foo")?;
+        let count = prepared.execute_write(&snapshot, &mut txn, &Default::default())?;
+        assert_eq!(count, 1);
+        txn.commit()?;
+    }
+
+    let snapshot = db.snapshot();
+    let labels = snapshot.resolve_node_labels(node_id).unwrap_or_default();
+    let foo = snapshot
+        .resolve_label_id("Foo")
+        .expect("Foo label should be created");
+    assert!(labels.contains(&foo));
+
+    Ok(())
+}

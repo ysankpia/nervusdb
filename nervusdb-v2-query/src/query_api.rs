@@ -184,7 +184,9 @@ impl PreparedQuery {
                         crate::executor::Plan::Create { .. }
                             | crate::executor::Plan::Delete { .. }
                             | crate::executor::Plan::SetProperty { .. }
+                            | crate::executor::Plan::SetLabels { .. }
                             | crate::executor::Plan::RemoveProperty { .. }
+                            | crate::executor::Plan::RemoveLabels { .. }
                             | crate::executor::Plan::Foreach { .. }
                     ) {
                         results.clear();
@@ -236,7 +238,9 @@ fn plan_contains_write(plan: &Plan) -> bool {
         Plan::Create { .. }
         | Plan::Delete { .. }
         | Plan::SetProperty { .. }
+        | Plan::SetLabels { .. }
         | Plan::RemoveProperty { .. }
+        | Plan::RemoveLabels { .. }
         | Plan::Foreach { .. } => true,
         Plan::Filter { input, .. }
         | Plan::Project { input, .. }
@@ -630,8 +634,16 @@ fn render_plan(plan: &Plan) -> String {
                 let _ = writeln!(out, "{pad}SetProperty(items={items:?})");
                 go(out, input, depth + 1);
             }
+            Plan::SetLabels { input, items } => {
+                let _ = writeln!(out, "{pad}SetLabels(items={items:?})");
+                go(out, input, depth + 1);
+            }
             Plan::RemoveProperty { input, items } => {
                 let _ = writeln!(out, "{pad}RemoveProperty(items={items:?})");
+                go(out, input, depth + 1);
+            }
+            Plan::RemoveLabels { input, items } => {
+                let _ = writeln!(out, "{pad}RemoveLabels(items={items:?})");
                 go(out, input, depth + 1);
             }
             Plan::IndexSeek {
@@ -1001,6 +1013,24 @@ fn validate_expression_types(expr: &Expression) -> Result<()> {
             for arg in &call.args {
                 validate_expression_types(arg)?;
             }
+            if call.name.eq_ignore_ascii_case("properties") {
+                if call.args.len() != 1 {
+                    return Err(Error::Other(
+                        "syntax error: InvalidArgumentType".to_string(),
+                    ));
+                }
+                if matches!(
+                    call.args[0],
+                    Expression::Literal(Literal::Number(_))
+                        | Expression::Literal(Literal::String(_))
+                        | Expression::Literal(Literal::Boolean(_))
+                        | Expression::List(_)
+                ) {
+                    return Err(Error::Other(
+                        "syntax error: InvalidArgumentType".to_string(),
+                    ));
+                }
+            }
             Ok(())
         }
         Expression::List(items) => {
@@ -1184,15 +1214,162 @@ fn compile_return_plan(input: Plan, ret: &crate::ast::ReturnClause) -> Result<(P
     Ok((plan, project_cols))
 }
 
+fn binary_operator_symbol(operator: &BinaryOperator) -> &'static str {
+    match operator {
+        BinaryOperator::Equals => "=",
+        BinaryOperator::NotEquals => "<>",
+        BinaryOperator::LessThan => "<",
+        BinaryOperator::LessEqual => "<=",
+        BinaryOperator::GreaterThan => ">",
+        BinaryOperator::GreaterEqual => ">=",
+        BinaryOperator::And => "AND",
+        BinaryOperator::Or => "OR",
+        BinaryOperator::Xor => "XOR",
+        BinaryOperator::Add => "+",
+        BinaryOperator::Subtract => "-",
+        BinaryOperator::Multiply => "*",
+        BinaryOperator::Divide => "/",
+        BinaryOperator::Modulo => "%",
+        BinaryOperator::Power => "^",
+        BinaryOperator::In => "IN",
+        BinaryOperator::StartsWith => "STARTS WITH",
+        BinaryOperator::EndsWith => "ENDS WITH",
+        BinaryOperator::Contains => "CONTAINS",
+        BinaryOperator::HasLabel => ":",
+        BinaryOperator::IsNull => "IS NULL",
+        BinaryOperator::IsNotNull => "IS NOT NULL",
+    }
+}
+
+fn unary_operator_symbol(operator: &crate::ast::UnaryOperator) -> &'static str {
+    match operator {
+        crate::ast::UnaryOperator::Not => "NOT ",
+        crate::ast::UnaryOperator::Negate => "-",
+    }
+}
+
+fn is_simple_property_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first == '_' || first.is_ascii_alphabetic()) {
+        return false;
+    }
+    chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
 fn expression_alias_fragment(expr: &Expression) -> String {
     match expr {
         Expression::Variable(name) => name.clone(),
         Expression::PropertyAccess(pa) => format!("{}.{}", pa.variable, pa.property),
         Expression::Literal(Literal::String(s)) if s == "*" => "*".to_string(),
-        Expression::Literal(Literal::Number(n)) => n.to_string(),
+        Expression::Literal(Literal::Number(n)) => {
+            if n.fract() == 0.0 {
+                format!("{}", *n as i64)
+            } else {
+                n.to_string()
+            }
+        }
         Expression::Literal(Literal::Boolean(b)) => b.to_string(),
         Expression::Literal(Literal::String(s)) => format!("'{}'", s),
+        Expression::Literal(Literal::Null) => "null".to_string(),
+        Expression::Parameter(name) => format!("${}", name),
+        Expression::FunctionCall(call) => {
+            if call.name.eq_ignore_ascii_case("__index") && call.args.len() == 2 {
+                return format!(
+                    "{}[{}]",
+                    expression_alias_fragment(&call.args[0]),
+                    expression_alias_fragment(&call.args[1])
+                );
+            }
+            if call.name.eq_ignore_ascii_case("__getprop") && call.args.len() == 2 {
+                let raw_base = expression_alias_fragment(&call.args[0]);
+                let base = if matches!(
+                    call.args[0],
+                    Expression::Variable(_) | Expression::PropertyAccess(_)
+                ) {
+                    raw_base
+                } else {
+                    format!("({raw_base})")
+                };
+                if let Expression::Literal(Literal::String(key)) = &call.args[1] {
+                    if is_simple_property_name(key) {
+                        return format!("{base}.{key}");
+                    }
+                    return format!("{base}['{}']", key.replace('\'', "\\'"));
+                }
+                return format!("{base}[{}]", expression_alias_fragment(&call.args[1]));
+            }
+            let args = call
+                .args
+                .iter()
+                .map(expression_alias_fragment)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{}({})", call.name.to_lowercase(), args)
+        }
+        Expression::Binary(b) => match b.operator {
+            BinaryOperator::IsNull => {
+                format!(
+                    "{} {}",
+                    expression_alias_fragment(&b.left),
+                    binary_operator_symbol(&b.operator)
+                )
+            }
+            BinaryOperator::IsNotNull => {
+                format!(
+                    "{} {}",
+                    expression_alias_fragment(&b.left),
+                    binary_operator_symbol(&b.operator)
+                )
+            }
+            BinaryOperator::HasLabel => format!(
+                "{}:{}",
+                expression_alias_fragment(&b.left),
+                expression_alias_fragment(&b.right)
+            ),
+            _ => format!(
+                "{} {} {}",
+                expression_alias_fragment(&b.left),
+                binary_operator_symbol(&b.operator),
+                expression_alias_fragment(&b.right)
+            ),
+        },
+        Expression::Unary(u) => format!(
+            "{}{}",
+            unary_operator_symbol(&u.operator),
+            expression_alias_fragment(&u.operand)
+        ),
+        Expression::List(items) => format!(
+            "[{}]",
+            items
+                .iter()
+                .map(expression_alias_fragment)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Expression::Map(map) => {
+            let inner = map
+                .properties
+                .iter()
+                .map(|pair| format!("{}: {}", pair.key, expression_alias_fragment(&pair.value)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{{}}}", inner)
+        }
+        Expression::Case(_) => "case(...)".to_string(),
+        Expression::Exists(_) => "exists(...)".to_string(),
         _ => "...".to_string(),
+    }
+}
+
+fn default_projection_alias(expr: &Expression, index: usize) -> String {
+    let alias = expression_alias_fragment(expr);
+    if alias.is_empty() || alias == "..." || alias.len() > 120 {
+        format!("expr_{}", index)
+    } else {
+        alias
     }
 }
 
@@ -1221,6 +1398,438 @@ fn default_aggregate_alias(call: &crate::ast::FunctionCall, index: usize) -> Str
     }
 }
 
+fn is_simple_group_expression(expr: &Expression) -> bool {
+    matches!(
+        expr,
+        Expression::Variable(_) | Expression::PropertyAccess(_)
+    )
+}
+
+fn contains_function_call_named(expr: &Expression, target: &str) -> bool {
+    match expr {
+        Expression::FunctionCall(call) => {
+            if call.name.eq_ignore_ascii_case(target) {
+                return true;
+            }
+            call.args
+                .iter()
+                .any(|arg| contains_function_call_named(arg, target))
+        }
+        Expression::Binary(b) => {
+            contains_function_call_named(&b.left, target)
+                || contains_function_call_named(&b.right, target)
+        }
+        Expression::Unary(u) => contains_function_call_named(&u.operand, target),
+        Expression::List(items) => items
+            .iter()
+            .any(|item| contains_function_call_named(item, target)),
+        Expression::Map(map) => map
+            .properties
+            .iter()
+            .any(|pair| contains_function_call_named(&pair.value, target)),
+        Expression::Case(case_expr) => {
+            case_expr
+                .expression
+                .as_ref()
+                .is_some_and(|expr| contains_function_call_named(expr, target))
+                || case_expr.when_clauses.iter().any(|(w, t)| {
+                    contains_function_call_named(w, target)
+                        || contains_function_call_named(t, target)
+                })
+                || case_expr
+                    .else_expression
+                    .as_ref()
+                    .is_some_and(|expr| contains_function_call_named(expr, target))
+        }
+        _ => false,
+    }
+}
+
+fn expression_uses_allowed_group_refs(
+    expr: &Expression,
+    grouping_keys: &[(Expression, String)],
+    grouping_aliases: &std::collections::HashSet<String>,
+) -> bool {
+    match expr {
+        Expression::Literal(_) | Expression::Parameter(_) => true,
+        Expression::Variable(v) => {
+            grouping_aliases.contains(v)
+                || grouping_keys.iter().any(|(group_expr, alias)| {
+                    alias == v || matches!(group_expr, Expression::Variable(name) if name == v)
+                })
+        }
+        Expression::PropertyAccess(pa) => {
+            let dotted = format!("{}.{}", pa.variable, pa.property);
+            grouping_aliases.contains(&dotted) || grouping_keys.iter().any(|(group_expr, alias)| {
+                alias == &dotted
+                    || matches!(group_expr, Expression::PropertyAccess(group_pa) if group_pa == pa)
+                    || matches!(group_expr, Expression::Variable(var) if var == &pa.variable)
+            })
+        }
+        Expression::Unary(u) => {
+            expression_uses_allowed_group_refs(&u.operand, grouping_keys, grouping_aliases)
+        }
+        Expression::Binary(b) => {
+            expression_uses_allowed_group_refs(&b.left, grouping_keys, grouping_aliases)
+                && expression_uses_allowed_group_refs(&b.right, grouping_keys, grouping_aliases)
+        }
+        Expression::FunctionCall(call) => call
+            .args
+            .iter()
+            .all(|arg| expression_uses_allowed_group_refs(arg, grouping_keys, grouping_aliases)),
+        Expression::List(items) => items
+            .iter()
+            .all(|item| expression_uses_allowed_group_refs(item, grouping_keys, grouping_aliases)),
+        Expression::Map(map) => map.properties.iter().all(|pair| {
+            expression_uses_allowed_group_refs(&pair.value, grouping_keys, grouping_aliases)
+        }),
+        Expression::Case(case_expr) => {
+            case_expr.expression.as_ref().map_or(true, |expr| {
+                expression_uses_allowed_group_refs(expr, grouping_keys, grouping_aliases)
+            }) && case_expr.when_clauses.iter().all(|(when_expr, then_expr)| {
+                expression_uses_allowed_group_refs(when_expr, grouping_keys, grouping_aliases)
+                    && expression_uses_allowed_group_refs(
+                        then_expr,
+                        grouping_keys,
+                        grouping_aliases,
+                    )
+            }) && case_expr.else_expression.as_ref().map_or(true, |expr| {
+                expression_uses_allowed_group_refs(expr, grouping_keys, grouping_aliases)
+            })
+        }
+        _ => false,
+    }
+}
+
+fn validate_aggregate_mixed_expression(
+    expr: &Expression,
+    grouping_keys: &[(Expression, String)],
+    grouping_aliases: &std::collections::HashSet<String>,
+) -> Result<()> {
+    if !contains_aggregate_expression(expr) {
+        return Ok(());
+    }
+
+    let valid = validate_aggregate_mixed_expression_impl(expr, grouping_keys, grouping_aliases)?;
+    if valid {
+        Ok(())
+    } else {
+        Err(Error::Other(
+            "syntax error: AmbiguousAggregationExpression".to_string(),
+        ))
+    }
+}
+
+fn validate_aggregate_mixed_expression_impl(
+    expr: &Expression,
+    grouping_keys: &[(Expression, String)],
+    grouping_aliases: &std::collections::HashSet<String>,
+) -> Result<bool> {
+    if !contains_aggregate_expression(expr) {
+        return Ok(expression_uses_allowed_group_refs(
+            expr,
+            grouping_keys,
+            grouping_aliases,
+        ));
+    }
+
+    match expr {
+        Expression::FunctionCall(call) => {
+            if parse_aggregate_function(call)?.is_some() {
+                return Ok(true);
+            }
+
+            for arg in &call.args {
+                if !validate_aggregate_mixed_expression_impl(arg, grouping_keys, grouping_aliases)?
+                {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        Expression::Binary(b) => Ok(validate_aggregate_mixed_expression_impl(
+            &b.left,
+            grouping_keys,
+            grouping_aliases,
+        )? && validate_aggregate_mixed_expression_impl(
+            &b.right,
+            grouping_keys,
+            grouping_aliases,
+        )?),
+        Expression::Unary(u) => {
+            validate_aggregate_mixed_expression_impl(&u.operand, grouping_keys, grouping_aliases)
+        }
+        Expression::List(items) => {
+            for item in items {
+                if !validate_aggregate_mixed_expression_impl(item, grouping_keys, grouping_aliases)?
+                {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        Expression::Map(map) => {
+            for pair in &map.properties {
+                if !validate_aggregate_mixed_expression_impl(
+                    &pair.value,
+                    grouping_keys,
+                    grouping_aliases,
+                )? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        Expression::Case(case_expr) => {
+            if let Some(test_expr) = &case_expr.expression
+                && !validate_aggregate_mixed_expression_impl(
+                    test_expr,
+                    grouping_keys,
+                    grouping_aliases,
+                )?
+            {
+                return Ok(false);
+            }
+            for (when_expr, then_expr) in &case_expr.when_clauses {
+                if !validate_aggregate_mixed_expression_impl(
+                    when_expr,
+                    grouping_keys,
+                    grouping_aliases,
+                )? {
+                    return Ok(false);
+                }
+                if !validate_aggregate_mixed_expression_impl(
+                    then_expr,
+                    grouping_keys,
+                    grouping_aliases,
+                )? {
+                    return Ok(false);
+                }
+            }
+            if let Some(else_expr) = &case_expr.else_expression
+                && !validate_aggregate_mixed_expression_impl(
+                    else_expr,
+                    grouping_keys,
+                    grouping_aliases,
+                )?
+            {
+                return Ok(false);
+            }
+            Ok(true)
+        }
+        _ => Ok(expression_uses_allowed_group_refs(
+            expr,
+            grouping_keys,
+            grouping_aliases,
+        )),
+    }
+}
+
+fn collect_aggregate_calls(
+    expr: &Expression,
+    out: &mut Vec<(Expression, crate::ast::AggregateFunction, String)>,
+) -> Result<()> {
+    match expr {
+        Expression::FunctionCall(call) => {
+            if let Some(agg) = parse_aggregate_function(call)? {
+                for arg in &call.args {
+                    if contains_aggregate_expression(arg) {
+                        return Err(Error::Other("syntax error: NestedAggregation".to_string()));
+                    }
+                    if contains_function_call_named(arg, "rand") {
+                        return Err(Error::Other(
+                            "syntax error: NonConstantExpression".to_string(),
+                        ));
+                    }
+                }
+
+                if !out.iter().any(|(existing, _, _)| existing == expr) {
+                    let alias = format!("__agg_{}", out.len());
+                    out.push((expr.clone(), agg, alias));
+                }
+                return Ok(());
+            }
+
+            for arg in &call.args {
+                collect_aggregate_calls(arg, out)?;
+            }
+            Ok(())
+        }
+        Expression::Binary(b) => {
+            collect_aggregate_calls(&b.left, out)?;
+            collect_aggregate_calls(&b.right, out)
+        }
+        Expression::Unary(u) => collect_aggregate_calls(&u.operand, out),
+        Expression::List(items) => {
+            for item in items {
+                collect_aggregate_calls(item, out)?;
+            }
+            Ok(())
+        }
+        Expression::Map(map) => {
+            for pair in &map.properties {
+                collect_aggregate_calls(&pair.value, out)?;
+            }
+            Ok(())
+        }
+        Expression::Case(case_expr) => {
+            if let Some(test_expr) = &case_expr.expression {
+                collect_aggregate_calls(test_expr, out)?;
+            }
+            for (when_expr, then_expr) in &case_expr.when_clauses {
+                collect_aggregate_calls(when_expr, out)?;
+                collect_aggregate_calls(then_expr, out)?;
+            }
+            if let Some(else_expr) = &case_expr.else_expression {
+                collect_aggregate_calls(else_expr, out)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn resolve_aggregate_alias(expr: &Expression, mappings: &[(Expression, String)]) -> Option<String> {
+    mappings
+        .iter()
+        .find_map(|(aggregate_expr, alias)| (aggregate_expr == expr).then(|| alias.clone()))
+}
+
+fn rewrite_aggregate_references(
+    expr: &Expression,
+    mappings: &[(Expression, String)],
+) -> Expression {
+    if let Some(alias) = resolve_aggregate_alias(expr, mappings) {
+        return Expression::Variable(alias);
+    }
+
+    match expr {
+        Expression::Binary(b) => Expression::Binary(Box::new(crate::ast::BinaryExpression {
+            left: rewrite_aggregate_references(&b.left, mappings),
+            operator: b.operator.clone(),
+            right: rewrite_aggregate_references(&b.right, mappings),
+        })),
+        Expression::Unary(u) => Expression::Unary(Box::new(crate::ast::UnaryExpression {
+            operator: u.operator.clone(),
+            operand: rewrite_aggregate_references(&u.operand, mappings),
+        })),
+        Expression::FunctionCall(call) => Expression::FunctionCall(crate::ast::FunctionCall {
+            name: call.name.clone(),
+            args: call
+                .args
+                .iter()
+                .map(|arg| rewrite_aggregate_references(arg, mappings))
+                .collect(),
+        }),
+        Expression::List(items) => Expression::List(
+            items
+                .iter()
+                .map(|item| rewrite_aggregate_references(item, mappings))
+                .collect(),
+        ),
+        Expression::Map(map) => Expression::Map(crate::ast::PropertyMap {
+            properties: map
+                .properties
+                .iter()
+                .map(|pair| crate::ast::PropertyPair {
+                    key: pair.key.clone(),
+                    value: rewrite_aggregate_references(&pair.value, mappings),
+                })
+                .collect(),
+        }),
+        Expression::Case(case_expr) => Expression::Case(Box::new(crate::ast::CaseExpression {
+            expression: case_expr
+                .expression
+                .as_ref()
+                .map(|expr| rewrite_aggregate_references(expr, mappings)),
+            when_clauses: case_expr
+                .when_clauses
+                .iter()
+                .map(|(when_expr, then_expr)| {
+                    (
+                        rewrite_aggregate_references(when_expr, mappings),
+                        rewrite_aggregate_references(then_expr, mappings),
+                    )
+                })
+                .collect(),
+            else_expression: case_expr
+                .else_expression
+                .as_ref()
+                .map(|expr| rewrite_aggregate_references(expr, mappings)),
+        })),
+        _ => expr.clone(),
+    }
+}
+
+fn rewrite_group_key_references(
+    expr: &Expression,
+    grouping_keys: &[(Expression, String)],
+) -> Expression {
+    if let Some(alias) = grouping_keys
+        .iter()
+        .find_map(|(group_expr, alias)| (group_expr == expr).then(|| alias.clone()))
+    {
+        return Expression::Variable(alias);
+    }
+
+    match expr {
+        Expression::Binary(b) => Expression::Binary(Box::new(crate::ast::BinaryExpression {
+            left: rewrite_group_key_references(&b.left, grouping_keys),
+            operator: b.operator.clone(),
+            right: rewrite_group_key_references(&b.right, grouping_keys),
+        })),
+        Expression::Unary(u) => Expression::Unary(Box::new(crate::ast::UnaryExpression {
+            operator: u.operator.clone(),
+            operand: rewrite_group_key_references(&u.operand, grouping_keys),
+        })),
+        Expression::FunctionCall(call) => Expression::FunctionCall(crate::ast::FunctionCall {
+            name: call.name.clone(),
+            args: call
+                .args
+                .iter()
+                .map(|arg| rewrite_group_key_references(arg, grouping_keys))
+                .collect(),
+        }),
+        Expression::List(items) => Expression::List(
+            items
+                .iter()
+                .map(|item| rewrite_group_key_references(item, grouping_keys))
+                .collect(),
+        ),
+        Expression::Map(map) => Expression::Map(crate::ast::PropertyMap {
+            properties: map
+                .properties
+                .iter()
+                .map(|pair| crate::ast::PropertyPair {
+                    key: pair.key.clone(),
+                    value: rewrite_group_key_references(&pair.value, grouping_keys),
+                })
+                .collect(),
+        }),
+        Expression::Case(case_expr) => Expression::Case(Box::new(crate::ast::CaseExpression {
+            expression: case_expr
+                .expression
+                .as_ref()
+                .map(|expr| rewrite_group_key_references(expr, grouping_keys)),
+            when_clauses: case_expr
+                .when_clauses
+                .iter()
+                .map(|(when_expr, then_expr)| {
+                    (
+                        rewrite_group_key_references(when_expr, grouping_keys),
+                        rewrite_group_key_references(then_expr, grouping_keys),
+                    )
+                })
+                .collect(),
+            else_expression: case_expr
+                .else_expression
+                .as_ref()
+                .map(|expr| rewrite_group_key_references(expr, grouping_keys)),
+        })),
+        _ => expr.clone(),
+    }
+}
+
 fn compile_projection_aggregation(
     input: Plan,
     items: &[crate::ast::ReturnItem],
@@ -1228,9 +1837,6 @@ fn compile_projection_aggregation(
     for item in items {
         validate_expression_types(&item.expression)?;
     }
-
-    let mut aggregates: Vec<(crate::ast::AggregateFunction, String)> = Vec::new();
-    let mut project_cols: Vec<String> = Vec::new(); // Final output columns
 
     // RETURN * / WITH * expansion.
     if items.len() == 1
@@ -1254,139 +1860,155 @@ fn compile_projection_aggregation(
         ));
     }
 
-    // We categorize items:
-    // 1. Aggregates -> Goes to Plan::Aggregate
-    // 2. Non-aggregates -> Must be grouping keys. Need to be projected BEFORE aggregation.
-
-    let mut pre_projections = Vec::new(); // For Plan::Project before Aggregate
-    let mut group_by = Vec::new(); // For Plan::Aggregate
-    let mut is_aggregation = false;
-    let mut projected_aliases = std::collections::HashSet::new();
-
-    // First pass: identify if it is an aggregation and collect items
+    let mut resolved_items: Vec<(Expression, String, bool)> = Vec::with_capacity(items.len());
+    let mut has_aggregation = false;
     for (i, item) in items.iter().enumerate() {
-        // Check for aggregation function
-        let mut found_agg = false;
-        if let Expression::FunctionCall(call) = &item.expression
-            && let Some(agg) = parse_aggregate_function(call)?
-        {
-            found_agg = true;
-            is_aggregation = true;
-            let alias = item
-                .alias
-                .clone()
-                .unwrap_or_else(|| default_aggregate_alias(call, i));
-            aggregates.push((agg, alias.clone()));
-            project_cols.push(alias);
+        let contains_agg = contains_aggregate_expression(&item.expression);
+        if contains_agg {
+            has_aggregation = true;
+        }
 
-            // Capture dependencies
-            let mut deps = std::collections::HashSet::new();
-            for arg in &call.args {
-                extract_variables_from_expr(arg, &mut deps);
+        let alias = if let Some(alias) = &item.alias {
+            alias.clone()
+        } else if let Expression::FunctionCall(call) = &item.expression {
+            if parse_aggregate_function(call)?.is_some() {
+                default_aggregate_alias(call, i)
+            } else {
+                default_projection_alias(&item.expression, i)
             }
-            // We will add deps to pre_projections AFTER loop or handle logic carefully.
-            // If we add them here, they are "implicit" projections.
-            // We need them to evaluate the aggregate.
-            // BUT, if the same variable is ALSO a grouping key later in the list...
-            // It's okay. Duplicates in pre_projections might be inefficient but usually fine if logic uses aliases.
-            // However, Plan::Aggregate uses grouping keys to form groups.
-            // Implicit deps are just "extra columns" passed through.
-            for dep in deps {
-                if !projected_aliases.contains(&dep) {
-                    pre_projections.push((dep.clone(), Expression::Variable(dep.clone())));
-                    projected_aliases.insert(dep);
+        } else {
+            default_projection_alias(&item.expression, i)
+        };
+
+        resolved_items.push((item.expression.clone(), alias, contains_agg));
+    }
+
+    if !has_aggregation {
+        let projections: Vec<(String, Expression)> = resolved_items
+            .iter()
+            .map(|(expr, alias, _)| (alias.clone(), expr.clone()))
+            .collect();
+        let project_cols: Vec<String> = resolved_items
+            .iter()
+            .map(|(_, alias, _)| alias.clone())
+            .collect();
+
+        return Ok((
+            Plan::Project {
+                input: Box::new(input),
+                projections,
+            },
+            project_cols,
+        ));
+    }
+
+    let mut pre_projections: Vec<(String, Expression)> = Vec::new();
+    let mut projected_aliases = std::collections::HashSet::new();
+    let mut grouping_keys: Vec<(Expression, String)> = Vec::new();
+    let mut grouping_aliases = std::collections::HashSet::new();
+    let mut group_by: Vec<String> = Vec::new();
+
+    for (expr, alias, contains_agg) in &resolved_items {
+        if *contains_agg {
+            continue;
+        }
+
+        if !projected_aliases.contains(alias) {
+            pre_projections.push((alias.clone(), expr.clone()));
+            projected_aliases.insert(alias.clone());
+        }
+
+        group_by.push(alias.clone());
+        grouping_aliases.insert(alias.clone());
+        if is_simple_group_expression(expr) {
+            grouping_keys.push((expr.clone(), alias.clone()));
+        }
+    }
+
+    let mut aggregate_exprs: Vec<(Expression, crate::ast::AggregateFunction, String)> = Vec::new();
+    for (expr, _alias, contains_agg) in &resolved_items {
+        if !*contains_agg {
+            continue;
+        }
+
+        validate_aggregate_mixed_expression(expr, &grouping_keys, &grouping_aliases)?;
+        collect_aggregate_calls(expr, &mut aggregate_exprs)?;
+    }
+
+    if aggregate_exprs.is_empty() {
+        return Err(Error::Other("syntax error: InvalidAggregation".to_string()));
+    }
+
+    for (_, agg, _) in &aggregate_exprs {
+        match agg {
+            crate::ast::AggregateFunction::Count(None) => {}
+            crate::ast::AggregateFunction::Count(Some(expr))
+            | crate::ast::AggregateFunction::CountDistinct(expr)
+            | crate::ast::AggregateFunction::Sum(expr)
+            | crate::ast::AggregateFunction::SumDistinct(expr)
+            | crate::ast::AggregateFunction::Avg(expr)
+            | crate::ast::AggregateFunction::AvgDistinct(expr)
+            | crate::ast::AggregateFunction::Min(expr)
+            | crate::ast::AggregateFunction::MinDistinct(expr)
+            | crate::ast::AggregateFunction::Max(expr)
+            | crate::ast::AggregateFunction::MaxDistinct(expr)
+            | crate::ast::AggregateFunction::Collect(expr)
+            | crate::ast::AggregateFunction::CollectDistinct(expr) => {
+                let mut deps = std::collections::HashSet::new();
+                extract_variables_from_expr(expr, &mut deps);
+                for dep in deps {
+                    if !projected_aliases.contains(&dep) {
+                        pre_projections.push((dep.clone(), Expression::Variable(dep.clone())));
+                        projected_aliases.insert(dep);
+                    }
                 }
             }
         }
-
-        if !found_agg {
-            let alias = item
-                .alias
-                .clone()
-                .unwrap_or_else(|| match &item.expression {
-                    Expression::Variable(name) => name.clone(),
-                    Expression::PropertyAccess(pa) => format!("{}.{}", pa.variable, pa.property),
-                    Expression::FunctionCall(call) => {
-                        // Generate descriptive alias for function calls like "length(p)"
-                        if call.args.is_empty() {
-                            format!("{}()", call.name)
-                        } else if call.args.len() == 1 {
-                            // For single arg functions, try to use variable name
-                            if let Expression::Variable(arg) = &call.args[0] {
-                                format!("{}({})", call.name, arg)
-                            } else {
-                                format!("{}(...)", call.name)
-                            }
-                        } else {
-                            format!("{}(...)", call.name)
-                        }
-                    }
-                    _ => format!("expr_{}", i),
-                });
-
-            // Even if variable, we project it to ensure it's available and aliased correctly
-            if !projected_aliases.contains(&alias) {
-                pre_projections.push((alias.clone(), item.expression.clone()));
-                projected_aliases.insert(alias.clone());
-            }
-
-            // If we are aggregating, this alias becomes a grouping key
-            group_by.push(alias.clone());
-            project_cols.push(alias);
-        }
     }
 
-    if is_aggregation {
-        // 1. Pre-project grouping keys
-        // Input -> Project(keys) -> Aggregate(keys)
-        // If pre_projections is empty (e.g. `RETURN count(*)`), check implicit group by?
-        // OpenCypher: fail if mixed agg and non-agg without grouping.
-        // We assume valid cypher for now.
+    let aggregate_aliases: Vec<(Expression, String)> = aggregate_exprs
+        .iter()
+        .map(|(expr, _, alias)| (expr.clone(), alias.clone()))
+        .collect();
 
-        // We only project if there are grouping keys.
-        // If there are NO grouping keys (global agg like `count(*)`), Plan::Project inputs nothing?
-        // If pre_projections is empty, Plan::Project would produce empty rows?
-        // Yes. `count(*)` counts rows. Empty rows are fine (as long as count is correct).
-        // But wait, Plan::Project logic: `input_iter.map(... new_row ...)`.
-        // If projections empty, `new_row` is empty.
-        // Rows still exist (one per input).
-        // Aggregate count(*) counts them. Correct.
-
-        // However, if we discard `n` (not in pre_projections), and we do `count(n)`,
-        // we might fail evaluating `n`.
-        // T305 MVP: Stick to `count(*)` or counting grouping keys.
-        // If user does `WITH n, count(m)`, we error or panic.
-        // We assume safe MVP scope.
-
-        let plan = if !pre_projections.is_empty() {
-            Plan::Project {
-                input: Box::new(input),
-                projections: pre_projections,
-            }
+    let mut final_projections: Vec<(String, Expression)> = Vec::new();
+    let mut project_cols: Vec<String> = Vec::new();
+    for (expr, alias, contains_agg) in resolved_items {
+        let final_expr = if contains_agg {
+            let rewritten = rewrite_aggregate_references(&expr, &aggregate_aliases);
+            rewrite_group_key_references(&rewritten, &grouping_keys)
         } else {
-            // Pass through input if no grouping keys?
-            // No, if we pass through, we keep ALL variables.
-            // Then Aggregate groups by "nothing" (empty group_by).
-            // This works for Global Aggregation.
-            input
+            Expression::Variable(alias.clone())
         };
 
-        let plan = Plan::Aggregate {
-            input: Box::new(plan),
-            group_by,
-            aggregates,
-        };
-        Ok((plan, project_cols))
-    } else {
-        // Simple Projection
-        Ok((
-            Plan::Project {
-                input: Box::new(input),
-                projections: pre_projections,
-            },
-            project_cols,
-        ))
+        project_cols.push(alias.clone());
+        final_projections.push((alias, final_expr));
     }
+
+    let plan = if !pre_projections.is_empty() {
+        Plan::Project {
+            input: Box::new(input),
+            projections: pre_projections,
+        }
+    } else {
+        input
+    };
+
+    let plan = Plan::Aggregate {
+        input: Box::new(plan),
+        group_by,
+        aggregates: aggregate_exprs
+            .into_iter()
+            .map(|(_, aggregate, alias)| (aggregate, alias))
+            .collect(),
+    };
+
+    let plan = Plan::Project {
+        input: Box::new(plan),
+        projections: final_projections,
+    };
+
+    Ok((plan, project_cols))
 }
 
 fn validate_order_by_scope(
@@ -1501,29 +2123,59 @@ fn compile_order_by_items(
 
 // Adapters for SET/REMOVE/DELETE since we changed signature to take input
 fn compile_set_plan_v2(input: Plan, set: crate::ast::SetClause) -> Result<Plan> {
-    // Convert SetItems to (var, key, expr)
-    let mut items = Vec::new();
+    let mut plan = input;
+
+    let mut prop_items = Vec::new();
     for item in set.items {
-        items.push((item.property.variable, item.property.property, item.value));
+        prop_items.push((item.property.variable, item.property.property, item.value));
+    }
+    if !prop_items.is_empty() {
+        plan = Plan::SetProperty {
+            input: Box::new(plan),
+            items: prop_items,
+        };
     }
 
-    Ok(Plan::SetProperty {
-        input: Box::new(input),
-        items,
-    })
+    let mut label_items = Vec::new();
+    for item in set.labels {
+        label_items.push((item.variable, item.labels));
+    }
+    if !label_items.is_empty() {
+        plan = Plan::SetLabels {
+            input: Box::new(plan),
+            items: label_items,
+        };
+    }
+
+    Ok(plan)
 }
 
 fn compile_remove_plan_v2(input: Plan, remove: crate::ast::RemoveClause) -> Result<Plan> {
-    // Convert properties to (var, key)
-    let mut items = Vec::with_capacity(remove.properties.len());
+    let mut plan = input;
+
+    let mut prop_items = Vec::with_capacity(remove.properties.len());
     for prop in remove.properties {
-        items.push((prop.variable, prop.property));
+        prop_items.push((prop.variable, prop.property));
+    }
+    if !prop_items.is_empty() {
+        plan = Plan::RemoveProperty {
+            input: Box::new(plan),
+            items: prop_items,
+        };
     }
 
-    Ok(Plan::RemoveProperty {
-        input: Box::new(input),
-        items,
-    })
+    let mut label_items = Vec::new();
+    for item in remove.labels {
+        label_items.push((item.variable, item.labels));
+    }
+    if !label_items.is_empty() {
+        plan = Plan::RemoveLabels {
+            input: Box::new(plan),
+            items: label_items,
+        };
+    }
+
+    Ok(plan)
 }
 
 fn compile_unwind_plan(input: Plan, unwind: crate::ast::UnwindClause) -> Plan {
@@ -2566,10 +3218,23 @@ fn extract_output_var_kinds(plan: &Plan, vars: &mut BTreeMap<String, BindingKind
         }
         Plan::Delete { input, .. }
         | Plan::SetProperty { input, .. }
-        | Plan::RemoveProperty { input, .. } => {
+        | Plan::SetLabels { input, .. }
+        | Plan::RemoveProperty { input, .. }
+        | Plan::RemoveLabels { input, .. } => {
             extract_output_var_kinds(input, vars);
         }
     }
+}
+
+fn unwrap_distinct_argument(expr: &Expression) -> (Expression, bool) {
+    if let Expression::FunctionCall(call) = expr
+        && call.name == "__distinct"
+        && call.args.len() == 1
+    {
+        return (call.args[0].clone(), true);
+    }
+
+    (expr.clone(), false)
 }
 
 fn parse_aggregate_function(
@@ -2581,14 +3246,18 @@ fn parse_aggregate_function(
             if call.args.is_empty() {
                 Ok(Some(crate::ast::AggregateFunction::Count(None)))
             } else if call.args.len() == 1 {
-                if let Expression::Literal(Literal::String(s)) = &call.args[0]
+                let (arg, distinct) = unwrap_distinct_argument(&call.args[0]);
+                if let Expression::Literal(Literal::String(s)) = &arg
                     && s == "*"
                 {
                     return Ok(Some(crate::ast::AggregateFunction::Count(None)));
                 }
-                Ok(Some(crate::ast::AggregateFunction::Count(Some(
-                    call.args[0].clone(),
-                ))))
+
+                if distinct {
+                    Ok(Some(crate::ast::AggregateFunction::CountDistinct(arg)))
+                } else {
+                    Ok(Some(crate::ast::AggregateFunction::Count(Some(arg))))
+                }
             } else {
                 Err(Error::Other("COUNT takes 0 or 1 argument".into()))
             }
@@ -2597,41 +3266,56 @@ fn parse_aggregate_function(
             if call.args.len() != 1 {
                 return Err(Error::Other("SUM takes exactly 1 argument".into()));
             }
-            Ok(Some(crate::ast::AggregateFunction::Sum(
-                call.args[0].clone(),
-            )))
+            let (arg, distinct) = unwrap_distinct_argument(&call.args[0]);
+            if distinct {
+                Ok(Some(crate::ast::AggregateFunction::SumDistinct(arg)))
+            } else {
+                Ok(Some(crate::ast::AggregateFunction::Sum(arg)))
+            }
         }
         "avg" => {
             if call.args.len() != 1 {
                 return Err(Error::Other("AVG takes exactly 1 argument".into()));
             }
-            Ok(Some(crate::ast::AggregateFunction::Avg(
-                call.args[0].clone(),
-            )))
+            let (arg, distinct) = unwrap_distinct_argument(&call.args[0]);
+            if distinct {
+                Ok(Some(crate::ast::AggregateFunction::AvgDistinct(arg)))
+            } else {
+                Ok(Some(crate::ast::AggregateFunction::Avg(arg)))
+            }
         }
         "min" => {
             if call.args.len() != 1 {
                 return Err(Error::Other("MIN takes exactly 1 argument".into()));
             }
-            Ok(Some(crate::ast::AggregateFunction::Min(
-                call.args[0].clone(),
-            )))
+            let (arg, distinct) = unwrap_distinct_argument(&call.args[0]);
+            if distinct {
+                Ok(Some(crate::ast::AggregateFunction::MinDistinct(arg)))
+            } else {
+                Ok(Some(crate::ast::AggregateFunction::Min(arg)))
+            }
         }
         "max" => {
             if call.args.len() != 1 {
                 return Err(Error::Other("MAX takes exactly 1 argument".into()));
             }
-            Ok(Some(crate::ast::AggregateFunction::Max(
-                call.args[0].clone(),
-            )))
+            let (arg, distinct) = unwrap_distinct_argument(&call.args[0]);
+            if distinct {
+                Ok(Some(crate::ast::AggregateFunction::MaxDistinct(arg)))
+            } else {
+                Ok(Some(crate::ast::AggregateFunction::Max(arg)))
+            }
         }
         "collect" => {
             if call.args.len() != 1 {
                 return Err(Error::Other("COLLECT takes exactly 1 argument".into()));
             }
-            Ok(Some(crate::ast::AggregateFunction::Collect(
-                call.args[0].clone(),
-            )))
+            let (arg, distinct) = unwrap_distinct_argument(&call.args[0]);
+            if distinct {
+                Ok(Some(crate::ast::AggregateFunction::CollectDistinct(arg)))
+            } else {
+                Ok(Some(crate::ast::AggregateFunction::Collect(arg)))
+            }
         }
         _ => Ok(None),
     }

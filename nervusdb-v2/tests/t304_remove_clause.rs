@@ -88,3 +88,39 @@ fn test_remove_edge_property() -> nervusdb_v2::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_remove_node_label() -> nervusdb_v2::Result<()> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("t304_remove_label.ndb");
+    let db = Db::open(&db_path)?;
+
+    let node_id = {
+        let mut txn = db.begin_write();
+        let foo = txn.get_or_create_label_id("Foo")?;
+        let bar = txn.get_or_create_label_id("Bar")?;
+        let node_id = txn.create_node(1, foo)?;
+        txn.add_node_label(node_id, bar)?;
+        txn.commit()?;
+        node_id
+    };
+
+    {
+        let snapshot = db.snapshot();
+        let mut txn = db.begin_write();
+        let q = "MATCH (n) REMOVE n:Foo";
+        let prep = nervusdb_v2::query::prepare(q)?;
+        let n = prep.execute_write(&snapshot, &mut txn, &Params::default())?;
+        assert_eq!(n, 1);
+        txn.commit()?;
+    }
+
+    let snapshot = db.snapshot();
+    let labels = snapshot.resolve_node_labels(node_id).unwrap_or_default();
+    let foo = snapshot.resolve_label_id("Foo").expect("Foo should exist");
+    let bar = snapshot.resolve_label_id("Bar").expect("Bar should exist");
+    assert!(!labels.contains(&foo));
+    assert!(labels.contains(&bar));
+
+    Ok(())
+}

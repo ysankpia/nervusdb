@@ -34,6 +34,10 @@ pub enum WalRecord {
         node: u32,
         label_id: u32,
     },
+    RemoveNodeLabel {
+        node: u32,
+        label_id: u32,
+    },
     CreateEdge {
         src: u32,
         rel: u32,
@@ -99,6 +103,7 @@ impl WalRecord {
             WalRecord::CreateLabel { .. } => 15,
             WalRecord::CreateNode { .. } => 5,
             WalRecord::AddNodeLabel { .. } => 16,
+            WalRecord::RemoveNodeLabel { .. } => 17,
             WalRecord::CreateEdge { .. } => 6,
             WalRecord::TombstoneNode { .. } => 7,
             WalRecord::TombstoneEdge { .. } => 8,
@@ -142,7 +147,8 @@ impl WalRecord {
                 out.extend_from_slice(&label_id.to_le_bytes());
                 out.extend_from_slice(&internal_id.to_le_bytes());
             }
-            WalRecord::AddNodeLabel { node, label_id } => {
+            WalRecord::AddNodeLabel { node, label_id }
+            | WalRecord::RemoveNodeLabel { node, label_id } => {
                 out.extend_from_slice(&node.to_le_bytes());
                 out.extend_from_slice(&label_id.to_le_bytes());
             }
@@ -297,6 +303,14 @@ impl WalRecord {
                 let node = u32::from_le_bytes(payload[0..4].try_into().unwrap());
                 let label_id = u32::from_le_bytes(payload[4..8].try_into().unwrap());
                 Ok(WalRecord::AddNodeLabel { node, label_id })
+            }
+            17 => {
+                if payload.len() != 8 {
+                    return Err(Error::WalProtocol("invalid RemoveNodeLabel payload length"));
+                }
+                let node = u32::from_le_bytes(payload[0..4].try_into().unwrap());
+                let label_id = u32::from_le_bytes(payload[4..8].try_into().unwrap());
+                Ok(WalRecord::RemoveNodeLabel { node, label_id })
             }
             6 => {
                 if payload.len() != 12 {

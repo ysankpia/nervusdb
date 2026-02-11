@@ -126,17 +126,31 @@ pub enum Direction {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SetClause {
     pub items: Vec<SetItem>,
+    pub labels: Vec<LabelSetItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RemoveClause {
     pub properties: Vec<PropertyAccess>,
+    pub labels: Vec<LabelRemoveItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SetItem {
     pub property: PropertyAccess,
     pub value: Expression,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LabelSetItem {
+    pub variable: String,
+    pub labels: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LabelRemoveItem {
+    pub variable: String,
+    pub labels: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -288,11 +302,17 @@ pub struct FunctionCall {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum AggregateFunction {
     Count(Option<Expression>), // None for COUNT(*)
+    CountDistinct(Expression),
     Sum(Expression),
+    SumDistinct(Expression),
     Avg(Expression),
+    AvgDistinct(Expression),
     Min(Expression),
+    MinDistinct(Expression),
     Max(Expression),
+    MaxDistinct(Expression),
     Collect(Expression),
+    CollectDistinct(Expression),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

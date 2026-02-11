@@ -501,6 +501,16 @@ impl nervusdb_v2_query::WriteableGraph for WriteTxn<'_> {
             .map_err(|e| nervusdb_v2_query::Error::Other(e.to_string()))
     }
 
+    fn remove_node_label(
+        &mut self,
+        node: InternalNodeId,
+        label_id: LabelId,
+    ) -> nervusdb_v2_query::Result<()> {
+        self.inner
+            .remove_node_label(node, label_id)
+            .map_err(|e| nervusdb_v2_query::Error::Other(e.to_string()))
+    }
+
     fn create_edge(
         &mut self,
         src: InternalNodeId,

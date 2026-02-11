@@ -390,31 +390,76 @@ impl TokenParser {
 
     fn parse_set(&mut self) -> Result<SetClause, Error> {
         let mut items = Vec::new();
+        let mut labels = Vec::new();
+
         loop {
-            items.push(self.parse_set_item()?);
+            let variable = self.parse_identifier("SET variable")?;
+            if self.match_token(&TokenType::Dot) {
+                let property = self.parse_identifier("property name")?;
+                self.consume(&TokenType::Equals, "Expected '=' in SET clause")?;
+                let value = self.parse_expression()?;
+                items.push(SetItem {
+                    property: PropertyAccess { variable, property },
+                    value,
+                });
+            } else if self.check(&TokenType::Colon) {
+                let label_names = self.parse_label_chain()?;
+                labels.push(LabelSetItem {
+                    variable,
+                    labels: label_names,
+                });
+            } else {
+                return Err(Error::Other(
+                    "Expected '.' or ':' after variable in SET clause".to_string(),
+                ));
+            }
+
             if !self.match_token(&TokenType::Comma) {
                 break;
             }
         }
-        Ok(SetClause { items })
-    }
 
-    fn parse_set_item(&mut self) -> Result<SetItem, Error> {
-        let property = self.parse_property_access()?;
-        self.consume(&TokenType::Equals, "Expected '=' in SET clause")?;
-        let value = self.parse_expression()?;
-        Ok(SetItem { property, value })
+        Ok(SetClause { items, labels })
     }
 
     fn parse_remove(&mut self) -> Result<RemoveClause, Error> {
         let mut properties = Vec::new();
+        let mut labels = Vec::new();
+
         loop {
-            properties.push(self.parse_property_access()?);
+            let variable = self.parse_identifier("REMOVE variable")?;
+            if self.match_token(&TokenType::Dot) {
+                let property = self.parse_identifier("property name")?;
+                properties.push(PropertyAccess { variable, property });
+            } else if self.check(&TokenType::Colon) {
+                let label_names = self.parse_label_chain()?;
+                labels.push(LabelRemoveItem {
+                    variable,
+                    labels: label_names,
+                });
+            } else {
+                return Err(Error::Other(
+                    "Expected '.' or ':' after variable in REMOVE clause".to_string(),
+                ));
+            }
+
             if !self.match_token(&TokenType::Comma) {
                 break;
             }
         }
-        Ok(RemoveClause { properties })
+
+        Ok(RemoveClause { properties, labels })
+    }
+
+    fn parse_label_chain(&mut self) -> Result<Vec<String>, Error> {
+        let mut labels = Vec::new();
+        while self.match_token(&TokenType::Colon) {
+            labels.push(self.parse_identifier("label name")?);
+        }
+        if labels.is_empty() {
+            return Err(Error::Other("Expected label after ':'".to_string()));
+        }
+        Ok(labels)
     }
 
     fn parse_delete(&mut self) -> Result<DeleteClause, Error> {
@@ -635,13 +680,6 @@ impl TokenParser {
         Ok(PropertyMap { properties })
     }
 
-    fn parse_property_access(&mut self) -> Result<PropertyAccess, Error> {
-        let variable = self.parse_identifier("property variable")?;
-        self.consume(&TokenType::Dot, "Expected '.' in property access")?;
-        let property = self.parse_identifier("property name")?;
-        Ok(PropertyAccess { variable, property })
-    }
-
     fn parse_order_by(&mut self) -> Result<OrderByClause, Error> {
         let mut items = Vec::new();
         loop {
@@ -716,9 +754,51 @@ impl TokenParser {
     fn parse_property_key(&mut self) -> Result<String, Error> {
         match &self.advance().token_type {
             TokenType::Identifier(name) => Ok(name.clone()),
+            TokenType::String(name) => Ok(name.clone()),
             TokenType::Boolean(true) => Ok("true".to_string()),
             TokenType::Boolean(false) => Ok("false".to_string()),
             TokenType::Null => Ok("null".to_string()),
+            TokenType::Match => Ok("match".to_string()),
+            TokenType::Create => Ok("create".to_string()),
+            TokenType::Return => Ok("return".to_string()),
+            TokenType::Where => Ok("where".to_string()),
+            TokenType::With => Ok("with".to_string()),
+            TokenType::Optional => Ok("optional".to_string()),
+            TokenType::Order => Ok("order".to_string()),
+            TokenType::By => Ok("by".to_string()),
+            TokenType::Asc => Ok("asc".to_string()),
+            TokenType::Desc => Ok("desc".to_string()),
+            TokenType::Limit => Ok("limit".to_string()),
+            TokenType::Skip => Ok("skip".to_string()),
+            TokenType::Distinct => Ok("distinct".to_string()),
+            TokenType::And => Ok("and".to_string()),
+            TokenType::Or => Ok("or".to_string()),
+            TokenType::Not => Ok("not".to_string()),
+            TokenType::Xor => Ok("xor".to_string()),
+            TokenType::Is => Ok("is".to_string()),
+            TokenType::In => Ok("in".to_string()),
+            TokenType::Starts => Ok("starts".to_string()),
+            TokenType::Ends => Ok("ends".to_string()),
+            TokenType::Contains => Ok("contains".to_string()),
+            TokenType::Set => Ok("set".to_string()),
+            TokenType::Delete => Ok("delete".to_string()),
+            TokenType::Detach => Ok("detach".to_string()),
+            TokenType::Remove => Ok("remove".to_string()),
+            TokenType::Merge => Ok("merge".to_string()),
+            TokenType::Union => Ok("union".to_string()),
+            TokenType::All => Ok("all".to_string()),
+            TokenType::Unwind => Ok("unwind".to_string()),
+            TokenType::As => Ok("as".to_string()),
+            TokenType::Case => Ok("case".to_string()),
+            TokenType::When => Ok("when".to_string()),
+            TokenType::Then => Ok("then".to_string()),
+            TokenType::Else => Ok("else".to_string()),
+            TokenType::End => Ok("end".to_string()),
+            TokenType::Call => Ok("call".to_string()),
+            TokenType::Yield => Ok("yield".to_string()),
+            TokenType::Foreach => Ok("foreach".to_string()),
+            TokenType::On => Ok("on".to_string()),
+            TokenType::Exists => Ok("exists".to_string()),
             _ => Err(Error::Other(
                 "Expected identifier for property key".to_string(),
             )),
@@ -846,12 +926,26 @@ impl TokenParser {
                 let name = name.clone();
                 self.advance();
 
-                // Function call: foo(...)
+                let mut function_name = name.clone();
+                let mut is_function = false;
+
+                // Function call: foo(...) or namespaced function call: foo.bar(...)
                 if self.check(&TokenType::LeftParen) {
-                    self.advance(); // '('
+                    is_function = true;
+                } else if self.is_namespaced_function_call() {
+                    while self.match_token(&TokenType::Dot) {
+                        let segment = self.parse_identifier("function name segment after '.'")?;
+                        function_name.push('.');
+                        function_name.push_str(&segment);
+                    }
+                    is_function = true;
+                }
+
+                if is_function {
+                    self.consume(&TokenType::LeftParen, "Expected '(' after function name")?;
 
                     // Quantifiers: any/all/none/single (x IN list WHERE pred)
-                    let quant_name = name.to_lowercase();
+                    let quant_name = function_name.to_lowercase();
                     if matches!(quant_name.as_str(), "any" | "all" | "none" | "single") {
                         let variable = self.parse_identifier("quantifier variable")?;
                         self.consume(&TokenType::In, "Expected IN in quantifier")?;
@@ -871,8 +965,25 @@ impl TokenParser {
                         }));
                     }
 
-                    let args = self.parse_function_arguments()?;
-                    Expression::FunctionCall(FunctionCall { name, args })
+                    let has_distinct_arg = self.match_token(&TokenType::Distinct);
+                    let mut args = self.parse_function_arguments()?;
+                    if has_distinct_arg {
+                        if args.len() != 1 {
+                            return Err(Error::Other(
+                                "DISTINCT inside function call expects exactly one argument"
+                                    .to_string(),
+                            ));
+                        }
+                        let distinct_arg = args.remove(0);
+                        args = vec![Expression::FunctionCall(FunctionCall {
+                            name: "__distinct".to_string(),
+                            args: vec![distinct_arg],
+                        })];
+                    }
+                    Expression::FunctionCall(FunctionCall {
+                        name: function_name,
+                        args,
+                    })
                 } else {
                     Expression::Variable(name)
                 }
@@ -932,16 +1043,16 @@ impl TokenParser {
         // Postfix operators: property access, indexing/slicing, label predicates.
         loop {
             if self.match_token(&TokenType::Dot) {
-                let property = self.parse_identifier("property name")?;
-                let variable = match expr {
-                    Expression::Variable(var) => var,
-                    _ => {
-                        return Err(Error::Other(
-                            "Expected identifier before '.' in property access".to_string(),
-                        ));
+                let property = self.parse_property_key()?;
+                expr = match expr {
+                    Expression::Variable(variable) => {
+                        Expression::PropertyAccess(PropertyAccess { variable, property })
                     }
+                    other => Expression::FunctionCall(FunctionCall {
+                        name: "__getprop".to_string(),
+                        args: vec![other, Expression::Literal(Literal::String(property))],
+                    }),
                 };
-                expr = Expression::PropertyAccess(PropertyAccess { variable, property });
                 continue;
             }
 
@@ -1257,6 +1368,26 @@ impl TokenParser {
 
     fn peek_is_identifier(&self) -> bool {
         matches!(self.peek().token_type, TokenType::Identifier(_))
+    }
+
+    fn is_namespaced_function_call(&self) -> bool {
+        let mut idx = self.position;
+        let mut saw_segment = false;
+
+        while idx + 1 < self.tokens.len() {
+            let is_dot = matches!(self.tokens[idx].token_type, TokenType::Dot);
+            let has_identifier =
+                matches!(self.tokens[idx + 1].token_type, TokenType::Identifier(_));
+            if !(is_dot && has_identifier) {
+                break;
+            }
+            saw_segment = true;
+            idx += 2;
+        }
+
+        saw_segment
+            && idx < self.tokens.len()
+            && matches!(self.tokens[idx].token_type, TokenType::LeftParen)
     }
 
     fn check_next(&self, token_type: &TokenType) -> bool {
