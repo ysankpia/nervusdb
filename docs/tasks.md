@@ -96,7 +96,11 @@
 | **Beta Gate** | **SQLite-Beta 必达门槛**                                   |        |        |                             |                                                          |
 | BETA-01       | [Storage] 强制 `storage_format_epoch` 校验                 | High   | Done   | feat/TB1-beta-gate          | `StorageFormatMismatch` + Compatibility 映射已落地 |
 | BETA-02       | [CI] Tier-3 全量通过率统计与 95% 阈值阻断                  | High   | Done   | feat/TB1-beta-gate          | `scripts/tck_full_rate.sh` + `scripts/beta_gate.sh` + nightly/manual workflow |
-| BETA-03       | [TCK] 官方全量通过率冲刺至 ≥95%                            | High   | WIP    | feat/TB1-tck-95             | 2026-02-11 最新 Tier-3：3105/3897=79.68%（较 2026-02-10 的 2989/3897 提升 +116 场，+2.98pp；failed 434→292）；Wave 1B 已清零 Temporal3(183/183) 与 Temporal10(131/131)，Wave 2 已清零 Pattern1(39/39)、Merge5(14 pass/15 skipped/0 fail)、Comparison1(43/43)；本轮定向回归已清零 Comparison2（feature 19/19）与 List5（feature 46/46）；本分支定向回归已清零 Temporal6（feature 17/17）与 Graph5（feature 9/9） |
+| BETA-03       | [TCK] 官方全量通过率冲刺至 ≥95%                            | High   | WIP    | feat/TB1-tck-95             | 2026-02-11 最新 Tier-3：3193/3897=81.93%（较 2026-02-10 的 2989/3897 提升 +204 场，+6.80pp；failed 434→178）；已合并 PR #126/#127/#128（Comparison、SET map、DELETE compile/null）；当前待清簇含 ReturnOrderBy2(2) 等 |
+| BETA-03R1     | [Refactor] 拆分 `query_api.rs`（解析/校验/Plan 组装模块化） | High   | Plan   | codex/feat/TBETA-03-refactor-query-api | 仅做结构拆分，不改外部 API 与语义；完成后先回归 `ReturnOrderBy2` |
+| BETA-03R2     | [Refactor] 拆分 `executor.rs`（读路径/写路径/排序投影）      | High   | Plan   | codex/feat/TBETA-03-refactor-executor  | 先抽 write 路径（SET/DELETE/MERGE）再分离 read/sort；保持行为等价 |
+| BETA-03R3     | [Refactor] 拆分 `evaluator.rs` Temporal/Duration 子模块     | High   | Plan   | codex/feat/TBETA-03-refactor-evaluator | 抽离 temporal 计算与构造器逻辑，保留现有入口与错误模型 |
+| BETA-03R4     | [TCK] 重构后恢复推进（ReturnOrderBy2 → Wave2 余簇）         | High   | WIP    | codex/feat/TBETA-03-returnorderby2-fixes | 当前 ReturnOrderBy2 尚余 2 失败：`InvalidAggregation` 误报 + DISTINCT 作用域未报 `UndefinedVariable` |
 | BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | Plan   | feat/TB1-stability-window   | 任一阻断失败即重置计数 |
 | BETA-05       | [Perf] 大规模 SLO 封板（读120/写180/向量220 ms P99）       | High   | Plan   | feat/TB1-perf-slo           | 达标后方可发布 Beta |
 
