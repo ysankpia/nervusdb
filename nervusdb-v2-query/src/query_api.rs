@@ -1433,15 +1433,67 @@ fn compile_with_plan(input: Plan, with: &crate::ast::WithClause) -> Result<Plan>
     // WITH is identical to RETURN in structure: items, orderBy, skip, limit, where.
     // It projects the input to a new set of variables.
 
+    let has_aggregation = with
+        .items
+        .iter()
+        .any(|item| contains_aggregate_expression(&item.expression));
+    let mut input_bindings: BTreeMap<String, BindingKind> = BTreeMap::new();
+    extract_output_var_kinds(&input, &mut input_bindings);
+
     let (mut plan, project_cols) = compile_projection_aggregation(input, &with.items)?;
 
     // 2. WHERE
     if let Some(w) = &with.where_clause {
         validate_expression_types(&w.expression)?;
+        let mut where_bindings: BTreeMap<String, BindingKind> = BTreeMap::new();
+        extract_output_var_kinds(&plan, &mut where_bindings);
+        if !has_aggregation {
+            for (name, kind) in &input_bindings {
+                where_bindings.entry(name.clone()).or_insert(*kind);
+            }
+        }
+        validate_where_expression_bindings(&w.expression, &where_bindings)?;
+
+        let mut passthrough: Vec<String> = Vec::new();
+        if !has_aggregation {
+            let projected: HashSet<String> = project_cols.iter().cloned().collect();
+            let mut used = HashSet::new();
+            extract_variables_from_expr(&w.expression, &mut used);
+            passthrough = used
+                .into_iter()
+                .filter(|name| !projected.contains(name) && input_bindings.contains_key(name))
+                .collect();
+            passthrough.sort();
+            passthrough.dedup();
+
+            if !passthrough.is_empty()
+                && let Plan::Project {
+                    input,
+                    mut projections,
+                } = plan
+            {
+                for name in &passthrough {
+                    projections.push((name.clone(), Expression::Variable(name.clone())));
+                }
+                plan = Plan::Project { input, projections };
+            }
+        }
+
         plan = Plan::Filter {
             input: Box::new(plan),
             predicate: w.expression.clone(),
         };
+
+        if !has_aggregation && !passthrough.is_empty() {
+            plan = Plan::Project {
+                input: Box::new(plan),
+                projections: project_cols
+                    .iter()
+                    .cloned()
+                    .map(|name| (name.clone(), Expression::Variable(name)))
+                    .collect(),
+            };
+        }
     }
 
     // 3. ORDER BY
