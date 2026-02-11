@@ -2,7 +2,7 @@ use crate::ast::{
     BinaryOperator, Expression, Literal, NodePattern, PathElement, Pattern, RelationshipDirection,
     RelationshipPattern, UnaryOperator,
 };
-use crate::executor::{Row, Value, convert_api_property_to_value};
+use crate::executor::{PathValue, Row, Value, convert_api_property_to_value};
 use crate::query_api::Params;
 use chrono::{
     DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone,
@@ -239,6 +239,9 @@ pub fn evaluate_expression_value<S: GraphSnapshot>(
                 }
             }
         }
+        Expression::PatternComprehension(pattern_comp) => {
+            evaluate_pattern_comprehension(pattern_comp, row, snapshot, params)
+        }
         _ => Value::Null, // Not supported yet
     }
 }
@@ -277,6 +280,296 @@ fn evaluate_pattern_exists<S: GraphSnapshot>(
         params,
         &mut used_edges,
     ))
+}
+
+fn evaluate_pattern_comprehension<S: GraphSnapshot>(
+    pattern_comp: &crate::ast::PatternComprehension,
+    row: &Row,
+    snapshot: &S,
+    params: &Params,
+) -> Value {
+    if pattern_comp.pattern.elements.is_empty() {
+        return Value::List(vec![]);
+    }
+    let PathElement::Node(start_node_pattern) = &pattern_comp.pattern.elements[0] else {
+        return Value::Null;
+    };
+
+    let start_nodes: Vec<InternalNodeId> =
+        if let Some(bound) = resolve_node_binding(start_node_pattern, row) {
+            vec![bound]
+        } else {
+            snapshot.nodes().collect()
+        };
+
+    let mut out = Vec::new();
+    for start_node in start_nodes {
+        if !node_pattern_matches(start_node_pattern, start_node, row, snapshot, params) {
+            continue;
+        }
+
+        let mut local_row = row.clone();
+        if let Some(var) = &start_node_pattern.variable {
+            local_row = local_row.with(var.clone(), Value::NodeId(start_node));
+        }
+
+        collect_pattern_comprehension_matches_from(
+            &pattern_comp.pattern,
+            1,
+            start_node,
+            &local_row,
+            vec![start_node],
+            Vec::new(),
+            &pattern_comp.where_expression,
+            &pattern_comp.projection,
+            snapshot,
+            params,
+            &mut out,
+        );
+    }
+
+    Value::List(out)
+}
+
+fn collect_pattern_comprehension_matches_from<S: GraphSnapshot>(
+    pattern: &Pattern,
+    rel_index: usize,
+    current_node: InternalNodeId,
+    row: &Row,
+    path_nodes: Vec<InternalNodeId>,
+    path_edges: Vec<EdgeKey>,
+    where_expression: &Option<Expression>,
+    projection: &Expression,
+    snapshot: &S,
+    params: &Params,
+    out: &mut Vec<Value>,
+) {
+    if rel_index >= pattern.elements.len() {
+        let mut eval_row = row.clone();
+        if let Some(path_var) = &pattern.variable {
+            eval_row = eval_row.with(
+                path_var.clone(),
+                Value::Path(PathValue {
+                    nodes: path_nodes,
+                    edges: path_edges,
+                }),
+            );
+        }
+
+        if let Some(where_expr) = where_expression {
+            match evaluate_expression_value(where_expr, &eval_row, snapshot, params) {
+                Value::Bool(true) => {}
+                Value::Bool(false) | Value::Null => return,
+                _ => return,
+            }
+        }
+
+        out.push(evaluate_expression_value(
+            projection, &eval_row, snapshot, params,
+        ));
+        return;
+    }
+
+    let PathElement::Relationship(rel_pattern) = &pattern.elements[rel_index] else {
+        return;
+    };
+    let PathElement::Node(dst_node_pattern) = &pattern.elements[rel_index + 1] else {
+        return;
+    };
+
+    let rel_type_ids = resolve_rel_type_ids(rel_pattern, snapshot);
+    if rel_pattern.variable_length.is_some() {
+        collect_variable_length_pattern_comprehension_matches(
+            pattern,
+            rel_index + 2,
+            rel_pattern,
+            dst_node_pattern,
+            rel_type_ids.as_deref(),
+            current_node,
+            row,
+            path_nodes,
+            path_edges,
+            where_expression,
+            projection,
+            snapshot,
+            params,
+            out,
+        );
+        return;
+    }
+
+    for (edge, next_node) in candidate_edges(
+        current_node,
+        rel_pattern.direction.clone(),
+        rel_type_ids.as_deref(),
+        snapshot,
+    ) {
+        if path_edges.contains(&edge) {
+            continue;
+        }
+        if !relationship_pattern_matches(rel_pattern, edge, row, snapshot, params) {
+            continue;
+        }
+        if !node_pattern_matches(dst_node_pattern, next_node, row, snapshot, params) {
+            continue;
+        }
+
+        let mut next_row = row.clone();
+        if let Some(var) = &rel_pattern.variable {
+            next_row = next_row.with(var.clone(), Value::EdgeKey(edge));
+        }
+        if let Some(var) = &dst_node_pattern.variable {
+            next_row = next_row.with(var.clone(), Value::NodeId(next_node));
+        }
+
+        let mut next_path_nodes = path_nodes.clone();
+        next_path_nodes.push(next_node);
+        let mut next_path_edges = path_edges.clone();
+        next_path_edges.push(edge);
+
+        collect_pattern_comprehension_matches_from(
+            pattern,
+            rel_index + 2,
+            next_node,
+            &next_row,
+            next_path_nodes,
+            next_path_edges,
+            where_expression,
+            projection,
+            snapshot,
+            params,
+            out,
+        );
+    }
+}
+
+fn collect_variable_length_pattern_comprehension_matches<S: GraphSnapshot>(
+    pattern: &Pattern,
+    next_rel_index: usize,
+    rel_pattern: &RelationshipPattern,
+    dst_node_pattern: &NodePattern,
+    rel_type_ids: Option<&[RelTypeId]>,
+    start_node: InternalNodeId,
+    row: &Row,
+    path_nodes: Vec<InternalNodeId>,
+    path_edges: Vec<EdgeKey>,
+    where_expression: &Option<Expression>,
+    projection: &Expression,
+    snapshot: &S,
+    params: &Params,
+    out: &mut Vec<Value>,
+) {
+    let var_len = rel_pattern
+        .variable_length
+        .as_ref()
+        .expect("checked by caller");
+    let min_hops = var_len.min.unwrap_or(1);
+    let max_hops = var_len.max.unwrap_or(PATTERN_PREDICATE_MAX_VARLEN_HOPS);
+    if max_hops < min_hops {
+        return;
+    }
+
+    struct PatternComprehensionCtx<'a, S: GraphSnapshot> {
+        pattern: &'a Pattern,
+        next_rel_index: usize,
+        rel_pattern: &'a RelationshipPattern,
+        dst_node_pattern: &'a NodePattern,
+        rel_type_ids: Option<&'a [RelTypeId]>,
+        where_expression: &'a Option<Expression>,
+        projection: &'a Expression,
+        snapshot: &'a S,
+        params: &'a Params,
+    }
+
+    fn dfs<S: GraphSnapshot>(
+        ctx: &PatternComprehensionCtx<'_, S>,
+        node: InternalNodeId,
+        depth: u32,
+        min_hops: u32,
+        max_hops: u32,
+        row: &Row,
+        path_nodes: Vec<InternalNodeId>,
+        path_edges: Vec<EdgeKey>,
+        out: &mut Vec<Value>,
+    ) {
+        if depth >= min_hops
+            && node_pattern_matches(ctx.dst_node_pattern, node, row, ctx.snapshot, ctx.params)
+        {
+            let mut matched_row = row.clone();
+            if let Some(var) = &ctx.dst_node_pattern.variable {
+                matched_row = matched_row.with(var.clone(), Value::NodeId(node));
+            }
+            collect_pattern_comprehension_matches_from(
+                ctx.pattern,
+                ctx.next_rel_index,
+                node,
+                &matched_row,
+                path_nodes.clone(),
+                path_edges.clone(),
+                ctx.where_expression,
+                ctx.projection,
+                ctx.snapshot,
+                ctx.params,
+                out,
+            );
+        }
+
+        if depth >= max_hops {
+            return;
+        }
+
+        for (edge, next_node) in candidate_edges(
+            node,
+            ctx.rel_pattern.direction.clone(),
+            ctx.rel_type_ids,
+            ctx.snapshot,
+        ) {
+            if path_edges.contains(&edge) {
+                continue;
+            }
+            if !relationship_pattern_matches(ctx.rel_pattern, edge, row, ctx.snapshot, ctx.params) {
+                continue;
+            }
+
+            let mut next_row = row.clone();
+            if let Some(var) = &ctx.rel_pattern.variable {
+                next_row = next_row.with(var.clone(), Value::EdgeKey(edge));
+            }
+
+            let mut next_path_nodes = path_nodes.clone();
+            next_path_nodes.push(next_node);
+            let mut next_path_edges = path_edges.clone();
+            next_path_edges.push(edge);
+
+            dfs(
+                ctx,
+                next_node,
+                depth + 1,
+                min_hops,
+                max_hops,
+                &next_row,
+                next_path_nodes,
+                next_path_edges,
+                out,
+            );
+        }
+    }
+
+    let ctx = PatternComprehensionCtx {
+        pattern,
+        next_rel_index,
+        rel_pattern,
+        dst_node_pattern,
+        rel_type_ids,
+        where_expression,
+        projection,
+        snapshot,
+        params,
+    };
+
+    dfs(
+        &ctx, start_node, 0, min_hops, max_hops, row, path_nodes, path_edges, out,
+    );
 }
 
 fn resolve_node_binding(node_pattern: &NodePattern, row: &Row) -> Option<InternalNodeId> {

@@ -223,6 +223,7 @@ pub enum Expression {
     Exists(Box<ExistsExpression>),
     List(Vec<Expression>),
     ListComprehension(Box<ListComprehension>),
+    PatternComprehension(Box<PatternComprehension>),
     Map(PropertyMap),
     Parameter(String), // $param
 }
@@ -239,6 +240,13 @@ pub struct ListComprehension {
     pub list: Expression,
     pub where_expression: Option<Expression>,
     pub map_expression: Option<Expression>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PatternComprehension {
+    pub pattern: Pattern,
+    pub where_expression: Option<Expression>,
+    pub projection: Expression,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -1385,7 +1385,45 @@ impl TokenParser {
             }));
         }
 
+        if self.maybe_pattern_comprehension_start() {
+            let checkpoint = self.position;
+            match self.parse_pattern_comprehension() {
+                Ok(expr) => return Ok(expr),
+                Err(_) => {
+                    // Not a pattern comprehension: rewind and parse as a list literal.
+                    self.position = checkpoint;
+                }
+            }
+        }
+
         Ok(Expression::List(self.parse_list()?))
+    }
+
+    fn maybe_pattern_comprehension_start(&self) -> bool {
+        self.check(&TokenType::LeftParen)
+            || (self.peek_is_identifier() && self.check_next(&TokenType::Equals))
+    }
+
+    fn parse_pattern_comprehension(&mut self) -> Result<Expression, Error> {
+        let pattern = self.parse_pattern()?;
+        let where_expression = if self.match_token(&TokenType::Where) {
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+        self.consume(&TokenType::Pipe, "Expected '|' in pattern comprehension")?;
+        let projection = self.parse_expression()?;
+        self.consume(
+            &TokenType::RightBracket,
+            "Expected ']' after pattern comprehension",
+        )?;
+        Ok(Expression::PatternComprehension(Box::new(
+            PatternComprehension {
+                pattern,
+                where_expression,
+                projection,
+            },
+        )))
     }
 
     fn parse_list(&mut self) -> Result<Vec<Expression>, Error> {

@@ -995,7 +995,8 @@ fn is_definitely_non_boolean(expr: &Expression) -> bool {
         | Expression::FunctionCall(_)
         | Expression::Case(_)
         | Expression::Exists(_)
-        | Expression::ListComprehension(_) => false,
+        | Expression::ListComprehension(_)
+        | Expression::PatternComprehension(_) => false,
     }
 }
 
@@ -1079,6 +1080,31 @@ fn validate_expression_types(expr: &Expression) -> Result<()> {
             if let Some(map_expr) = &list_comp.map_expression {
                 validate_expression_types(map_expr)?;
             }
+            Ok(())
+        }
+        Expression::PatternComprehension(pattern_comp) => {
+            for element in &pattern_comp.pattern.elements {
+                match element {
+                    crate::ast::PathElement::Node(node) => {
+                        if let Some(props) = &node.properties {
+                            for pair in &props.properties {
+                                validate_expression_types(&pair.value)?;
+                            }
+                        }
+                    }
+                    crate::ast::PathElement::Relationship(rel) => {
+                        if let Some(props) = &rel.properties {
+                            for pair in &props.properties {
+                                validate_expression_types(&pair.value)?;
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(where_expr) = &pattern_comp.where_expression {
+                validate_expression_types(where_expr)?;
+            }
+            validate_expression_types(&pattern_comp.projection)?;
             Ok(())
         }
         Expression::Map(map) => {
@@ -1240,6 +1266,48 @@ fn validate_where_expression_variables(
             }
             local_scopes.pop();
         }
+        Expression::PatternComprehension(pattern_comp) => {
+            let scope = collect_pattern_local_variables(&pattern_comp.pattern);
+            local_scopes.push(scope);
+
+            for element in &pattern_comp.pattern.elements {
+                match element {
+                    crate::ast::PathElement::Node(node) => {
+                        if let Some(props) = &node.properties {
+                            for pair in &props.properties {
+                                validate_where_expression_variables(
+                                    &pair.value,
+                                    known_bindings,
+                                    local_scopes,
+                                )?;
+                            }
+                        }
+                    }
+                    crate::ast::PathElement::Relationship(rel) => {
+                        if let Some(props) = &rel.properties {
+                            for pair in &props.properties {
+                                validate_where_expression_variables(
+                                    &pair.value,
+                                    known_bindings,
+                                    local_scopes,
+                                )?;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(where_expr) = &pattern_comp.where_expression {
+                validate_where_expression_variables(where_expr, known_bindings, local_scopes)?;
+            }
+            validate_where_expression_variables(
+                &pattern_comp.projection,
+                known_bindings,
+                local_scopes,
+            )?;
+
+            local_scopes.pop();
+        }
         Expression::Exists(_) | Expression::Parameter(_) | Expression::Literal(_) => {}
     }
     Ok(())
@@ -1247,6 +1315,30 @@ fn validate_where_expression_variables(
 
 fn is_locally_bound(local_scopes: &[HashSet<String>], var: &str) -> bool {
     local_scopes.iter().rev().any(|scope| scope.contains(var))
+}
+
+fn collect_pattern_local_variables(pattern: &crate::ast::Pattern) -> HashSet<String> {
+    let mut vars = HashSet::new();
+    if let Some(path_var) = &pattern.variable {
+        vars.insert(path_var.clone());
+    }
+
+    for element in &pattern.elements {
+        match element {
+            crate::ast::PathElement::Node(node) => {
+                if let Some(var) = &node.variable {
+                    vars.insert(var.clone());
+                }
+            }
+            crate::ast::PathElement::Relationship(rel) => {
+                if let Some(var) = &rel.variable {
+                    vars.insert(var.clone());
+                }
+            }
+        }
+    }
+
+    vars
 }
 
 fn validate_pattern_predicate_bindings(
@@ -1367,6 +1459,36 @@ fn validate_pattern_predicate_bindings(
                 validate_pattern_predicate_bindings(map_expr, known_bindings)?;
             }
         }
+        Expression::PatternComprehension(pattern_comp) => {
+            let mut scoped = known_bindings.clone();
+            for var in collect_pattern_local_variables(&pattern_comp.pattern) {
+                scoped.entry(var).or_insert(BindingKind::Unknown);
+            }
+
+            for element in &pattern_comp.pattern.elements {
+                match element {
+                    crate::ast::PathElement::Node(node) => {
+                        if let Some(props) = &node.properties {
+                            for pair in &props.properties {
+                                validate_pattern_predicate_bindings(&pair.value, &scoped)?;
+                            }
+                        }
+                    }
+                    crate::ast::PathElement::Relationship(rel) => {
+                        if let Some(props) = &rel.properties {
+                            for pair in &props.properties {
+                                validate_pattern_predicate_bindings(&pair.value, &scoped)?;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(where_expr) = &pattern_comp.where_expression {
+                validate_pattern_predicate_bindings(where_expr, &scoped)?;
+            }
+            validate_pattern_predicate_bindings(&pattern_comp.projection, &scoped)?;
+        }
         Expression::Map(map) => {
             for pair in &map.properties {
                 validate_pattern_predicate_bindings(&pair.value, known_bindings)?;
@@ -1421,6 +1543,35 @@ fn contains_pattern_predicate(expr: &Expression) -> bool {
                     .map_expression
                     .as_ref()
                     .is_some_and(contains_pattern_predicate)
+        }
+        Expression::PatternComprehension(pattern_comp) => {
+            pattern_comp
+                .where_expression
+                .as_ref()
+                .is_some_and(contains_pattern_predicate)
+                || contains_pattern_predicate(&pattern_comp.projection)
+                || pattern_comp
+                    .pattern
+                    .elements
+                    .iter()
+                    .any(|element| match element {
+                        crate::ast::PathElement::Node(node) => {
+                            node.properties.as_ref().is_some_and(|props| {
+                                props
+                                    .properties
+                                    .iter()
+                                    .any(|pair| contains_pattern_predicate(&pair.value))
+                            })
+                        }
+                        crate::ast::PathElement::Relationship(rel) => {
+                            rel.properties.as_ref().is_some_and(|props| {
+                                props
+                                    .properties
+                                    .iter()
+                                    .any(|pair| contains_pattern_predicate(&pair.value))
+                            })
+                        }
+                    })
         }
         Expression::Map(map) => map
             .properties
