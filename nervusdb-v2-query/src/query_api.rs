@@ -2,7 +2,7 @@ use crate::ast::{BinaryOperator, CallClause, Clause, Expression, Literal, Query}
 use crate::error::{Error, Result};
 use crate::executor::{Plan, Row, Value, execute_plan, execute_write};
 use nervusdb_v2_api::GraphSnapshot;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::fmt::Write as _;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1038,7 +1038,7 @@ fn validate_expression_types(expr: &Expression) -> Result<()> {
                 }
                 if matches!(
                     call.args[0],
-                    Expression::Literal(Literal::Number(_))
+                    Expression::Literal(Literal::Integer(_) | Literal::Float(_))
                         | Expression::Literal(Literal::String(_))
                         | Expression::Literal(Literal::Boolean(_))
                         | Expression::List(_)
@@ -1139,14 +1139,8 @@ fn validate_where_expression_bindings(
     expr: &Expression,
     known_bindings: &BTreeMap<String, BindingKind>,
 ) -> Result<()> {
-    if let Expression::Variable(var) = expr
-        && !known_bindings.contains_key(var)
-    {
-        return Err(Error::Other(format!(
-            "syntax error: UndefinedVariable ({})",
-            var
-        )));
-    }
+    let mut local_scopes: Vec<HashSet<String>> = Vec::new();
+    validate_where_expression_variables(expr, known_bindings, &mut local_scopes)?;
 
     validate_pattern_predicate_bindings(expr, known_bindings)?;
     if matches!(
@@ -1158,6 +1152,86 @@ fn validate_where_expression_bindings(
         ));
     }
     Ok(())
+}
+
+fn validate_where_expression_variables(
+    expr: &Expression,
+    known_bindings: &BTreeMap<String, BindingKind>,
+    local_scopes: &mut Vec<HashSet<String>>,
+) -> Result<()> {
+    match expr {
+        Expression::Variable(var) => {
+            if !is_locally_bound(local_scopes, var) && !known_bindings.contains_key(var) {
+                return Err(Error::Other(format!(
+                    "syntax error: UndefinedVariable ({})",
+                    var
+                )));
+            }
+        }
+        Expression::PropertyAccess(pa) => {
+            if !is_locally_bound(local_scopes, &pa.variable)
+                && !known_bindings.contains_key(&pa.variable)
+            {
+                return Err(Error::Other(format!(
+                    "syntax error: UndefinedVariable ({})",
+                    pa.variable
+                )));
+            }
+        }
+        Expression::Unary(u) => {
+            validate_where_expression_variables(&u.operand, known_bindings, local_scopes)?;
+        }
+        Expression::Binary(b) => {
+            validate_where_expression_variables(&b.left, known_bindings, local_scopes)?;
+            validate_where_expression_variables(&b.right, known_bindings, local_scopes)?;
+        }
+        Expression::FunctionCall(call) => {
+            for arg in &call.args {
+                validate_where_expression_variables(arg, known_bindings, local_scopes)?;
+            }
+        }
+        Expression::List(items) => {
+            for item in items {
+                validate_where_expression_variables(item, known_bindings, local_scopes)?;
+            }
+        }
+        Expression::Map(map) => {
+            for pair in &map.properties {
+                validate_where_expression_variables(&pair.value, known_bindings, local_scopes)?;
+            }
+        }
+        Expression::Case(case_expr) => {
+            if let Some(test_expr) = &case_expr.expression {
+                validate_where_expression_variables(test_expr, known_bindings, local_scopes)?;
+            }
+            for (when_expr, then_expr) in &case_expr.when_clauses {
+                validate_where_expression_variables(when_expr, known_bindings, local_scopes)?;
+                validate_where_expression_variables(then_expr, known_bindings, local_scopes)?;
+            }
+            if let Some(else_expr) = &case_expr.else_expression {
+                validate_where_expression_variables(else_expr, known_bindings, local_scopes)?;
+            }
+        }
+        Expression::ListComprehension(list_comp) => {
+            validate_where_expression_variables(&list_comp.list, known_bindings, local_scopes)?;
+            let mut scope = HashSet::new();
+            scope.insert(list_comp.variable.clone());
+            local_scopes.push(scope);
+            if let Some(where_expr) = &list_comp.where_expression {
+                validate_where_expression_variables(where_expr, known_bindings, local_scopes)?;
+            }
+            if let Some(map_expr) = &list_comp.map_expression {
+                validate_where_expression_variables(map_expr, known_bindings, local_scopes)?;
+            }
+            local_scopes.pop();
+        }
+        Expression::Exists(_) | Expression::Parameter(_) | Expression::Literal(_) => {}
+    }
+    Ok(())
+}
+
+fn is_locally_bound(local_scopes: &[HashSet<String>], var: &str) -> bool {
+    local_scopes.iter().rev().any(|scope| scope.contains(var))
 }
 
 fn validate_pattern_predicate_bindings(
@@ -1500,13 +1574,8 @@ fn expression_alias_fragment(expr: &Expression) -> String {
         Expression::Variable(name) => name.clone(),
         Expression::PropertyAccess(pa) => format!("{}.{}", pa.variable, pa.property),
         Expression::Literal(Literal::String(s)) if s == "*" => "*".to_string(),
-        Expression::Literal(Literal::Number(n)) => {
-            if n.fract() == 0.0 {
-                format!("{}", *n as i64)
-            } else {
-                n.to_string()
-            }
-        }
+        Expression::Literal(Literal::Integer(n)) => n.to_string(),
+        Expression::Literal(Literal::Float(n)) => n.to_string(),
         Expression::Literal(Literal::Boolean(b)) => b.to_string(),
         Expression::Literal(Literal::String(s)) => format!("'{}'", s),
         Expression::Literal(Literal::Null) => "null".to_string(),

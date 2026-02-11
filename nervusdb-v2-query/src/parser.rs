@@ -524,14 +524,9 @@ impl TokenParser {
                     self.advance();
                 }
                 TokenType::Number(n) => {
-                    let n = *n;
+                    let raw = n.raw.clone();
                     self.advance();
-                    if n.fract() != 0.0 || n < 0.0 {
-                        return Err(Error::Other(
-                            "Label id must be a non-negative integer".into(),
-                        ));
-                    }
-                    labels.push(format!("{}", n as u64));
+                    labels.push(parse_non_negative_u64(&raw, "Label id")?.to_string());
                 }
                 TokenType::End => {
                     labels.push("End".to_string());
@@ -583,14 +578,11 @@ impl TokenParser {
                             self.advance();
                         }
                         TokenType::Number(n) => {
-                            let n = *n;
+                            let raw = n.raw.clone();
                             self.advance();
-                            if n.fract() != 0.0 || n < 0.0 {
-                                return Err(Error::Other(
-                                    "Relationship type id must be a non-negative integer".into(),
-                                ));
-                            }
-                            types.push(format!("{}", n as u64));
+                            types.push(
+                                parse_non_negative_u64(&raw, "Relationship type id")?.to_string(),
+                            );
                         }
                         _ => {
                             return Err(Error::Other(
@@ -746,7 +738,10 @@ impl TokenParser {
 
     fn parse_integer(&mut self, ctx: &'static str) -> Result<u32, Error> {
         match &self.advance().token_type {
-            TokenType::Number(n) if *n >= 0.0 => Ok(*n as u32),
+            TokenType::Number(n) if n.is_integer() => n
+                .raw
+                .parse::<u32>()
+                .map_err(|_| Error::Other(format!("Expected integer after {ctx}"))),
             _ => Err(Error::Other(format!("Expected integer after {ctx}"))),
         }
     }
@@ -875,6 +870,14 @@ impl TokenParser {
         // NOTE: The lexer tokenizes '-' as `Dash` (shared with pattern syntax).
         // In expression context, we interpret it as unary negation / binary subtraction.
         if self.match_token(&TokenType::Dash) {
+            // Support minimum i64 literal: -9223372036854775808.
+            if let TokenType::Number(n) = &self.peek().token_type
+                && n.is_integer()
+                && n.raw == "9223372036854775808"
+            {
+                self.advance();
+                return Ok(Expression::Literal(Literal::Integer(i64::MIN)));
+            }
             let operand = self.parse_expression_bp(Self::BP_PREFIX)?;
             return Ok(Expression::Unary(Box::new(UnaryExpression {
                 operator: UnaryOperator::Negate,
@@ -903,9 +906,17 @@ impl TokenParser {
                 }
             }
             TokenType::Number(n) => {
-                let n = *n;
+                let number = n.clone();
                 self.advance();
-                Expression::Literal(Literal::Number(n))
+                if number.is_integer() {
+                    let parsed = number
+                        .raw
+                        .parse::<i64>()
+                        .map_err(|_| Error::Other("syntax error: IntegerOverflow".to_string()))?;
+                    Expression::Literal(Literal::Integer(parsed))
+                } else {
+                    Expression::Literal(Literal::Float(number.value))
+                }
             }
             TokenType::String(s) => {
                 let s = s.clone();
@@ -1462,4 +1473,14 @@ impl TokenParser {
         }
         &self.tokens[self.position - 1]
     }
+}
+
+fn parse_non_negative_u64(raw: &str, ctx: &str) -> Result<u64, Error> {
+    if raw.chars().any(|ch| ch == '.' || ch == 'e' || ch == 'E') {
+        return Err(Error::Other(format!(
+            "{ctx} must be a non-negative integer"
+        )));
+    }
+    raw.parse::<u64>()
+        .map_err(|_| Error::Other(format!("{ctx} must be a non-negative integer")))
 }

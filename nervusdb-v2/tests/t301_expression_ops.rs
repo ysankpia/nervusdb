@@ -159,3 +159,84 @@ fn test_string_ops_in_and_count_star() -> nervusdb_v2::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_comparison_list_and_map_null_semantics() -> nervusdb_v2::Result<()> {
+    let dir = tempdir()?;
+    let db = Db::open(dir.path().join("t301_cmp_nulls.ndb"))?;
+    let snapshot = db.snapshot();
+
+    let list_q = "RETURN [null] = [1] AS a, [[1], [2]] = [[1], [null]] AS b";
+    let list_rows: Vec<_> = nervusdb_v2::query::prepare(list_q)?
+        .execute_streaming(&snapshot, &Params::default())
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(list_rows.len(), 1);
+    assert!(matches!(list_rows[0].get("a"), Some(Value::Null)));
+    assert!(matches!(list_rows[0].get("b"), Some(Value::Null)));
+
+    let map_q = "RETURN {k: null} = {k: null} AS eq1, {k: 1} = {k: null} AS eq2";
+    let map_rows: Vec<_> = nervusdb_v2::query::prepare(map_q)?
+        .execute_streaming(&snapshot, &Params::default())
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(map_rows.len(), 1);
+    assert!(matches!(map_rows[0].get("eq1"), Some(Value::Null)));
+    assert!(matches!(map_rows[0].get("eq2"), Some(Value::Null)));
+
+    Ok(())
+}
+
+#[test]
+fn test_comparison_nan_equality_behavior() -> nervusdb_v2::Result<()> {
+    let dir = tempdir()?;
+    let db = Db::open(dir.path().join("t301_cmp_nan.ndb"))?;
+    let snapshot = db.snapshot();
+
+    let q = "RETURN 0.0 / 0.0 = 1 AS is_equal, 0.0 / 0.0 <> 1 AS is_not_equal";
+    let rows: Vec<_> = nervusdb_v2::query::prepare(q)?
+        .execute_streaming(&snapshot, &Params::default())
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(rows.len(), 1);
+    assert!(matches!(rows[0].get("is_equal"), Some(Value::Bool(false))));
+    assert!(matches!(
+        rows[0].get("is_not_equal"),
+        Some(Value::Bool(true))
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn test_large_integer_literal_keeps_precision_in_match() -> nervusdb_v2::Result<()> {
+    let dir = tempdir()?;
+    let db = Db::open(dir.path().join("t301_bigint_match.ndb"))?;
+    let params = Params::new();
+
+    let mut txn = db.begin_write();
+    nervusdb_v2::query::prepare("CREATE (:TheLabel {id: 4611686018427387905})")?.execute_write(
+        &db.snapshot(),
+        &mut txn,
+        &params,
+    )?;
+    txn.commit()?;
+
+    let snapshot = db.snapshot();
+    let equal_rows: Vec<_> = nervusdb_v2::query::prepare(
+        "MATCH (p:TheLabel) WHERE p.id = 4611686018427387905 RETURN p.id",
+    )?
+    .execute_streaming(&snapshot, &params)
+    .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(equal_rows.len(), 1);
+    assert!(matches!(
+        equal_rows[0].get("p.id"),
+        Some(Value::Int(4611686018427387905))
+    ));
+
+    let non_equal_rows: Vec<_> = nervusdb_v2::query::prepare(
+        "MATCH (p:TheLabel) WHERE p.id = 4611686018427387900 RETURN p.id",
+    )?
+    .execute_streaming(&snapshot, &params)
+    .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(non_equal_rows.len(), 0);
+
+    Ok(())
+}

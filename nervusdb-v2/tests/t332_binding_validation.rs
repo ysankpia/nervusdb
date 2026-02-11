@@ -50,3 +50,11 @@ fn t332_prepare_unicode_input_does_not_panic() {
         "prepare() should not panic on unicode input"
     );
 }
+
+#[test]
+fn t332_where_expression_rejects_undefined_variable() {
+    assert_compile_error_contains(
+        "MATCH (s) WHERE s.name = undefinedVariable AND s.age = 10 RETURN s",
+        "UndefinedVariable",
+    );
+}

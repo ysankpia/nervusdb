@@ -34,14 +34,8 @@ pub fn evaluate_expression_value<S: GraphSnapshot>(
     match expr {
         Expression::Literal(l) => match l {
             Literal::String(s) => Value::String(s.clone()),
-            Literal::Number(n) => {
-                // Interpret as integer only when the value is integral and safely representable.
-                if n.fract() == 0.0 && *n >= i64::MIN as f64 && *n <= i64::MAX as f64 {
-                    Value::Int(*n as i64)
-                } else {
-                    Value::Float(*n)
-                }
-            }
+            Literal::Integer(n) => Value::Int(*n),
+            Literal::Float(n) => Value::Float(*n),
             Literal::Boolean(b) => Value::Bool(*b),
             Literal::Null => Value::Null,
         },
@@ -128,7 +122,10 @@ pub fn evaluate_expression_value<S: GraphSnapshot>(
                     _ => Value::Null,
                 },
                 UnaryOperator::Negate => match v {
-                    Value::Int(i) => Value::Int(-i),
+                    Value::Int(i) => i
+                        .checked_neg()
+                        .map(Value::Int)
+                        .unwrap_or_else(|| Value::Float(-(i as f64))),
                     Value::Float(f) => Value::Float(-f),
                     Value::Null => Value::Null,
                     _ => Value::Null,
@@ -628,15 +625,78 @@ fn node_pattern_matches<S: GraphSnapshot>(
 }
 
 fn cypher_equals(left: &Value, right: &Value) -> Value {
-    if matches!(left, Value::Null) || matches!(right, Value::Null) {
-        return Value::Null;
+    match (left, right) {
+        (Value::Null, _) | (_, Value::Null) => Value::Null,
+        (Value::Int(l), Value::Int(r)) => Value::Bool(l == r),
+        (Value::Int(l), Value::Float(r)) => Value::Bool(float_equals_int(*r, *l)),
+        (Value::Float(l), Value::Int(r)) => Value::Bool(float_equals_int(*l, *r)),
+        (Value::Float(l), Value::Float(r)) => {
+            if l.is_nan() || r.is_nan() {
+                Value::Bool(false)
+            } else {
+                Value::Bool(l == r)
+            }
+        }
+        (Value::List(l), Value::List(r)) => cypher_equals_sequence(l, r),
+        (Value::Map(l), Value::Map(r)) => cypher_equals_map(l, r),
+        _ => Value::Bool(left == right),
+    }
+}
+
+fn float_equals_int(float_value: f64, int_value: i64) -> bool {
+    if float_value.is_nan() || !float_value.is_finite() {
+        return false;
+    }
+    float_value == int_value as f64
+}
+
+fn cypher_equals_sequence(left: &[Value], right: &[Value]) -> Value {
+    if left.len() != right.len() {
+        return Value::Bool(false);
     }
 
-    match (left, right) {
-        (Value::Int(l), Value::Float(r)) => Value::Bool((*l as f64 - *r).abs() < 1e-9),
-        (Value::Float(l), Value::Int(r)) => Value::Bool((*l - *r as f64).abs() < 1e-9),
-        (Value::Float(l), Value::Float(r)) => Value::Bool((*l - *r).abs() < 1e-9),
-        _ => Value::Bool(left == right),
+    let mut saw_null = false;
+    for (l, r) in left.iter().zip(right.iter()) {
+        match cypher_equals(l, r) {
+            Value::Bool(true) => {}
+            Value::Bool(false) => return Value::Bool(false),
+            Value::Null => saw_null = true,
+            _ => return Value::Null,
+        }
+    }
+
+    if saw_null {
+        Value::Null
+    } else {
+        Value::Bool(true)
+    }
+}
+
+fn cypher_equals_map(
+    left: &std::collections::BTreeMap<String, Value>,
+    right: &std::collections::BTreeMap<String, Value>,
+) -> Value {
+    if left.len() != right.len() {
+        return Value::Bool(false);
+    }
+
+    let mut saw_null = false;
+    for (key, left_value) in left {
+        let Some(right_value) = right.get(key) else {
+            return Value::Bool(false);
+        };
+        match cypher_equals(left_value, right_value) {
+            Value::Bool(true) => {}
+            Value::Bool(false) => return Value::Bool(false),
+            Value::Null => saw_null = true,
+            _ => return Value::Null,
+        }
+    }
+
+    if saw_null {
+        Value::Null
+    } else {
+        Value::Bool(true)
     }
 }
 
@@ -867,6 +927,7 @@ fn evaluate_function<S: GraphSnapshot>(
             }
             Value::Null
         }
+        "tointeger" => cast_to_integer(args.first()),
         "head" => {
             if let Some(Value::List(l)) = args.first() {
                 l.first().cloned().unwrap_or(Value::Null)
@@ -1437,6 +1498,37 @@ fn evaluate_temporal_truncate(function_name: &str, args: &[Value]) -> Value {
                 out.push(']');
             }
             Value::String(out)
+        }
+        _ => Value::Null,
+    }
+}
+
+fn cast_to_integer(value: Option<&Value>) -> Value {
+    let Some(value) = value else {
+        return Value::Null;
+    };
+    match value {
+        Value::Null => Value::Null,
+        Value::Int(i) => Value::Int(*i),
+        Value::Float(f) => {
+            if !f.is_finite() {
+                return Value::Null;
+            }
+            let truncated = f.trunc();
+            if truncated < i64::MIN as f64 || truncated > i64::MAX as f64 {
+                Value::Null
+            } else {
+                Value::Int(truncated as i64)
+            }
+        }
+        Value::String(s) => {
+            if let Ok(i) = s.parse::<i64>() {
+                return Value::Int(i);
+            }
+            if let Ok(f) = s.parse::<f64>() {
+                return cast_to_integer(Some(&Value::Float(f)));
+            }
+            Value::Null
         }
         _ => Value::Null,
     }
@@ -4109,8 +4201,7 @@ where
 fn numeric_div(left: &Value, right: &Value) -> Value {
     match (left, right) {
         (Value::Null, _) | (_, Value::Null) => Value::Null,
-        (_, Value::Int(0)) => Value::Null,
-        (_, Value::Float(r)) if *r == 0.0 => Value::Null,
+        (Value::Int(_), Value::Int(0)) => Value::Null,
         (Value::Int(l), Value::Int(r)) => Value::Int(*l / *r),
         (Value::Int(l), Value::Float(r)) => Value::Float(*l as f64 / *r),
         (Value::Float(l), Value::Int(r)) => Value::Float(*l / *r as f64),
