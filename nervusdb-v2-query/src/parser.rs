@@ -1123,12 +1123,8 @@ impl TokenParser {
             }
 
             if self.match_token(&TokenType::Colon) {
-                let label = self.parse_identifier("label identifier")?;
-                expr = Expression::Binary(Box::new(BinaryExpression {
-                    left: expr,
-                    operator: BinaryOperator::HasLabel,
-                    right: Expression::Literal(Literal::String(label)),
-                }));
+                let labels = self.parse_expression_label_chain()?;
+                expr = self.build_expression_label_predicate(expr, labels);
                 continue;
             }
 
@@ -1136,6 +1132,48 @@ impl TokenParser {
         }
 
         Ok(expr)
+    }
+
+    fn parse_expression_label_chain(&mut self) -> Result<Vec<String>, Error> {
+        let mut labels = vec![self.parse_identifier("label identifier")?];
+        while self.match_token(&TokenType::Colon) {
+            labels.push(self.parse_identifier("label identifier")?);
+        }
+        Ok(labels)
+    }
+
+    fn build_expression_label_predicate(
+        &self,
+        base_expr: Expression,
+        labels: Vec<String>,
+    ) -> Expression {
+        debug_assert!(!labels.is_empty());
+
+        let mut labels_iter = labels.into_iter();
+        let first = labels_iter
+            .next()
+            .expect("label chain should contain at least one label");
+
+        let mut out = Expression::Binary(Box::new(BinaryExpression {
+            left: base_expr.clone(),
+            operator: BinaryOperator::HasLabel,
+            right: Expression::Literal(Literal::String(first)),
+        }));
+
+        for label in labels_iter {
+            let has_label = Expression::Binary(Box::new(BinaryExpression {
+                left: base_expr.clone(),
+                operator: BinaryOperator::HasLabel,
+                right: Expression::Literal(Literal::String(label)),
+            }));
+            out = Expression::Binary(Box::new(BinaryExpression {
+                left: out,
+                operator: BinaryOperator::And,
+                right: has_label,
+            }));
+        }
+
+        out
     }
 
     fn try_parse_relationship_pattern_predicate(&mut self) -> Option<Pattern> {
