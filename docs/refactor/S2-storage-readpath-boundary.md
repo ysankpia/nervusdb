@@ -307,3 +307,15 @@
    - `cargo test -p nervusdb-v2-storage --test m1_graph`
    - `cargo test -p nervusdb-v2 --test t106_checkpoint_on_close`
    - `bash scripts/workspace_quick_test.sh`
+
+42. 已完成切片-21（GraphStore snapshot tombstone 收敛）
+   - 新增模块：`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/read_path_tombstones.rs`。
+   - 先补失败测试，再实现 helper：`collect_tombstoned_nodes`，统一 run 集合上的 tombstone 节点聚合逻辑。
+   - `api.rs` 的 `GraphStore::snapshot()` 改为委托 helper，减少读路径初始化中的内联遍历逻辑。
+   - 对外 `StorageSnapshot` 与 `GraphSnapshot` 接口行为保持不变。
+43. 切片-21 验证通过
+   - `cargo test -p nervusdb-v2-storage read_path_tombstones --lib`（先红后绿）
+   - `cargo test -p nervusdb-v2-storage --test t47_api_trait`
+   - `cargo test -p nervusdb-v2-storage --test t51_snapshot_scan`
+   - `cargo test -p nervusdb-v2-storage --test m1_graph`
+   - `bash scripts/workspace_quick_test.sh`

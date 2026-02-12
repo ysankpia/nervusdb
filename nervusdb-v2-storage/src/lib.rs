@@ -29,6 +29,7 @@ mod read_path_run_props;
 mod read_path_run_state;
 mod read_path_stats;
 mod read_path_symbols;
+mod read_path_tombstones;
 pub mod snapshot;
 pub mod stats;
 pub mod vacuum;
