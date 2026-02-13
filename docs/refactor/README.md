@@ -20,8 +20,8 @@
 | 断言ID | 原文摘录 | 事实证据文件 | 影响级别 | 风险 | 建议动作 | 映射任务ID | 状态 |
 |---|---|---|---|---|---|---|---|
 | A-001 | “Phase 0: 审计与护栏（前置）” | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-Architecture.md:1150` | P0 | 若跳过基线将无法判定等价 | 先落地 R0 基线文档与护栏清单 | R0 | Done |
-| A-002 | “Phase 1a: 纯文件拆分 + CLI 边界收敛” | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-Architecture.md:1158` | P0 | 拆分与边界改造混改导致回归定位困难 | 拆为 R1/R2/R3/S1 四个独立任务 | R1,R2,R3,S1 | In Progress |
-| A-003 | “query 三巨型文件需拆分” | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/query_api.rs:4187`；`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor.rs:6524`；`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/evaluator.rs:4832` | P1 | 大文件继续增长将降低可维护性 | 先拆 API，再拆执行，再拆 evaluator | R1,R2,R3 | In Progress |
+| A-002 | “Phase 1a: 纯文件拆分 + CLI 边界收敛” | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-Architecture.md:1158` | P0 | 拆分与边界改造混改导致回归定位困难 | 拆为 R1/R2/R3/S1 四个独立任务 | R1,R2,R3,S1 | Done |
+| A-003 | “query 三巨型文件需拆分” | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/query_api.rs:142`；`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor.rs:196`；`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/evaluator.rs:378` | P1 | 大文件继续增长将降低可维护性 | 先拆 API，再拆执行，再拆 evaluator | R1,R2,R3 | Done |
 | A-004 | “CLI 边界收敛到门面层” | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-cli/src/main.rs:2`；`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-cli/src/main.rs:248`；`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/src/lib.rs:212` | P0 | CLI 直连 storage 造成层级漂移 | 移除 CLI 对 storage 实现层直接依赖（含 vacuum 路径） | S1 | Done |
 | A-005 | “每 PR 全门禁” | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/spec.md:38`；`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/spec.md:42` | P0 | 门禁缺跑会放大语义漂移风险 | 固化为所有任务 DoD 硬条件 | R0,R1,R2,R3,S1,S2,S3 | Done |
 | A-006 | “当前 Tier-3 仍未达 Beta 阈值” | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/artifacts/tck/tier3-rate.json:11`；`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/tasks.md:99` | P0 | 若在低通过率下混入语义变更，回归噪音过高 | 本轮重构限定“结构等价” | R0,R1,R2,R3 | Done |
@@ -65,4 +65,6 @@
   证据：`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/refactor/S2-storage-readpath-boundary.md`
 - Phase2 已完成 S3（bindings 契约回归）并增强 Node runtime 合同断言。  
   证据：`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/refactor/S3-bindings-contract-regression.md`、`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/scripts/contract_smoke.sh`
+- PR #131 已完成 crash gate 修复并通过全部 CI。  
+  证据：`https://github.com/LuQing-Studio/nervusdb/pull/131`
 - 已完成回归门禁（本轮已执行）：`cargo fmt --all -- --check`、`cargo clippy --workspace --exclude nervusdb-pyo3 --all-targets -- -W warnings`、`cargo check --workspace`、`bash scripts/workspace_quick_test.sh`、`bash scripts/tck_tier_gate.sh tier0`、`bash scripts/tck_tier_gate.sh tier1`、`bash scripts/tck_tier_gate.sh tier2`、`bash scripts/binding_smoke.sh`、`bash scripts/contract_smoke.sh`。
