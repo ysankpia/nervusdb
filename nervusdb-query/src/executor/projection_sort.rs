@@ -1,6 +1,6 @@
 use super::{Result, Row, Value};
 use crate::ast::AggregateFunction;
-use crate::evaluator::evaluate_expression_value;
+use crate::evaluator::{evaluate_expression_value, order_compare};
 use nervusdb_api::GraphSnapshot;
 
 pub(super) fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
@@ -194,7 +194,7 @@ pub(super) fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
                                 let v = evaluate_expression_value(expr, r, snapshot, params);
                                 if v == Value::Null { None } else { Some(v) }
                             })
-                            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                            .min_by(|a, b| order_compare(a, b));
                         min_val.unwrap_or(Value::Null)
                     }
                     AggregateFunction::MinDistinct(expr) => {
@@ -211,7 +211,7 @@ pub(super) fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
 
                         distinct_values
                             .into_iter()
-                            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                            .min_by(|a, b| order_compare(a, b))
                             .unwrap_or(Value::Null)
                     }
                     AggregateFunction::Max(expr) => {
@@ -221,7 +221,7 @@ pub(super) fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
                                 let v = evaluate_expression_value(expr, r, snapshot, params);
                                 if v == Value::Null { None } else { Some(v) }
                             })
-                            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                            .max_by(|a, b| order_compare(a, b));
                         max_val.unwrap_or(Value::Null)
                     }
                     AggregateFunction::MaxDistinct(expr) => {
@@ -238,7 +238,7 @@ pub(super) fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
 
                         distinct_values
                             .into_iter()
-                            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                            .max_by(|a, b| order_compare(a, b))
                             .unwrap_or(Value::Null)
                     }
                     AggregateFunction::Collect(expr) => {
