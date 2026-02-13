@@ -1158,6 +1158,8 @@ impl TokenParser {
                     } else {
                         Some(self.parse_expression()?)
                     };
+                    let has_start = start_expr.is_some();
+                    let has_end = end_expr.is_some();
                     self.consume(&TokenType::RightBracket, "Expected ']' after slice")?;
                     expr = Expression::FunctionCall(FunctionCall {
                         name: "__slice".to_string(),
@@ -1165,6 +1167,8 @@ impl TokenParser {
                             expr,
                             start_expr.unwrap_or(Expression::Literal(Literal::Null)),
                             end_expr.unwrap_or(Expression::Literal(Literal::Null)),
+                            Expression::Literal(Literal::Boolean(has_start)),
+                            Expression::Literal(Literal::Boolean(has_end)),
                         ],
                     });
                     continue;

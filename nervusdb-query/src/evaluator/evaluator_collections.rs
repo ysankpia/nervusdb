@@ -232,20 +232,46 @@ fn evaluate_index<S: GraphSnapshot>(args: &[Value], snapshot: &S) -> Value {
 }
 
 fn evaluate_slice(args: &[Value]) -> Value {
-    if args.len() != 3 {
+    if args.len() != 3 && args.len() != 5 {
         return Value::Null;
     }
 
-    let parse_index = |value: &Value| -> Option<i64> {
+    let (start_value, end_value, has_start, has_end) = if args.len() == 5 {
+        let start_bound = match args[3] {
+            Value::Bool(flag) => flag,
+            _ => return Value::Null,
+        };
+        let end_bound = match args[4] {
+            Value::Bool(flag) => flag,
+            _ => return Value::Null,
+        };
+        (&args[1], &args[2], start_bound, end_bound)
+    } else {
+        // Legacy fallback for pre-existing plans: NULL bounds were encoded as omitted.
+        (
+            &args[1],
+            &args[2],
+            !matches!(args[1], Value::Null),
+            !matches!(args[2], Value::Null),
+        )
+    };
+
+    let parse_bound = |value: &Value, present: bool| -> Option<Option<i64>> {
+        if !present {
+            return Some(None);
+        }
         match value {
+            Value::Int(v) => Some(Some(*v)),
             Value::Null => None,
-            Value::Int(v) => Some(*v),
             _ => None,
         }
     };
-
-    let start = parse_index(&args[1]);
-    let end = parse_index(&args[2]);
+    let Some(start) = parse_bound(start_value, has_start) else {
+        return Value::Null;
+    };
+    let Some(end) = parse_bound(end_value, has_end) else {
+        return Value::Null;
+    };
 
     match &args[0] {
         Value::List(items) => {
@@ -284,6 +310,51 @@ fn evaluate_slice(args: &[Value]) -> Value {
             }
         }
         _ => Value::Null,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::evaluate_slice;
+    use crate::evaluator::Value;
+
+    #[test]
+    fn slice_returns_null_for_explicit_null_lower_bound() {
+        let result = evaluate_slice(&[
+            Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+            Value::Null,
+            Value::Int(2),
+            Value::Bool(true),
+            Value::Bool(true),
+        ]);
+        assert_eq!(result, Value::Null);
+    }
+
+    #[test]
+    fn slice_returns_null_for_explicit_null_upper_bound() {
+        let result = evaluate_slice(&[
+            Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+            Value::Int(1),
+            Value::Null,
+            Value::Bool(true),
+            Value::Bool(true),
+        ]);
+        assert_eq!(result, Value::Null);
+    }
+
+    #[test]
+    fn slice_allows_omitted_bounds_without_null_result() {
+        let result = evaluate_slice(&[
+            Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+            Value::Null,
+            Value::Null,
+            Value::Bool(false),
+            Value::Bool(false),
+        ]);
+        assert_eq!(
+            result,
+            Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+        );
     }
 }
 
