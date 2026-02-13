@@ -153,9 +153,6 @@ pub(super) fn duration_from_map(map: &BTreeMap<String, Value>) -> DurationParts 
 }
 
 pub(super) fn parse_duration_literal(input: &str) -> Option<DurationParts> {
-    const HOUR_NANOS: i128 = 3_600_000_000_000;
-    const MINUTE_NANOS: i128 = 60_000_000_000;
-
     let s = input.trim();
     if !s.starts_with('P') {
         return None;
@@ -165,30 +162,43 @@ pub(super) fn parse_duration_literal(input: &str) -> Option<DurationParts> {
         return None;
     }
 
+    // Support the component form used by the TCK: `PYYYY-MM-DDThh:mm:ss[.fff]`.
+    //
+    // Example:
+    // - `P2012-02-02T14:37:21.545` => `P2012Y2M2DT14H37M21.545S`
+    if looks_like_duration_components(body) {
+        return parse_duration_components(body);
+    }
+
+    // ISO 8601 duration form: `PnYnMnWnDTnHnMnS`, with optional fractions in any component.
     let (date_part, time_part) = if let Some(idx) = body.find('T') {
         (&body[..idx], Some(&body[idx + 1..]))
     } else {
         (body, None)
     };
 
-    let mut months: i64 = 0;
-    let mut days: i64 = 0;
-    let mut nanos: i128 = 0;
+    let mut years = 0.0f64;
+    let mut months = 0.0f64;
+    let mut weeks = 0.0f64;
+    let mut days = 0.0f64;
+    let mut hours = 0.0f64;
+    let mut minutes = 0.0f64;
+    let mut seconds = 0.0f64;
     let mut saw_component = false;
 
     let mut idx = 0usize;
     while idx < date_part.len() {
-        let (next, number, has_fraction) = parse_duration_number(date_part, idx)?;
-        if has_fraction || next >= date_part.len() {
+        let (next, number, _has_fraction) = parse_duration_number(date_part, idx)?;
+        if next >= date_part.len() {
             return None;
         }
         let unit = date_part.as_bytes()[next];
-        let value = number.parse::<i64>().ok()?;
+        let value = number.parse::<f64>().ok()?;
         match unit {
-            b'Y' => months = months.checked_add(value.checked_mul(12)?)?,
-            b'M' => months = months.checked_add(value)?,
-            b'W' => days = days.checked_add(value.checked_mul(7)?)?,
-            b'D' => days = days.checked_add(value)?,
+            b'Y' => years += value,
+            b'M' => months += value,
+            b'W' => weeks += value,
+            b'D' => days += value,
             _ => return None,
         }
         saw_component = true;
@@ -199,31 +209,19 @@ pub(super) fn parse_duration_literal(input: &str) -> Option<DurationParts> {
         if time_part.is_empty() && !saw_component {
             return None;
         }
+
         let mut idx = 0usize;
         while idx < time_part.len() {
-            let (next, number, has_fraction) = parse_duration_number(time_part, idx)?;
+            let (next, number, _has_fraction) = parse_duration_number(time_part, idx)?;
             if next >= time_part.len() {
                 return None;
             }
             let unit = time_part.as_bytes()[next];
+            let value = number.parse::<f64>().ok()?;
             match unit {
-                b'H' => {
-                    if has_fraction {
-                        return None;
-                    }
-                    let value = number.parse::<i128>().ok()?;
-                    nanos = nanos.checked_add(value.checked_mul(HOUR_NANOS)?)?;
-                }
-                b'M' => {
-                    if has_fraction {
-                        return None;
-                    }
-                    let value = number.parse::<i128>().ok()?;
-                    nanos = nanos.checked_add(value.checked_mul(MINUTE_NANOS)?)?;
-                }
-                b'S' => {
-                    nanos = nanos.checked_add(parse_duration_seconds_to_nanos(number)?)?;
-                }
+                b'H' => hours += value,
+                b'M' => minutes += value,
+                b'S' => seconds += value,
                 _ => return None,
             }
             saw_component = true;
@@ -235,11 +233,30 @@ pub(super) fn parse_duration_literal(input: &str) -> Option<DurationParts> {
         return None;
     }
 
-    Some(DurationParts {
-        months: i32::try_from(months).ok()?,
-        days,
-        nanos: i64::try_from(nanos).ok()?,
-    })
+    let mut map = BTreeMap::new();
+    if years != 0.0 {
+        map.insert("years".to_string(), Value::Float(years));
+    }
+    if months != 0.0 {
+        map.insert("months".to_string(), Value::Float(months));
+    }
+    if weeks != 0.0 {
+        map.insert("weeks".to_string(), Value::Float(weeks));
+    }
+    if days != 0.0 {
+        map.insert("days".to_string(), Value::Float(days));
+    }
+    if hours != 0.0 {
+        map.insert("hours".to_string(), Value::Float(hours));
+    }
+    if minutes != 0.0 {
+        map.insert("minutes".to_string(), Value::Float(minutes));
+    }
+    if seconds != 0.0 {
+        map.insert("seconds".to_string(), Value::Float(seconds));
+    }
+
+    Some(duration_from_map(&map))
 }
 
 pub(super) fn add_duration_parts(lhs: &DurationParts, rhs: &DurationParts) -> DurationParts {
@@ -420,6 +437,52 @@ fn parse_duration_seconds_to_nanos(number: &str) -> Option<i128> {
         .checked_mul(SECOND_NANOS)?
         .checked_add(frac_nanos)?;
     nanos.checked_mul(sign)
+}
+
+fn looks_like_duration_components(body: &str) -> bool {
+    if !body.contains('-') {
+        return false;
+    }
+    // Component format does not use unit letters (Y/M/W/D/H/S).
+    !body
+        .chars()
+        .any(|ch| matches!(ch, 'Y' | 'M' | 'W' | 'D' | 'H' | 'S'))
+}
+
+fn parse_duration_components(body: &str) -> Option<DurationParts> {
+    const HOUR_NANOS: i128 = 3_600_000_000_000;
+    const MINUTE_NANOS: i128 = 60_000_000_000;
+
+    let (date_part, time_part) = body.split_once('T')?;
+
+    let mut date_iter = date_part.split('-');
+    let year: i64 = date_iter.next()?.parse().ok()?;
+    let month: i64 = date_iter.next()?.parse().ok()?;
+    let day: i64 = date_iter.next()?.parse().ok()?;
+    if date_iter.next().is_some() {
+        return None;
+    }
+
+    let mut time_iter = time_part.split(':');
+    let hour: i128 = time_iter.next()?.parse().ok()?;
+    let minute: i128 = time_iter.next()?.parse().ok()?;
+    let seconds_raw = time_iter.next()?;
+    if time_iter.next().is_some() {
+        return None;
+    }
+
+    let seconds_nanos = parse_duration_seconds_to_nanos(seconds_raw)?;
+    let nanos = hour
+        .checked_mul(HOUR_NANOS)?
+        .checked_add(minute.checked_mul(MINUTE_NANOS)?)?
+        .checked_add(seconds_nanos)?;
+
+    let months_total = year.checked_mul(12)?.checked_add(month)?;
+    Some(DurationParts {
+        months: i32::try_from(months_total).ok()?,
+        days: day,
+        nanos: i64::try_from(nanos).ok()?,
+    })
 }
 
 fn duration_map_i64(map: &BTreeMap<String, Value>, key: &str) -> Option<i64> {

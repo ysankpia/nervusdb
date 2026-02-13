@@ -98,14 +98,14 @@ pub(super) fn parse_temporal_string(s: &str) -> Option<TemporalValue> {
     parse_time_literal(s_no_zone).map(TemporalValue::LocalTime)
 }
 
-fn find_offset_split_index(s: &str) -> Option<usize> {
+pub(super) fn find_offset_split_index(s: &str) -> Option<usize> {
     let bytes = s.as_bytes();
     (1..bytes.len())
         .rev()
         .find(|&idx| bytes[idx] == b'+' || bytes[idx] == b'-')
 }
 
-fn parse_time_literal(s: &str) -> Option<NaiveTime> {
+pub(super) fn parse_time_literal(s: &str) -> Option<NaiveTime> {
     let s = s.trim();
 
     if let Ok(parsed) = NaiveTime::parse_from_str(s, "%H:%M:%S%.f") {

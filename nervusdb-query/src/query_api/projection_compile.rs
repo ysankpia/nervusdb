@@ -30,6 +30,24 @@ fn contains_function_call_named(expr: &Expression, target: &str) -> bool {
         Expression::List(items) => items
             .iter()
             .any(|item| contains_function_call_named(item, target)),
+        Expression::ListComprehension(list_comp) => {
+            contains_function_call_named(&list_comp.list, target)
+                || list_comp
+                    .where_expression
+                    .as_ref()
+                    .is_some_and(|expr| contains_function_call_named(expr, target))
+                || list_comp
+                    .map_expression
+                    .as_ref()
+                    .is_some_and(|expr| contains_function_call_named(expr, target))
+        }
+        Expression::PatternComprehension(pattern_comp) => {
+            pattern_comp
+                .where_expression
+                .as_ref()
+                .is_some_and(|expr| contains_function_call_named(expr, target))
+                || contains_function_call_named(&pattern_comp.projection, target)
+        }
         Expression::Map(map) => map
             .properties
             .iter()
@@ -112,9 +130,15 @@ fn validate_projection_expression_semantics(
         Expression::ListComprehension(list_comp) => {
             validate_projection_expression_semantics(&list_comp.list, vars)?;
             if let Some(where_expr) = &list_comp.where_expression {
+                if contains_aggregate_expression(where_expr) {
+                    return Err(Error::Other("syntax error: InvalidAggregation".to_string()));
+                }
                 validate_projection_expression_semantics(where_expr, vars)?;
             }
             if let Some(map_expr) = &list_comp.map_expression {
+                if contains_aggregate_expression(map_expr) {
+                    return Err(Error::Other("syntax error: InvalidAggregation".to_string()));
+                }
                 validate_projection_expression_semantics(map_expr, vars)?;
             }
         }
@@ -203,16 +227,23 @@ fn expression_uses_allowed_group_refs(
     expr: &Expression,
     grouping_keys: &[(Expression, String)],
     grouping_aliases: &std::collections::HashSet<String>,
+    local_scopes: &mut Vec<std::collections::HashSet<String>>,
 ) -> bool {
     match expr {
         Expression::Literal(_) | Expression::Parameter(_) => true,
         Expression::Variable(v) => {
+            if is_locally_bound(local_scopes, v) {
+                return true;
+            }
             grouping_aliases.contains(v)
                 || grouping_keys.iter().any(|(group_expr, alias)| {
                     alias == v || matches!(group_expr, Expression::Variable(name) if name == v)
                 })
         }
         Expression::PropertyAccess(pa) => {
+            if is_locally_bound(local_scopes, &pa.variable) {
+                return true;
+            }
             let dotted = format!("{}.{}", pa.variable, pa.property);
             grouping_aliases.contains(&dotted) || grouping_keys.iter().any(|(group_expr, alias)| {
                 alias == &dotted
@@ -220,36 +251,121 @@ fn expression_uses_allowed_group_refs(
                     || matches!(group_expr, Expression::Variable(var) if var == &pa.variable)
             })
         }
-        Expression::Unary(u) => {
-            expression_uses_allowed_group_refs(&u.operand, grouping_keys, grouping_aliases)
-        }
+        Expression::Unary(u) => expression_uses_allowed_group_refs(
+            &u.operand,
+            grouping_keys,
+            grouping_aliases,
+            local_scopes,
+        ),
         Expression::Binary(b) => {
-            expression_uses_allowed_group_refs(&b.left, grouping_keys, grouping_aliases)
-                && expression_uses_allowed_group_refs(&b.right, grouping_keys, grouping_aliases)
+            expression_uses_allowed_group_refs(
+                &b.left,
+                grouping_keys,
+                grouping_aliases,
+                local_scopes,
+            ) && expression_uses_allowed_group_refs(
+                &b.right,
+                grouping_keys,
+                grouping_aliases,
+                local_scopes,
+            )
         }
-        Expression::FunctionCall(call) => call
-            .args
-            .iter()
-            .all(|arg| expression_uses_allowed_group_refs(arg, grouping_keys, grouping_aliases)),
-        Expression::List(items) => items
-            .iter()
-            .all(|item| expression_uses_allowed_group_refs(item, grouping_keys, grouping_aliases)),
+        Expression::FunctionCall(call) => call.args.iter().all(|arg| {
+            expression_uses_allowed_group_refs(arg, grouping_keys, grouping_aliases, local_scopes)
+        }),
+        Expression::List(items) => items.iter().all(|item| {
+            expression_uses_allowed_group_refs(item, grouping_keys, grouping_aliases, local_scopes)
+        }),
         Expression::Map(map) => map.properties.iter().all(|pair| {
-            expression_uses_allowed_group_refs(&pair.value, grouping_keys, grouping_aliases)
+            expression_uses_allowed_group_refs(
+                &pair.value,
+                grouping_keys,
+                grouping_aliases,
+                local_scopes,
+            )
         }),
         Expression::Case(case_expr) => {
             case_expr.expression.as_ref().map_or(true, |expr| {
-                expression_uses_allowed_group_refs(expr, grouping_keys, grouping_aliases)
+                expression_uses_allowed_group_refs(
+                    expr,
+                    grouping_keys,
+                    grouping_aliases,
+                    local_scopes,
+                )
             }) && case_expr.when_clauses.iter().all(|(when_expr, then_expr)| {
-                expression_uses_allowed_group_refs(when_expr, grouping_keys, grouping_aliases)
-                    && expression_uses_allowed_group_refs(
-                        then_expr,
-                        grouping_keys,
-                        grouping_aliases,
-                    )
+                expression_uses_allowed_group_refs(
+                    when_expr,
+                    grouping_keys,
+                    grouping_aliases,
+                    local_scopes,
+                ) && expression_uses_allowed_group_refs(
+                    then_expr,
+                    grouping_keys,
+                    grouping_aliases,
+                    local_scopes,
+                )
             }) && case_expr.else_expression.as_ref().map_or(true, |expr| {
-                expression_uses_allowed_group_refs(expr, grouping_keys, grouping_aliases)
+                expression_uses_allowed_group_refs(
+                    expr,
+                    grouping_keys,
+                    grouping_aliases,
+                    local_scopes,
+                )
             })
+        }
+        Expression::ListComprehension(list_comp) => {
+            if !expression_uses_allowed_group_refs(
+                &list_comp.list,
+                grouping_keys,
+                grouping_aliases,
+                local_scopes,
+            ) {
+                return false;
+            }
+
+            let mut scope = std::collections::HashSet::new();
+            scope.insert(list_comp.variable.clone());
+            local_scopes.push(scope);
+
+            let ok = list_comp.where_expression.as_ref().map_or(true, |expr| {
+                expression_uses_allowed_group_refs(
+                    expr,
+                    grouping_keys,
+                    grouping_aliases,
+                    local_scopes,
+                )
+            }) && list_comp.map_expression.as_ref().map_or(true, |expr| {
+                expression_uses_allowed_group_refs(
+                    expr,
+                    grouping_keys,
+                    grouping_aliases,
+                    local_scopes,
+                )
+            });
+
+            local_scopes.pop();
+            ok
+        }
+        Expression::PatternComprehension(pattern_comp) => {
+            let scope = collect_pattern_local_variables(&pattern_comp.pattern);
+            local_scopes.push(scope);
+
+            let ok = pattern_comp.where_expression.as_ref().map_or(true, |expr| {
+                expression_uses_allowed_group_refs(
+                    expr,
+                    grouping_keys,
+                    grouping_aliases,
+                    local_scopes,
+                )
+            }) && expression_uses_allowed_group_refs(
+                &pattern_comp.projection,
+                grouping_keys,
+                grouping_aliases,
+                local_scopes,
+            );
+
+            local_scopes.pop();
+            ok
         }
         _ => false,
     }
@@ -264,7 +380,13 @@ fn validate_aggregate_mixed_expression(
         return Ok(());
     }
 
-    let valid = validate_aggregate_mixed_expression_impl(expr, grouping_keys, grouping_aliases)?;
+    let mut local_scopes: Vec<std::collections::HashSet<String>> = Vec::new();
+    let valid = validate_aggregate_mixed_expression_impl(
+        expr,
+        grouping_keys,
+        grouping_aliases,
+        &mut local_scopes,
+    )?;
     if valid {
         Ok(())
     } else {
@@ -278,12 +400,14 @@ fn validate_aggregate_mixed_expression_impl(
     expr: &Expression,
     grouping_keys: &[(Expression, String)],
     grouping_aliases: &std::collections::HashSet<String>,
+    local_scopes: &mut Vec<std::collections::HashSet<String>>,
 ) -> Result<bool> {
     if !contains_aggregate_expression(expr) {
         return Ok(expression_uses_allowed_group_refs(
             expr,
             grouping_keys,
             grouping_aliases,
+            local_scopes,
         ));
     }
 
@@ -294,8 +418,12 @@ fn validate_aggregate_mixed_expression_impl(
             }
 
             for arg in &call.args {
-                if !validate_aggregate_mixed_expression_impl(arg, grouping_keys, grouping_aliases)?
-                {
+                if !validate_aggregate_mixed_expression_impl(
+                    arg,
+                    grouping_keys,
+                    grouping_aliases,
+                    local_scopes,
+                )? {
                     return Ok(false);
                 }
             }
@@ -305,18 +433,27 @@ fn validate_aggregate_mixed_expression_impl(
             &b.left,
             grouping_keys,
             grouping_aliases,
+            local_scopes,
         )? && validate_aggregate_mixed_expression_impl(
             &b.right,
             grouping_keys,
             grouping_aliases,
+            local_scopes,
         )?),
-        Expression::Unary(u) => {
-            validate_aggregate_mixed_expression_impl(&u.operand, grouping_keys, grouping_aliases)
-        }
+        Expression::Unary(u) => validate_aggregate_mixed_expression_impl(
+            &u.operand,
+            grouping_keys,
+            grouping_aliases,
+            local_scopes,
+        ),
         Expression::List(items) => {
             for item in items {
-                if !validate_aggregate_mixed_expression_impl(item, grouping_keys, grouping_aliases)?
-                {
+                if !validate_aggregate_mixed_expression_impl(
+                    item,
+                    grouping_keys,
+                    grouping_aliases,
+                    local_scopes,
+                )? {
                     return Ok(false);
                 }
             }
@@ -328,6 +465,7 @@ fn validate_aggregate_mixed_expression_impl(
                     &pair.value,
                     grouping_keys,
                     grouping_aliases,
+                    local_scopes,
                 )? {
                     return Ok(false);
                 }
@@ -340,6 +478,7 @@ fn validate_aggregate_mixed_expression_impl(
                     test_expr,
                     grouping_keys,
                     grouping_aliases,
+                    local_scopes,
                 )?
             {
                 return Ok(false);
@@ -349,6 +488,7 @@ fn validate_aggregate_mixed_expression_impl(
                     when_expr,
                     grouping_keys,
                     grouping_aliases,
+                    local_scopes,
                 )? {
                     return Ok(false);
                 }
@@ -356,6 +496,7 @@ fn validate_aggregate_mixed_expression_impl(
                     then_expr,
                     grouping_keys,
                     grouping_aliases,
+                    local_scopes,
                 )? {
                     return Ok(false);
                 }
@@ -365,18 +506,110 @@ fn validate_aggregate_mixed_expression_impl(
                     else_expr,
                     grouping_keys,
                     grouping_aliases,
+                    local_scopes,
                 )?
             {
                 return Ok(false);
             }
             Ok(true)
         }
+        Expression::ListComprehension(list_comp) => {
+            if !validate_aggregate_mixed_expression_impl(
+                &list_comp.list,
+                grouping_keys,
+                grouping_aliases,
+                local_scopes,
+            )? {
+                return Ok(false);
+            }
+
+            let mut scope = std::collections::HashSet::new();
+            scope.insert(list_comp.variable.clone());
+            local_scopes.push(scope);
+
+            let ok = list_comp
+                .where_expression
+                .as_ref()
+                .map_or(Ok(true), |expr| {
+                    validate_aggregate_mixed_expression_impl(
+                        expr,
+                        grouping_keys,
+                        grouping_aliases,
+                        local_scopes,
+                    )
+                })?
+                && list_comp.map_expression.as_ref().map_or(Ok(true), |expr| {
+                    validate_aggregate_mixed_expression_impl(
+                        expr,
+                        grouping_keys,
+                        grouping_aliases,
+                        local_scopes,
+                    )
+                })?;
+
+            local_scopes.pop();
+            Ok(ok)
+        }
+        Expression::PatternComprehension(pattern_comp) => {
+            let scope = collect_pattern_local_variables(&pattern_comp.pattern);
+            local_scopes.push(scope);
+
+            let ok = pattern_comp
+                .where_expression
+                .as_ref()
+                .map_or(Ok(true), |expr| {
+                    validate_aggregate_mixed_expression_impl(
+                        expr,
+                        grouping_keys,
+                        grouping_aliases,
+                        local_scopes,
+                    )
+                })?
+                && validate_aggregate_mixed_expression_impl(
+                    &pattern_comp.projection,
+                    grouping_keys,
+                    grouping_aliases,
+                    local_scopes,
+                )?;
+
+            local_scopes.pop();
+            Ok(ok)
+        }
         _ => Ok(expression_uses_allowed_group_refs(
             expr,
             grouping_keys,
             grouping_aliases,
+            local_scopes,
         )),
     }
+}
+
+fn is_locally_bound(local_scopes: &[std::collections::HashSet<String>], var: &str) -> bool {
+    local_scopes.iter().rev().any(|scope| scope.contains(var))
+}
+
+fn collect_pattern_local_variables(
+    pattern: &crate::ast::Pattern,
+) -> std::collections::HashSet<String> {
+    let mut vars = std::collections::HashSet::new();
+    if let Some(path_var) = &pattern.variable {
+        vars.insert(path_var.clone());
+    }
+    for element in &pattern.elements {
+        match element {
+            crate::ast::PathElement::Node(node) => {
+                if let Some(var) = &node.variable {
+                    vars.insert(var.clone());
+                }
+            }
+            crate::ast::PathElement::Relationship(rel) => {
+                if let Some(var) = &rel.variable {
+                    vars.insert(var.clone());
+                }
+            }
+        }
+    }
+    vars
 }
 
 fn collect_aggregate_calls(
@@ -439,6 +672,41 @@ fn collect_aggregate_calls(
             }
             Ok(())
         }
+        Expression::ListComprehension(list_comp) => {
+            collect_aggregate_calls(&list_comp.list, out)?;
+            if let Some(where_expr) = &list_comp.where_expression {
+                collect_aggregate_calls(where_expr, out)?;
+            }
+            if let Some(map_expr) = &list_comp.map_expression {
+                collect_aggregate_calls(map_expr, out)?;
+            }
+            Ok(())
+        }
+        Expression::PatternComprehension(pattern_comp) => {
+            for element in &pattern_comp.pattern.elements {
+                match element {
+                    crate::ast::PathElement::Node(node) => {
+                        if let Some(props) = &node.properties {
+                            for pair in &props.properties {
+                                collect_aggregate_calls(&pair.value, out)?;
+                            }
+                        }
+                    }
+                    crate::ast::PathElement::Relationship(rel) => {
+                        if let Some(props) = &rel.properties {
+                            for pair in &props.properties {
+                                collect_aggregate_calls(&pair.value, out)?;
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(where_expr) = &pattern_comp.where_expression {
+                collect_aggregate_calls(where_expr, out)?;
+            }
+            collect_aggregate_calls(&pattern_comp.projection, out)?;
+            Ok(())
+        }
         _ => Ok(()),
     }
 }
@@ -481,6 +749,30 @@ fn rewrite_aggregate_references(
                 .map(|item| rewrite_aggregate_references(item, mappings))
                 .collect(),
         ),
+        Expression::ListComprehension(list_comp) => {
+            Expression::ListComprehension(Box::new(crate::ast::ListComprehension {
+                variable: list_comp.variable.clone(),
+                list: rewrite_aggregate_references(&list_comp.list, mappings),
+                where_expression: list_comp
+                    .where_expression
+                    .as_ref()
+                    .map(|expr| rewrite_aggregate_references(expr, mappings)),
+                map_expression: list_comp
+                    .map_expression
+                    .as_ref()
+                    .map(|expr| rewrite_aggregate_references(expr, mappings)),
+            }))
+        }
+        Expression::PatternComprehension(pattern_comp) => {
+            Expression::PatternComprehension(Box::new(crate::ast::PatternComprehension {
+                pattern: pattern_comp.pattern.clone(),
+                where_expression: pattern_comp
+                    .where_expression
+                    .as_ref()
+                    .map(|expr| rewrite_aggregate_references(expr, mappings)),
+                projection: rewrite_aggregate_references(&pattern_comp.projection, mappings),
+            }))
+        }
         Expression::Map(map) => Expression::Map(crate::ast::PropertyMap {
             properties: map
                 .properties
@@ -550,6 +842,30 @@ fn rewrite_group_key_references(
                 .map(|item| rewrite_group_key_references(item, grouping_keys))
                 .collect(),
         ),
+        Expression::ListComprehension(list_comp) => {
+            Expression::ListComprehension(Box::new(crate::ast::ListComprehension {
+                variable: list_comp.variable.clone(),
+                list: rewrite_group_key_references(&list_comp.list, grouping_keys),
+                where_expression: list_comp
+                    .where_expression
+                    .as_ref()
+                    .map(|expr| rewrite_group_key_references(expr, grouping_keys)),
+                map_expression: list_comp
+                    .map_expression
+                    .as_ref()
+                    .map(|expr| rewrite_group_key_references(expr, grouping_keys)),
+            }))
+        }
+        Expression::PatternComprehension(pattern_comp) => {
+            Expression::PatternComprehension(Box::new(crate::ast::PatternComprehension {
+                pattern: pattern_comp.pattern.clone(),
+                where_expression: pattern_comp
+                    .where_expression
+                    .as_ref()
+                    .map(|expr| rewrite_group_key_references(expr, grouping_keys)),
+                projection: rewrite_group_key_references(&pattern_comp.projection, grouping_keys),
+            }))
+        }
         Expression::Map(map) => Expression::Map(crate::ast::PropertyMap {
             properties: map
                 .properties
@@ -918,6 +1234,46 @@ pub(super) fn contains_aggregate_expression(expr: &Expression) -> bool {
         }
         Expression::Unary(u) => contains_aggregate_expression(&u.operand),
         Expression::List(items) => items.iter().any(contains_aggregate_expression),
+        Expression::ListComprehension(list_comp) => {
+            contains_aggregate_expression(&list_comp.list)
+                || list_comp
+                    .where_expression
+                    .as_ref()
+                    .is_some_and(contains_aggregate_expression)
+                || list_comp
+                    .map_expression
+                    .as_ref()
+                    .is_some_and(contains_aggregate_expression)
+        }
+        Expression::PatternComprehension(pattern_comp) => {
+            pattern_comp
+                .where_expression
+                .as_ref()
+                .is_some_and(contains_aggregate_expression)
+                || contains_aggregate_expression(&pattern_comp.projection)
+                || pattern_comp
+                    .pattern
+                    .elements
+                    .iter()
+                    .any(|element| match element {
+                        crate::ast::PathElement::Node(node) => {
+                            node.properties.as_ref().is_some_and(|props| {
+                                props
+                                    .properties
+                                    .iter()
+                                    .any(|pair| contains_aggregate_expression(&pair.value))
+                            })
+                        }
+                        crate::ast::PathElement::Relationship(rel) => {
+                            rel.properties.as_ref().is_some_and(|props| {
+                                props
+                                    .properties
+                                    .iter()
+                                    .any(|pair| contains_aggregate_expression(&pair.value))
+                            })
+                        }
+                    })
+        }
         Expression::Map(map) => map
             .properties
             .iter()

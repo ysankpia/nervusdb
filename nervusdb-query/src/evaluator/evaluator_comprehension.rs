@@ -1,25 +1,17 @@
 use super::{Params, Row, Value, evaluate_expression_value};
-use crate::ast::{Expression, FunctionCall};
+use crate::ast::{Expression, FunctionCall, ListComprehension};
 use nervusdb_api::GraphSnapshot;
 
 pub(super) fn evaluate_list_comprehension<S: GraphSnapshot>(
-    call: &FunctionCall,
+    comp: &ListComprehension,
     row: &Row,
     snapshot: &S,
     params: &Params,
 ) -> Value {
-    if call.args.len() != 4 {
-        return Value::Null;
-    }
-
-    let var_name = match &call.args[0] {
-        Expression::Variable(v) => v.clone(),
-        _ => return Value::Null,
-    };
-
-    let list_value = evaluate_expression_value(&call.args[1], row, snapshot, params);
-    let predicate = &call.args[2];
-    let projection = &call.args[3];
+    let var_name = comp.variable.clone();
+    let list_value = evaluate_expression_value(&comp.list, row, snapshot, params);
+    let predicate = comp.where_expression.as_ref();
+    let projection = comp.map_expression.as_ref();
 
     let items = match list_value {
         Value::List(items) => items,
@@ -30,14 +22,22 @@ pub(super) fn evaluate_list_comprehension<S: GraphSnapshot>(
     let mut out = Vec::new();
     for item in items {
         let local_row = row.clone().with(var_name.clone(), item.clone());
-        match evaluate_expression_value(predicate, &local_row, snapshot, params) {
-            Value::Bool(true) => {
-                let proj = evaluate_expression_value(projection, &local_row, snapshot, params);
-                out.push(proj);
-            }
-            Value::Bool(false) | Value::Null => {}
-            _ => {}
+        let predicate_pass = match predicate {
+            None => true,
+            Some(expr) => matches!(
+                evaluate_expression_value(expr, &local_row, snapshot, params),
+                Value::Bool(true)
+            ),
+        };
+        if !predicate_pass {
+            continue;
         }
+
+        let projected = match projection {
+            Some(expr) => evaluate_expression_value(expr, &local_row, snapshot, params),
+            None => item.clone(),
+        };
+        out.push(projected);
     }
     Value::List(out)
 }

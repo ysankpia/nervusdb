@@ -11,7 +11,8 @@ use super::evaluator_temporal_map::{make_date_from_map, make_time_from_map, map_
 use super::evaluator_temporal_math::shift_time_of_day;
 use super::evaluator_temporal_overrides::{apply_date_overrides, apply_time_overrides};
 use super::evaluator_temporal_parse::{
-    extract_timezone_name, parse_date_literal, parse_temporal_string,
+    extract_timezone_name, find_offset_split_index, parse_date_literal, parse_temporal_string,
+    parse_time_literal,
 };
 use super::evaluator_timezone::{
     format_offset, parse_fixed_offset, timezone_named_offset, timezone_named_offset_standard,
@@ -100,27 +101,36 @@ pub(super) fn construct_local_time(arg: Option<&Value>) -> Value {
         Some(Value::Map(map)) => make_time_from_map(map)
             .map(|(t, include_seconds)| Value::String(format_time_literal(t, include_seconds)))
             .unwrap_or(Value::Null),
-        Some(Value::String(s)) => match parse_temporal_string(s) {
-            Some(TemporalValue::LocalTime(t)) => {
-                let include_seconds = t.second() != 0 || t.nanosecond() != 0;
-                Value::String(format_time_literal(t, include_seconds))
-            }
-            Some(TemporalValue::Time { time, .. }) => {
+        Some(Value::String(s)) => {
+            // Parse time-like strings (e.g. `2140`, `2140-02`) as time first.
+            // `parse_temporal_string()` prefers dates for inputs like `2140`, which breaks localtime().
+            if let Some((time, _offset)) = parse_time_literal_with_optional_offset(s) {
                 let include_seconds = time.second() != 0 || time.nanosecond() != 0;
-                Value::String(format_time_literal(time, include_seconds))
+                return Value::String(format_time_literal(time, include_seconds));
             }
-            Some(TemporalValue::LocalDateTime(dt)) => {
-                let time = dt.time();
-                let include_seconds = time.second() != 0 || time.nanosecond() != 0;
-                Value::String(format_time_literal(time, include_seconds))
+
+            match parse_temporal_string(s) {
+                Some(TemporalValue::LocalTime(t)) => {
+                    let include_seconds = t.second() != 0 || t.nanosecond() != 0;
+                    Value::String(format_time_literal(t, include_seconds))
+                }
+                Some(TemporalValue::Time { time, .. }) => {
+                    let include_seconds = time.second() != 0 || time.nanosecond() != 0;
+                    Value::String(format_time_literal(time, include_seconds))
+                }
+                Some(TemporalValue::LocalDateTime(dt)) => {
+                    let time = dt.time();
+                    let include_seconds = time.second() != 0 || time.nanosecond() != 0;
+                    Value::String(format_time_literal(time, include_seconds))
+                }
+                Some(TemporalValue::DateTime(dt)) => {
+                    let time = dt.naive_local().time();
+                    let include_seconds = time.second() != 0 || time.nanosecond() != 0;
+                    Value::String(format_time_literal(time, include_seconds))
+                }
+                _ => Value::Null,
             }
-            Some(TemporalValue::DateTime(dt)) => {
-                let time = dt.naive_local().time();
-                let include_seconds = time.second() != 0 || time.nanosecond() != 0;
-                Value::String(format_time_literal(time, include_seconds))
-            }
-            _ => Value::Null,
-        },
+        }
         _ => Value::Null,
     }
 }
@@ -187,42 +197,82 @@ pub(super) fn construct_time(arg: Option<&Value>) -> Value {
             }
             Value::String(out)
         }
-        Some(Value::String(s)) => match parse_temporal_string(s) {
-            Some(TemporalValue::Time { time, offset }) => {
+        Some(Value::String(s)) => {
+            // Parse time-like strings (e.g. `2140-02`) as time first.
+            // `parse_temporal_string()` prefers dates for inputs like `2140-02`, which breaks time().
+            if let Some((time, offset)) = parse_time_literal_with_optional_offset(s) {
                 let include_seconds = time.second() != 0 || time.nanosecond() != 0;
-                Value::String(format!(
+                let offset = offset.unwrap_or_else(|| FixedOffset::east_opt(0).expect("UTC"));
+                return Value::String(format!(
                     "{}{}",
                     format_time_literal(time, include_seconds),
                     format_offset(offset)
-                ))
+                ));
             }
-            Some(TemporalValue::LocalTime(time)) => {
-                let include_seconds = time.second() != 0 || time.nanosecond() != 0;
-                let offset = FixedOffset::east_opt(0).expect("UTC offset");
-                Value::String(format!(
-                    "{}{}",
-                    format_time_literal(time, include_seconds),
-                    format_offset(offset)
-                ))
+
+            match parse_temporal_string(s) {
+                Some(TemporalValue::Time { time, offset }) => {
+                    let include_seconds = time.second() != 0 || time.nanosecond() != 0;
+                    Value::String(format!(
+                        "{}{}",
+                        format_time_literal(time, include_seconds),
+                        format_offset(offset)
+                    ))
+                }
+                Some(TemporalValue::LocalTime(time)) => {
+                    let include_seconds = time.second() != 0 || time.nanosecond() != 0;
+                    let offset = FixedOffset::east_opt(0).expect("UTC offset");
+                    Value::String(format!(
+                        "{}{}",
+                        format_time_literal(time, include_seconds),
+                        format_offset(offset)
+                    ))
+                }
+                Some(TemporalValue::LocalDateTime(dt)) => {
+                    let time = dt.time();
+                    let include_seconds = time.second() != 0 || time.nanosecond() != 0;
+                    Value::String(format!("{}Z", format_time_literal(time, include_seconds)))
+                }
+                Some(TemporalValue::DateTime(dt)) => {
+                    let time = dt.naive_local().time();
+                    let include_seconds = time.second() != 0 || time.nanosecond() != 0;
+                    Value::String(format!(
+                        "{}{}",
+                        format_time_literal(time, include_seconds),
+                        format_offset(*dt.offset())
+                    ))
+                }
+                _ => Value::Null,
             }
-            Some(TemporalValue::LocalDateTime(dt)) => {
-                let time = dt.time();
-                let include_seconds = time.second() != 0 || time.nanosecond() != 0;
-                Value::String(format!("{}Z", format_time_literal(time, include_seconds)))
-            }
-            Some(TemporalValue::DateTime(dt)) => {
-                let time = dt.naive_local().time();
-                let include_seconds = time.second() != 0 || time.nanosecond() != 0;
-                Value::String(format!(
-                    "{}{}",
-                    format_time_literal(time, include_seconds),
-                    format_offset(*dt.offset())
-                ))
-            }
-            _ => Value::Null,
-        },
+        }
         _ => Value::Null,
     }
+}
+
+fn parse_time_literal_with_optional_offset(raw: &str) -> Option<(NaiveTime, Option<FixedOffset>)> {
+    let s = raw.trim();
+    let s_no_zone = s.split('[').next().unwrap_or(s).trim();
+
+    if s_no_zone.is_empty() {
+        return None;
+    }
+
+    if s_no_zone.ends_with('Z') {
+        let bare = &s_no_zone[..s_no_zone.len().saturating_sub(1)];
+        let time = parse_time_literal(bare)?;
+        let offset = FixedOffset::east_opt(0).expect("UTC offset");
+        return Some((time, Some(offset)));
+    }
+
+    if let Some(split_idx) = find_offset_split_index(s_no_zone) {
+        let (time_part, offset_part) = s_no_zone.split_at(split_idx);
+        let time = parse_time_literal(time_part)?;
+        let offset = parse_fixed_offset(offset_part)?;
+        return Some((time, Some(offset)));
+    }
+
+    let time = parse_time_literal(s_no_zone)?;
+    Some((time, None))
 }
 
 pub(super) fn construct_local_datetime(arg: Option<&Value>) -> Value {

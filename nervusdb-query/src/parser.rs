@@ -1591,31 +1591,28 @@ impl TokenParser {
             self.consume(&TokenType::In, "Expected IN in list comprehension")?;
 
             let list_expr = self.parse_expression()?;
-            let predicate_expr = if self.match_token(&TokenType::Where) {
-                self.parse_expression()?
+            let where_expression = if self.match_token(&TokenType::Where) {
+                Some(self.parse_expression()?)
             } else {
-                Expression::Literal(Literal::Boolean(true))
+                None
             };
 
-            let projection_expr = if self.match_token(&TokenType::Pipe) {
-                self.parse_expression()?
+            let map_expression = if self.match_token(&TokenType::Pipe) {
+                Some(self.parse_expression()?)
             } else {
-                Expression::Variable(variable.clone())
+                None
             };
 
             self.consume(
                 &TokenType::RightBracket,
                 "Expected ']' after list comprehension",
             )?;
-            return Ok(Expression::FunctionCall(FunctionCall {
-                name: "__list_comp".to_string(),
-                args: vec![
-                    Expression::Variable(variable),
-                    list_expr,
-                    predicate_expr,
-                    projection_expr,
-                ],
-            }));
+            return Ok(Expression::ListComprehension(Box::new(ListComprehension {
+                variable,
+                list: list_expr,
+                where_expression,
+                map_expression,
+            })));
         }
 
         if self.maybe_pattern_comprehension_start() {

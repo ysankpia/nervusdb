@@ -1,7 +1,9 @@
 use crate::ast::{BinaryOperator, Expression, Literal, UnaryOperator};
 use crate::executor::{Row, Value, convert_api_property_to_value};
 use crate::query_api::Params;
-use chrono::{DateTime, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{
+    DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike,
+};
 mod evaluator_arithmetic;
 mod evaluator_collections;
 mod evaluator_compare;
@@ -103,6 +105,13 @@ pub fn evaluate_expression_value<S: GraphSnapshot>(
                     .unwrap_or(Value::Null);
             }
 
+            if let Some(Value::String(raw)) = row.get(&pa.variable)
+                && let Some(temporal) = evaluator_temporal_parse::parse_temporal_string(raw)
+                && let Some(v) = evaluate_temporal_accessor(raw, temporal, &pa.property)
+            {
+                return v;
+            }
+
             // Get node/edge from row, then query property from snapshot
             if let Some(node_id) = row.get_node(&pa.variable) {
                 return snapshot
@@ -121,6 +130,11 @@ pub fn evaluate_expression_value<S: GraphSnapshot>(
             }
 
             if let Some(Value::Map(map)) = row.get(&pa.variable) {
+                if matches!(map.get("__kind"), Some(Value::String(kind)) if kind == "duration")
+                    && let Some(v) = evaluate_duration_accessor(map, &pa.property)
+                {
+                    return v;
+                }
                 return map.get(&pa.property).cloned().unwrap_or(Value::Null);
             }
 
@@ -246,10 +260,11 @@ pub fn evaluate_expression_value<S: GraphSnapshot>(
                 .map(|e| evaluate_expression_value(e, row, snapshot, params))
                 .unwrap_or(Value::Null)
         }
+        Expression::ListComprehension(comp) => {
+            evaluate_list_comprehension(comp, row, snapshot, params)
+        }
         Expression::FunctionCall(call) => {
-            if call.name == "__list_comp" {
-                evaluate_list_comprehension(call, row, snapshot, params)
-            } else if call.name.starts_with("__quant_") {
+            if call.name.starts_with("__quant_") {
                 evaluate_quantifier(call, row, snapshot, params)
             } else {
                 evaluate_function(call, row, snapshot, params)
@@ -269,7 +284,6 @@ pub fn evaluate_expression_value<S: GraphSnapshot>(
         Expression::PatternComprehension(pattern_comp) => {
             evaluate_pattern_comprehension(pattern_comp, row, snapshot, params)
         }
-        _ => Value::Null, // Not supported yet
     }
 }
 
@@ -378,4 +392,175 @@ enum TemporalValue {
     },
     LocalDateTime(NaiveDateTime),
     DateTime(DateTime<FixedOffset>),
+}
+
+fn evaluate_temporal_accessor(raw: &str, temporal: TemporalValue, property: &str) -> Option<Value> {
+    match temporal {
+        TemporalValue::Date(date) => evaluate_date_accessor(date, property),
+        TemporalValue::LocalTime(time) => match evaluate_time_accessor(time, property) {
+            Some(v) => Some(v),
+            None => match property {
+                // localtime has no offset/timezone metadata.
+                "timezone" | "offset" | "offsetMinutes" | "offsetSeconds" => Some(Value::Null),
+                _ => None,
+            },
+        },
+        TemporalValue::Time { time, offset } => {
+            if let Some(v) = evaluate_time_accessor(time, property) {
+                return Some(v);
+            }
+            match property {
+                "timezone" | "offset" => {
+                    Some(Value::String(evaluator_timezone::format_offset(offset)))
+                }
+                "offsetMinutes" => Some(Value::Int(i64::from(offset.local_minus_utc() / 60))),
+                "offsetSeconds" => Some(Value::Int(i64::from(offset.local_minus_utc()))),
+                _ => None,
+            }
+        }
+        TemporalValue::LocalDateTime(dt) => {
+            let date = dt.date();
+            let time = dt.time();
+            if let Some(v) = evaluate_date_accessor(date, property) {
+                return Some(v);
+            }
+            if let Some(v) = evaluate_time_accessor(time, property) {
+                return Some(v);
+            }
+            match property {
+                "timezone" | "offset" | "offsetMinutes" | "offsetSeconds" | "epochSeconds"
+                | "epochMillis" => Some(Value::Null),
+                _ => None,
+            }
+        }
+        TemporalValue::DateTime(dt) => {
+            let local = dt.naive_local();
+            if let Some(v) = evaluate_date_accessor(local.date(), property) {
+                return Some(v);
+            }
+            if let Some(v) = evaluate_time_accessor(local.time(), property) {
+                return Some(v);
+            }
+
+            let offset = *dt.offset();
+            let offset_str = evaluator_timezone::format_offset(offset);
+            match property {
+                "timezone" => evaluator_temporal_parse::extract_timezone_name(raw)
+                    .map(Value::String)
+                    .or_else(|| Some(Value::String(offset_str))),
+                "offset" => Some(Value::String(offset_str)),
+                "offsetMinutes" => Some(Value::Int(i64::from(offset.local_minus_utc() / 60))),
+                "offsetSeconds" => Some(Value::Int(i64::from(offset.local_minus_utc()))),
+                "epochSeconds" => Some(Value::Int(dt.timestamp())),
+                "epochMillis" => Some(Value::Int(dt.timestamp_millis())),
+                _ => None,
+            }
+        }
+    }
+}
+
+fn evaluate_date_accessor(date: NaiveDate, property: &str) -> Option<Value> {
+    match property {
+        "year" => Some(Value::Int(i64::from(date.year()))),
+        "quarter" => Some(Value::Int(i64::from((date.month0() / 3) + 1))),
+        "month" => Some(Value::Int(i64::from(date.month()))),
+        "week" => Some(Value::Int(i64::from(date.iso_week().week()))),
+        "weekYear" => Some(Value::Int(i64::from(date.iso_week().year()))),
+        "day" => Some(Value::Int(i64::from(date.day()))),
+        "ordinalDay" => Some(Value::Int(i64::from(date.ordinal()))),
+        "weekDay" => Some(Value::Int(i64::from(date.weekday().number_from_monday()))),
+        "dayOfQuarter" => {
+            let quarter = (date.month0() / 3) + 1;
+            let start_month = ((quarter - 1) * 3) + 1;
+            let start = NaiveDate::from_ymd_opt(date.year(), start_month, 1)?;
+            let delta = date.signed_duration_since(start).num_days() + 1;
+            Some(Value::Int(delta))
+        }
+        _ => None,
+    }
+}
+
+fn evaluate_time_accessor(time: NaiveTime, property: &str) -> Option<Value> {
+    let nanos = i64::from(time.nanosecond());
+    match property {
+        "hour" => Some(Value::Int(i64::from(time.hour()))),
+        "minute" => Some(Value::Int(i64::from(time.minute()))),
+        "second" => Some(Value::Int(i64::from(time.second()))),
+        "millisecond" => Some(Value::Int(nanos / 1_000_000)),
+        "microsecond" => Some(Value::Int(nanos / 1_000)),
+        "nanosecond" => Some(Value::Int(nanos)),
+        _ => None,
+    }
+}
+
+fn evaluate_duration_accessor(
+    map: &std::collections::BTreeMap<String, Value>,
+    property: &str,
+) -> Option<Value> {
+    let months = match map.get("months") {
+        Some(Value::Int(v)) => *v,
+        _ => return Some(Value::Null),
+    };
+    let days = match map.get("days") {
+        Some(Value::Int(v)) => *v,
+        _ => return Some(Value::Null),
+    };
+    let nanos = match map.get("nanos") {
+        Some(Value::Int(v)) => *v,
+        _ => return Some(Value::Null),
+    };
+
+    let years = months.div_euclid(12);
+    let quarters = months.div_euclid(3);
+    let months_of_year = months.rem_euclid(12);
+    let quarters_of_year = months_of_year.div_euclid(3);
+    let months_of_quarter = months_of_year.rem_euclid(3);
+
+    let weeks = days.div_euclid(7);
+    let days_of_week = days.rem_euclid(7);
+
+    let hours = nanos.div_euclid(3_600_000_000_000);
+    let minutes = nanos.div_euclid(60_000_000_000);
+    let seconds = nanos.div_euclid(1_000_000_000);
+    let total_seconds = days
+        .saturating_mul(86_400)
+        .saturating_add(nanos.div_euclid(1_000_000_000));
+    let milliseconds = nanos.div_euclid(1_000_000);
+    let microseconds = nanos.div_euclid(1_000);
+    let nanoseconds = nanos;
+
+    let minutes_of_hour = minutes.rem_euclid(60);
+    let seconds_of_minute = seconds.rem_euclid(60);
+
+    let nanos_of_second = nanos.rem_euclid(1_000_000_000);
+    let milliseconds_of_second = nanos_of_second.div_euclid(1_000_000);
+    let microseconds_of_second = nanos_of_second.div_euclid(1_000);
+    let nanoseconds_of_second = nanos_of_second;
+
+    match property {
+        "years" => Some(Value::Int(years)),
+        "quarters" => Some(Value::Int(quarters)),
+        "months" => Some(Value::Int(months)),
+        "weeks" => Some(Value::Int(weeks)),
+        "days" => Some(Value::Int(days)),
+        "hours" => Some(Value::Int(hours)),
+        "minutes" => Some(Value::Int(minutes)),
+        // NOTE: `duration.seconds` historically returned total seconds including `days` as 24h.
+        // Keep this behaviour for now, since we already expose the same derived value in
+        // `duration_value_wide` and our baseline tests rely on it.
+        "seconds" => Some(Value::Int(total_seconds)),
+        "milliseconds" => Some(Value::Int(milliseconds)),
+        "microseconds" => Some(Value::Int(microseconds)),
+        "nanoseconds" => Some(Value::Int(nanoseconds)),
+        "quartersOfYear" => Some(Value::Int(quarters_of_year)),
+        "monthsOfQuarter" => Some(Value::Int(months_of_quarter)),
+        "monthsOfYear" => Some(Value::Int(months_of_year)),
+        "daysOfWeek" => Some(Value::Int(days_of_week)),
+        "minutesOfHour" => Some(Value::Int(minutes_of_hour)),
+        "secondsOfMinute" => Some(Value::Int(seconds_of_minute)),
+        "millisecondsOfSecond" => Some(Value::Int(milliseconds_of_second)),
+        "microsecondsOfSecond" => Some(Value::Int(microseconds_of_second)),
+        "nanosecondsOfSecond" => Some(Value::Int(nanoseconds_of_second)),
+        _ => None,
+    }
 }
