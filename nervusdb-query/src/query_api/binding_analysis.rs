@@ -127,6 +127,9 @@ pub(super) fn infer_expression_binding_kind(
     match expr {
         Expression::Variable(name) => vars.get(name).copied().unwrap_or(BindingKind::Unknown),
         Expression::FunctionCall(call) => {
+            if call.name.eq_ignore_ascii_case("__nervus_singleton_path") {
+                return BindingKind::Path;
+            }
             if call.name.eq_ignore_ascii_case("coalesce") {
                 let mut inferred = BindingKind::Unknown;
                 for arg in &call.args {

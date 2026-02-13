@@ -287,6 +287,7 @@ fn is_supported_function_name(name: &str) -> bool {
             | "coalesce"
             | "sqrt"
             | "sign"
+            | "ceil"
             | "tointeger"
             | "tofloat"
             | "toboolean"

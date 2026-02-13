@@ -364,4 +364,46 @@ mod tests {
             .expect_err("UNION ALL with different columns should fail");
         assert_eq!(err.to_string(), "syntax error: DifferentColumnsInUnion");
     }
+
+    #[test]
+    fn with_requires_alias_for_non_variable_projection() {
+        let err = compile_query("MATCH (a) WITH a, count(*) RETURN a")
+            .expect_err("WITH non-variable expression without alias should fail");
+        assert_eq!(err.to_string(), "syntax error: NoExpressionAlias");
+    }
+
+    #[test]
+    fn return_undefined_variable_fails_compile_time() {
+        let err = compile_query("MATCH () RETURN foo")
+            .expect_err("RETURN with undefined variable should fail");
+        assert_eq!(err.to_string(), "syntax error: UndefinedVariable (foo)");
+    }
+
+    #[test]
+    fn return_star_requires_variables_in_scope() {
+        let err =
+            compile_query("MATCH () RETURN *").expect_err("RETURN * without bindings should fail");
+        assert_eq!(err.to_string(), "syntax error: NoVariablesInScope");
+    }
+
+    #[test]
+    fn labels_on_path_rejected_at_compile_time() {
+        let err = compile_query("MATCH p = (a) RETURN labels(p) AS l")
+            .expect_err("labels(path) should fail at compile time");
+        assert_eq!(err.to_string(), "syntax error: InvalidArgumentType");
+    }
+
+    #[test]
+    fn type_on_node_rejected_at_compile_time() {
+        let err = compile_query("MATCH (r) RETURN type(r)")
+            .expect_err("type(node) should fail at compile time");
+        assert_eq!(err.to_string(), "syntax error: InvalidArgumentType");
+    }
+
+    #[test]
+    fn map_literal_with_unbound_value_variable_fails() {
+        let err = compile_query("RETURN {k1: k2} AS literal")
+            .expect_err("map value variable must be in scope");
+        assert_eq!(err.to_string(), "syntax error: UndefinedVariable (k2)");
+    }
 }

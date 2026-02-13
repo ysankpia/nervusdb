@@ -215,11 +215,11 @@ pub(super) fn render_plan(plan: &Plan) -> String {
                 go(out, input, depth + 1);
             }
             Plan::Skip { input, skip } => {
-                let _ = writeln!(out, "{pad}Skip(skip={skip})");
+                let _ = writeln!(out, "{pad}Skip(skip={skip:?})");
                 go(out, input, depth + 1);
             }
             Plan::Limit { input, limit } => {
-                let _ = writeln!(out, "{pad}Limit(limit={limit})");
+                let _ = writeln!(out, "{pad}Limit(limit={limit:?})");
                 go(out, input, depth + 1);
             }
             Plan::CartesianProduct { left, right } => {

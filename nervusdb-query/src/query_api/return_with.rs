@@ -1,12 +1,70 @@
 use super::{
-    BTreeMap, BindingKind, Expression, HashSet, Plan, Result, compile_order_by_items,
-    compile_projection_aggregation, contains_aggregate_expression, extract_output_var_kinds,
-    extract_variables_from_expr, rewrite_order_expression, validate_expression_types,
-    validate_order_by_aggregate_semantics, validate_order_by_scope,
+    BTreeMap, BindingKind, Error, Expression, HashSet, Literal, Plan, Result,
+    compile_order_by_items, compile_projection_aggregation, contains_aggregate_expression,
+    extract_output_var_kinds, extract_variables_from_expr, rewrite_order_expression,
+    validate_expression_types, validate_order_by_aggregate_semantics, validate_order_by_scope,
     validate_where_expression_bindings,
 };
 
+fn validate_with_projection_aliases(with: &crate::ast::WithClause) -> Result<()> {
+    for item in &with.items {
+        if item.alias.is_some() {
+            continue;
+        }
+        if matches!(&item.expression, Expression::Variable(_)) {
+            continue;
+        }
+        if matches!(&item.expression, Expression::Literal(Literal::String(s)) if s == "*") {
+            continue;
+        }
+        return Err(Error::Other("syntax error: NoExpressionAlias".to_string()));
+    }
+    Ok(())
+}
+
+fn validate_skip_or_limit_expression(expr: &Expression) -> Result<()> {
+    let mut used = HashSet::new();
+    extract_variables_from_expr(expr, &mut used);
+    if !used.is_empty() {
+        return Err(Error::Other(
+            "syntax error: NonConstantExpression".to_string(),
+        ));
+    }
+
+    validate_expression_types(expr)?;
+
+    match expr {
+        Expression::Unary(unary)
+            if matches!(unary.operator, crate::ast::UnaryOperator::Negate)
+                && matches!(unary.operand, Expression::Literal(Literal::Integer(_))) =>
+        {
+            return Err(Error::Other(
+                "syntax error: NegativeIntegerArgument".to_string(),
+            ));
+        }
+        Expression::Literal(Literal::Integer(v)) if *v < 0 => {
+            return Err(Error::Other(
+                "syntax error: NegativeIntegerArgument".to_string(),
+            ));
+        }
+        Expression::Literal(Literal::Float(_))
+        | Expression::Unary(_)
+        | Expression::Literal(Literal::Boolean(_) | Literal::String(_) | Literal::Null)
+        | Expression::Map(_)
+        | Expression::List(_) => {
+            return Err(Error::Other(
+                "syntax error: InvalidArgumentType".to_string(),
+            ));
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
 pub(super) fn compile_with_plan(input: Plan, with: &crate::ast::WithClause) -> Result<Plan> {
+    validate_with_projection_aliases(with)?;
+
     let has_aggregation = with
         .items
         .iter()
@@ -136,17 +194,19 @@ pub(super) fn compile_with_plan(input: Plan, with: &crate::ast::WithClause) -> R
         }
     }
 
-    if let Some(skip) = with.skip {
+    if let Some(skip) = &with.skip {
+        validate_skip_or_limit_expression(skip)?;
         plan = Plan::Skip {
             input: Box::new(plan),
-            skip,
+            skip: skip.clone(),
         };
     }
 
-    if let Some(limit) = with.limit {
+    if let Some(limit) = &with.limit {
+        validate_skip_or_limit_expression(limit)?;
         plan = Plan::Limit {
             input: Box::new(plan),
-            limit,
+            limit: limit.clone(),
         };
     }
 
@@ -190,17 +250,19 @@ pub(super) fn compile_return_plan(
         };
     }
 
-    if let Some(skip) = ret.skip {
+    if let Some(skip) = &ret.skip {
+        validate_skip_or_limit_expression(skip)?;
         plan = Plan::Skip {
             input: Box::new(plan),
-            skip,
+            skip: skip.clone(),
         };
     }
 
-    if let Some(limit) = ret.limit {
+    if let Some(limit) = &ret.limit {
+        validate_skip_or_limit_expression(limit)?;
         plan = Plan::Limit {
             input: Box::new(plan),
-            limit,
+            limit: limit.clone(),
         };
     }
 

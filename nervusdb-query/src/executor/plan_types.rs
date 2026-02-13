@@ -119,12 +119,12 @@ pub enum Plan {
     /// `SKIP` - skip first n rows
     Skip {
         input: Box<Plan>,
-        skip: u32,
+        skip: Expression,
     },
     /// `LIMIT` - limit result count
     Limit {
         input: Box<Plan>,
-        limit: u32,
+        limit: Expression,
     },
     /// `RETURN DISTINCT` - deduplicate results
     Distinct {

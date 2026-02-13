@@ -34,6 +34,65 @@ fn unary_operator_symbol(operator: &UnaryOperator) -> &'static str {
     }
 }
 
+fn binary_precedence(operator: &BinaryOperator) -> u8 {
+    match operator {
+        BinaryOperator::Or => 1,
+        BinaryOperator::Xor => 2,
+        BinaryOperator::And => 3,
+        BinaryOperator::Equals
+        | BinaryOperator::NotEquals
+        | BinaryOperator::LessThan
+        | BinaryOperator::LessEqual
+        | BinaryOperator::GreaterThan
+        | BinaryOperator::GreaterEqual
+        | BinaryOperator::In
+        | BinaryOperator::StartsWith
+        | BinaryOperator::EndsWith
+        | BinaryOperator::Contains
+        | BinaryOperator::HasLabel
+        | BinaryOperator::IsNull
+        | BinaryOperator::IsNotNull => 4,
+        BinaryOperator::Add | BinaryOperator::Subtract => 5,
+        BinaryOperator::Multiply | BinaryOperator::Divide | BinaryOperator::Modulo => 6,
+        BinaryOperator::Power => 7,
+    }
+}
+
+fn format_binary_operand(
+    expr: &Expression,
+    parent_operator: &BinaryOperator,
+    is_left_operand: bool,
+) -> String {
+    let rendered = expression_alias_fragment(expr);
+    let Expression::Binary(child) = expr else {
+        return rendered;
+    };
+
+    let parent_prec = binary_precedence(parent_operator);
+    let child_prec = binary_precedence(&child.operator);
+    let needs_parentheses = if child_prec < parent_prec {
+        true
+    } else if child_prec > parent_prec {
+        false
+    } else if is_left_operand {
+        matches!(parent_operator, BinaryOperator::Power)
+    } else {
+        matches!(
+            parent_operator,
+            BinaryOperator::Subtract
+                | BinaryOperator::Divide
+                | BinaryOperator::Modulo
+                | BinaryOperator::Power
+        )
+    };
+
+    if needs_parentheses {
+        format!("({rendered})")
+    } else {
+        rendered
+    }
+}
+
 fn is_simple_property_name(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
@@ -110,9 +169,9 @@ fn expression_alias_fragment(expr: &Expression) -> String {
             }
             _ => format!(
                 "{} {} {}",
-                expression_alias_fragment(&b.left),
+                format_binary_operand(&b.left, &b.operator, true),
                 binary_operator_symbol(&b.operator),
-                expression_alias_fragment(&b.right)
+                format_binary_operand(&b.right, &b.operator, false)
             ),
         },
         Expression::Unary(u) => format!(
@@ -180,7 +239,7 @@ pub(super) fn default_aggregate_alias(call: &crate::ast::FunctionCall, index: us
 #[cfg(test)]
 mod tests {
     use super::{default_aggregate_alias, default_projection_alias};
-    use crate::ast::{Expression, FunctionCall, Literal};
+    use crate::ast::{BinaryExpression, BinaryOperator, Expression, FunctionCall, Literal};
 
     #[test]
     fn projection_alias_falls_back_for_too_long_fragment() {
@@ -210,5 +269,29 @@ mod tests {
         };
         let alias = default_aggregate_alias(&call, 0);
         assert_eq!(alias, "count(distinct p)");
+    }
+
+    #[test]
+    fn projection_alias_preserves_parenthesized_precedence() {
+        let expr = Expression::Binary(Box::new(BinaryExpression {
+            operator: BinaryOperator::Multiply,
+            left: Expression::Binary(Box::new(BinaryExpression {
+                operator: BinaryOperator::Divide,
+                left: Expression::Literal(Literal::Integer(12)),
+                right: Expression::Literal(Literal::Integer(4)),
+            })),
+            right: Expression::Binary(Box::new(BinaryExpression {
+                operator: BinaryOperator::Subtract,
+                left: Expression::Literal(Literal::Integer(3)),
+                right: Expression::Binary(Box::new(BinaryExpression {
+                    operator: BinaryOperator::Multiply,
+                    left: Expression::Literal(Literal::Integer(2)),
+                    right: Expression::Literal(Literal::Integer(4)),
+                })),
+            })),
+        }));
+
+        let alias = default_projection_alias(&expr, 0);
+        assert_eq!(alias, "12 / 4 * (3 - 2 * 4)");
     }
 }

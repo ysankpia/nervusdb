@@ -118,7 +118,7 @@ pub(super) fn execute_write_with_rows<S: GraphSnapshot>(
             let (mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
             let staged = Plan::Skip {
                 input: Box::new(Plan::Values { rows }),
-                skip: *skip,
+                skip: skip.clone(),
             };
             let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
             Ok((mods, out_rows))
@@ -127,7 +127,7 @@ pub(super) fn execute_write_with_rows<S: GraphSnapshot>(
             let (mods, rows) = execute_write_with_rows(input, snapshot, txn, params)?;
             let staged = Plan::Limit {
                 input: Box::new(Plan::Values { rows }),
-                limit: *limit,
+                limit: limit.clone(),
             };
             let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
             Ok((mods, out_rows))
@@ -195,7 +195,7 @@ pub(super) fn execute_write_with_rows<S: GraphSnapshot>(
                     dst_alias: dst_alias.clone(),
                     dst_labels: dst_labels.clone(),
                     src_prebound: *src_prebound,
-                    limit: *limit,
+                    limit: limit.clone(),
                     project: project.clone(),
                     project_external: *project_external,
                     optional: *optional,
@@ -241,7 +241,7 @@ pub(super) fn execute_write_with_rows<S: GraphSnapshot>(
                     direction: direction.clone(),
                     min_hops: *min_hops,
                     max_hops: *max_hops,
-                    limit: *limit,
+                    limit: limit.clone(),
                     project: project.clone(),
                     project_external: *project_external,
                     optional: *optional,
@@ -279,7 +279,7 @@ pub(super) fn execute_write_with_rows<S: GraphSnapshot>(
                     dst_alias: dst_alias.clone(),
                     dst_labels: dst_labels.clone(),
                     src_prebound: *src_prebound,
-                    limit: *limit,
+                    limit: limit.clone(),
                     optional: *optional,
                     optional_unbind: optional_unbind.clone(),
                     path_alias: path_alias.clone(),
@@ -315,7 +315,7 @@ pub(super) fn execute_write_with_rows<S: GraphSnapshot>(
                     dst_alias: dst_alias.clone(),
                     dst_labels: dst_labels.clone(),
                     src_prebound: *src_prebound,
-                    limit: *limit,
+                    limit: limit.clone(),
                     optional: *optional,
                     optional_unbind: optional_unbind.clone(),
                     path_alias: path_alias.clone(),
@@ -728,7 +728,7 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
             )?;
             let staged = Plan::Skip {
                 input: Box::new(Plan::Values { rows }),
-                skip: *skip,
+                skip: skip.clone(),
             };
             let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
             Ok((mods, out_rows))
@@ -747,7 +747,7 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
             )?;
             let staged = Plan::Limit {
                 input: Box::new(Plan::Values { rows }),
-                limit: *limit,
+                limit: limit.clone(),
             };
             let out_rows = execute_plan(snapshot, &staged, params).collect::<Result<Vec<_>>>()?;
             Ok((mods, out_rows))
@@ -855,7 +855,7 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                     dst_alias: dst_alias.clone(),
                     dst_labels: dst_labels.clone(),
                     src_prebound: *src_prebound,
-                    limit: *limit,
+                    limit: limit.clone(),
                     project: project.clone(),
                     project_external: *project_external,
                     optional: *optional,
@@ -911,7 +911,7 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                     direction: direction.clone(),
                     min_hops: *min_hops,
                     max_hops: *max_hops,
-                    limit: *limit,
+                    limit: limit.clone(),
                     project: project.clone(),
                     project_external: *project_external,
                     optional: *optional,
@@ -959,7 +959,7 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                     dst_alias: dst_alias.clone(),
                     dst_labels: dst_labels.clone(),
                     src_prebound: *src_prebound,
-                    limit: *limit,
+                    limit: limit.clone(),
                     optional: *optional,
                     optional_unbind: optional_unbind.clone(),
                     path_alias: path_alias.clone(),
@@ -1005,7 +1005,7 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                     dst_alias: dst_alias.clone(),
                     dst_labels: dst_labels.clone(),
                     src_prebound: *src_prebound,
-                    limit: *limit,
+                    limit: limit.clone(),
                     optional: *optional,
                     optional_unbind: optional_unbind.clone(),
                     path_alias: path_alias.clone(),

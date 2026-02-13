@@ -20,6 +20,7 @@ pub(super) fn evaluate_scalar_function(name: &str, args: &[Value]) -> Option<Val
         "coalesce" => Some(evaluate_coalesce(args)),
         "sqrt" => Some(evaluate_sqrt(args)),
         "sign" => Some(evaluate_sign(args)),
+        "ceil" => Some(evaluate_ceil(args)),
         _ => None,
     }
 }
@@ -213,6 +214,14 @@ fn evaluate_sign(args: &[Value]) -> Value {
     }
 }
 
+fn evaluate_ceil(args: &[Value]) -> Value {
+    match args.first() {
+        Some(Value::Int(i)) => Value::Float(*i as f64),
+        Some(Value::Float(f)) => Value::Float(f.ceil()),
+        _ => Value::Null,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::evaluate_scalar_function;
@@ -231,6 +240,18 @@ mod tests {
         assert_eq!(
             evaluate_scalar_function("sign", &[Value::Int(7)]),
             Some(Value::Int(1))
+        );
+    }
+
+    #[test]
+    fn ceil_returns_expected_rounded_value() {
+        assert_eq!(
+            evaluate_scalar_function("ceil", &[Value::Float(1.7)]),
+            Some(Value::Float(2.0))
+        );
+        assert_eq!(
+            evaluate_scalar_function("ceil", &[Value::Int(2)]),
+            Some(Value::Float(2.0))
         );
     }
 }

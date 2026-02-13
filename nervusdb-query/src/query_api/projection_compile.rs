@@ -1,8 +1,8 @@
 use super::{
     BTreeMap, BindingKind, Error, Expression, Literal, Plan, Result, default_aggregate_alias,
     default_projection_alias, ensure_no_pattern_predicate, extract_output_var_kinds,
-    extract_variables_from_expr, infer_expression_binding_kind, parse_aggregate_function,
-    validate_expression_types,
+    extract_variables_from_expr, infer_expression_binding_kind, is_internal_path_alias,
+    parse_aggregate_function, validate_expression_types,
 };
 
 fn is_simple_group_expression(expr: &Expression) -> bool {
@@ -70,6 +70,212 @@ fn contains_function_call_named(expr: &Expression, target: &str) -> bool {
     }
 }
 
+fn is_quantifier_call(call: &crate::ast::FunctionCall) -> bool {
+    matches!(
+        call.name.as_str(),
+        "__quant_any" | "__quant_all" | "__quant_none" | "__quant_single"
+    )
+}
+
+fn validate_projection_expression_bindings(
+    expr: &Expression,
+    known_bindings: &BTreeMap<String, BindingKind>,
+    local_scopes: &mut Vec<std::collections::HashSet<String>>,
+) -> Result<()> {
+    match expr {
+        Expression::Variable(var) => {
+            if !is_locally_bound(local_scopes, var) && !known_bindings.contains_key(var) {
+                return Err(Error::Other(format!(
+                    "syntax error: UndefinedVariable ({})",
+                    var
+                )));
+            }
+        }
+        Expression::PropertyAccess(pa) => {
+            if !is_locally_bound(local_scopes, &pa.variable)
+                && matches!(
+                    known_bindings.get(&pa.variable),
+                    Some(BindingKind::Path | BindingKind::RelationshipList)
+                )
+            {
+                return Err(Error::Other(
+                    "syntax error: InvalidArgumentType".to_string(),
+                ));
+            }
+            if !is_locally_bound(local_scopes, &pa.variable)
+                && !known_bindings.contains_key(&pa.variable)
+            {
+                return Err(Error::Other(format!(
+                    "syntax error: UndefinedVariable ({})",
+                    pa.variable
+                )));
+            }
+        }
+        Expression::Unary(u) => {
+            validate_projection_expression_bindings(&u.operand, known_bindings, local_scopes)?
+        }
+        Expression::Binary(b) => {
+            validate_projection_expression_bindings(&b.left, known_bindings, local_scopes)?;
+            validate_projection_expression_bindings(&b.right, known_bindings, local_scopes)?;
+        }
+        Expression::FunctionCall(call) => {
+            if is_quantifier_call(call) && call.args.len() == 3 {
+                validate_projection_expression_bindings(
+                    &call.args[1],
+                    known_bindings,
+                    local_scopes,
+                )?;
+                if let Expression::Variable(var) = &call.args[0] {
+                    let mut scope = std::collections::HashSet::new();
+                    scope.insert(var.clone());
+                    local_scopes.push(scope);
+                    validate_projection_expression_bindings(
+                        &call.args[2],
+                        known_bindings,
+                        local_scopes,
+                    )?;
+                    local_scopes.pop();
+                } else {
+                    validate_projection_expression_bindings(
+                        &call.args[2],
+                        known_bindings,
+                        local_scopes,
+                    )?;
+                }
+            } else {
+                for arg in &call.args {
+                    validate_projection_expression_bindings(arg, known_bindings, local_scopes)?;
+                }
+            }
+        }
+        Expression::List(items) => {
+            for item in items {
+                validate_projection_expression_bindings(item, known_bindings, local_scopes)?;
+            }
+        }
+        Expression::Map(map) => {
+            for pair in &map.properties {
+                validate_projection_expression_bindings(&pair.value, known_bindings, local_scopes)?;
+            }
+        }
+        Expression::Case(case_expr) => {
+            if let Some(test_expr) = &case_expr.expression {
+                validate_projection_expression_bindings(test_expr, known_bindings, local_scopes)?;
+            }
+            for (when_expr, then_expr) in &case_expr.when_clauses {
+                validate_projection_expression_bindings(when_expr, known_bindings, local_scopes)?;
+                validate_projection_expression_bindings(then_expr, known_bindings, local_scopes)?;
+            }
+            if let Some(else_expr) = &case_expr.else_expression {
+                validate_projection_expression_bindings(else_expr, known_bindings, local_scopes)?;
+            }
+        }
+        Expression::ListComprehension(list_comp) => {
+            validate_projection_expression_bindings(&list_comp.list, known_bindings, local_scopes)?;
+            let mut scope = std::collections::HashSet::new();
+            scope.insert(list_comp.variable.clone());
+            local_scopes.push(scope);
+            if let Some(where_expr) = &list_comp.where_expression {
+                validate_projection_expression_bindings(where_expr, known_bindings, local_scopes)?;
+            }
+            if let Some(map_expr) = &list_comp.map_expression {
+                validate_projection_expression_bindings(map_expr, known_bindings, local_scopes)?;
+            }
+            local_scopes.pop();
+        }
+        Expression::PatternComprehension(pattern_comp) => {
+            let scope = collect_pattern_local_variables(&pattern_comp.pattern);
+            local_scopes.push(scope);
+
+            for element in &pattern_comp.pattern.elements {
+                match element {
+                    crate::ast::PathElement::Node(node) => {
+                        if let Some(props) = &node.properties {
+                            for pair in &props.properties {
+                                validate_projection_expression_bindings(
+                                    &pair.value,
+                                    known_bindings,
+                                    local_scopes,
+                                )?;
+                            }
+                        }
+                    }
+                    crate::ast::PathElement::Relationship(rel) => {
+                        if let Some(props) = &rel.properties {
+                            for pair in &props.properties {
+                                validate_projection_expression_bindings(
+                                    &pair.value,
+                                    known_bindings,
+                                    local_scopes,
+                                )?;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(where_expr) = &pattern_comp.where_expression {
+                validate_projection_expression_bindings(where_expr, known_bindings, local_scopes)?;
+            }
+            validate_projection_expression_bindings(
+                &pattern_comp.projection,
+                known_bindings,
+                local_scopes,
+            )?;
+
+            local_scopes.pop();
+        }
+        Expression::Exists(exists_expr) => match exists_expr.as_ref() {
+            crate::ast::ExistsExpression::Pattern(pattern) => {
+                let scope = collect_pattern_local_variables(pattern);
+                local_scopes.push(scope);
+
+                for element in &pattern.elements {
+                    match element {
+                        crate::ast::PathElement::Node(node) => {
+                            if let Some(props) = &node.properties {
+                                for pair in &props.properties {
+                                    validate_projection_expression_bindings(
+                                        &pair.value,
+                                        known_bindings,
+                                        local_scopes,
+                                    )?;
+                                }
+                            }
+                        }
+                        crate::ast::PathElement::Relationship(rel) => {
+                            if let Some(props) = &rel.properties {
+                                for pair in &props.properties {
+                                    validate_projection_expression_bindings(
+                                        &pair.value,
+                                        known_bindings,
+                                        local_scopes,
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                local_scopes.pop();
+            }
+            crate::ast::ExistsExpression::Subquery(_) => {
+                // Subquery variables are validated in nested query compilation.
+            }
+        },
+        Expression::Parameter(_) | Expression::Literal(_) => {}
+    }
+    Ok(())
+}
+
+fn validate_projection_bindings_root(
+    expr: &Expression,
+    known_bindings: &BTreeMap<String, BindingKind>,
+) -> Result<()> {
+    let mut local_scopes: Vec<std::collections::HashSet<String>> = Vec::new();
+    validate_projection_expression_bindings(expr, known_bindings, &mut local_scopes)
+}
+
 fn validate_projection_expression_semantics(
     expr: &Expression,
     vars: &BTreeMap<String, BindingKind>,
@@ -78,6 +284,28 @@ fn validate_projection_expression_semantics(
         Expression::FunctionCall(call) => {
             for arg in &call.args {
                 validate_projection_expression_semantics(arg, vars)?;
+            }
+            if call.name.eq_ignore_ascii_case("labels") && call.args.len() == 1 {
+                match infer_expression_binding_kind(&call.args[0], vars) {
+                    BindingKind::Relationship
+                    | BindingKind::RelationshipList
+                    | BindingKind::Path => {
+                        return Err(Error::Other(
+                            "syntax error: InvalidArgumentType".to_string(),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            if call.name.eq_ignore_ascii_case("type") && call.args.len() == 1 {
+                match infer_expression_binding_kind(&call.args[0], vars) {
+                    BindingKind::Node | BindingKind::RelationshipList | BindingKind::Path => {
+                        return Err(Error::Other(
+                            "syntax error: InvalidArgumentType".to_string(),
+                        ));
+                    }
+                    _ => {}
+                }
             }
             if call.name.eq_ignore_ascii_case("size")
                 && call.args.len() == 1
@@ -964,6 +1192,7 @@ pub(super) fn compile_projection_aggregation(
     extract_output_var_kinds(&input, &mut input_bindings);
     for item in items {
         ensure_no_pattern_predicate(&item.expression)?;
+        validate_projection_bindings_root(&item.expression, &input_bindings)?;
         validate_expression_types(&item.expression)?;
         validate_projection_expression_semantics(&item.expression, &input_bindings)?;
     }
@@ -975,7 +1204,14 @@ pub(super) fn compile_projection_aggregation(
     {
         let mut vars = BTreeMap::new();
         extract_output_var_kinds(&input, &mut vars);
-        let cols: Vec<String> = vars.keys().cloned().collect();
+        let cols: Vec<String> = vars
+            .keys()
+            .filter(|name| !is_internal_path_alias(name) && !name.starts_with("_gen_"))
+            .cloned()
+            .collect();
+        if cols.is_empty() {
+            return Err(Error::Other("syntax error: NoVariablesInScope".to_string()));
+        }
         let projections: Vec<(String, Expression)> = cols
             .iter()
             .map(|name| (name.clone(), Expression::Variable(name.clone())))

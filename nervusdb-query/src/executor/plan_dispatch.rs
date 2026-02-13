@@ -195,8 +195,8 @@ pub(super) fn execute_plan<'a, S: GraphSnapshot + 'a>(
         Plan::OrderBy { input, items } => {
             plan_mid::execute_order_by(snapshot, input, items, params)
         }
-        Plan::Skip { input, skip } => plan_tail::execute_skip(snapshot, input, *skip, params),
-        Plan::Limit { input, limit } => plan_tail::execute_limit(snapshot, input, *limit, params),
+        Plan::Skip { input, skip } => plan_tail::execute_skip(snapshot, input, skip, params),
+        Plan::Limit { input, limit } => plan_tail::execute_limit(snapshot, input, limit, params),
         Plan::Distinct { input } => plan_tail::execute_distinct(snapshot, input, params),
         Plan::Unwind {
             input,

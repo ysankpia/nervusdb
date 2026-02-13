@@ -1,23 +1,50 @@
 use super::{Error, GraphSnapshot, Plan, PlanIterator, Row, Value, execute_plan};
 
+fn evaluate_row_window_expression<S: GraphSnapshot>(
+    snapshot: &S,
+    expr: &crate::ast::Expression,
+    params: &crate::query_api::Params,
+) -> super::Result<usize> {
+    let value =
+        crate::evaluator::evaluate_expression_value(expr, &Row::default(), snapshot, params);
+    match value {
+        Value::Int(v) if v >= 0 => usize::try_from(v)
+            .map_err(|_| Error::Other("syntax error: InvalidArgumentType".to_string())),
+        Value::Int(_) => Err(Error::Other(
+            "syntax error: NegativeIntegerArgument".to_string(),
+        )),
+        _ => Err(Error::Other(
+            "syntax error: InvalidArgumentType".to_string(),
+        )),
+    }
+}
+
 pub(super) fn execute_skip<'a, S: GraphSnapshot + 'a>(
     snapshot: &'a S,
     input: &'a Plan,
-    skip: u32,
+    skip: &'a crate::ast::Expression,
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
+    let skip = match evaluate_row_window_expression(snapshot, skip, params) {
+        Ok(value) => value,
+        Err(err) => return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err)))),
+    };
     let input_iter = execute_plan(snapshot, input, params);
-    PlanIterator::Dynamic(Box::new(input_iter.skip(skip as usize)))
+    PlanIterator::Dynamic(Box::new(input_iter.skip(skip)))
 }
 
 pub(super) fn execute_limit<'a, S: GraphSnapshot + 'a>(
     snapshot: &'a S,
     input: &'a Plan,
-    limit: u32,
+    limit: &'a crate::ast::Expression,
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
+    let limit = match evaluate_row_window_expression(snapshot, limit, params) {
+        Ok(value) => value,
+        Err(err) => return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err)))),
+    };
     let input_iter = execute_plan(snapshot, input, params);
-    PlanIterator::Dynamic(Box::new(input_iter.take(limit as usize)))
+    PlanIterator::Dynamic(Box::new(input_iter.take(limit)))
 }
 
 pub(super) fn execute_distinct<'a, S: GraphSnapshot + 'a>(

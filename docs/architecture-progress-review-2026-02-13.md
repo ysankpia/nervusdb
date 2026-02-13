@@ -283,7 +283,7 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 
 ---
 
-## 9. 续更快照（2026-02-13，BETA-03R5-W5 / BETA-03R6-W2）
+## 9. 续更快照（2026-02-13，BETA-03R5-W5 / BETA-03R6-W4）
 
 ### 9.1 W5：Union1/Union2 列名一致性补齐
 
@@ -318,10 +318,42 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
   - `clauses/create/Create1.feature` 全通过（20 passed）。
   - `cargo test -p nervusdb-query --lib` 全通过（47 passed）。
 
-### 9.4 新增证据文件
+### 9.4 W3：编译期作用域与投影校验收口
+
+- 修复点：
+  - `WITH` 子句补齐“非变量表达式必须别名”规则，未别名时编译期返回 `NoExpressionAlias`。
+  - 投影表达式增加绑定校验：`RETURN foo`、`RETURN {k1: k2}` 等未定义变量在编译期拦截。
+  - `RETURN *` 扩展时过滤内部匿名绑定；当作用域无可见变量时返回 `NoVariablesInScope`。
+  - 增强投影函数参数类型约束：`labels(path)`、`type(node)` 编译期返回 `InvalidArgumentType`。
+- 结果：
+  - `clauses/with/With4.feature` 全通过（7 passed）。
+  - `clauses/return/Return1.feature` 全通过（2 passed）。
+  - `clauses/return/Return7.feature` 全通过（2 passed）。
+  - `expressions/literals/Literals8.feature` 全通过（27 passed）。
+  - `expressions/graph/Graph3.feature` 全通过（非跳过 5 passed）。
+  - `expressions/graph/Graph4.feature` 全通过（非跳过 6 passed）。
+
+### 9.5 W4：SKIP/LIMIT + 数学列名语义收口
+
+- 修复点：
+  - `SKIP/LIMIT` 从整数字面量升级为常量表达式：支持参数与函数（例如 `SKIP $skipAmount`、`LIMIT toInteger(ceil(1.7))`）。
+  - 编译期新增常量表达式约束：引用行变量时报 `NonConstantExpression`；字面负整数与浮点直接在编译期阻断。
+  - 执行期对 `SKIP/LIMIT` 表达式统一求值，并保持运行时参数错误语义（负数/非整数）。
+  - 标量函数补齐 `ceil()`；默认投影列名渲染补齐二元表达式括号优先级保真，修复数学表达式列名漂移。
+- 结果：
+  - `clauses/return-skip-limit/ReturnSkipLimit1.feature` 全通过（非跳过 9 passed）。
+  - `clauses/return-skip-limit/ReturnSkipLimit2.feature` 全通过（非跳过 13 passed）。
+  - `expressions/mathematical/Mathematical8.feature` 全通过（2 passed）。
+  - 候选回归重扫（`With4`、`ReturnSkipLimit1/2`、`Return1/7`、`Mathematical8`、`Literals8`、`Graph3/4`）全部非跳过通过。
+
+### 9.6 新增证据文件
 
 - `artifacts/tck/beta-03r6-seed-cluster-2026-02-13.log`
 - `artifacts/tck/beta-03r6-union-columns-2026-02-13.log`
 - `artifacts/tck/beta-03r6-candidate-scan-2026-02-13.log`
 - `artifacts/tck/beta-03r6-candidate-scan-2026-02-13.cluster.md`
 - `artifacts/tck/beta-03r6-precommit-merge-match8-create1-2026-02-13.log`
+- `artifacts/tck/beta-03r6-candidate-rescan-post-merge-2026-02-13.log`
+- `artifacts/tck/beta-03r6-compile-scope-cluster-2026-02-13.log`
+- `artifacts/tck/beta-03r6-skip-limit-cluster-2026-02-13.log`
+- `artifacts/tck/beta-03r6-candidate-rescan-r3-2026-02-13.log`

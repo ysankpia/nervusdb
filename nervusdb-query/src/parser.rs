@@ -310,14 +310,14 @@ impl TokenParser {
 
         // Parse SKIP
         let skip = if self.match_token(&TokenType::Skip) {
-            Some(self.parse_integer("SKIP")?)
+            Some(self.parse_expression()?)
         } else {
             None
         };
 
         // Parse LIMIT
         let limit = if self.match_token(&TokenType::Limit) {
-            Some(self.parse_integer("LIMIT")?)
+            Some(self.parse_expression()?)
         } else {
             None
         };
@@ -371,14 +371,14 @@ impl TokenParser {
 
         // Parse SKIP
         let skip = if self.match_token(&TokenType::Skip) {
-            Some(self.parse_integer("SKIP")?)
+            Some(self.parse_expression()?)
         } else {
             None
         };
 
         // Parse LIMIT
         let limit = if self.match_token(&TokenType::Limit) {
-            Some(self.parse_integer("LIMIT")?)
+            Some(self.parse_expression()?)
         } else {
             None
         };

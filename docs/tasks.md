@@ -123,7 +123,9 @@
 ### BETA-03R6 子进展（2026-02-13）
 - R6-W1：失败簇刷新扫描（候选 16 个 feature），确认下一主簇为 `Merge1/2/3`（11 个非跳过失败）；次级簇为 `ReturnSkipLimit1/2`、`With4`、`Graph3/4`、`Literals8`、`Mathematical8`、`Match8`。
 - R6-W2：写路径语义收口，清零 `Merge1`、`Merge2`、`Merge3`、`Match8`、`Create1` 非跳过失败；补齐 `MERGE`/`CREATE` 计划语义解耦、`ON CREATE/ON MATCH` label+property 回填、删除可见性（tombstone）过滤、写查询空结果行与 side effects 统计口径修复。
-- 证据日志：`artifacts/tck/beta-03r6-seed-cluster-2026-02-13.log`、`artifacts/tck/beta-03r6-candidate-scan-2026-02-13.log`、`artifacts/tck/beta-03r6-candidate-scan-2026-02-13.cluster.md`、`artifacts/tck/beta-03r6-precommit-merge-match8-create1-2026-02-13.log`。
+- R6-W3：编译期作用域与类型校验收口，清零 `With4`、`Return1`、`Return7`、`Literals8`、`Graph3`、`Graph4` 非跳过失败；补齐 `WITH` 非变量表达式强制别名、`RETURN *` 空作用域阻断、投影表达式变量绑定校验、`labels(path)`/`type(node)` 编译期拦截。
+- R6-W4：`SKIP/LIMIT` 语义升级与列名渲染收口，清零 `ReturnSkipLimit1`、`ReturnSkipLimit2`、`Mathematical8` 非跳过失败；`SKIP/LIMIT` 从整数字面量升级为常量表达式（支持参数/函数，如 `toInteger(ceil(1.7))`），执行期统一求值并保留运行时参数错误语义；默认投影列名渲染补齐括号优先级保真。
+- 证据日志：`artifacts/tck/beta-03r6-seed-cluster-2026-02-13.log`、`artifacts/tck/beta-03r6-candidate-scan-2026-02-13.log`、`artifacts/tck/beta-03r6-candidate-scan-2026-02-13.cluster.md`、`artifacts/tck/beta-03r6-precommit-merge-match8-create1-2026-02-13.log`、`artifacts/tck/beta-03r6-candidate-rescan-post-merge-2026-02-13.log`、`artifacts/tck/beta-03r6-compile-scope-cluster-2026-02-13.log`、`artifacts/tck/beta-03r6-skip-limit-cluster-2026-02-13.log`、`artifacts/tck/beta-03r6-candidate-rescan-r3-2026-02-13.log`。
 
 ## Archived (v1/Alpha)
 

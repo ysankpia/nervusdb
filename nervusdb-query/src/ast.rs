@@ -81,8 +81,8 @@ pub struct ReturnClause {
     pub distinct: bool,
     pub items: Vec<ReturnItem>,
     pub order_by: Option<OrderByClause>,
-    pub limit: Option<u32>,
-    pub skip: Option<u32>,
+    pub limit: Option<Expression>,
+    pub skip: Option<Expression>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -102,8 +102,8 @@ pub struct WithClause {
     pub items: Vec<ReturnItem>,
     pub where_clause: Option<WhereClause>,
     pub order_by: Option<OrderByClause>,
-    pub limit: Option<u32>,
-    pub skip: Option<u32>,
+    pub limit: Option<Expression>,
+    pub skip: Option<Expression>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
