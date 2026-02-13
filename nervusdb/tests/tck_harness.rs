@@ -330,7 +330,13 @@ fn value_eq(a: &Value, b: &Value) -> bool {
         (Value::Null, Value::Null) => true,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Int(a), Value::Int(b)) => a == b,
-        (Value::Float(a), Value::Float(b)) => (a - b).abs() < 1e-9,
+        (Value::Float(a), Value::Float(b)) => {
+            if a.is_nan() && b.is_nan() {
+                true
+            } else {
+                (a - b).abs() < 1e-9
+            }
+        }
         (Value::Int(i), Value::Float(f)) => (*i as f64 - *f).abs() < 1e-9,
         (Value::Float(f), Value::Int(i)) => (*f - *i as f64).abs() < 1e-9,
         (Value::String(a), Value::String(b)) => {
