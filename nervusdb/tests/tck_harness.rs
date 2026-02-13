@@ -893,6 +893,20 @@ impl SideEffectsSnapshot {
             }
         }
 
+        // openCypher side effects count label token delta, not per-node label assignments.
+        let before_label_ids: std::collections::BTreeSet<nervusdb_api::LabelId> = before
+            .node_labels
+            .values()
+            .flat_map(|labels| labels.iter().copied())
+            .collect();
+        let after_label_ids: std::collections::BTreeSet<nervusdb_api::LabelId> = self
+            .node_labels
+            .values()
+            .flat_map(|labels| labels.iter().copied())
+            .collect();
+        plus_labels = after_label_ids.difference(&before_label_ids).count() as i64;
+        minus_labels = before_label_ids.difference(&after_label_ids).count() as i64;
+
         SideEffectsDelta {
             plus_nodes,
             minus_nodes,

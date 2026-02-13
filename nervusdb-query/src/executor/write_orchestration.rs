@@ -1,11 +1,13 @@
+use super::write_support::merge_eval_props_on_row;
 use super::{
-    GraphSnapshot, MergeOverlayState, Plan, Result, Row, WriteableGraph,
-    apply_label_overlay_to_rows, apply_removed_property_overlay_to_rows,
+    EdgeKey, GraphSnapshot, InternalNodeId, MergeOverlayState, Plan, Result, Row, Value,
+    WriteableGraph, apply_label_overlay_to_rows, apply_removed_property_overlay_to_rows,
     apply_set_map_overlay_to_rows, apply_set_property_overlay_to_rows, execute_create_write_rows,
     execute_delete_on_rows, execute_foreach, execute_merge_create_from_rows, execute_plan,
     execute_remove, execute_remove_labels, execute_set, execute_set_from_maps, execute_set_labels,
 };
-use crate::ast::Expression;
+use crate::ast::{Expression, PathElement};
+use crate::evaluator::evaluate_expression_value;
 
 pub(super) fn execute_write_with_rows<S: GraphSnapshot>(
     plan: &Plan,
@@ -384,6 +386,8 @@ pub(super) fn execute_merge_with_rows<S: GraphSnapshot>(
     params: &crate::query_api::Params,
     on_create_items: &[(String, String, Expression)],
     on_match_items: &[(String, String, Expression)],
+    on_create_labels: &[(String, Vec<String>)],
+    on_match_labels: &[(String, Vec<String>)],
 ) -> Result<(u32, Vec<Row>)> {
     let mut overlay = MergeOverlayState::default();
     execute_merge_with_rows_inner(
@@ -393,6 +397,8 @@ pub(super) fn execute_merge_with_rows<S: GraphSnapshot>(
         params,
         on_create_items,
         on_match_items,
+        on_create_labels,
+        on_match_labels,
         &mut overlay,
     )
 }
@@ -404,10 +410,16 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
     params: &crate::query_api::Params,
     on_create_items: &[(String, String, Expression)],
     on_match_items: &[(String, String, Expression)],
+    on_create_labels: &[(String, Vec<String>)],
+    on_match_labels: &[(String, Vec<String>)],
     overlay: &mut MergeOverlayState,
 ) -> Result<(u32, Vec<Row>)> {
     match plan {
-        Plan::Create { input, pattern } => {
+        Plan::Create {
+            input,
+            pattern,
+            merge,
+        } => {
             let (prefix_mods, input_rows) = execute_merge_with_rows_inner(
                 input,
                 snapshot,
@@ -415,18 +427,37 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                 params,
                 on_create_items,
                 on_match_items,
+                on_create_labels,
+                on_match_labels,
                 overlay,
             )?;
-            let (created, out_rows) = execute_merge_create_from_rows(
-                snapshot,
-                input_rows,
-                txn,
-                pattern,
-                params,
-                on_create_items,
-                on_match_items,
-                overlay,
-            )?;
+            let (created, out_rows) = if *merge {
+                execute_merge_create_from_rows(
+                    snapshot,
+                    input_rows,
+                    txn,
+                    pattern,
+                    params,
+                    on_create_items,
+                    on_match_items,
+                    on_create_labels,
+                    on_match_labels,
+                    overlay,
+                )?
+            } else {
+                let create_rows = input_rows.clone();
+                let (created, out_rows) = super::create_delete_ops::execute_create_from_rows(
+                    snapshot, input_rows, txn, pattern, params,
+                )?;
+                record_anonymous_create_signatures(
+                    snapshot,
+                    pattern,
+                    &create_rows,
+                    params,
+                    overlay,
+                )?;
+                (created, out_rows)
+            };
             Ok((prefix_mods + created, out_rows))
         }
         Plan::Delete {
@@ -441,10 +472,16 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                 params,
                 on_create_items,
                 on_match_items,
+                on_create_labels,
+                on_match_labels,
                 overlay,
             )?;
+            let (deleted_nodes, deleted_edges) =
+                collect_delete_targets_from_rows(snapshot, &rows, expressions, params);
             let deleted =
                 execute_delete_on_rows(snapshot, &rows, txn, *detach, expressions, params)?;
+            overlay.deleted_nodes.extend(deleted_nodes);
+            overlay.deleted_edges.extend(deleted_edges);
             Ok((prefix_mods + deleted, rows))
         }
         Plan::SetProperty { input, items } => {
@@ -455,6 +492,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                 params,
                 on_create_items,
                 on_match_items,
+                on_create_labels,
+                on_match_labels,
                 overlay,
             )?;
             let values_plan = Plan::Values { rows: rows.clone() };
@@ -470,6 +509,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                 params,
                 on_create_items,
                 on_match_items,
+                on_create_labels,
+                on_match_labels,
                 overlay,
             )?;
             let values_plan = Plan::Values { rows: rows.clone() };
@@ -485,6 +526,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                 params,
                 on_create_items,
                 on_match_items,
+                on_create_labels,
+                on_match_labels,
                 overlay,
             )?;
             let values_plan = Plan::Values { rows: rows.clone() };
@@ -500,6 +543,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                 params,
                 on_create_items,
                 on_match_items,
+                on_create_labels,
+                on_match_labels,
                 overlay,
             )?;
             let values_plan = Plan::Values { rows: rows.clone() };
@@ -515,6 +560,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                 params,
                 on_create_items,
                 on_match_items,
+                on_create_labels,
+                on_match_labels,
                 overlay,
             )?;
             let values_plan = Plan::Values { rows: rows.clone() };
@@ -535,6 +582,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                 params,
                 on_create_items,
                 on_match_items,
+                on_create_labels,
+                on_match_labels,
                 overlay,
             )?;
             let values_plan = Plan::Values { rows: rows.clone() };
@@ -549,6 +598,41 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
             )?;
             Ok((prefix_mods + changed, rows))
         }
+        Plan::OptionalWhereFixup {
+            outer,
+            filtered,
+            null_aliases,
+        } => {
+            let (mods, outer_rows) = execute_merge_with_rows_inner(
+                outer,
+                snapshot,
+                txn,
+                params,
+                on_create_items,
+                on_match_items,
+                on_create_labels,
+                on_match_labels,
+                overlay,
+            )?;
+
+            let mut staged_filtered = filtered.as_ref().clone();
+            bind_plan_input_rows(&mut staged_filtered, &outer_rows);
+            let filtered_rows =
+                execute_plan(snapshot, &staged_filtered, params).collect::<Result<Vec<_>>>()?;
+
+            let staged_fixup = Plan::OptionalWhereFixup {
+                outer: Box::new(Plan::Values {
+                    rows: outer_rows.clone(),
+                }),
+                filtered: Box::new(Plan::Values {
+                    rows: filtered_rows,
+                }),
+                null_aliases: null_aliases.clone(),
+            };
+            let out_rows =
+                execute_plan(snapshot, &staged_fixup, params).collect::<Result<Vec<_>>>()?;
+            Ok((mods, out_rows))
+        }
         Plan::Filter { input, predicate } => {
             let (mods, rows) = execute_merge_with_rows_inner(
                 input,
@@ -557,6 +641,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                 params,
                 on_create_items,
                 on_match_items,
+                on_create_labels,
+                on_match_labels,
                 overlay,
             )?;
             let staged = Plan::Filter {
@@ -574,6 +660,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                 params,
                 on_create_items,
                 on_match_items,
+                on_create_labels,
+                on_match_labels,
                 overlay,
             )?;
             let staged = Plan::Project {
@@ -595,6 +683,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                 params,
                 on_create_items,
                 on_match_items,
+                on_create_labels,
+                on_match_labels,
                 overlay,
             )?;
             let staged = Plan::Aggregate {
@@ -613,6 +703,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                 params,
                 on_create_items,
                 on_match_items,
+                on_create_labels,
+                on_match_labels,
                 overlay,
             )?;
             let staged = Plan::OrderBy {
@@ -630,6 +722,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                 params,
                 on_create_items,
                 on_match_items,
+                on_create_labels,
+                on_match_labels,
                 overlay,
             )?;
             let staged = Plan::Skip {
@@ -647,6 +741,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                 params,
                 on_create_items,
                 on_match_items,
+                on_create_labels,
+                on_match_labels,
                 overlay,
             )?;
             let staged = Plan::Limit {
@@ -664,6 +760,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                 params,
                 on_create_items,
                 on_match_items,
+                on_create_labels,
+                on_match_labels,
                 overlay,
             )?;
             let staged = Plan::Distinct {
@@ -684,6 +782,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                 params,
                 on_create_items,
                 on_match_items,
+                on_create_labels,
+                on_match_labels,
                 overlay,
             )?;
             let staged = Plan::Unwind {
@@ -707,6 +807,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                 params,
                 on_create_items,
                 on_match_items,
+                on_create_labels,
+                on_match_labels,
                 overlay,
             )?;
             let staged = Plan::ProcedureCall {
@@ -741,6 +843,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                     params,
                     on_create_items,
                     on_match_items,
+                    on_create_labels,
+                    on_match_labels,
                     overlay,
                 )?;
                 let staged = Plan::MatchOut {
@@ -792,6 +896,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                     params,
                     on_create_items,
                     on_match_items,
+                    on_create_labels,
+                    on_match_labels,
                     overlay,
                 )?;
                 let staged = Plan::MatchOutVarLen {
@@ -841,6 +947,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                     params,
                     on_create_items,
                     on_match_items,
+                    on_create_labels,
+                    on_match_labels,
                     overlay,
                 )?;
                 let staged = Plan::MatchIn {
@@ -885,6 +993,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                     params,
                     on_create_items,
                     on_match_items,
+                    on_create_labels,
+                    on_match_labels,
                     overlay,
                 )?;
                 let staged = Plan::MatchUndirected {
@@ -928,6 +1038,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                 params,
                 on_create_items,
                 on_match_items,
+                on_create_labels,
+                on_match_labels,
                 overlay,
             )?;
             let staged = Plan::MatchBoundRel {
@@ -958,6 +1070,8 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
                 params,
                 on_create_items,
                 on_match_items,
+                on_create_labels,
+                on_match_labels,
                 overlay,
             )?;
             let staged = Plan::Apply {
@@ -972,5 +1086,121 @@ fn execute_merge_with_rows_inner<S: GraphSnapshot>(
             let out_rows = execute_plan(snapshot, plan, params).collect::<Result<Vec<_>>>()?;
             Ok((0, out_rows))
         }
+    }
+}
+
+fn bind_plan_input_rows(plan: &mut Plan, rows: &[Row]) {
+    let values = || Plan::Values {
+        rows: rows.to_vec(),
+    };
+
+    match plan {
+        Plan::MatchOut { input, .. }
+        | Plan::MatchOutVarLen { input, .. }
+        | Plan::MatchIn { input, .. }
+        | Plan::MatchUndirected { input, .. } => {
+            *input = Some(Box::new(values()));
+        }
+        Plan::MatchBoundRel { input, .. } => {
+            *input = Box::new(values());
+        }
+        Plan::Filter { input, .. }
+        | Plan::Project { input, .. }
+        | Plan::Aggregate { input, .. }
+        | Plan::OrderBy { input, .. }
+        | Plan::Skip { input, .. }
+        | Plan::Limit { input, .. }
+        | Plan::Distinct { input }
+        | Plan::Unwind { input, .. } => bind_plan_input_rows(input, rows),
+        _ => {
+            *plan = values();
+        }
+    }
+}
+
+fn collect_delete_targets_from_rows<S: GraphSnapshot>(
+    snapshot: &S,
+    rows: &[Row],
+    expressions: &[Expression],
+    params: &crate::query_api::Params,
+) -> (
+    std::collections::BTreeSet<InternalNodeId>,
+    std::collections::BTreeSet<EdgeKey>,
+) {
+    let mut nodes = std::collections::BTreeSet::new();
+    let mut edges = std::collections::BTreeSet::new();
+    for row in rows {
+        for expr in expressions {
+            let value = evaluate_expression_value(expr, row, snapshot, params);
+            collect_delete_targets_from_value(&value, &mut nodes, &mut edges);
+        }
+    }
+    (nodes, edges)
+}
+
+fn record_anonymous_create_signatures<S: GraphSnapshot>(
+    snapshot: &S,
+    pattern: &crate::ast::Pattern,
+    input_rows: &[Row],
+    params: &crate::query_api::Params,
+    overlay: &mut MergeOverlayState,
+) -> Result<()> {
+    if pattern.variable.is_some() || pattern.elements.len() != 1 {
+        return Ok(());
+    }
+    let PathElement::Node(node_pat) = &pattern.elements[0] else {
+        return Ok(());
+    };
+    if node_pat.variable.is_some() {
+        return Ok(());
+    }
+
+    for row in input_rows {
+        let props = merge_eval_props_on_row(snapshot, row, &node_pat.properties, params)?;
+        overlay
+            .anonymous_nodes
+            .push((node_pat.labels.clone(), props));
+    }
+
+    Ok(())
+}
+
+fn collect_delete_targets_from_value(
+    value: &Value,
+    nodes: &mut std::collections::BTreeSet<InternalNodeId>,
+    edges: &mut std::collections::BTreeSet<EdgeKey>,
+) {
+    match value {
+        Value::NodeId(node_id) => {
+            nodes.insert(*node_id);
+        }
+        Value::Node(node) => {
+            nodes.insert(node.id);
+        }
+        Value::EdgeKey(edge) => {
+            edges.insert(*edge);
+        }
+        Value::Relationship(rel) => {
+            edges.insert(rel.key);
+        }
+        Value::Path(path) => {
+            for node in &path.nodes {
+                nodes.insert(*node);
+            }
+            for edge in &path.edges {
+                edges.insert(*edge);
+            }
+        }
+        Value::List(items) => {
+            for item in items {
+                collect_delete_targets_from_value(item, nodes, edges);
+            }
+        }
+        Value::Map(map) => {
+            for item in map.values() {
+                collect_delete_targets_from_value(item, nodes, edges);
+            }
+        }
+        _ => {}
     }
 }

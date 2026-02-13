@@ -15,8 +15,12 @@ pub(super) fn render_plan(plan: &Plan) -> String {
             Plan::Values { rows } => {
                 let _ = writeln!(out, "{pad}Values(rows={})", rows.len());
             }
-            Plan::Create { input, pattern } => {
-                let _ = writeln!(out, "{pad}Create(pattern={pattern:?})");
+            Plan::Create {
+                input,
+                pattern,
+                merge,
+            } => {
+                let _ = writeln!(out, "{pad}Create(merge={merge}, pattern={pattern:?})");
                 go(out, input, depth + 1);
             }
             Plan::Foreach {

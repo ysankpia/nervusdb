@@ -122,7 +122,8 @@
 
 ### BETA-03R6 子进展（2026-02-13）
 - R6-W1：失败簇刷新扫描（候选 16 个 feature），确认下一主簇为 `Merge1/2/3`（11 个非跳过失败）；次级簇为 `ReturnSkipLimit1/2`、`With4`、`Graph3/4`、`Literals8`、`Mathematical8`、`Match8`。
-- 证据日志：`artifacts/tck/beta-03r6-seed-cluster-2026-02-13.log`、`artifacts/tck/beta-03r6-candidate-scan-2026-02-13.log`、`artifacts/tck/beta-03r6-candidate-scan-2026-02-13.cluster.md`。
+- R6-W2：写路径语义收口，清零 `Merge1`、`Merge2`、`Merge3`、`Match8`、`Create1` 非跳过失败；补齐 `MERGE`/`CREATE` 计划语义解耦、`ON CREATE/ON MATCH` label+property 回填、删除可见性（tombstone）过滤、写查询空结果行与 side effects 统计口径修复。
+- 证据日志：`artifacts/tck/beta-03r6-seed-cluster-2026-02-13.log`、`artifacts/tck/beta-03r6-candidate-scan-2026-02-13.log`、`artifacts/tck/beta-03r6-candidate-scan-2026-02-13.cluster.md`、`artifacts/tck/beta-03r6-precommit-merge-match8-create1-2026-02-13.log`。
 
 ## Archived (v1/Alpha)
 

@@ -1,4 +1,4 @@
-use super::{PropertyValue, Row, WriteableGraph, convert_executor_value_to_property};
+use super::{PropertyValue, Row, Value, WriteableGraph, convert_executor_value_to_property};
 use crate::ast::Expression;
 use crate::error::{Error, Result};
 use crate::evaluator::evaluate_expression_value;
@@ -7,7 +7,7 @@ use nervusdb_api::GraphSnapshot;
 pub(super) fn merge_apply_set_items<S: GraphSnapshot>(
     snapshot: &S,
     txn: &mut dyn WriteableGraph,
-    row: &Row,
+    row: &mut Row,
     items: &[(String, String, Expression)],
     params: &crate::query_api::Params,
 ) -> Result<()> {
@@ -21,17 +21,83 @@ pub(super) fn merge_apply_set_items<S: GraphSnapshot>(
             } else {
                 txn.set_node_property(node_id, key.clone(), prop_val)?;
             }
+            overlay_set_property_value(row, var, key, &val, is_remove);
         } else if let Some(edge) = row.get_edge(var) {
             if is_remove {
                 txn.remove_edge_property(edge.src, edge.rel, edge.dst, key)?;
             } else {
                 txn.set_edge_property(edge.src, edge.rel, edge.dst, key.clone(), prop_val)?;
             }
+            overlay_set_property_value(row, var, key, &val, is_remove);
         } else {
             return Err(Error::Other(format!("Variable {} not found in row", var)));
         }
     }
     Ok(())
+}
+
+pub(super) fn merge_apply_label_items(
+    txn: &mut dyn WriteableGraph,
+    row: &mut Row,
+    items: &[(String, Vec<String>)],
+) -> Result<()> {
+    for (var, labels) in items {
+        let node_id = row
+            .get_node(var)
+            .ok_or_else(|| Error::Other(format!("Variable {} not found in row", var)))?;
+        for label in labels {
+            let label_id = txn.get_or_create_label_id(label)?;
+            txn.add_node_label(node_id, label_id)?;
+            overlay_add_label_value(row, var, label);
+        }
+    }
+    Ok(())
+}
+
+fn overlay_set_property_value(row: &mut Row, var: &str, key: &str, value: &Value, is_remove: bool) {
+    let Some(current) = row.get(var).cloned() else {
+        return;
+    };
+
+    let updated = match current {
+        Value::Node(mut node) => {
+            if is_remove {
+                node.properties.remove(key);
+            } else {
+                node.properties.insert(key.to_string(), value.clone());
+            }
+            Value::Node(node)
+        }
+        Value::Relationship(mut rel) => {
+            if is_remove {
+                rel.properties.remove(key);
+            } else {
+                rel.properties.insert(key.to_string(), value.clone());
+            }
+            Value::Relationship(rel)
+        }
+        other => other,
+    };
+
+    *row = row.clone().with(var.to_string(), updated);
+}
+
+fn overlay_add_label_value(row: &mut Row, var: &str, label: &str) {
+    let Some(current) = row.get(var).cloned() else {
+        return;
+    };
+
+    let updated = match current {
+        Value::Node(mut node) => {
+            if !node.labels.iter().any(|existing| existing == label) {
+                node.labels.push(label.to_string());
+            }
+            Value::Node(node)
+        }
+        other => other,
+    };
+
+    *row = row.clone().with(var.to_string(), updated);
 }
 
 pub(super) fn merge_eval_props_on_row<S: GraphSnapshot>(

@@ -1,4 +1,4 @@
-use super::{Row, Value};
+use super::{EdgeKey, Row, Value};
 use nervusdb_api::InternalNodeId;
 
 pub(super) fn apply_optional_unbinds_row(mut row: Row, optional_unbind: &[String]) -> Row {
@@ -25,10 +25,31 @@ pub(super) fn row_matches_node_binding(row: &Row, alias: &str, candidate: Intern
 }
 
 pub(super) fn row_contains_all_bindings(candidate: &Row, outer: &Row) -> bool {
-    outer
-        .cols
-        .iter()
-        .all(|(key, value)| candidate.get(key).is_some_and(|v| v == value))
+    outer.cols.iter().all(|(key, outer_value)| {
+        candidate
+            .get(key)
+            .is_some_and(|candidate_value| binding_values_equal(candidate_value, outer_value))
+    })
+}
+
+fn value_edge_key(value: &Value) -> Option<EdgeKey> {
+    match value {
+        Value::EdgeKey(edge) => Some(*edge),
+        Value::Relationship(rel) => Some(rel.key),
+        _ => None,
+    }
+}
+
+fn binding_values_equal(candidate: &Value, outer: &Value) -> bool {
+    if let (Some(candidate_id), Some(outer_id)) = (value_node_id(candidate), value_node_id(outer)) {
+        return candidate_id == outer_id;
+    }
+    if let (Some(candidate_edge), Some(outer_edge)) =
+        (value_edge_key(candidate), value_edge_key(outer))
+    {
+        return candidate_edge == outer_edge;
+    }
+    candidate == outer
 }
 
 #[cfg(test)]
@@ -37,7 +58,8 @@ mod tests {
         apply_optional_unbinds_row, row_contains_all_bindings, row_matches_node_binding,
         value_node_id,
     };
-    use crate::executor::{NodeValue, Row, Value};
+    use crate::executor::{NodeValue, RelationshipValue, Row, Value};
+    use nervusdb_api::EdgeKey;
     use nervusdb_api::InternalNodeId;
     use std::collections::BTreeMap;
 
@@ -97,5 +119,38 @@ mod tests {
 
         assert!(row_contains_all_bindings(&candidate, &outer_ok));
         assert!(!row_contains_all_bindings(&candidate, &outer_fail));
+    }
+
+    #[test]
+    fn row_contains_all_bindings_allows_node_and_relationship_identity_equivalence() {
+        let edge = EdgeKey {
+            src: 1,
+            rel: 2,
+            dst: 3,
+        };
+        let candidate = Row::new(vec![
+            ("n".to_string(), Value::NodeId(9)),
+            ("r".to_string(), Value::EdgeKey(edge)),
+        ]);
+        let outer = Row::new(vec![
+            (
+                "n".to_string(),
+                Value::Node(NodeValue {
+                    id: 9,
+                    labels: vec!["X".to_string()],
+                    properties: BTreeMap::new(),
+                }),
+            ),
+            (
+                "r".to_string(),
+                Value::Relationship(RelationshipValue {
+                    key: edge,
+                    rel_type: "R".to_string(),
+                    properties: BTreeMap::new(),
+                }),
+            ),
+        ]);
+
+        assert!(row_contains_all_bindings(&candidate, &outer));
     }
 }

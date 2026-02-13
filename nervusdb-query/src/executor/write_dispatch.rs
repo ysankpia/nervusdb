@@ -11,7 +11,9 @@ pub(super) fn execute_write<S: GraphSnapshot>(
     params: &crate::query_api::Params,
 ) -> Result<u32> {
     match plan {
-        Plan::Create { input, pattern } => execute_create(snapshot, input, txn, pattern, params),
+        Plan::Create { input, pattern, .. } => {
+            execute_create(snapshot, input, txn, pattern, params)
+        }
         Plan::Delete {
             input,
             detach,

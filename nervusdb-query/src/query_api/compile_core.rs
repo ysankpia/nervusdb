@@ -12,6 +12,8 @@ pub(crate) struct CompiledQuery {
     pub(crate) write: WriteSemantics,
     pub(crate) merge_on_create_items: Vec<(String, String, Expression)>,
     pub(crate) merge_on_match_items: Vec<(String, String, Expression)>,
+    pub(crate) merge_on_create_labels: Vec<(String, Vec<String>)>,
+    pub(crate) merge_on_match_labels: Vec<(String, Vec<String>)>,
 }
 
 pub(crate) fn compile_m3_plan(
@@ -24,6 +26,8 @@ pub(crate) fn compile_m3_plan(
     let mut write_semantics = WriteSemantics::Default;
     let mut merge_on_create_items: Vec<(String, String, Expression)> = Vec::new();
     let mut merge_on_match_items: Vec<(String, String, Expression)> = Vec::new();
+    let mut merge_on_create_labels: Vec<(String, Vec<String>)> = Vec::new();
+    let mut merge_on_match_labels: Vec<(String, Vec<String>)> = Vec::new();
     let mut next_anon_id = 0u32;
     let mut pending_optional_where_fixup: Option<(Plan, Vec<String>)> = None;
 
@@ -177,6 +181,8 @@ pub(crate) fn compile_m3_plan(
                         write: write_semantics,
                         merge_on_create_items,
                         merge_on_match_items,
+                        merge_on_create_labels,
+                        merge_on_match_labels,
                     });
                 }
             }
@@ -192,8 +198,12 @@ pub(crate) fn compile_m3_plan(
                     Error::Other("internal error: missing MERGE subclauses".into())
                 })?;
                 let merge_vars = extract_merge_pattern_vars(&m.pattern);
-                merge_on_create_items = compile_merge_set_items(&merge_vars, sub.on_create)?;
-                merge_on_match_items = compile_merge_set_items(&merge_vars, sub.on_match)?;
+                let compiled_on_create = compile_merge_set_items(&merge_vars, sub.on_create)?;
+                merge_on_create_items = compiled_on_create.property_items;
+                merge_on_create_labels = compiled_on_create.label_items;
+                let compiled_on_match = compile_merge_set_items(&merge_vars, sub.on_match)?;
+                merge_on_match_items = compiled_on_match.property_items;
+                merge_on_match_labels = compiled_on_match.label_items;
                 plan = Some(compile_merge_plan(input, m.clone())?);
             }
             Clause::Set(s) => {
@@ -260,6 +270,8 @@ pub(crate) fn compile_m3_plan(
             write: write_semantics,
             merge_on_create_items,
             merge_on_match_items,
+            merge_on_create_labels,
+            merge_on_match_labels,
         });
     }
 

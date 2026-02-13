@@ -16,6 +16,8 @@ pub(super) fn prepare(cypher: &str) -> Result<PreparedQuery> {
             write: physical.write,
             merge_on_create_items: physical.merge_on_create_items,
             merge_on_match_items: physical.merge_on_match_items,
+            merge_on_create_labels: physical.merge_on_create_labels,
+            merge_on_match_labels: physical.merge_on_match_labels,
         });
     }
 
@@ -29,5 +31,7 @@ pub(super) fn prepare(cypher: &str) -> Result<PreparedQuery> {
         write: physical.write,
         merge_on_create_items: physical.merge_on_create_items,
         merge_on_match_items: physical.merge_on_match_items,
+        merge_on_create_labels: physical.merge_on_create_labels,
+        merge_on_match_labels: physical.merge_on_match_labels,
     })
 }

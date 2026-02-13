@@ -213,6 +213,7 @@ pub enum Plan {
     Create {
         input: Box<Plan>,
         pattern: Pattern,
+        merge: bool,
     },
 }
 

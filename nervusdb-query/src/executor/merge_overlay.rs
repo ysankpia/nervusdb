@@ -18,4 +18,10 @@ pub(super) struct MergeOverlayEdge {
 pub(super) struct MergeOverlayState {
     pub(super) nodes: Vec<MergeOverlayNode>,
     pub(super) edges: Vec<MergeOverlayEdge>,
+    pub(super) deleted_nodes: std::collections::BTreeSet<InternalNodeId>,
+    pub(super) deleted_edges: std::collections::BTreeSet<EdgeKey>,
+    pub(super) anonymous_nodes: Vec<(
+        Vec<String>,
+        std::collections::BTreeMap<String, PropertyValue>,
+    )>,
 }

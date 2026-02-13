@@ -363,7 +363,7 @@ pub(super) fn extract_output_var_kinds(plan: &Plan, vars: &mut BTreeMap<String, 
                 }
             }
         }
-        Plan::Create { input, pattern } => {
+        Plan::Create { input, pattern, .. } => {
             extract_output_var_kinds(input, vars);
             for el in &pattern.elements {
                 match el {

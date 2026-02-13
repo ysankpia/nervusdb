@@ -5,10 +5,12 @@ use super::merge_helpers::{
 };
 use super::merge_overlay::{MergeOverlayEdge, MergeOverlayNode, MergeOverlayState};
 use super::property_bridge::merge_props_to_values;
-use super::write_support::{merge_apply_set_items, merge_eval_props_on_row};
+use super::write_support::{
+    merge_apply_label_items, merge_apply_set_items, merge_eval_props_on_row,
+};
 use super::{
-    EdgeKey, Error, GraphSnapshot, NodeValue, Plan, RelationshipValue, Result, Row, Value,
-    WriteableGraph,
+    EdgeKey, Error, GraphSnapshot, NodeValue, PathValue, Plan, RelationshipValue, Result, Row,
+    Value, WriteableGraph,
 };
 use crate::ast::{Expression, PathElement, Pattern};
 
@@ -20,6 +22,8 @@ pub(super) fn execute_merge_create_from_rows<S: GraphSnapshot>(
     params: &crate::query_api::Params,
     on_create_items: &[(String, String, Expression)],
     on_match_items: &[(String, String, Expression)],
+    on_create_labels: &[(String, Vec<String>)],
+    on_match_labels: &[(String, Vec<String>)],
     overlay: &mut MergeOverlayState,
 ) -> Result<(u32, Vec<Row>)> {
     let mut created_count = 0u32;
@@ -49,6 +53,16 @@ pub(super) fn execute_merge_create_from_rows<S: GraphSnapshot>(
                     merge_find_node_candidates(snapshot, overlay, &node_pat.labels, &node_props);
             }
 
+            if candidates.is_empty()
+                && node_pat.variable.is_none()
+                && overlay.anonymous_nodes.iter().any(|(labels, props)| {
+                    anonymous_node_matches(labels, props, node_pat, &node_props)
+                })
+            {
+                output_rows.push(row.clone());
+                continue;
+            }
+
             if candidates.is_empty() {
                 let iid = merge_create_node(txn, node_pat, &node_props, &mut created_count)?;
                 overlay.nodes.push(MergeOverlayNode {
@@ -68,12 +82,35 @@ pub(super) fn execute_merge_create_from_rows<S: GraphSnapshot>(
                         merge_materialize_node_value(snapshot, overlay, iid),
                     );
                 }
+                if let Some(path_var) = &pattern.variable {
+                    out_row = out_row.with(
+                        path_var.clone(),
+                        Value::Path(PathValue {
+                            nodes: vec![iid],
+                            edges: vec![],
+                        }),
+                    );
+                }
                 if was_created {
                     if !on_create_items.is_empty() {
-                        merge_apply_set_items(snapshot, txn, &out_row, on_create_items, params)?;
+                        merge_apply_set_items(
+                            snapshot,
+                            txn,
+                            &mut out_row,
+                            on_create_items,
+                            params,
+                        )?;
                     }
-                } else if !on_match_items.is_empty() {
-                    merge_apply_set_items(snapshot, txn, &out_row, on_match_items, params)?;
+                    if !on_create_labels.is_empty() {
+                        merge_apply_label_items(txn, &mut out_row, on_create_labels)?;
+                    }
+                } else {
+                    if !on_match_items.is_empty() {
+                        merge_apply_set_items(snapshot, txn, &mut out_row, on_match_items, params)?;
+                    }
+                    if !on_match_labels.is_empty() {
+                        merge_apply_label_items(txn, &mut out_row, on_match_labels)?;
+                    }
                 }
                 output_rows.push(out_row);
             }
@@ -215,7 +252,10 @@ pub(super) fn execute_merge_create_from_rows<S: GraphSnapshot>(
                         out_row.join_path(path_var, edge.src, edge, edge.dst);
                     }
                     if !on_match_items.is_empty() {
-                        merge_apply_set_items(snapshot, txn, &out_row, on_match_items, params)?;
+                        merge_apply_set_items(snapshot, txn, &mut out_row, on_match_items, params)?;
+                    }
+                    if !on_match_labels.is_empty() {
+                        merge_apply_label_items(txn, &mut out_row, on_match_labels)?;
                     }
                     matched_rows.push(out_row);
                 }
@@ -299,7 +339,10 @@ pub(super) fn execute_merge_create_from_rows<S: GraphSnapshot>(
             out_row.join_path(path_var, edge_src, edge_key, edge_dst);
         }
         if !on_create_items.is_empty() {
-            merge_apply_set_items(snapshot, txn, &out_row, on_create_items, params)?;
+            merge_apply_set_items(snapshot, txn, &mut out_row, on_create_items, params)?;
+        }
+        if !on_create_labels.is_empty() {
+            merge_apply_label_items(txn, &mut out_row, on_create_labels)?;
         }
         output_rows.push(out_row);
     }
@@ -307,9 +350,24 @@ pub(super) fn execute_merge_create_from_rows<S: GraphSnapshot>(
     Ok((created_count, output_rows))
 }
 
+fn anonymous_node_matches(
+    labels: &[String],
+    props: &std::collections::BTreeMap<String, super::PropertyValue>,
+    node_pat: &crate::ast::NodePattern,
+    expected_props: &std::collections::BTreeMap<String, super::PropertyValue>,
+) -> bool {
+    for required in &node_pat.labels {
+        if !labels.iter().any(|actual| actual == required) {
+            return false;
+        }
+    }
+    props == expected_props
+}
+
 fn find_create_plan(plan: &Plan) -> Option<&Plan> {
     match plan {
-        Plan::Create { .. } => Some(plan),
+        Plan::Create { merge: true, .. } => Some(plan),
+        Plan::Create { input, .. } => find_create_plan(input),
         Plan::Filter { input, .. }
         | Plan::Project { input, .. }
         | Plan::Limit { input, .. }
@@ -353,14 +411,21 @@ pub(super) fn execute_merge<S: GraphSnapshot>(
     params: &crate::query_api::Params,
     on_create_items: &[(String, String, Expression)],
     on_match_items: &[(String, String, Expression)],
+    on_create_labels: &[(String, Vec<String>)],
+    on_match_labels: &[(String, Vec<String>)],
 ) -> Result<u32> {
     let create_plan = find_create_plan(plan)
         .ok_or_else(|| Error::Other("MERGE plan must contain a CREATE stage".into()))?;
-    let Plan::Create { pattern, .. } = create_plan else {
+    let Plan::Create { pattern, merge, .. } = create_plan else {
         return Err(Error::Other(
             "MERGE CREATE stage is not available in compiled plan".into(),
         ));
     };
+    if !merge {
+        return Err(Error::Other(
+            "MERGE CREATE stage is not available in compiled plan".into(),
+        ));
+    }
 
     let mut created_count = 0u32;
     let mut overlay: Vec<ExecMergeOverlayNode> = Vec::new();
@@ -480,8 +545,16 @@ pub(super) fn execute_merge<S: GraphSnapshot>(
     } else {
         on_match_items
     };
+    let label_items = if created_any {
+        on_create_labels
+    } else {
+        on_match_labels
+    };
     if !set_items.is_empty() {
-        merge_apply_set_items(snapshot, txn, &merge_row, set_items, params)?;
+        merge_apply_set_items(snapshot, txn, &mut merge_row, set_items, params)?;
+    }
+    if !label_items.is_empty() {
+        merge_apply_label_items(txn, &mut merge_row, label_items)?;
     }
 
     Ok(created_count)

@@ -11,6 +11,8 @@ pub(super) fn execute_merge_create_from_rows<S: GraphSnapshot>(
     params: &crate::query_api::Params,
     on_create_items: &[(String, String, Expression)],
     on_match_items: &[(String, String, Expression)],
+    on_create_labels: &[(String, Vec<String>)],
+    on_match_labels: &[(String, Vec<String>)],
     overlay: &mut MergeOverlayState,
 ) -> Result<(u32, Vec<Row>)> {
     merge_execution::execute_merge_create_from_rows(
@@ -21,6 +23,8 @@ pub(super) fn execute_merge_create_from_rows<S: GraphSnapshot>(
         params,
         on_create_items,
         on_match_items,
+        on_create_labels,
+        on_match_labels,
         overlay,
     )
 }

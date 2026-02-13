@@ -283,7 +283,7 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 
 ---
 
-## 9. 续更快照（2026-02-13，BETA-03R5-W5 / BETA-03R6-W1）
+## 9. 续更快照（2026-02-13，BETA-03R5-W5 / BETA-03R6-W2）
 
 ### 9.1 W5：Union1/Union2 列名一致性补齐
 
@@ -301,9 +301,27 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 - 已确认通过：`List12`、`WithSkipLimit2`、`Graph8`。
 - 当前主阻断（非跳过失败）：`Merge1`(7)、`Merge2`(2)、`Merge3`(2)；次级簇为 `ReturnSkipLimit1/2`、`With4`、`Return1/7`、`Mathematical8`、`Match8`、`Literals8`、`Graph3/4`。
 
-### 9.3 新增证据文件
+### 9.3 W2：Merge/写路径语义收口
+
+- 修复点：
+  - `Plan::Create` 增加 `merge` 标识，解耦 `CREATE` 与 `MERGE` 执行语义，避免前置 `CREATE` 被误走 merge 路径。
+  - `WriteSemantics::Merge` 对写查询返回行行为与默认写语义对齐（无 `RETURN` 时空结果集）。
+  - `MERGE ON CREATE/ON MATCH` 支持 label/property 执行并回填当前行，保证 `RETURN` 可见最新值。
+  - `MergeOverlayState` 纳入 tombstone 过滤，避免同语句内匹配到已删除节点/关系。
+  - side effects 中 `+labels/-labels` 统计改为 token 级差集口径，修复 `Create1` 统计偏差。
+  - `row_contains_all_bindings` 支持 `NodeId/Node`、`EdgeKey/Relationship` 身份等价比较，修复 `Match8[2]` 漏计。
+- 结果：
+  - `clauses/merge/Merge1.feature` 全通过（15 passed, 2 skipped）。
+  - `clauses/merge/Merge2.feature` 全通过（5 passed, 1 skipped）。
+  - `clauses/merge/Merge3.feature` 全通过（4 passed, 1 skipped）。
+  - `clauses/match/Match8.feature` 全通过（3 passed）。
+  - `clauses/create/Create1.feature` 全通过（20 passed）。
+  - `cargo test -p nervusdb-query --lib` 全通过（47 passed）。
+
+### 9.4 新增证据文件
 
 - `artifacts/tck/beta-03r6-seed-cluster-2026-02-13.log`
 - `artifacts/tck/beta-03r6-union-columns-2026-02-13.log`
 - `artifacts/tck/beta-03r6-candidate-scan-2026-02-13.log`
 - `artifacts/tck/beta-03r6-candidate-scan-2026-02-13.cluster.md`
+- `artifacts/tck/beta-03r6-precommit-merge-match8-create1-2026-02-13.log`

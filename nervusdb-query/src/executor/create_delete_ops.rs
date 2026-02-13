@@ -385,7 +385,7 @@ pub(super) fn execute_create_write_rows<S: GraphSnapshot>(
     params: &crate::query_api::Params,
 ) -> Result<(u32, Vec<Row>)> {
     match plan {
-        Plan::Create { input, pattern } => {
+        Plan::Create { input, pattern, .. } => {
             let (prefix_mods, input_rows) =
                 execute_create_write_rows(input, snapshot, txn, params)?;
             let (created, out_rows) =

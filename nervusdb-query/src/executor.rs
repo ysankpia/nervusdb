@@ -100,6 +100,8 @@ pub fn execute_merge_with_rows<S: GraphSnapshot>(
     params: &crate::query_api::Params,
     on_create_items: &[(String, String, Expression)],
     on_match_items: &[(String, String, Expression)],
+    on_create_labels: &[(String, Vec<String>)],
+    on_match_labels: &[(String, Vec<String>)],
 ) -> Result<(u32, Vec<Row>)> {
     write_orchestration::execute_merge_with_rows(
         plan,
@@ -108,6 +110,8 @@ pub fn execute_merge_with_rows<S: GraphSnapshot>(
         params,
         on_create_items,
         on_match_items,
+        on_create_labels,
+        on_match_labels,
     )
 }
 
@@ -118,8 +122,19 @@ pub(crate) fn execute_merge<S: GraphSnapshot>(
     params: &crate::query_api::Params,
     on_create_items: &[(String, String, Expression)],
     on_match_items: &[(String, String, Expression)],
+    on_create_labels: &[(String, Vec<String>)],
+    on_match_labels: &[(String, Vec<String>)],
 ) -> Result<u32> {
-    merge_execution::execute_merge(plan, snapshot, txn, params, on_create_items, on_match_items)
+    merge_execution::execute_merge(
+        plan,
+        snapshot,
+        txn,
+        params,
+        on_create_items,
+        on_match_items,
+        on_create_labels,
+        on_match_labels,
+    )
 }
 
 pub trait WriteableGraph {

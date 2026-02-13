@@ -85,6 +85,7 @@ pub(super) fn compile_create_plan(
         plan = Plan::Create {
             input: Box::new(plan),
             pattern,
+            merge: false,
         };
     }
 
@@ -159,5 +160,6 @@ pub(super) fn compile_merge_plan(
     Ok(Plan::Create {
         input: Box::new(input),
         pattern,
+        merge: true,
     })
 }

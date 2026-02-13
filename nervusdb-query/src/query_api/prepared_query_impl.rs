@@ -4,6 +4,20 @@ use super::{
 };
 
 impl PreparedQuery {
+    fn should_clear_write_rows(plan: &crate::executor::Plan) -> bool {
+        matches!(
+            plan,
+            crate::executor::Plan::Create { .. }
+                | crate::executor::Plan::Delete { .. }
+                | crate::executor::Plan::SetProperty { .. }
+                | crate::executor::Plan::SetPropertiesFromMap { .. }
+                | crate::executor::Plan::SetLabels { .. }
+                | crate::executor::Plan::RemoveProperty { .. }
+                | crate::executor::Plan::RemoveLabels { .. }
+                | crate::executor::Plan::Foreach { .. }
+        )
+    }
+
     /// Executes a read query and returns a streaming iterator.
     ///
     /// The returned iterator yields `Result<Row>`, where each row
@@ -65,6 +79,8 @@ impl PreparedQuery {
                 params,
                 &self.merge_on_create_items,
                 &self.merge_on_match_items,
+                &self.merge_on_create_labels,
+                &self.merge_on_match_labels,
             ),
         }
     }
@@ -104,17 +120,7 @@ impl PreparedQuery {
                         })
                         .collect();
 
-                    if matches!(
-                        &self.plan,
-                        crate::executor::Plan::Create { .. }
-                            | crate::executor::Plan::Delete { .. }
-                            | crate::executor::Plan::SetProperty { .. }
-                            | crate::executor::Plan::SetPropertiesFromMap { .. }
-                            | crate::executor::Plan::SetLabels { .. }
-                            | crate::executor::Plan::RemoveProperty { .. }
-                            | crate::executor::Plan::RemoveLabels { .. }
-                            | crate::executor::Plan::Foreach { .. }
-                    ) {
+                    if Self::should_clear_write_rows(&self.plan) {
                         results.clear();
                     }
 
@@ -128,6 +134,8 @@ impl PreparedQuery {
                         params,
                         &self.merge_on_create_items,
                         &self.merge_on_match_items,
+                        &self.merge_on_create_labels,
+                        &self.merge_on_match_labels,
                     )?;
                     let results: Vec<std::collections::HashMap<String, crate::executor::Value>> =
                         write_rows
@@ -140,6 +148,10 @@ impl PreparedQuery {
                                 map
                             })
                             .collect();
+                    let mut results = results;
+                    if Self::should_clear_write_rows(&self.plan) {
+                        results.clear();
+                    }
                     Ok((results, write_count))
                 }
             };

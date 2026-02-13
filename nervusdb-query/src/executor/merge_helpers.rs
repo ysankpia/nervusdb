@@ -75,12 +75,18 @@ pub(super) fn merge_find_node_candidates<S: GraphSnapshot>(
     let mut seen = std::collections::HashSet::new();
 
     for n in &overlay.nodes {
+        if overlay.deleted_nodes.contains(&n.iid) {
+            continue;
+        }
         if merge_node_matches_overlay(n, labels, props) && seen.insert(n.iid) {
             out.push(n.iid);
         }
     }
 
     for iid in snapshot.nodes() {
+        if overlay.deleted_nodes.contains(&iid) {
+            continue;
+        }
         if merge_node_matches_snapshot(snapshot, iid, labels, props) && seen.insert(iid) {
             out.push(iid);
         }
@@ -157,12 +163,19 @@ pub(super) fn merge_collect_edges_between<S: GraphSnapshot>(
     direction: &RelationshipDirection,
     rel_props: &std::collections::BTreeMap<String, PropertyValue>,
 ) -> Vec<EdgeKey> {
+    if overlay.deleted_nodes.contains(&left) || overlay.deleted_nodes.contains(&right) {
+        return Vec::new();
+    }
+
     let mut out = Vec::new();
     let dedup_by_key = !rel_props.is_empty();
     let mut seen = std::collections::HashSet::new();
 
     let mut collect_dir = |src: InternalNodeId, dst: InternalNodeId| {
         for edge in snapshot.neighbors(src, Some(rel_type)) {
+            if overlay.deleted_edges.contains(&edge) {
+                continue;
+            }
             if edge.dst == dst
                 && merge_edge_matches_snapshot(snapshot, edge, rel_props)
                 && (!dedup_by_key || seen.insert(edge))
@@ -171,6 +184,9 @@ pub(super) fn merge_collect_edges_between<S: GraphSnapshot>(
             }
         }
         for edge in &overlay.edges {
+            if overlay.deleted_edges.contains(&edge.key) {
+                continue;
+            }
             if edge.key.src == src
                 && edge.key.dst == dst
                 && edge.key.rel == rel_type
