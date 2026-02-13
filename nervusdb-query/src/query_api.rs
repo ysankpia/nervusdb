@@ -163,9 +163,11 @@ pub(crate) fn exists_subquery_has_rows<S: GraphSnapshot>(
     }
 
     let mut iter = execute_plan(snapshot, &compiled.plan, params);
-    while let Some(next_row) = iter.next() {
-        next_row?;
-        return Ok(true);
+    match iter.next() {
+        Some(next_row) => {
+            next_row?;
+            Ok(true)
+        }
+        None => Ok(false),
     }
-    Ok(false)
 }
