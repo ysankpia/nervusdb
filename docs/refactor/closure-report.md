@@ -7,7 +7,7 @@
 
 - 周期：Week 1 - Week 6
 - 策略：保守串行（单任务 PR + 全门禁）
-- 结论：`阶段性通过（Phase1b+Phase1c 入口改造已落地，Phase2 仍待推进）`
+- 结论：`阶段性通过（Phase1b+Phase1c 已落地，Phase2 的 S2/S3 已完成）`
 
 ## 2. 里程碑验收
 
@@ -15,7 +15,7 @@
 |---|---|---|---|
 | M1 | 基线与映射就绪 | `Done` | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/refactor/R0-baseline.md` |
 | M2 | R1/R2/R3/S1 完成 | `Done` | `代码证据见 docs/refactor/README.md 第6节` |
-| M3 | S2/S3 完成 | `In Progress` | `待 Phase2` |
+| M3 | S2/S3 完成 | `Done` | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/refactor/S2-storage-readpath-boundary.md`；`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/refactor/S3-bindings-contract-regression.md` |
 | M4 | 闭环报告完成 | `In Progress` | `this file` |
 
 ## 3. 审计断言闭环状态
@@ -53,7 +53,7 @@
 
 - P0：`未发现`
 - P1：`pyo3 cfg 警告（gil-refs）与 clippy 历史 warning 仍存在，但不阻断门禁`
-- P2：`Phase2（Storage 读路径边界）尚未推进`
+- P2：`未发现阻断级剩余项`
 
 建议：
 

@@ -22,11 +22,15 @@ fn classify_err_message(msg: &str) -> (&'static str, &'static str) {
     } else if lower.contains("syntax")
         || lower.contains("parse")
         || lower.contains("unexpected token")
+        || lower.starts_with("expected ")
     {
         ("NERVUS_SYNTAX", "syntax")
     } else if lower.contains("wal")
         || lower.contains("checkpoint")
         || lower.contains("io error")
+        || lower.contains("permission denied")
+        || lower.contains("no such file")
+        || lower.contains("disk full")
         || lower.contains("database is closed")
     {
         ("NERVUS_STORAGE", "storage")
@@ -239,7 +243,12 @@ impl WriteTxn {
 
 #[cfg(test)]
 mod tests {
-    use super::napi_err;
+    use super::{classify_err_message, napi_err};
+    use serde_json::Value;
+
+    fn parse_payload(reason: &str) -> Value {
+        serde_json::from_str(reason).expect("napi reason should be valid json payload")
+    }
 
     #[test]
     fn napi_err_uses_structured_compatibility_payload() {
@@ -247,5 +256,46 @@ mod tests {
         let reason = err.reason;
         assert!(reason.contains("\"category\":\"compatibility\""));
         assert!(reason.contains("\"code\":\"NERVUS_COMPATIBILITY\""));
+    }
+
+    #[test]
+    fn napi_err_maps_syntax_messages_to_syntax_category() {
+        let err = napi_err("syntax error: unexpected token");
+        let payload = parse_payload(&err.reason);
+        assert_eq!(payload["code"], "NERVUS_SYNTAX");
+        assert_eq!(payload["category"], "syntax");
+        assert_eq!(payload["message"], "syntax error: unexpected token");
+    }
+
+    #[test]
+    fn napi_err_maps_expected_prefix_to_syntax_category() {
+        let err = napi_err("Expected ')'");
+        let payload = parse_payload(&err.reason);
+        assert_eq!(payload["code"], "NERVUS_SYNTAX");
+        assert_eq!(payload["category"], "syntax");
+    }
+
+    #[test]
+    fn napi_err_maps_storage_messages_for_fs_failures() {
+        let err = napi_err("permission denied while opening wal");
+        let payload = parse_payload(&err.reason);
+        assert_eq!(payload["code"], "NERVUS_STORAGE");
+        assert_eq!(payload["category"], "storage");
+    }
+
+    #[test]
+    fn napi_err_falls_back_to_execution_category() {
+        let err = napi_err("not implemented: expression");
+        let payload = parse_payload(&err.reason);
+        assert_eq!(payload["code"], "NERVUS_EXECUTION");
+        assert_eq!(payload["category"], "execution");
+    }
+
+    #[test]
+    fn classify_err_message_keeps_compatibility_priority() {
+        let (code, category) =
+            classify_err_message("compatibility warning with parse token details");
+        assert_eq!(code, "NERVUS_COMPATIBILITY");
+        assert_eq!(category, "compatibility");
     }
 }

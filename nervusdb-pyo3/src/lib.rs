@@ -40,18 +40,19 @@ enum ErrorClass {
 fn classify_error_text(msg: &str) -> ErrorClass {
     let lower = msg.to_lowercase();
 
-    if lower.contains("syntax")
-        || lower.contains("parse")
-        || lower.contains("unexpected token")
-        || lower.contains("variabletypeconflict")
-        || lower.contains("variablealreadybound")
-    {
-        ErrorClass::Syntax
-    } else if lower.contains("storage format mismatch")
+    if lower.contains("storage format mismatch")
         || lower.contains("compatibility")
         || lower.contains("epoch")
     {
         ErrorClass::Compatibility
+    } else if lower.contains("syntax")
+        || lower.contains("parse")
+        || lower.contains("unexpected token")
+        || lower.starts_with("expected ")
+        || lower.contains("variabletypeconflict")
+        || lower.contains("variablealreadybound")
+    {
+        ErrorClass::Syntax
     } else if lower.contains("wal")
         || lower.contains("checkpoint")
         || lower.contains("database is closed")
@@ -124,6 +125,7 @@ mod tests {
             classify_error_text("VariableTypeConflict: r"),
             ErrorClass::Syntax
         );
+        assert_eq!(classify_error_text("Expected ')'"), ErrorClass::Syntax);
     }
 
     #[test]
@@ -134,6 +136,14 @@ mod tests {
         );
         assert_eq!(
             classify_error_text("wal replay failed"),
+            ErrorClass::Storage
+        );
+        assert_eq!(
+            classify_error_text("permission denied while opening wal"),
+            ErrorClass::Storage
+        );
+        assert_eq!(
+            classify_error_text("io error: disk full"),
             ErrorClass::Storage
         );
     }
@@ -151,6 +161,14 @@ mod tests {
         assert_eq!(
             classify_error_text("not implemented: expression"),
             ErrorClass::Execution
+        );
+    }
+
+    #[test]
+    fn classify_prioritizes_compatibility_when_multiple_keywords_exist() {
+        assert_eq!(
+            classify_error_text("compatibility failure after parse step"),
+            ErrorClass::Compatibility
         );
     }
 }

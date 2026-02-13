@@ -2,7 +2,7 @@
 
 更新时间：2026-02-13  
 任务类型：Phase 2  
-任务状态：In Progress
+任务状态：Done
 
 ## 1. 目标
 
@@ -365,3 +365,12 @@
    - `cargo test -p nervusdb-storage --test t51_snapshot_scan`
    - `cargo test -p nervusdb-storage --test m1_graph`
    - `bash scripts/workspace_quick_test.sh`
+
+52. 已完成切片-26（S2 收口验证）
+   - 在 Phase1b+1c 落地后对 S2 读路径边界改造进行完整回归复核，确认 `engine/snapshot/api` 读路径委托链保持行为等价。
+   - 收口验证命令：
+     - `cargo test -p nervusdb-storage --test t51_snapshot_scan`
+     - `cargo test -p nervusdb-storage --test t47_api_trait`
+     - `cargo test -p nervusdb-storage --test m1_graph`
+     - `bash scripts/workspace_quick_test.sh`
+   - 结论：S2 目标达成，读路径边界治理阶段转 `Done`。

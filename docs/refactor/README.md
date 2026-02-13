@@ -1,6 +1,6 @@
 # NervusDB 全面重构审计总览（Phase 0 基线）
 
-更新时间：2026-02-12  
+更新时间：2026-02-13  
 执行分支：`codex/feat/R0-refactor-baseline`
 
 ## 1. 适用范围
@@ -26,7 +26,7 @@
 | A-005 | “每 PR 全门禁” | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/spec.md:38`；`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/spec.md:42` | P0 | 门禁缺跑会放大语义漂移风险 | 固化为所有任务 DoD 硬条件 | R0,R1,R2,R3,S1,S2,S3 | Done |
 | A-006 | “当前 Tier-3 仍未达 Beta 阈值” | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/artifacts/tck/tier3-rate.json:11`；`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/tasks.md:99` | P0 | 若在低通过率下混入语义变更，回归噪音过高 | 本轮重构限定“结构等价” | R0,R1,R2,R3 | Done |
 | A-007 | “ReturnOrderBy2 仍有失败簇” | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/tasks.md:103` | P1 | 语义修复与结构拆分混改会互相污染 | 将语义修复后置至 R4 独立任务 | BETA-03R4 | Open |
-| A-008 | “Db 与 StorageSnapshot 的桥接层仍在” | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/src/lib.rs:50`；`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/src/lib.rs:208` | P1 | 边界职责不清会导致重复改动 | 在 S1/S2 明确边界与调用方向 | S1,S2 | In Progress |
+| A-008 | “Db 与 StorageSnapshot 的桥接层仍在” | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/src/lib.rs:50`；`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/src/lib.rs:208` | P1 | 边界职责不清会导致重复改动 | 在 S1/S2 明确边界与调用方向 | S1,S2 | Done |
 | A-009 | “门禁脚本具备 tier0-3 参数能力” | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/scripts/tck_tier_gate.sh:102` | P1 | 回归覆盖不足 | 固定 tier0-2 每 PR，tier3 作为阶段验证 | R0 | Done |
 
 ## 4. 任务文件索引
@@ -61,4 +61,8 @@
   证据：`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/src/lib.rs`
 - Phase1c 已完成查询入口重定向：`prepare` 现统一走 `LogicalPlan -> Optimizer -> PhysicalPlan` 管线。  
   证据：`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/query_api/prepare_entry.rs`、`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/query_api/plan/logical.rs`、`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/query_api/plan/optimizer.rs`、`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/query_api/plan/physical.rs`、`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/query_api/planner.rs`
+- Phase2 已完成 S2（Storage 读路径边界治理）收口验证并转 `Done`。  
+  证据：`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/refactor/S2-storage-readpath-boundary.md`
+- Phase2 已完成 S3（bindings 契约回归）并增强 Node runtime 合同断言。  
+  证据：`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/refactor/S3-bindings-contract-regression.md`、`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/scripts/contract_smoke.sh`
 - 已完成回归门禁（本轮已执行）：`cargo fmt --all -- --check`、`cargo clippy --workspace --exclude nervusdb-pyo3 --all-targets -- -W warnings`、`cargo check --workspace`、`bash scripts/workspace_quick_test.sh`、`bash scripts/tck_tier_gate.sh tier0`、`bash scripts/tck_tier_gate.sh tier1`、`bash scripts/tck_tier_gate.sh tier2`、`bash scripts/binding_smoke.sh`、`bash scripts/contract_smoke.sh`。
