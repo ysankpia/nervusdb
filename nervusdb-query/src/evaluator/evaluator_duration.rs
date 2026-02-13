@@ -12,9 +12,7 @@ pub(super) fn duration_value_wide(months: i64, days: i64, nanos: i64) -> Value {
     out.insert("days".to_string(), Value::Int(days));
     out.insert("nanos".to_string(), Value::Int(nanos));
 
-    let seconds = days
-        .saturating_mul(86_400)
-        .saturating_add(nanos.div_euclid(1_000_000_000));
+    let seconds = nanos.div_euclid(1_000_000_000);
     let nanos_of_second = nanos.rem_euclid(1_000_000_000);
     out.insert("seconds".to_string(), Value::Int(seconds));
     out.insert(

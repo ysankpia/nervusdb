@@ -522,9 +522,6 @@ fn evaluate_duration_accessor(
     let hours = nanos.div_euclid(3_600_000_000_000);
     let minutes = nanos.div_euclid(60_000_000_000);
     let seconds = nanos.div_euclid(1_000_000_000);
-    let total_seconds = days
-        .saturating_mul(86_400)
-        .saturating_add(nanos.div_euclid(1_000_000_000));
     let milliseconds = nanos.div_euclid(1_000_000);
     let microseconds = nanos.div_euclid(1_000);
     let nanoseconds = nanos;
@@ -545,10 +542,7 @@ fn evaluate_duration_accessor(
         "days" => Some(Value::Int(days)),
         "hours" => Some(Value::Int(hours)),
         "minutes" => Some(Value::Int(minutes)),
-        // NOTE: `duration.seconds` historically returned total seconds including `days` as 24h.
-        // Keep this behaviour for now, since we already expose the same derived value in
-        // `duration_value_wide` and our baseline tests rely on it.
-        "seconds" => Some(Value::Int(total_seconds)),
+        "seconds" => Some(Value::Int(seconds)),
         "milliseconds" => Some(Value::Int(milliseconds)),
         "microseconds" => Some(Value::Int(microseconds)),
         "nanoseconds" => Some(Value::Int(nanoseconds)),

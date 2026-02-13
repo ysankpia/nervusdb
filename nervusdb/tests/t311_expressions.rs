@@ -379,14 +379,14 @@ fn test_duration_between_dates_exposes_components() {
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].get("days"), Some(&Value::Int(2)));
-    assert_eq!(rows[0].get("seconds"), Some(&Value::Int(172800)));
+    assert_eq!(rows[0].get("seconds"), Some(&Value::Int(0)));
     assert_eq!(rows[0].get("nanos"), Some(&Value::Int(0)));
 
     let duration = rows[0].get("d").expect("duration field must exist");
     match duration {
         Value::Map(map) => {
             assert_eq!(map.get("days"), Some(&Value::Int(2)));
-            assert_eq!(map.get("seconds"), Some(&Value::Int(172800)));
+            assert_eq!(map.get("seconds"), Some(&Value::Int(0)));
             assert_eq!(map.get("nanosecondsOfSecond"), Some(&Value::Int(0)));
         }
         other => panic!("expected duration map, got {other:?}"),
