@@ -49,6 +49,30 @@ pub(super) fn cast_to_integer(value: Option<&Value>) -> Value {
     }
 }
 
+pub(super) fn cast_to_float(value: Option<&Value>) -> Value {
+    let Some(value) = value else {
+        return Value::Null;
+    };
+    match value {
+        Value::Null => Value::Null,
+        Value::Int(i) => Value::Float(*i as f64),
+        Value::Float(f) => {
+            if f.is_finite() {
+                Value::Float(*f)
+            } else {
+                Value::Null
+            }
+        }
+        Value::String(s) => s
+            .parse::<f64>()
+            .ok()
+            .filter(|f| f.is_finite())
+            .map(Value::Float)
+            .unwrap_or(Value::Null),
+        _ => Value::Null,
+    }
+}
+
 pub(super) fn numeric_binop<FInt, FFloat>(
     left: &Value,
     right: &Value,

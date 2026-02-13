@@ -36,7 +36,7 @@ use evaluator_duration_core::build_duration_parts;
 use evaluator_equality::cypher_equals;
 use evaluator_graph_functions::evaluate_graph_function;
 use evaluator_membership::{in_list, string_predicate};
-use evaluator_numeric::{cast_to_integer, numeric_mod, numeric_pow};
+use evaluator_numeric::{cast_to_float, cast_to_integer, numeric_mod, numeric_pow};
 use evaluator_pattern::{
     evaluate_has_label, evaluate_pattern_comprehension, evaluate_pattern_exists,
 };
@@ -300,6 +300,7 @@ fn evaluate_function<S: GraphSnapshot>(
 
     match name.as_str() {
         "tointeger" => cast_to_integer(args.first()),
+        "tofloat" => cast_to_float(args.first()),
         _ => Value::Null, // Unknown function
     }
 }

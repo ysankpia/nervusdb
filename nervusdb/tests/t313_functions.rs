@@ -92,6 +92,63 @@ fn test_size_of_path_is_compile_error() {
 // ============================================================================
 
 #[test]
+fn test_to_float_from_integer() -> nervusdb::Result<()> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("t313.ndb");
+    let db = Db::open(&db_path)?;
+
+    let query = "RETURN toFloat(3) AS result";
+    let prep = nervusdb::query::prepare(query)?;
+    let snapshot = db.snapshot();
+    let results: Vec<_> = prep
+        .execute_streaming(&snapshot, &Default::default())
+        .collect::<Result<Vec<_>, _>>()?;
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get("result").unwrap(), &Value::Float(3.0));
+
+    Ok(())
+}
+
+#[test]
+fn test_to_float_from_numeric_string() -> nervusdb::Result<()> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("t313.ndb");
+    let db = Db::open(&db_path)?;
+
+    let query = "RETURN toFloat('5.25') AS result";
+    let prep = nervusdb::query::prepare(query)?;
+    let snapshot = db.snapshot();
+    let results: Vec<_> = prep
+        .execute_streaming(&snapshot, &Default::default())
+        .collect::<Result<Vec<_>, _>>()?;
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get("result").unwrap(), &Value::Float(5.25));
+
+    Ok(())
+}
+
+#[test]
+fn test_to_float_from_invalid_string_returns_null() -> nervusdb::Result<()> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("t313.ndb");
+    let db = Db::open(&db_path)?;
+
+    let query = "RETURN toFloat('foo') AS result";
+    let prep = nervusdb::query::prepare(query)?;
+    let snapshot = db.snapshot();
+    let results: Vec<_> = prep
+        .execute_streaming(&snapshot, &Default::default())
+        .collect::<Result<Vec<_>, _>>()?;
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get("result").unwrap(), &Value::Null);
+
+    Ok(())
+}
+
+#[test]
 fn test_coalesce_first_non_null() -> nervusdb::Result<()> {
     let dir = tempdir()?;
     let db_path = dir.path().join("t313.ndb");
