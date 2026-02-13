@@ -220,5 +220,8 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 
 - `artifacts/tck/beta-03r4-match-cluster-2026-02-13.log`
 - `artifacts/tck/beta-03r4-followup-cluster-2026-02-13.log`
+- `artifacts/tck/beta-03r4-match4-match9-2026-02-13.log`
+- `artifacts/tck/beta-03r4-regression-matrix-2026-02-13.log`
 - `artifacts/tck/beta-03r4-baseline-gates-2026-02-13.log`
 - `artifacts/tck/beta-03r4-baseline-gates-r2-2026-02-13.log`
+- `artifacts/tck/beta-03r4-baseline-gates-r4-2026-02-13.log`
