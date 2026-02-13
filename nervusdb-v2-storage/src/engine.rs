@@ -9,6 +9,9 @@ use crate::index::ordered_key::encode_ordered_value;
 use crate::label_interner::{LabelInterner, LabelSnapshot};
 use crate::memtable::MemTable;
 use crate::pager::{PageId, Pager};
+use crate::read_path_engine_idmap::{
+    lookup_internal_node_id, read_i2e_snapshot, read_i2l_snapshot,
+};
 use crate::read_path_engine_labels::{
     lookup_label_id, lookup_label_name, published_label_snapshot,
 };
@@ -215,8 +218,7 @@ impl GraphEngine {
     }
 
     pub fn lookup_internal_id(&self, external_id: ExternalId) -> Option<InternalNodeId> {
-        let idmap = self.idmap.lock().unwrap();
-        idmap.lookup(external_id)
+        lookup_internal_node_id(&self.idmap, external_id)
     }
 
     /// Get or create a label, returns the label ID.
@@ -268,8 +270,7 @@ impl GraphEngine {
     /// Update published node labels from IdMap.
     /// Should be called after write transactions that create nodes.
     fn update_published_node_labels(&self) {
-        let idmap = self.idmap.lock().unwrap();
-        let snapshot = idmap.get_i2l_snapshot();
+        let snapshot = read_i2l_snapshot(&self.idmap);
         let mut published = self.published_node_labels.write().unwrap();
         *published = Arc::new(snapshot);
     }
@@ -303,8 +304,7 @@ impl GraphEngine {
     }
 
     pub fn scan_i2e_records(&self) -> Vec<I2eRecord> {
-        let idmap = self.idmap.lock().unwrap();
-        idmap.get_i2e_snapshot()
+        read_i2e_snapshot(&self.idmap)
     }
 
     fn publish_run(&self, run: Arc<L0Run>) {

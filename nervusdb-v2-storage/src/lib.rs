@@ -15,6 +15,7 @@ mod read_path_api_iter;
 mod read_path_api_props;
 mod read_path_api_stats;
 mod read_path_convert;
+mod read_path_engine_idmap;
 mod read_path_engine_labels;
 mod read_path_engine_view;
 mod read_path_iters;

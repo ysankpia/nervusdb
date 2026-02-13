@@ -343,3 +343,25 @@
    - `cargo test -p nervusdb-v2-storage --test t47_api_trait`
    - `cargo test -p nervusdb-v2-storage --test m1_graph`
    - `bash scripts/workspace_quick_test.sh`
+
+48. 已完成切片-24（Engine IdMap 快照读取 helper 下沉）
+   - 新增模块：`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/read_path_engine_idmap.rs`。
+   - 先补失败测试，再实现 `read_i2e_snapshot`，统一封装 `Mutex<IdMap>` 的快照读取逻辑，固定返回 owned copy 语义。
+   - `engine.rs` 中 `scan_i2e_records` 改为统一委托 helper，读路径锁访问点进一步集中；对外 API 与返回值语义不变。
+49. 切片-24 验证通过
+   - `cargo test -p nervusdb-v2-storage read_path_engine_idmap --lib`（先红后绿）
+   - `cargo test -p nervusdb-v2-storage --test t47_api_trait`
+   - `cargo test -p nervusdb-v2-storage --test t51_snapshot_scan`
+   - `cargo test -p nervusdb-v2-storage --test m1_graph`
+   - `bash scripts/workspace_quick_test.sh`
+
+50. 已完成切片-25（Engine IdMap 读取入口进一步收敛）
+   - 扩展模块：`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/read_path_engine_idmap.rs`。
+   - 先补失败测试，再实现 `lookup_internal_node_id / read_i2l_snapshot`，统一封装 `IdMap` 查找与标签快照读取。
+   - `engine.rs` 的 `lookup_internal_id` 与 `update_published_node_labels` 已改为委托 helper，保持外部 API 与语义不变。
+51. 切片-25 验证通过
+   - `cargo test -p nervusdb-v2-storage read_path_engine_idmap --lib`（先红后绿）
+   - `cargo test -p nervusdb-v2-storage --test t47_api_trait`
+   - `cargo test -p nervusdb-v2-storage --test t51_snapshot_scan`
+   - `cargo test -p nervusdb-v2-storage --test m1_graph`
+   - `bash scripts/workspace_quick_test.sh`
