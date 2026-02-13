@@ -57,20 +57,15 @@ pub(super) fn maybe_reanchor_pattern(
     pattern: crate::ast::Pattern,
     known_bindings: &BTreeMap<String, BindingKind>,
 ) -> crate::ast::Pattern {
-    if pattern.elements.len() != 3 {
+    // Patterns are expected as Node-(Rel-Node)* chains.
+    if pattern.elements.len() < 3 || pattern.elements.len() % 2 == 0 {
         return pattern;
     }
 
-    let (first, rel, last) = match (
-        &pattern.elements[0],
-        &pattern.elements[1],
-        &pattern.elements[2],
-    ) {
-        (
-            crate::ast::PathElement::Node(first),
-            crate::ast::PathElement::Relationship(rel),
-            crate::ast::PathElement::Node(last),
-        ) => (first, rel, last),
+    let (first, last) = match (pattern.elements.first(), pattern.elements.last()) {
+        (Some(crate::ast::PathElement::Node(first)), Some(crate::ast::PathElement::Node(last))) => {
+            (first, last)
+        }
         _ => return pattern,
     };
 
@@ -81,16 +76,22 @@ pub(super) fn maybe_reanchor_pattern(
         return pattern;
     }
 
-    let mut flipped_rel = rel.clone();
-    flipped_rel.direction = reverse_relationship_direction(&flipped_rel.direction);
+    let mut reversed_elements = Vec::with_capacity(pattern.elements.len());
+    for element in pattern.elements.into_iter().rev() {
+        match element {
+            crate::ast::PathElement::Node(node) => {
+                reversed_elements.push(crate::ast::PathElement::Node(node))
+            }
+            crate::ast::PathElement::Relationship(mut rel) => {
+                rel.direction = reverse_relationship_direction(&rel.direction);
+                reversed_elements.push(crate::ast::PathElement::Relationship(rel));
+            }
+        }
+    }
 
     crate::ast::Pattern {
         variable: pattern.variable,
-        elements: vec![
-            crate::ast::PathElement::Node(last.clone()),
-            crate::ast::PathElement::Relationship(flipped_rel),
-            crate::ast::PathElement::Node(first.clone()),
-        ],
+        elements: reversed_elements,
     }
 }
 

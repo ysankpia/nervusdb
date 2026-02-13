@@ -255,18 +255,17 @@ pub fn evaluate_expression_value<S: GraphSnapshot>(
                 evaluate_function(call, row, snapshot, params)
             }
         }
-        Expression::Exists(exists_expr) => {
-            match exists_expr.as_ref() {
-                crate::ast::ExistsExpression::Pattern(pattern) => {
-                    evaluate_pattern_exists(pattern, row, snapshot, params)
-                }
-                crate::ast::ExistsExpression::Subquery(_query) => {
-                    // Subquery evaluation is complex - requires full query compilation and execution
-                    // For now, return Null to indicate not implemented
-                    Value::Null
+        Expression::Exists(exists_expr) => match exists_expr.as_ref() {
+            crate::ast::ExistsExpression::Pattern(pattern) => {
+                evaluate_pattern_exists(pattern, row, snapshot, params)
+            }
+            crate::ast::ExistsExpression::Subquery(query) => {
+                match crate::query_api::exists_subquery_has_rows(query, row, snapshot, params) {
+                    Ok(has_rows) => Value::Bool(has_rows),
+                    Err(_) => Value::Null,
                 }
             }
-        }
+        },
         Expression::PatternComprehension(pattern_comp) => {
             evaluate_pattern_comprehension(pattern_comp, row, snapshot, params)
         }

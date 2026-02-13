@@ -366,7 +366,7 @@ fn test_type_of_relationship() -> nervusdb::Result<()> {
     // Use unique large external IDs to avoid conflicts
     let n1 = txn.create_node(1001, label)?;
     let n2 = txn.create_node(1002, label)?;
-    txn.create_edge(n1, n2, rel_type);
+    txn.create_edge(n1, rel_type, n2);
     txn.commit()?;
 
     let query = "MATCH (a)-[r]->(b) RETURN type(r) AS result";

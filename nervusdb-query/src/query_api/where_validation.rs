@@ -1,6 +1,5 @@
 use super::{
-    BTreeMap, BindingKind, Clause, Error, Expression, HashSet, Result,
-    infer_expression_binding_kind,
+    BTreeMap, BindingKind, Error, Expression, HashSet, Result, infer_expression_binding_kind,
 };
 
 fn is_quantifier_call(call: &crate::ast::FunctionCall) -> bool {
@@ -122,25 +121,10 @@ fn ensure_no_aggregation_functions(expr: &Expression) -> Result<()> {
                 }
             }
             crate::ast::ExistsExpression::Subquery(subquery) => {
-                for clause in &subquery.clauses {
-                    match clause {
-                        Clause::Where(w) => ensure_no_aggregation_functions(&w.expression)?,
-                        Clause::With(w) => {
-                            for item in &w.items {
-                                ensure_no_aggregation_functions(&item.expression)?;
-                            }
-                            if let Some(where_clause) = &w.where_clause {
-                                ensure_no_aggregation_functions(&where_clause.expression)?;
-                            }
-                        }
-                        Clause::Return(r) => {
-                            for item in &r.items {
-                                ensure_no_aggregation_functions(&item.expression)?;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+                let _ = subquery;
+                // Subquery internals are validated when compiling the nested query itself.
+                // Rejecting aggregates here would incorrectly ban legal constructs like
+                // `EXISTS { ... WITH n, count(*) AS c WHERE c > 0 ... }`.
             }
         },
         Expression::Variable(_)
@@ -388,36 +372,9 @@ fn validate_pattern_predicate_bindings(
                 }
             }
             crate::ast::ExistsExpression::Subquery(subquery) => {
-                for clause in &subquery.clauses {
-                    match clause {
-                        Clause::Where(w) => {
-                            validate_pattern_predicate_bindings(&w.expression, known_bindings)?
-                        }
-                        Clause::With(w) => {
-                            for item in &w.items {
-                                validate_pattern_predicate_bindings(
-                                    &item.expression,
-                                    known_bindings,
-                                )?;
-                            }
-                            if let Some(where_clause) = &w.where_clause {
-                                validate_pattern_predicate_bindings(
-                                    &where_clause.expression,
-                                    known_bindings,
-                                )?;
-                            }
-                        }
-                        Clause::Return(r) => {
-                            for item in &r.items {
-                                validate_pattern_predicate_bindings(
-                                    &item.expression,
-                                    known_bindings,
-                                )?;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+                let _ = subquery;
+                // Variables introduced inside EXISTS subqueries are scoped to that subquery.
+                // Recursing with the outer `known_bindings` causes false UndefinedVariable errors.
             }
         },
         Expression::Unary(u) => validate_pattern_predicate_bindings(&u.operand, known_bindings)?,

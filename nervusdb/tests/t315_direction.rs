@@ -28,7 +28,7 @@ fn test_incoming_relationship() -> nervusdb::Result<()> {
         nervusdb::PropertyValue::String("Bob".to_string()),
     )?;
 
-    txn.create_edge(alice, bob, rel_type);
+    txn.create_edge(alice, rel_type, bob);
     txn.commit()?;
 
     // Query: MATCH (b:Person {name: 'Bob'})<-[:KNOWS]-(a) RETURN a.name
@@ -74,7 +74,7 @@ fn test_undirected_relationship() -> nervusdb::Result<()> {
         nervusdb::PropertyValue::String("Bob".to_string()),
     )?;
 
-    txn.create_edge(alice, bob, rel_type);
+    txn.create_edge(alice, rel_type, bob);
     txn.commit()?;
 
     // Query 1: MATCH (a {name: 'Alice'})-[:KNOWS]-(b) RETURN b.name

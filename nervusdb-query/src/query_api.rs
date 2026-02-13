@@ -140,3 +140,32 @@ pub struct PreparedQuery {
 pub fn prepare(cypher: &str) -> Result<PreparedQuery> {
     prepare_entry::prepare(cypher)
 }
+
+pub(crate) fn exists_subquery_has_rows<S: GraphSnapshot>(
+    subquery: &Query,
+    outer_row: &Row,
+    snapshot: &S,
+    params: &Params,
+) -> Result<bool> {
+    let mut merge_subclauses = VecDeque::new();
+    let compiled = compile_m3_plan(
+        subquery.clone(),
+        &mut merge_subclauses,
+        Some(Plan::Values {
+            rows: vec![outer_row.clone()],
+        }),
+    )?;
+
+    if plan_contains_write(&compiled.plan) {
+        return Err(Error::Other(
+            "syntax error: InvalidClauseComposition".to_string(),
+        ));
+    }
+
+    let mut iter = execute_plan(snapshot, &compiled.plan, params);
+    while let Some(next_row) = iter.next() {
+        next_row?;
+        return Ok(true);
+    }
+    Ok(false)
+}

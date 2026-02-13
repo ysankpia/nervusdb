@@ -1256,14 +1256,72 @@ impl TokenParser {
 
     fn parse_exists_expression(&mut self) -> Result<ExistsExpression, Error> {
         self.consume(&TokenType::LeftBrace, "Expected '{' after EXISTS")?;
-
-        // Check if it's a subquery (starts with MATCH) or a Pattern
-        // For T309 tests use `EXISTS { (n)-[:KNOWS]->() }` which is a Pattern.
-        // We will default to parsing a pattern for now.
+        if self.check(&TokenType::Match)
+            || self.check(&TokenType::With)
+            || self.check(&TokenType::Return)
+            || self.check(&TokenType::Unwind)
+            || self.check(&TokenType::Call)
+        {
+            let subquery = self.parse_query()?;
+            self.consume(&TokenType::RightBrace, "Expected '}' after EXISTS subquery")?;
+            self.validate_exists_subquery_clauses(&subquery)?;
+            return Ok(ExistsExpression::Subquery(subquery));
+        }
 
         let pattern = self.parse_pattern()?;
+        if self.match_token(&TokenType::Where) {
+            let predicate = self.parse_expression()?;
+            self.consume(&TokenType::RightBrace, "Expected '}' after EXISTS pattern")?;
+            let subquery = self.build_exists_pattern_subquery(pattern, Some(predicate));
+            return Ok(ExistsExpression::Subquery(subquery));
+        }
+
         self.consume(&TokenType::RightBrace, "Expected '}' after EXISTS pattern")?;
         Ok(ExistsExpression::Pattern(pattern))
+    }
+
+    fn validate_exists_subquery_clauses(&self, subquery: &Query) -> Result<(), Error> {
+        for clause in &subquery.clauses {
+            if matches!(
+                clause,
+                Clause::Create(_)
+                    | Clause::Merge(_)
+                    | Clause::Set(_)
+                    | Clause::Remove(_)
+                    | Clause::Delete(_)
+                    | Clause::Foreach(_)
+            ) {
+                return Err(Error::Other(
+                    "syntax error: InvalidClauseComposition".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn build_exists_pattern_subquery(
+        &self,
+        pattern: Pattern,
+        where_expr: Option<Expression>,
+    ) -> Query {
+        let mut clauses = vec![Clause::Match(MatchClause {
+            optional: false,
+            patterns: vec![pattern],
+        })];
+        if let Some(expression) = where_expr {
+            clauses.push(Clause::Where(WhereClause { expression }));
+        }
+        clauses.push(Clause::Return(ReturnClause {
+            distinct: false,
+            items: vec![ReturnItem {
+                expression: Expression::Literal(Literal::Boolean(true)),
+                alias: None,
+            }],
+            order_by: None,
+            limit: None,
+            skip: None,
+        }));
+        Query { clauses }
     }
 
     fn parse_case_expression(&mut self) -> Result<CaseExpression, Error> {
