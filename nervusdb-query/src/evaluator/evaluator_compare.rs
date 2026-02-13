@@ -54,20 +54,10 @@ where
 
 fn compare_value_for_list_ordering(left: &Value, right: &Value) -> Option<Ordering> {
     match (left, right) {
-        (Value::Null, _) | (_, Value::Null) => None,
-        (Value::Int(_) | Value::Float(_), Value::Int(_) | Value::Float(_)) => {
-            let l = value_as_f64(left)?;
-            let r = value_as_f64(right)?;
-            if l.is_nan() || r.is_nan() {
-                None
-            } else {
-                l.partial_cmp(&r)
-            }
-        }
-        (Value::Bool(l), Value::Bool(r)) => Some(l.cmp(r)),
-        (Value::String(l), Value::String(r)) => Some(compare_strings_with_temporal(l, r)),
-        (Value::List(l), Value::List(r)) => compare_lists_ordering(l, r),
-        _ => None,
+        (Value::Null, Value::Null) => Some(Ordering::Equal),
+        (Value::Null, _) => Some(Ordering::Greater),
+        (_, Value::Null) => Some(Ordering::Less),
+        _ => order_compare_non_null(left, right),
     }
 }
 
@@ -245,5 +235,33 @@ mod tests {
         assert!(matches!(values[7], Value::Float(f) if !f.is_nan()));
         assert!(matches!(values[8], Value::Float(f) if f.is_nan()));
         assert!(matches!(values[9], Value::Null));
+    }
+
+    #[test]
+    fn list_ordering_treats_null_elements_as_highest() {
+        let mut lists = vec![
+            Value::List(vec![]),
+            Value::List(vec![Value::String("a".to_string())]),
+            Value::List(vec![Value::String("a".to_string()), Value::Int(1)]),
+            Value::List(vec![Value::Int(1)]),
+            Value::List(vec![Value::Int(1), Value::String("a".to_string())]),
+            Value::List(vec![Value::Int(1), Value::Null]),
+            Value::List(vec![Value::Null, Value::Int(1)]),
+            Value::List(vec![Value::Null, Value::Int(2)]),
+        ];
+
+        lists.sort_by(super::super::order_compare);
+        let mut descending = lists.clone();
+        descending.reverse();
+
+        assert_eq!(
+            descending[..4].to_vec(),
+            vec![
+                Value::List(vec![Value::Null, Value::Int(2)]),
+                Value::List(vec![Value::Null, Value::Int(1)]),
+                Value::List(vec![Value::Int(1), Value::Null]),
+                Value::List(vec![Value::Int(1), Value::String("a".to_string())]),
+            ]
+        );
     }
 }

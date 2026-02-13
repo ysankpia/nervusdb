@@ -58,9 +58,19 @@ impl TokenParser {
 
     fn parse_query(&mut self) -> Result<Query, Error> {
         let mut clauses = self.parse_single_query_clauses()?;
+        let mut union_mode: Option<bool> = None;
 
         while self.match_token(&TokenType::Union) {
             let all = self.match_token(&TokenType::All);
+            if let Some(existing) = union_mode {
+                if existing != all {
+                    return Err(Error::Other(
+                        "syntax error: InvalidClauseComposition".to_string(),
+                    ));
+                }
+            } else {
+                union_mode = Some(all);
+            }
             let right_clauses = self.parse_single_query_clauses()?;
             clauses.push(Clause::Union(UnionClause {
                 all,
@@ -924,10 +934,10 @@ impl TokenParser {
                 break;
             }
             let op = if self.match_token(&TokenType::Not) {
-                self.consume(&TokenType::Null, "Expected NULL after IS NOT")?;
+                self.consume_null_keyword("Expected NULL after IS NOT")?;
                 BinaryOperator::IsNotNull
             } else {
-                self.consume(&TokenType::Null, "Expected NULL after IS")?;
+                self.consume_null_keyword("Expected NULL after IS")?;
                 BinaryOperator::IsNull
             };
             lhs = Self::binary_expr(lhs, op, Expression::Literal(Literal::Null));
@@ -1083,6 +1093,16 @@ impl TokenParser {
             TokenType::Identifier(name) => {
                 let name = name.clone();
                 self.advance();
+
+                if name.eq_ignore_ascii_case("true") {
+                    return Ok(Expression::Literal(Literal::Boolean(true)));
+                }
+                if name.eq_ignore_ascii_case("false") {
+                    return Ok(Expression::Literal(Literal::Boolean(false)));
+                }
+                if name.eq_ignore_ascii_case("null") {
+                    return Ok(Expression::Literal(Literal::Null));
+                }
 
                 let mut function_name = name.clone();
                 let mut is_function = false;
@@ -1266,6 +1286,20 @@ impl TokenParser {
         }
 
         Ok(expr)
+    }
+
+    fn consume_null_keyword(&mut self, message: &'static str) -> Result<(), Error> {
+        match &self.peek().token_type {
+            TokenType::Null => {
+                self.advance();
+                Ok(())
+            }
+            TokenType::Identifier(name) if name.eq_ignore_ascii_case("null") => {
+                self.advance();
+                Ok(())
+            }
+            _ => Err(Error::Other(message.to_string())),
+        }
     }
 
     fn parse_expression_label_chain(&mut self) -> Result<Vec<String>, Error> {
@@ -1764,4 +1798,58 @@ fn parse_non_negative_u64(raw: &str, ctx: &str) -> Result<u64, Error> {
     }
     raw.parse::<u64>()
         .map_err(|_| Error::Other(format!("{ctx} must be a non-negative integer")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Parser;
+    use crate::ast::{Clause, Expression, Literal};
+
+    #[test]
+    fn rejects_mixed_union_and_union_all() {
+        let err = Parser::parse("RETURN 1 AS a UNION RETURN 2 AS a UNION ALL RETURN 3 AS a")
+            .expect_err("mixed UNION / UNION ALL should fail");
+        assert_eq!(err.to_string(), "syntax error: InvalidClauseComposition");
+    }
+
+    #[test]
+    fn map_literal_keyword_keys_preserve_case() {
+        let query = Parser::parse("RETURN {null: 'Mats', NULL: 'Pontus'} AS m")
+            .expect("query should parse");
+        let Clause::Return(ret) = &query.clauses[0] else {
+            panic!("expected RETURN clause");
+        };
+        let Expression::Map(map) = &ret.items[0].expression else {
+            panic!("expected map literal");
+        };
+
+        let keys: Vec<&str> = map
+            .properties
+            .iter()
+            .map(|pair| pair.key.as_str())
+            .collect();
+        assert_eq!(keys, vec!["null", "NULL"]);
+    }
+
+    #[test]
+    fn identifier_true_false_null_are_parsed_as_literals() {
+        let query =
+            Parser::parse("RETURN true AS t, FALSE AS f, null AS n").expect("query should parse");
+        let Clause::Return(ret) = &query.clauses[0] else {
+            panic!("expected RETURN clause");
+        };
+
+        assert!(matches!(
+            ret.items[0].expression,
+            Expression::Literal(Literal::Boolean(true))
+        ));
+        assert!(matches!(
+            ret.items[1].expression,
+            Expression::Literal(Literal::Boolean(false))
+        ));
+        assert!(matches!(
+            ret.items[2].expression,
+            Expression::Literal(Literal::Null)
+        ));
+    }
 }

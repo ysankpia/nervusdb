@@ -644,9 +644,6 @@ impl<'a> Lexer<'a> {
             "FOREACH" => TokenType::Foreach,
             "ON" => TokenType::On,
             "EXISTS" => TokenType::Exists,
-            "TRUE" => TokenType::Boolean(true),
-            "FALSE" => TokenType::Boolean(false),
-            "NULL" => TokenType::Null,
             _ => TokenType::Identifier(value),
         };
 

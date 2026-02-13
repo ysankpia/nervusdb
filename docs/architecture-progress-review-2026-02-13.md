@@ -225,3 +225,58 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 - `artifacts/tck/beta-03r4-baseline-gates-2026-02-13.log`
 - `artifacts/tck/beta-03r4-baseline-gates-r2-2026-02-13.log`
 - `artifacts/tck/beta-03r4-baseline-gates-r4-2026-02-13.log`
+
+---
+
+## 8. 续更快照（2026-02-13，BETA-03R5 失败簇滚动清零）
+
+### 8.1 本轮完成项（按四波次）
+
+- W1（Temporal/Aggregation/Return 收口）：
+  - `duration.seconds` 语义对齐 openCypher（仅秒组，不再折算天）。
+  - `MIN/MAX` 聚合比较切换到 Cypher 全序比较。
+  - `Return2` 投影差异修复（括号列名归一化、map 递归比较、UnknownFunction 编译期拦截）。
+- W2（List11 主簇）：
+  - `range(start,end)` 默认步长固定为 `+1`。
+  - 补齐 `sign()` 函数。
+  - 聚合+量词作用域校验收口，消除 `AmbiguousAggregationExpression` 误判。
+- W3（WITH/ORDER BY 链）：
+  - `WITH DISTINCT` 增加去重执行节点，修复去重失效。
+  - 列表排序比较在元素级纳入 Cypher 总序（含 `null`），修复 `WithOrderBy1[10]`。
+  - 绑定分析输出顺序修复，避免 `MATCH` 新变量被输入 `Project` 覆盖丢失（修复 `With1`）。
+- W4（Map/Union 语义）：
+  - parser 增加 `UNION` 与 `UNION ALL` 混用编译期阻断（`InvalidClauseComposition`）。
+  - map key 关键字大小写保留（`null`/`NULL`），修复静态/动态 map 访问大小写语义。
+
+### 8.2 定向结果
+
+- 全通过（非跳过场景）：
+  - `expressions/temporal/Temporal2.feature`
+  - `expressions/temporal/Temporal5.feature`
+  - `expressions/aggregation/Aggregation2.feature`
+  - `clauses/return/Return2.feature`
+  - `expressions/list/List11.feature`
+  - `clauses/with/With1.feature`
+  - `clauses/with/With5.feature`
+  - `clauses/with-orderBy/WithOrderBy1.feature`
+  - `clauses/with-orderBy/WithOrderBy2.feature`
+  - `clauses/with-orderBy/WithOrderBy3.feature`
+  - `expressions/map/Map1.feature`
+  - `expressions/map/Map2.feature`
+  - `clauses/union/Union3.feature`
+
+### 8.3 证据文件
+
+- `artifacts/tck/beta-03r5-temporal2-2026-02-13.log`
+- `artifacts/tck/beta-03r5-temporal5-2026-02-13.log`
+- `artifacts/tck/beta-03r5-aggregation2-2026-02-13.log`
+- `artifacts/tck/beta-03r5-return2-2026-02-13.log`
+- `artifacts/tck/beta-03r5-list11-2026-02-13.log`
+- `artifacts/tck/beta-03r5-with1-2026-02-13.log`
+- `artifacts/tck/beta-03r5-with5-2026-02-13.log`
+- `artifacts/tck/beta-03r5-withorderby1-2026-02-13.log`
+- `artifacts/tck/beta-03r5-withorderby2-2026-02-13.log`
+- `artifacts/tck/beta-03r5-withorderby3-2026-02-13.log`
+- `artifacts/tck/beta-03r5-map1-2026-02-13.log`
+- `artifacts/tck/beta-03r5-map2-2026-02-13.log`
+- `artifacts/tck/beta-03r5-union3-2026-02-13.log`

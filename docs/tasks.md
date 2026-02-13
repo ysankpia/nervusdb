@@ -96,11 +96,12 @@
 | **Beta Gate** | **SQLite-Beta 必达门槛**                                   |        |        |                             |                                                          |
 | BETA-01       | [Storage] 强制 `storage_format_epoch` 校验                 | High   | Done   | feat/TB1-beta-gate          | `StorageFormatMismatch` + Compatibility 映射已落地 |
 | BETA-02       | [CI] Tier-3 全量通过率统计与 95% 阈值阻断                  | High   | Done   | feat/TB1-beta-gate          | `scripts/tck_full_rate.sh` + `scripts/beta_gate.sh` + nightly/manual workflow |
-| BETA-03       | [TCK] 官方全量通过率冲刺至 ≥95%                            | High   | WIP    | feat/TB1-tck-95             | 2026-02-13 最新 Tier-3：3306/3897=84.83%（skipped 535，failed 56；见 `artifacts/tck/tier3-rate-2026-02-13.md`、`artifacts/tck/tier3-cluster-2026-02-13.md`）。当前主阻断：大量场景因 TCK harness 未覆盖（结果有序比较/参数注入/side effects/graph fixtures/procedure test stubs 等）导致 skipped；Top failing features：Temporal2/Temporal5。 |
+| BETA-03       | [TCK] 官方全量通过率冲刺至 ≥95%                            | High   | WIP    | feat/TB1-tck-95             | 2026-02-13 最新 Tier-3：3306/3897=84.83%（skipped 535，failed 56；见 `artifacts/tck/tier3-rate-2026-02-13.md`、`artifacts/tck/tier3-cluster-2026-02-13.md`）。当前主阻断：大量场景因 TCK harness 未覆盖（结果有序比较/参数注入/side effects/graph fixtures/procedure test stubs 等）导致 skipped。R5 定向簇已清零：Temporal2/Temporal5、Aggregation2、Return2、List11、With1/With5、WithOrderBy1、Union3、Map1/Map2（见 `artifacts/tck/beta-03r5-*.log`）。 |
 | BETA-03R1     | [Refactor] 拆分 `query_api.rs`（解析/校验/Plan 组装模块化） | High   | Done   | codex/feat/phase1b1c-bigbang | 已由 Phase 1a (R1) 覆盖完成，query_api/ 目录已拆分为多文件模块；PR #131 全门禁通过 |
 | BETA-03R2     | [Refactor] 拆分 `executor.rs`（读路径/写路径/排序投影）      | High   | Done   | codex/feat/phase1b1c-bigbang | 已由 Phase 1a (R2) 覆盖完成，executor/ 目录已拆分为 34 文件；PR #131 全门禁通过 |
 | BETA-03R3     | [Refactor] 拆分 `evaluator.rs` Temporal/Duration 子模块     | High   | Done   | codex/feat/phase1b1c-bigbang | 已由 Phase 1a (R3) 覆盖完成，evaluator/ 目录已拆分为 25 文件；PR #131 全门禁通过 |
 | BETA-03R4     | [TCK] 重构后恢复推进（Match4/Match9 失败簇三波次）           | High   | Done   | codex/feat/phase1b1c-bigbang | 2026-02-13 主干攻坚 + Follow-up 完成：W1/W2/W3 落地（varlen 关系变量统一列表语义、`[rs*]` 受绑定关系列表约束、parser+varlen 过滤收口、复合 CREATE 管线修复、trail 去重修复），并补齐 follow-up 收口（多标签 MATCH 过滤、`[:T|:T]` parser 去重、`length()` 参数类型校验、`null` 绑定类型冲突修复、TCK 标签顺序归一化）。`Match4`/`Match9` 非跳过场景全通过，扩展矩阵历史失败已清零。证据：`artifacts/tck/beta-03r4-match-cluster-2026-02-13.log`、`artifacts/tck/beta-03r4-followup-cluster-2026-02-13.log`、`artifacts/tck/beta-03r4-regression-matrix-2026-02-13.log`、`artifacts/tck/beta-03r4-baseline-gates-r4-2026-02-13.log`。 |
+| BETA-03R5     | [TCK] 失败簇滚动清零（Temporal/Return/List/With/Map/Union） | High   | WIP    | codex/feat/phase1b1c-bigbang | 2026-02-13 已清零定向失败簇：`Temporal2`、`Temporal5`、`Aggregation2`、`Return2`、`List11`、`With1`、`With5`、`WithOrderBy1`、`Union3`、`Map1`、`Map2`；并补齐编译期 UnknownFunction、WITH DISTINCT、聚合量词作用域、列表含 null 排序、map keyword key 大小写、UNION/UNION ALL 混用校验等语义。待执行下一轮全量 tier3 复算。 |
 | BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | Plan   | feat/TB1-stability-window   | 任一阻断失败即重置计数 |
 | BETA-05       | [Perf] 大规模 SLO 封板（读120/写180/向量220 ms P99）       | High   | Plan   | feat/TB1-perf-slo           | 达标后方可发布 Beta |
 
@@ -110,6 +111,13 @@
 - W3：修复关系关键字解析与 varlen 属性谓词路径；补齐复合 `CREATE...WITH...UNWIND...CREATE` 写执行链；在 `MatchBoundRel` 增加路径重复边检查，清零 `Match4[4,7]`。
 - W4（Follow-up 收口）：清零扩展矩阵历史失败簇：`Match1[3]`、`Match3[7,8,25]`、`Path1[1]`、`Path2[3]`、`Path3[2,3]`。
 - 回归与门禁：`cargo fmt --check`、`cargo clippy --workspace --exclude nervusdb-pyo3 --all-targets -- -W warnings`、`workspace_quick_test`、`tier0/1/2`、`binding_smoke`、`contract_smoke` 全通过（见 `artifacts/tck/beta-03r4-baseline-gates-r4-2026-02-13.log`）。
+
+### BETA-03R5 子进展（2026-02-13）
+- R5-W1：Temporal/聚合/投影链修复，清零 `Temporal2`、`Temporal5`、`Aggregation2`、`Return2`。
+- R5-W2：列表与量词语义修复，清零 `List11`（`range()` 默认步长 + `sign()` + 量词聚合作用域）。
+- R5-W3：WITH 与排序链修复，清零 `With5`、`With1`、`WithOrderBy1`。
+- R5-W4：map/union 语义收口，清零 `Map1`、`Map2`、`Union3`。
+- 证据日志：`artifacts/tck/beta-03r5-temporal2-2026-02-13.log`、`artifacts/tck/beta-03r5-temporal5-2026-02-13.log`、`artifacts/tck/beta-03r5-aggregation2-2026-02-13.log`、`artifacts/tck/beta-03r5-return2-2026-02-13.log`、`artifacts/tck/beta-03r5-list11-2026-02-13.log`、`artifacts/tck/beta-03r5-with1-2026-02-13.log`、`artifacts/tck/beta-03r5-with5-2026-02-13.log`、`artifacts/tck/beta-03r5-withorderby1-2026-02-13.log`、`artifacts/tck/beta-03r5-map1-2026-02-13.log`、`artifacts/tck/beta-03r5-map2-2026-02-13.log`、`artifacts/tck/beta-03r5-union3-2026-02-13.log`。
 
 ## Archived (v1/Alpha)
 

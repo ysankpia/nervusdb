@@ -296,7 +296,12 @@ fn expression_uses_allowed_group_refs(
                 return ok;
             }
             call.args.iter().all(|arg| {
-                expression_uses_allowed_group_refs(arg, grouping_keys, grouping_aliases, local_scopes)
+                expression_uses_allowed_group_refs(
+                    arg,
+                    grouping_keys,
+                    grouping_aliases,
+                    local_scopes,
+                )
             })
         }
         Expression::List(items) => items.iter().all(|item| {
@@ -1367,11 +1372,7 @@ mod tests {
             ],
         });
 
-        validate_aggregate_mixed_expression(
-            &quantifier,
-            &[],
-            &std::collections::HashSet::new(),
-        )
-        .expect("quantifier-local variable should not trigger ambiguous aggregation");
+        validate_aggregate_mixed_expression(&quantifier, &[], &std::collections::HashSet::new())
+            .expect("quantifier-local variable should not trigger ambiguous aggregation");
     }
 }

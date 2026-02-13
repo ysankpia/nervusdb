@@ -150,6 +150,12 @@ pub(super) fn compile_with_plan(input: Plan, with: &crate::ast::WithClause) -> R
         };
     }
 
+    if with.distinct {
+        plan = Plan::Distinct {
+            input: Box::new(plan),
+        };
+    }
+
     Ok(plan)
 }
 
