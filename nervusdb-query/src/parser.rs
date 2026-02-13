@@ -1412,7 +1412,10 @@ impl TokenParser {
                 Self::BP_MUL + 1,
                 false,
             )),
-            TokenType::Power => Some((BinaryOperator::Power, Self::BP_POW, Self::BP_POW, false)), // right-assoc
+            // openCypher exponentiation is left-associative: 4 ^ 6 ^ 3 == (4 ^ 6) ^ 3.
+            TokenType::Power => {
+                Some((BinaryOperator::Power, Self::BP_POW, Self::BP_POW + 1, false))
+            }
             _ => None,
         }
     }

@@ -539,6 +539,138 @@ fn format_value(value: &Value) -> String {
     }
 }
 
+fn split_top_level(input: &str, delimiter: char) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut bracket_depth: i32 = 0;
+    let mut brace_depth: i32 = 0;
+    let mut paren_depth: i32 = 0;
+    let mut in_quote: Option<char> = None;
+    let mut escaped = false;
+
+    for ch in input.chars() {
+        if let Some(quote) = in_quote {
+            current.push(ch);
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == quote {
+                in_quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' | '"' => {
+                in_quote = Some(ch);
+                current.push(ch);
+            }
+            '[' => {
+                bracket_depth += 1;
+                current.push(ch);
+            }
+            ']' => {
+                bracket_depth -= 1;
+                current.push(ch);
+            }
+            '{' => {
+                brace_depth += 1;
+                current.push(ch);
+            }
+            '}' => {
+                brace_depth -= 1;
+                current.push(ch);
+            }
+            '(' => {
+                paren_depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                paren_depth -= 1;
+                current.push(ch);
+            }
+            c if c == delimiter && bracket_depth == 0 && brace_depth == 0 && paren_depth == 0 => {
+                parts.push(current.trim().to_string());
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if !current.trim().is_empty() {
+        parts.push(current.trim().to_string());
+    }
+
+    parts
+}
+
+fn find_top_level_colon(input: &str) -> Option<usize> {
+    let mut bracket_depth: i32 = 0;
+    let mut brace_depth: i32 = 0;
+    let mut paren_depth: i32 = 0;
+    let mut in_quote: Option<char> = None;
+    let mut escaped = false;
+
+    for (idx, ch) in input.char_indices() {
+        if let Some(quote) = in_quote {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == quote {
+                in_quote = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' | '"' => in_quote = Some(ch),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth -= 1,
+            '{' => brace_depth += 1,
+            '}' => brace_depth -= 1,
+            '(' => paren_depth += 1,
+            ')' => paren_depth -= 1,
+            ':' if bracket_depth == 0 && brace_depth == 0 && paren_depth == 0 => return Some(idx),
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn parse_tck_map(inner: &str) -> Value {
+    let mut map = std::collections::BTreeMap::new();
+    for entry in split_top_level(inner, ',') {
+        if entry.is_empty() {
+            continue;
+        }
+        let Some(colon_idx) = find_top_level_colon(&entry) else {
+            return Value::String(format!("{{{inner}}}"));
+        };
+        let key_raw = entry[..colon_idx].trim();
+        let value_raw = entry[colon_idx + 1..].trim();
+        let key = if (key_raw.starts_with('\'') && key_raw.ends_with('\''))
+            || (key_raw.starts_with('"') && key_raw.ends_with('"'))
+        {
+            key_raw[1..key_raw.len() - 1].to_string()
+        } else {
+            key_raw.to_string()
+        };
+        map.insert(key, parse_tck_value(value_raw));
+    }
+    Value::Map(map)
+}
+
 fn parse_tck_value(s: &str) -> Value {
     let s = s.trim();
     if s == "null" {
@@ -559,12 +691,14 @@ fn parse_tck_value(s: &str) -> Value {
         if inner.is_empty() {
             return Value::List(vec![]);
         }
-        // Simple split for basic cases - doesn't handle nested lists
-        let items: Vec<Value> = inner
-            .split(',')
-            .map(|item| parse_tck_value(item.trim()))
+        let items: Vec<Value> = split_top_level(inner, ',')
+            .into_iter()
+            .map(|item| parse_tck_value(&item))
             .collect();
         return Value::List(items);
+    }
+    if s.starts_with('{') && s.ends_with('}') {
+        return parse_tck_map(&s[1..s.len() - 1]);
     }
     if let Ok(i) = s.parse::<i64>() {
         return Value::Int(i);
