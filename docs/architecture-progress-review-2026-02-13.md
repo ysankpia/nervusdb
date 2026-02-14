@@ -905,3 +905,42 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 - `artifacts/tck/beta-04-r14w4-tail-guard-targeted-2026-02-14.log`
 - `artifacts/tck/beta-04-r14w4-tail-guard-tier0-2026-02-14.log`
 - `artifacts/tck/beta-04-r14w4-tail-guard-tier12-2026-02-14.log`
+
+---
+
+## 23. 续更快照（2026-02-14，BETA-03R14-W5 CREATE 属性入口收口）
+
+### 23.1 本轮完成项（R14-W5）
+
+- 以 TDD 方式补齐 `CREATE` 属性表达式入口的 runtime 类型语义：
+  - 新增并先跑红：
+    - `test_create_property_with_invalid_toboolean_argument_raises_runtime_type_error`
+  - 修复实现：
+    - 在 `execute_create_from_rows` 中，对节点/关系属性表达式求值前接入 `ensure_runtime_expression_compatible(...)`。
+- 行为变化：
+  - 修复 `CREATE (:N {flag: toBoolean(1)})` 在非法参数输入下可能“静默跳过属性”的行为差异；
+  - 将 `CREATE` 属性入口与既有 `WHERE/UNWIND/SET/MERGE/FOREACH/DELETE` 统一到同一 runtime TypeError 语义链路。
+
+### 23.2 回归结果
+
+- 定向测试：
+  - `cargo test -p nervusdb --test create_test test_create_property_with_invalid_toboolean_argument_raises_runtime_type_error -- --exact --nocapture`：`1 passed`
+  - `cargo test -p nervusdb --test create_test test_delete_list_index_with_invalid_index_type_raises_runtime_type_error -- --exact --nocapture`：`1 passed`
+  - `cargo test -p nervusdb --test t324_foreach t324_foreach_invalid_toboolean_argument_raises_runtime_type_error -- --exact --nocapture`：`1 passed`
+  - `cargo test -p nervusdb --test t108_set_clause test_set_invalid_toboolean_argument_raises_runtime_type_error -- --exact --nocapture`：`1 passed`
+  - `cargo test -p nervusdb --test t306_unwind test_unwind_toboolean_invalid_argument_raises_runtime_type_error -- --exact --nocapture`：`1 passed`
+- TCK 定向：
+  - `clauses/create/Create1.feature`、`clauses/delete/Delete5.feature` 全通过。
+- 门禁：
+  - `bash scripts/tck_tier_gate.sh tier0` 全通过；
+  - `cargo fmt --all -- --check` 通过。
+
+### 23.3 对后续 R14 的影响
+
+- R14-W5 完成后，运行期类型守卫已覆盖主要写读执行入口；
+- 后续可转为“函数白名单覆盖完整性”与“错误码精细一致性”审计，避免新增函数路径再次出现 silent null。
+
+### 23.4 证据文件
+
+- `artifacts/tck/beta-04-r14w5-create-guard-targeted-2026-02-14.log`
+- `artifacts/tck/beta-04-r14w5-create-guard-tier0-2026-02-14.log`

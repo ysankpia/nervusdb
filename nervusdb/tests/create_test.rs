@@ -490,3 +490,22 @@ fn test_delete_list_index_with_invalid_index_type_raises_runtime_type_error() {
         "expected InvalidArgumentType, got: {err}"
     );
 }
+
+#[test]
+fn test_create_property_with_invalid_toboolean_argument_raises_runtime_type_error() {
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path()).unwrap();
+    let snapshot = db.snapshot();
+
+    let q = prepare("CREATE (:N {flag: toBoolean(1)})").unwrap();
+    let mut txn = db.begin_write();
+    let err = q
+        .execute_write(&snapshot, &mut txn, &nervusdb_query::Params::new())
+        .expect_err("invalid toBoolean argument in CREATE property should raise runtime TypeError")
+        .to_string();
+
+    assert!(
+        err.contains("InvalidArgumentValue"),
+        "expected InvalidArgumentValue, got: {err}"
+    );
+}
