@@ -603,3 +603,50 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 - `artifacts/tck/tier3-rate-2026-02-14.json`
 - `artifacts/tck/tier3-rate-2026-02-14.md`
 - `artifacts/tck/tier3-cluster-2026-02-14.md`
+
+---
+
+## 16. 续更快照（2026-02-14，BETA-03R13 compile-time TypeError 严格化）
+
+### 16.1 本轮完成项（R13-W1）
+
+- 将 TCK harness 中 `TypeError should be raised at compile time` 从桥接模式切换为严格断言：
+  - `allow_success: true -> false`
+  - 影响：不再允许“未报错也通过”的过渡路径。
+- 为保障严格断言可通过，在投影绑定校验补齐编译期静态拦截：
+  - 新增“变量来源表达式追溯”，沿 `Plan` 链向上回溯 alias 来源表达式。
+  - 对可静态判定为“非 map 标量/列表”的属性访问，直接在编译期返回 `syntax error: InvalidArgumentType`。
+  - 保持 `null` 来源不误判（例如 `WITH null AS m RETURN m.x` 仍保持 `null` 语义）。
+
+### 16.2 回归结果
+
+- 定向主簇：
+  - `expressions/map/Map1.feature`：`19/19 passed`
+  - `expressions/graph/Graph6.feature`：`14/14 passed`
+- 扩展回归：
+  - `expressions/map/Map2.feature`
+  - `expressions/graph/Graph3.feature`
+  - `expressions/graph/Graph4.feature`
+  - `clauses/return/Return2.feature`
+  - 以上均通过，无回退。
+- 基线门禁：
+  - `cargo fmt --all -- --check`
+  - `bash scripts/workspace_quick_test.sh`
+  - `bash scripts/tck_tier_gate.sh tier0`
+  - `bash scripts/tck_tier_gate.sh tier1`
+  - `bash scripts/tck_tier_gate.sh tier2`
+  - `bash scripts/binding_smoke.sh`
+  - `bash scripts/contract_smoke.sh`
+  - 全通过。
+
+### 16.3 对 BETA-04 稳定窗的影响
+
+- R13-W1 不改变 Tier-3 通过率指标口径，属于“语义收紧 + 编译期前置失败”。
+- 当前稳定窗核心信号保持不变：`failed = 0`，并维持门禁全绿。
+
+### 16.4 证据文件
+
+- `artifacts/tck/beta-04-r13w1-map1-2026-02-14.log`
+- `artifacts/tck/beta-04-r13w1-graph6-2026-02-14.log`
+- `artifacts/tck/beta-04-r13w1-regression-2026-02-14.log`
+- `artifacts/tck/beta-04-r13w1-gate-2026-02-14.log`
