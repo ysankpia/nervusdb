@@ -105,7 +105,7 @@
 | BETA-03R6     | [TCK] 失败簇滚动清零（Merge/With/Return/Graph/Skip-Limit）  | High   | Done   | codex/feat/phase1b1c-bigbang | 2026-02-13 已清零 `Merge1/2/3`、`Match8`、`Create1`、`With4`、`Return1/7`、`Graph3/4`、`ReturnSkipLimit1/2`、`Mathematical8`；见 `artifacts/tck/beta-03r6-*.log`。 |
 | BETA-03R7     | [TCK] 主干攻坚（Temporal/Aggregation/Set/Remove/Create/Subquery） | High   | Done   | codex/feat/phase1b1c-bigbang | 2026-02-13 已清零 `Temporal4`、`Aggregation6`、`Remove1/3`、`Set2/4/5`、`Create3`，修复 correlated subquery 作用域回归，Tier-3 提升至 94.48%（3682/3897）。 |
 | BETA-03R13    | [Hardening] `TypeError` 断言收紧（compile-time + any-time + runtime） | High   | Done   | codex/feat/beta-04-r13w2-anytime-hardening | R13-W1/W2/W3 已全部完成：compile-time、any-time、runtime 三类 `TypeError` 断言均切换为严格模式；补齐递归运行期表达式类型守卫（含 list comprehension 作用域）与属性写入非法 list 元素拦截，定向簇与基线门禁全绿。 |
-| BETA-03R14    | [Hardening] runtime 语义一致性收口（WHERE guard + type(rel)） | High   | WIP    | codex/feat/beta-04-r14w2-unwind-guard | R14-W1/W2/W3/W4/W5/W6/W7/W8/W9/W10/W11 持续推进：完成 `WHERE` + `UNWIND` + 写路径（`SET/MERGE`）+ 尾部入口（`FOREACH/DELETE`）+ `CREATE` 属性表达式 + `CALL` 参数表达式 + 聚合参数表达式 + `IndexSeek` 值表达式 runtime guard 收口；并新增 runtime guard 审计脚本（识别 executor 直接求值点），覆盖 `type(rel)`、非法索引、非法 `toBoolean` 参数等场景；定向回归与 tier0/1/2 全绿。 |
+| BETA-03R14    | [Hardening] runtime 语义一致性收口（WHERE guard + type(rel)） | High   | WIP    | codex/feat/beta-04-r14w2-unwind-guard | R14-W1/W2/W3/W4/W5/W6/W7/W8/W9/W10/W11/W12 持续推进：完成 `WHERE` + `UNWIND` + 写路径（`SET/MERGE`）+ 尾部入口（`FOREACH/DELETE`）+ `CREATE` 属性表达式 + `CALL` 参数表达式 + 聚合参数表达式 + `IndexSeek` 值表达式 runtime guard 收口；并新增/执行 runtime guard 审计脚本（识别 executor 直接求值点），已清零 executor 热点文件；定向回归与 tier0/1/2 全绿。 |
 | BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | WIP    | feat/TB1-stability-window   | 已新增 `scripts/stability_window.sh`（按最近 N 天 `tier3-rate-YYYY-MM-DD.json` 校验 `pass_rate>=95 且 failed=0`）；2026-02-14 最新快照 `100.00%`（`3897/3897`，`failed=0`），当前累计天数不足 7 天，继续滚动积累。 |
 | BETA-05       | [Perf] 大规模 SLO 封板（读120/写180/向量220 ms P99）       | High   | Plan   | feat/TB1-perf-slo           | 达标后方可发布 Beta |
 
@@ -373,6 +373,12 @@
     - 统计 `executor/` 中 `evaluate_expression_value` vs `ensure_runtime_expression_compatible` 分布；
     - 当前唯一潜在热点：`write_orchestration.rs`（存在一次直接求值且未显式 guard；该处为 delete overlay 目标收集，后续可评估是否需要改为 Result 传播）。
   - 证据：`artifacts/tck/beta-04-r14w11-runtime-guard-audit-2026-02-14.log`。
+- R14-W12（收口：清零 executor 侧 runtime guard 审计热点）：
+  - 修复点：
+    - `collect_delete_targets_from_rows` 升级为 `Result`，并在表达式求值前接入 `ensure_runtime_expression_compatible`，避免 delete overlay 目标收集阶段的“未 guard 直接求值”。
+  - 结果：
+    - `scripts/runtime_guard_audit.sh` 输出 `potential hotspots` 为 `none`。
+  - 门禁：`bash scripts/tck_tier_gate.sh tier0` 全通过，`cargo fmt --all -- --check` 通过。
 - 证据日志：
   - `artifacts/tck/beta-04-r14w1-targeted-2026-02-14.log`
   - `artifacts/tck/beta-04-r14w1-tier0-2026-02-14.log`
@@ -400,6 +406,9 @@
   - `artifacts/tck/beta-04-r14w10-index-seek-guard-fmt-2026-02-14.log`
   - `artifacts/tck/beta-04-r14w10-index-seek-guard-tier0-2026-02-14.log`
   - `artifacts/tck/beta-04-r14w11-runtime-guard-audit-2026-02-14.log`
+  - `artifacts/tck/beta-04-r14w12-runtime-guard-hotspot-fix-2026-02-14.log`
+  - `artifacts/tck/beta-04-r14w12-runtime-guard-hotspot-fix-tier0-2026-02-14.log`
+  - `artifacts/tck/beta-04-r14w12-runtime-guard-hotspot-fix-fmt-2026-02-14.log`
 
 ## Archived (v1/Alpha)
 

@@ -1154,3 +1154,29 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 ### 29.3 证据文件
 
 - `artifacts/tck/beta-04-r14w11-runtime-guard-audit-2026-02-14.log`
+
+---
+
+## 30. 续更快照（2026-02-14，BETA-03R14-W12 清零 runtime guard 审计热点）
+
+### 30.1 本轮完成项（R14-W12）
+
+- 修复审计脚本识别出的唯一 executor 热点（`write_orchestration.rs`）：
+  - 将 `collect_delete_targets_from_rows` 升级为 `Result<...>`；
+  - 在 delete overlay 目标收集阶段，对每个 `DELETE` 目标表达式求值前接入 `ensure_runtime_expression_compatible(...)`。
+- 目标：
+  - 消除“内部收集阶段直接求值但未 guard”的剩余路径，使 runtime 语义一致性更稳健（不依赖后续执行入口兜底）。
+
+### 30.2 回归与门禁结果
+
+- 审计脚本：
+  - `scripts/runtime_guard_audit.sh` 输出 `potential hotspots (eval>0 && guard==0)` 为 `none`。
+- 门禁：
+  - `bash scripts/tck_tier_gate.sh tier0` 全通过；
+  - `cargo fmt --all -- --check` 通过。
+
+### 30.3 证据文件
+
+- `artifacts/tck/beta-04-r14w12-runtime-guard-hotspot-fix-2026-02-14.log`
+- `artifacts/tck/beta-04-r14w12-runtime-guard-hotspot-fix-tier0-2026-02-14.log`
+- `artifacts/tck/beta-04-r14w12-runtime-guard-hotspot-fix-fmt-2026-02-14.log`
