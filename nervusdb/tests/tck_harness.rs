@@ -45,6 +45,24 @@ async fn empty_graph(_world: &mut GraphWorld) {
     // Already empty on new()
 }
 
+#[given(regex = r"^the ([A-Za-z0-9_-]+) graph$")]
+async fn given_named_graph(world: &mut GraphWorld, graph_name: String) {
+    let graph_file = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/opencypher_tck/tck/graphs")
+        .join(&graph_name)
+        .join(format!("{graph_name}.cypher"));
+
+    let cypher = fs::read_to_string(&graph_file)
+        .unwrap_or_else(|e| panic!("Failed to read graph fixture {}: {e}", graph_file.display()));
+    execute_write(world, &cypher);
+    assert!(
+        world.last_error.is_none(),
+        "Failed to load graph fixture {}: {:?}",
+        graph_file.display(),
+        world.last_error
+    );
+}
+
 #[given(regex = r"^parameters are:$")]
 async fn parameters_are(world: &mut GraphWorld, step: &cucumber::gherkin::Step) {
     let table = step.table.as_ref().expect("Expected table");

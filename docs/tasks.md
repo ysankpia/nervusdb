@@ -96,7 +96,7 @@
 | **Beta Gate** | **SQLite-Beta 必达门槛**                                   |        |        |                             |                                                          |
 | BETA-01       | [Storage] 强制 `storage_format_epoch` 校验                 | High   | Done   | feat/TB1-beta-gate          | `StorageFormatMismatch` + Compatibility 映射已落地 |
 | BETA-02       | [CI] Tier-3 全量通过率统计与 95% 阈值阻断                  | High   | Done   | feat/TB1-beta-gate          | `scripts/tck_full_rate.sh` + `scripts/beta_gate.sh` + nightly/manual workflow |
-| BETA-03       | [TCK] 官方全量通过率冲刺至 ≥95%                            | High   | Done   | feat/TB1-tck-95             | 2026-02-14 Tier-3 全量复算达到门槛：`3719/3897=95.43%`（skipped 178，failed 0）；见 `artifacts/tck/beta-03r9-tier3-full-2026-02-14.log`、`artifacts/tck/tier3-rate-2026-02-14.md`、`artifacts/tck/tier3-cluster-2026-02-14.md`。 |
+| BETA-03       | [TCK] 官方全量通过率冲刺至 ≥95%                            | High   | Done   | feat/TB1-tck-95             | 2026-02-14 最新 Tier-3 全量复算：`3738/3897=95.92%`（skipped 159，failed 0）；见 `artifacts/tck/beta-04-tier3-rerun-2026-02-14.log`、`artifacts/tck/tier3-rate-2026-02-14.md`、`artifacts/tck/tier3-cluster-2026-02-14.md`。 |
 | BETA-03R1     | [Refactor] 拆分 `query_api.rs`（解析/校验/Plan 组装模块化） | High   | Done   | codex/feat/phase1b1c-bigbang | 已由 Phase 1a (R1) 覆盖完成，query_api/ 目录已拆分为多文件模块；PR #131 全门禁通过 |
 | BETA-03R2     | [Refactor] 拆分 `executor.rs`（读路径/写路径/排序投影）      | High   | Done   | codex/feat/phase1b1c-bigbang | 已由 Phase 1a (R2) 覆盖完成，executor/ 目录已拆分为 34 文件；PR #131 全门禁通过 |
 | BETA-03R3     | [Refactor] 拆分 `evaluator.rs` Temporal/Duration 子模块     | High   | Done   | codex/feat/phase1b1c-bigbang | 已由 Phase 1a (R3) 覆盖完成，evaluator/ 目录已拆分为 25 文件；PR #131 全门禁通过 |
@@ -180,6 +180,18 @@
   - `scripts/beta_gate.sh` 负责单次阈值阻断
   - `scripts/stability_window.sh` 负责连续天数窗口阻断
 - 当前状态：仅 `2026-02-14` 快照已达标，稳定窗累计仍在进行中。
+
+### BETA-03R10 子进展（2026-02-14）
+- R10-W1：新增 TCK harness 图夹具步骤 `Given the <graph> graph`，支持从 `tests/opencypher_tck/tck/graphs/<name>/<name>.cypher` 自动加载图数据。
+- R10-W2：定向回归 `useCases/triadicSelection/TriadicSelection1.feature`：
+  - `19 skipped` → `19 passed`（零失败）
+- R10-W3：Tier-3 全量复算进一步提升：
+  - `3897 scenarios (3738 passed, 159 skipped, 0 failed)`，通过率 `95.92%`
+- 证据日志：
+  - `artifacts/tck/beta-04-triadic-before-2026-02-14.log`
+  - `artifacts/tck/beta-04-triadic-after-2026-02-14.log`
+  - `artifacts/tck/beta-04-tier3-rerun-2026-02-14.log`
+  - `artifacts/tck/tier3-rate-2026-02-14.md`
 
 ## Archived (v1/Alpha)
 

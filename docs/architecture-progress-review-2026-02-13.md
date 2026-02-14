@@ -50,7 +50,7 @@
 | 统一 EdgeKey（消除 snapshot 本地定义） | Done | `nervusdb-storage/src/snapshot.rs` 改为 API 别名 |
 | 包名去 -v2 后缀 | Done | 所有 Cargo.toml `name` 字段均无 `-v2` |
 | facade re-export 补全 | Done | `nervusdb/src/lib.rs:57-67` 导出 GraphStore/PAGE_SIZE/backup/bulkload |
-| TCK 文件名清理（tXXX_ 前缀） | 未执行 | 依赖 TCK 100% 通过后执行（当前 95.43%） |
+| TCK 文件名清理（tXXX_ 前缀） | 未执行 | 依赖 TCK 100% 通过后执行（当前 95.92%） |
 
 Phase 1b 完成度约 95%，唯一未完成项是 TCK 文件名语义化重命名（按规划需等 TCK 100% 后执行）。
 
@@ -106,7 +106,7 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 
 | 门槛 | 目标 | 当前 | 状态 |
 |------|------|------|------|
-| TCK Tier-3 全量通过率 | ≥95% | 95.43%（3719/3897） | 已达成（0 failed） |
+| TCK Tier-3 全量通过率 | ≥95% | 95.92%（3738/3897） | 已达成（0 failed） |
 | 连续 7 天稳定窗 | 7 天全绿 | 进行中（BETA-04 WIP） | 已解锁（等待 7 天累计） |
 | 性能 SLO 封板 | P99 读≤120ms/写≤180ms/向量≤220ms | 未启动（BETA-05 Plan） | 阻塞于稳定窗 |
 
@@ -119,6 +119,7 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 | 2026-02-13（R5 快照） | 3306 | 3897 | 84.83% | 56 | +113 场（较 2026-02-11） |
 | 2026-02-13（R7 复算） | 3682 | 3897 | 94.48% | 16 | +376 场（较 R5 快照） |
 | 2026-02-14（R9 复算） | 3719 | 3897 | 95.43% | 0 | +37 场（较 R7 复算） |
+| 2026-02-14（R10 复算） | 3738 | 3897 | 95.92% | 0 | +19 场（较 R9 复算） |
 
 ### 3.3 NotImplemented 残留（8 处）
 
@@ -141,7 +142,7 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 |------|-----|------|
 | Cargo.toml 版本 | 2.0.0 | `Cargo.toml` |
 | Workspace crate 数 | 5（api/storage/query/nervusdb/cli） | `Cargo.toml` members |
-| TCK Tier-3 通过率 | 95.43%（3719/3897） | `artifacts/tck/tier3-rate-2026-02-14.md` |
+| TCK Tier-3 通过率 | 95.92%（3738/3897） | `artifacts/tck/tier3-rate-2026-02-14.md` |
 | TCK 失败场景数 | 0 | `artifacts/tck/tier3-rate-2026-02-14.md` |
 | NotImplemented 残留 | 8 处 | grep 验证 |
 | executor/ 文件数 | 34 | `nervusdb-query/src/executor/` |
@@ -485,3 +486,30 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 - `artifacts/tck/tier3-rate-2026-02-14.json`
 - `artifacts/tck/tier3-cluster-2026-02-14.md`
 - `scripts/stability_window.sh`
+
+---
+
+## 13. 续更快照（2026-02-14，BETA-03R10 triadic 图夹具收口）
+
+### 13.1 本轮完成项
+
+- 新增 TCK harness 图夹具步骤：
+  - `Given the <graph> graph`
+  - 自动加载 `tests/opencypher_tck/tck/graphs/<name>/<name>.cypher` 并执行初始化
+- 直接修复 `TriadicSelection1` 全量 skipped 根因（步骤未定义），不改查询内核语义。
+
+### 13.2 回归结果
+
+- 定向回归：
+  - `useCases/triadicSelection/TriadicSelection1.feature`
+  - 结果：`19 skipped` → `19 passed`
+- Tier-3 全量复算：
+  - `3897 scenarios (3738 passed, 159 skipped, 0 failed)`
+  - 通过率 `95.92%`（较 R9 再提升 `+0.49pp`）
+
+### 13.3 证据文件
+
+- `artifacts/tck/beta-04-triadic-before-2026-02-14.log`
+- `artifacts/tck/beta-04-triadic-after-2026-02-14.log`
+- `artifacts/tck/beta-04-tier3-rerun-2026-02-14.log`
+- `artifacts/tck/tier3-rate-2026-02-14.md`
