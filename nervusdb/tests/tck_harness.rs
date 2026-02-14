@@ -1,8 +1,12 @@
 use cucumber::{World, given, then, when};
 use nervusdb::Db;
 use nervusdb_api::GraphSnapshot;
+use nervusdb_query::executor::{
+    TestProcedureField, TestProcedureFixture, TestProcedureType, clear_test_procedure_fixtures,
+    register_test_procedure_fixture,
+};
 use nervusdb_query::{Params, Value, prepare};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
 use std::fs;
 use std::path::Path;
@@ -41,12 +45,17 @@ impl GraphWorld {
 
 #[given("an empty graph")]
 #[given("any graph")]
-async fn empty_graph(_world: &mut GraphWorld) {
+async fn empty_graph(world: &mut GraphWorld) {
+    clear_test_procedure_fixtures();
+    world.params = Params::new();
     // Already empty on new()
 }
 
 #[given(regex = r"^the ([A-Za-z0-9_-]+) graph$")]
 async fn given_named_graph(world: &mut GraphWorld, graph_name: String) {
+    clear_test_procedure_fixtures();
+    world.params = Params::new();
+
     let graph_file = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/opencypher_tck/tck/graphs")
         .join(&graph_name)
@@ -60,6 +69,47 @@ async fn given_named_graph(world: &mut GraphWorld, graph_name: String) {
         "Failed to load graph fixture {}: {:?}",
         graph_file.display(),
         world.last_error
+    );
+}
+
+#[given(regex = r"^there exists a procedure (.+)$")]
+async fn given_procedure_exists(
+    world: &mut GraphWorld,
+    declaration: String,
+    step: &cucumber::gherkin::Step,
+) {
+    let _ = world;
+    let (name, inputs, outputs) = parse_procedure_declaration(&declaration);
+
+    let mut rows: Vec<BTreeMap<String, Value>> = Vec::new();
+    if let Some(table) = &step.table
+        && !table.rows.is_empty()
+    {
+        let headers: Vec<String> = table.rows[0]
+            .iter()
+            .map(|cell| cell.trim().to_string())
+            .filter(|cell| !cell.is_empty())
+            .collect();
+
+        if !headers.is_empty() {
+            for raw_row in table.rows.iter().skip(1) {
+                let mut row_map = BTreeMap::new();
+                for (idx, header) in headers.iter().enumerate() {
+                    let raw_value = raw_row.get(idx).map(|s| s.trim()).unwrap_or("null");
+                    row_map.insert(header.clone(), parse_tck_value(raw_value));
+                }
+                rows.push(row_map);
+            }
+        }
+    }
+
+    register_test_procedure_fixture(
+        name,
+        TestProcedureFixture {
+            inputs,
+            outputs,
+            rows,
+        },
     );
 }
 
@@ -286,6 +336,34 @@ async fn syntax_error_raised(world: &mut GraphWorld, error_type: String) {
     // TCK 当前阶段只要求“有错误且为编译期路径”，错误码逐步细化
     if err_lower.trim().is_empty() {
         panic!("Expected error type '{}' but got empty error", error_type);
+    }
+}
+
+#[then(regex = r"^a ProcedureError should be raised at compile time: (.+)$")]
+async fn procedure_error_raised(world: &mut GraphWorld, error_type: String) {
+    let err = world
+        .last_error
+        .as_ref()
+        .expect("Expected a ProcedureError but got success");
+    if err.trim().is_empty() {
+        panic!(
+            "Expected procedure error type '{}' but got empty error",
+            error_type
+        );
+    }
+}
+
+#[then(regex = r"^a ParameterMissing should be raised at compile time: (.+)$")]
+async fn parameter_missing_raised(world: &mut GraphWorld, error_type: String) {
+    let err = world
+        .last_error
+        .as_ref()
+        .expect("Expected a ParameterMissing error but got success");
+    if err.trim().is_empty() {
+        panic!(
+            "Expected parameter missing error type '{}' but got empty error",
+            error_type
+        );
     }
 }
 
@@ -1414,6 +1492,100 @@ fn parse_tck_map(inner: &str) -> Value {
     Value::Map(map)
 }
 
+fn parse_procedure_declaration(
+    declaration: &str,
+) -> (String, Vec<TestProcedureField>, Vec<TestProcedureField>) {
+    let trimmed = declaration.trim().trim_end_matches(':').trim();
+    let name_start = trimmed
+        .find('(')
+        .unwrap_or_else(|| panic!("Invalid procedure declaration (missing input '('): {trimmed}"));
+    let mut depth = 0i32;
+    let mut input_end = None;
+    for (idx, ch) in trimmed.char_indices().skip(name_start) {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    input_end = Some(idx);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let input_end = input_end
+        .unwrap_or_else(|| panic!("Invalid procedure declaration (unclosed input): {trimmed}"));
+    let name = trimmed[..name_start].trim().to_string();
+    let input_inner = trimmed[name_start + 1..input_end].trim();
+
+    let after_inputs = trimmed[input_end + 1..].trim_start();
+    let Some(after_sep) = after_inputs.strip_prefix("::") else {
+        panic!("Invalid procedure declaration (missing '::' separator): {trimmed}");
+    };
+    let outputs_raw = after_sep.trim_start();
+    let out_start = outputs_raw
+        .find('(')
+        .unwrap_or_else(|| panic!("Invalid procedure declaration (missing output '('): {trimmed}"));
+    let mut out_depth = 0i32;
+    let mut out_end = None;
+    for (offset, ch) in outputs_raw.char_indices().skip(out_start) {
+        match ch {
+            '(' => out_depth += 1,
+            ')' => {
+                out_depth -= 1;
+                if out_depth == 0 {
+                    out_end = Some(offset);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let out_end = out_end
+        .unwrap_or_else(|| panic!("Invalid procedure declaration (unclosed output): {trimmed}"));
+    let output_inner = outputs_raw[out_start + 1..out_end].trim();
+
+    let inputs = parse_procedure_fields(input_inner);
+    let outputs = parse_procedure_fields(output_inner);
+    (name, inputs, outputs)
+}
+
+fn parse_procedure_fields(raw_fields: &str) -> Vec<TestProcedureField> {
+    if raw_fields.trim().is_empty() {
+        return Vec::new();
+    }
+
+    split_top_level(raw_fields, ',')
+        .into_iter()
+        .filter(|part| !part.trim().is_empty())
+        .map(|part| {
+            let (name_raw, ty_raw) = part
+                .split_once("::")
+                .unwrap_or_else(|| panic!("Invalid procedure field signature: {part}"));
+            let name = name_raw.trim().to_string();
+            let mut ty = ty_raw.trim().to_ascii_uppercase();
+            let nullable = ty.ends_with('?');
+            if nullable {
+                ty.pop();
+            }
+            let field_type = match ty.trim() {
+                "INTEGER" => TestProcedureType::Integer,
+                "FLOAT" => TestProcedureType::Float,
+                "NUMBER" => TestProcedureType::Number,
+                "STRING" => TestProcedureType::String,
+                "BOOLEAN" => TestProcedureType::Boolean,
+                _ => TestProcedureType::Any,
+            };
+            TestProcedureField {
+                name,
+                field_type,
+                nullable,
+            }
+        })
+        .collect()
+}
+
 fn parse_tck_value(s: &str) -> Value {
     let s = s.trim();
     if s == "null" {
@@ -1615,6 +1787,7 @@ fn main() {
 
     futures::executor::block_on(
         GraphWorld::cucumber()
+            .max_concurrent_scenarios(1)
             .with_default_cli()
             .run_and_exit(run_input),
     );

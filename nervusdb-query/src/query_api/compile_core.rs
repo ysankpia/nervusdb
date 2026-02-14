@@ -3,8 +3,8 @@ use super::{
     VecDeque, WriteSemantics, compile_create_plan, compile_delete_plan_v2, compile_foreach_plan,
     compile_match_plan, compile_merge_plan, compile_merge_set_items, compile_remove_plan_v2,
     compile_return_plan, compile_set_plan_v2, compile_unwind_plan, compile_with_plan,
-    extract_merge_pattern_vars, extract_output_var_kinds, extract_predicates,
-    validate_expression_types, validate_where_expression_bindings,
+    contains_aggregate_expression, extract_merge_pattern_vars, extract_output_var_kinds,
+    extract_predicates, validate_expression_types, validate_where_expression_bindings,
 };
 
 pub(crate) struct CompiledQuery {
@@ -164,12 +164,47 @@ pub(crate) fn compile_m3_plan(
                 }
                 CallClause::Procedure(proc_call) => {
                     let input = plan.unwrap_or(Plan::ReturnOne);
+                    let mut bound_vars: BTreeMap<String, BindingKind> = BTreeMap::new();
+                    extract_output_var_kinds(&input, &mut bound_vars);
+
+                    if proc_call
+                        .arguments
+                        .iter()
+                        .any(contains_aggregate_expression)
+                    {
+                        return Err(Error::Other("syntax error: InvalidAggregation".to_string()));
+                    }
+
                     let mut yields = Vec::new();
+                    let mut yield_all = false;
+                    let mut yielded_names = BTreeSet::new();
                     if let Some(items) = &proc_call.yields {
                         for item in items {
-                            yields.push((item.name.clone(), item.alias.clone()));
+                            if item.name == "*" {
+                                yield_all = true;
+                            } else {
+                                let output_name =
+                                    item.alias.clone().unwrap_or_else(|| item.name.clone());
+                                if bound_vars.contains_key(&output_name)
+                                    || !yielded_names.insert(output_name.clone())
+                                {
+                                    return Err(Error::Other(
+                                        "syntax error: VariableAlreadyBound".to_string(),
+                                    ));
+                                }
+                                yields.push((item.name.clone(), item.alias.clone()));
+                            }
                         }
                     }
+
+                    if yield_all {
+                        // openCypher allows `YIELD *` only for standalone CALL.
+                        if clauses.peek().is_some() {
+                            return Err(Error::Other("syntax error: UnexpectedSyntax".to_string()));
+                        }
+                        yields.clear();
+                    }
+
                     plan = Some(Plan::ProcedureCall {
                         input: Box::new(input),
                         name: proc_call.name.clone(),

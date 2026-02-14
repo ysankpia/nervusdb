@@ -96,7 +96,7 @@
 | **Beta Gate** | **SQLite-Beta 必达门槛**                                   |        |        |                             |                                                          |
 | BETA-01       | [Storage] 强制 `storage_format_epoch` 校验                 | High   | Done   | feat/TB1-beta-gate          | `StorageFormatMismatch` + Compatibility 映射已落地 |
 | BETA-02       | [CI] Tier-3 全量通过率统计与 95% 阈值阻断                  | High   | Done   | feat/TB1-beta-gate          | `scripts/tck_full_rate.sh` + `scripts/beta_gate.sh` + nightly/manual workflow |
-| BETA-03       | [TCK] 官方全量通过率冲刺至 ≥95%                            | High   | Done   | feat/TB1-tck-95             | 2026-02-14 最新 Tier-3 全量复算：`3738/3897=95.92%`（skipped 159，failed 0）；见 `artifacts/tck/beta-04-tier3-rerun-2026-02-14.log`、`artifacts/tck/tier3-rate-2026-02-14.md`、`artifacts/tck/tier3-cluster-2026-02-14.md`。 |
+| BETA-03       | [TCK] 官方全量通过率冲刺至 ≥95%                            | High   | Done   | feat/TB1-tck-95             | 2026-02-14 最新 Tier-3 全量复算：`3790/3897=97.25%`（skipped 107，failed 0）；见 `artifacts/tck/beta-04-callcluster-tier3-full-2026-02-14.log`、`artifacts/tck/tier3-rate-2026-02-14.md`、`artifacts/tck/tier3-cluster-2026-02-14.md`。 |
 | BETA-03R1     | [Refactor] 拆分 `query_api.rs`（解析/校验/Plan 组装模块化） | High   | Done   | codex/feat/phase1b1c-bigbang | 已由 Phase 1a (R1) 覆盖完成，query_api/ 目录已拆分为多文件模块；PR #131 全门禁通过 |
 | BETA-03R2     | [Refactor] 拆分 `executor.rs`（读路径/写路径/排序投影）      | High   | Done   | codex/feat/phase1b1c-bigbang | 已由 Phase 1a (R2) 覆盖完成，executor/ 目录已拆分为 34 文件；PR #131 全门禁通过 |
 | BETA-03R3     | [Refactor] 拆分 `evaluator.rs` Temporal/Duration 子模块     | High   | Done   | codex/feat/phase1b1c-bigbang | 已由 Phase 1a (R3) 覆盖完成，evaluator/ 目录已拆分为 25 文件；PR #131 全门禁通过 |
@@ -104,7 +104,7 @@
 | BETA-03R5     | [TCK] 失败簇滚动清零（Temporal/Return/List/With/Map/Union） | High   | Done   | codex/feat/phase1b1c-bigbang | 2026-02-13 已清零 `Temporal2/5`、`Aggregation2`、`Return2`、`List11`、`With1/5`、`WithOrderBy1`、`Union1/2/3`、`Map1/2`，并补齐 UnknownFunction、WITH DISTINCT、UNION 校验等编译期语义。 |
 | BETA-03R6     | [TCK] 失败簇滚动清零（Merge/With/Return/Graph/Skip-Limit）  | High   | Done   | codex/feat/phase1b1c-bigbang | 2026-02-13 已清零 `Merge1/2/3`、`Match8`、`Create1`、`With4`、`Return1/7`、`Graph3/4`、`ReturnSkipLimit1/2`、`Mathematical8`；见 `artifacts/tck/beta-03r6-*.log`。 |
 | BETA-03R7     | [TCK] 主干攻坚（Temporal/Aggregation/Set/Remove/Create/Subquery） | High   | Done   | codex/feat/phase1b1c-bigbang | 2026-02-13 已清零 `Temporal4`、`Aggregation6`、`Remove1/3`、`Set2/4/5`、`Create3`，修复 correlated subquery 作用域回归，Tier-3 提升至 94.48%（3682/3897）。 |
-| BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | WIP    | feat/TB1-stability-window   | 已新增 `scripts/stability_window.sh`（按最近 N 天 `tier3-rate-YYYY-MM-DD.json` 校验 `pass_rate>=95 且 failed=0`）；当前累计天数不足 7 天，继续滚动积累。 |
+| BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | WIP    | feat/TB1-stability-window   | 已新增 `scripts/stability_window.sh`（按最近 N 天 `tier3-rate-YYYY-MM-DD.json` 校验 `pass_rate>=95 且 failed=0`）；2026-02-14 最新快照 `97.25%`（`3790/3897`，`failed=0`），当前累计天数不足 7 天，继续滚动积累。 |
 | BETA-05       | [Perf] 大规模 SLO 封板（读120/写180/向量220 ms P99）       | High   | Plan   | feat/TB1-perf-slo           | 达标后方可发布 Beta |
 
 ### BETA-03R4 子进展（2026-02-13）
@@ -179,7 +179,7 @@
   - `scripts/tck_full_rate.sh` 负责产出每日 rate 快照
   - `scripts/beta_gate.sh` 负责单次阈值阻断
   - `scripts/stability_window.sh` 负责连续天数窗口阻断
-- 当前状态：仅 `2026-02-14` 快照已达标，稳定窗累计仍在进行中。
+- 当前状态：`2026-02-14` 快照已达标（`3790/3897=97.25%`，`failed=0`），稳定窗累计仍在进行中。
 
 ### BETA-03R10 子进展（2026-02-14）
 - R10-W1：新增 TCK harness 图夹具步骤 `Given the <graph> graph`，支持从 `tests/opencypher_tck/tck/graphs/<name>/<name>.cypher` 自动加载图数据。
@@ -192,6 +192,25 @@
   - `artifacts/tck/beta-04-triadic-after-2026-02-14.log`
   - `artifacts/tck/beta-04-tier3-rerun-2026-02-14.log`
   - `artifacts/tck/tier3-rate-2026-02-14.md`
+
+### BETA-03R11 子进展（2026-02-14）
+- R11-W1：补齐 `CALL` 簇的 TCK harness 步骤与夹具能力：
+  - 新增 `And there exists a procedure ...` 步骤，支持签名（输入/输出类型）+ 表格数据注册。
+  - 新增 `ProcedureError` / `ParameterMissing` 编译期断言步骤桥接。
+- R11-W2：查询内核最小语义补齐（面向 openCypher CALL 簇）：
+  - `procedure_registry` 增加 fixture 驱动的 `test.doNothing` / `test.labels` / `test.my.proc`。
+  - `CALL` 支持无括号形式（隐式参数模式）与 `YIELD *`（仅 standalone 放行）。
+  - 编译期补齐 `VariableAlreadyBound`（YIELD 覆盖冲突）与 `InvalidAggregation`（CALL 参数含聚合）。
+  - `void` procedure 在 in-query 场景保持输入行基数（不吞行）。
+  - TCK harness 串行执行（`max_concurrent_scenarios(1)`）避免 fixture 并发串台。
+- R11-W3：Tier-3 全量复算（全绿）：
+  - `3897 scenarios (3790 passed, 107 skipped, 0 failed)`，通过率 `97.25%`
+  - 相比 R10：`passed +52`、`skipped -52`
+- 证据日志：
+  - `artifacts/tck/beta-04-callcluster-tier3-full-2026-02-14.log`
+  - `artifacts/tck/beta-04-skipped-cluster-2026-02-14.txt`
+  - `artifacts/tck/tier3-rate-2026-02-14.md`
+  - `artifacts/tck/tier3-cluster-2026-02-14.md`
 
 ## Archived (v1/Alpha)
 

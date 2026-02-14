@@ -1,11 +1,35 @@
 use super::{
     EdgeKey, Error, GraphSnapshot, InternalNodeId, LabelId, RelTypeId, Result, Row, Value,
 };
-use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, OnceLock, RwLock};
 
 pub trait Procedure: Send + Sync {
     fn execute(&self, snapshot: &dyn ErasedSnapshot, args: Vec<Value>) -> Result<Vec<Row>>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestProcedureType {
+    Any,
+    Integer,
+    Float,
+    Number,
+    String,
+    Boolean,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestProcedureField {
+    pub name: String,
+    pub field_type: TestProcedureType,
+    pub nullable: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TestProcedureFixture {
+    pub inputs: Vec<TestProcedureField>,
+    pub outputs: Vec<TestProcedureField>,
+    pub rows: Vec<BTreeMap<String, Value>>,
 }
 
 pub trait ErasedSnapshot {
@@ -104,6 +128,24 @@ impl ProcedureRegistry {
         let mut handlers: HashMap<String, Arc<dyn Procedure>> = HashMap::new();
         handlers.insert("db.info".to_string(), Arc::new(DbInfoProcedure));
         handlers.insert("math.add".to_string(), Arc::new(MathAddProcedure));
+        handlers.insert(
+            "test.doNothing".to_string(),
+            Arc::new(TestFixtureProcedure {
+                name: "test.doNothing".to_string(),
+            }),
+        );
+        handlers.insert(
+            "test.labels".to_string(),
+            Arc::new(TestFixtureProcedure {
+                name: "test.labels".to_string(),
+            }),
+        );
+        handlers.insert(
+            "test.my.proc".to_string(),
+            Arc::new(TestFixtureProcedure {
+                name: "test.my.proc".to_string(),
+            }),
+        );
         Self { handlers }
     }
 
@@ -116,6 +158,141 @@ pub static GLOBAL_PROCEDURE_REGISTRY: OnceLock<ProcedureRegistry> = OnceLock::ne
 
 pub fn get_procedure_registry() -> &'static ProcedureRegistry {
     GLOBAL_PROCEDURE_REGISTRY.get_or_init(ProcedureRegistry::new)
+}
+
+static TEST_PROCEDURE_FIXTURES: OnceLock<RwLock<HashMap<String, TestProcedureFixture>>> =
+    OnceLock::new();
+
+fn get_test_procedure_fixture_map() -> &'static RwLock<HashMap<String, TestProcedureFixture>> {
+    TEST_PROCEDURE_FIXTURES.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+pub fn clear_test_procedure_fixtures() {
+    if let Ok(mut guard) = get_test_procedure_fixture_map().write() {
+        guard.clear();
+    }
+}
+
+pub fn register_test_procedure_fixture(name: impl Into<String>, fixture: TestProcedureFixture) {
+    if let Ok(mut guard) = get_test_procedure_fixture_map().write() {
+        guard.insert(name.into(), fixture);
+    }
+}
+
+pub fn get_test_procedure_fixture(name: &str) -> Option<TestProcedureFixture> {
+    get_test_procedure_fixture_map()
+        .read()
+        .ok()
+        .and_then(|guard| guard.get(name).cloned())
+}
+
+fn assert_assignable(field: &TestProcedureField, value: &Value) -> Result<()> {
+    if matches!(value, Value::Null) {
+        return if field.nullable {
+            Ok(())
+        } else {
+            Err(Error::Other(
+                "syntax error: InvalidArgumentType".to_string(),
+            ))
+        };
+    }
+
+    let ok = match field.field_type {
+        TestProcedureType::Any => true,
+        TestProcedureType::Integer => matches!(value, Value::Int(_)),
+        TestProcedureType::Float => matches!(value, Value::Float(_) | Value::Int(_)),
+        TestProcedureType::Number => matches!(value, Value::Float(_) | Value::Int(_)),
+        TestProcedureType::String => matches!(value, Value::String(_)),
+        TestProcedureType::Boolean => matches!(value, Value::Bool(_)),
+    };
+
+    if ok {
+        Ok(())
+    } else {
+        Err(Error::Other(
+            "syntax error: InvalidArgumentType".to_string(),
+        ))
+    }
+}
+
+fn values_match(field: &TestProcedureField, expected: &Value, actual: &Value) -> bool {
+    if matches!(expected, Value::Null) || matches!(actual, Value::Null) {
+        return expected == actual;
+    }
+
+    match field.field_type {
+        TestProcedureType::Float | TestProcedureType::Number => {
+            let left = match expected {
+                Value::Int(i) => *i as f64,
+                Value::Float(f) => *f,
+                _ => return false,
+            };
+            let right = match actual {
+                Value::Int(i) => *i as f64,
+                Value::Float(f) => *f,
+                _ => return false,
+            };
+            (left - right).abs() < 1e-9
+        }
+        _ => expected == actual,
+    }
+}
+
+struct TestFixtureProcedure {
+    name: String,
+}
+
+impl Procedure for TestFixtureProcedure {
+    fn execute(&self, _snapshot: &dyn ErasedSnapshot, args: Vec<Value>) -> Result<Vec<Row>> {
+        let Some(fixture) = get_test_procedure_fixture(&self.name) else {
+            return Err(Error::Other("syntax error: ProcedureNotFound".to_string()));
+        };
+
+        if args.len() != fixture.inputs.len() {
+            return Err(Error::Other(
+                "syntax error: InvalidNumberOfArguments".to_string(),
+            ));
+        }
+
+        for (field, value) in fixture.inputs.iter().zip(args.iter()) {
+            assert_assignable(field, value)?;
+        }
+
+        if fixture.outputs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut out = Vec::new();
+        for row in &fixture.rows {
+            let mut matched = true;
+            for (idx, field) in fixture.inputs.iter().enumerate() {
+                let expected = row.get(&field.name);
+                let actual = args.get(idx);
+                match (expected, actual) {
+                    (Some(expected), Some(actual)) if values_match(field, expected, actual) => {}
+                    _ => {
+                        matched = false;
+                        break;
+                    }
+                }
+            }
+
+            if !matched {
+                continue;
+            }
+
+            let mut cols = Vec::with_capacity(fixture.outputs.len());
+            for field in &fixture.outputs {
+                cols.push((
+                    field.name.clone(),
+                    row.get(&field.name).cloned().unwrap_or(Value::Null),
+                ));
+            }
+            out.push(Row::new(cols));
+        }
+
+        Ok(out)
+    }
 }
 
 struct DbInfoProcedure;

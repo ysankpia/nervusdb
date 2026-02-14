@@ -63,7 +63,9 @@ const UNLABELED_LABEL_ID: LabelId = LabelId::MAX;
 pub use core_types::{NodeValue, PathValue, ReifiedPathValue, RelationshipValue, Row, Value};
 pub use plan_types::{Plan, PlanIterator};
 pub use procedure_registry::{
-    ErasedSnapshot, Procedure, ProcedureRegistry, get_procedure_registry,
+    ErasedSnapshot, Procedure, ProcedureRegistry, TestProcedureField, TestProcedureFixture,
+    TestProcedureType, clear_test_procedure_fixtures, get_procedure_registry,
+    get_test_procedure_fixture, register_test_procedure_fixture,
 };
 
 pub fn execute_plan<'a, S: GraphSnapshot + 'a>(

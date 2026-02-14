@@ -1,5 +1,6 @@
 use super::{
     ErasedSnapshot, Error, Plan, PlanIterator, Result, Row, execute_plan, get_procedure_registry,
+    get_test_procedure_fixture,
 };
 use crate::ast::Expression;
 use crate::evaluator::evaluate_expression_value;
@@ -133,11 +134,38 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for ProcedureCallIter<'a, S> {
                         eval_args.push(v);
                     }
 
+                    if eval_args.is_empty()
+                        && let Some(fixture) = get_test_procedure_fixture(&self.proc_name)
+                        && !fixture.inputs.is_empty()
+                    {
+                        let mut implicit_args = Vec::with_capacity(fixture.inputs.len());
+                        for field in fixture.inputs {
+                            if let Some(value) = self.params.get(&field.name) {
+                                implicit_args.push(value.clone());
+                            } else {
+                                return Some(Err(Error::Other(
+                                    "syntax error: MissingParameter".to_string(),
+                                )));
+                            }
+                        }
+                        eval_args = implicit_args;
+                    }
+
                     // 4. Call procedure
                     let registry = get_procedure_registry();
                     if let Some(proc) = registry.get(&self.proc_name) {
                         match proc.execute(self.snapshot as &dyn ErasedSnapshot, eval_args) {
-                            Ok(results) => {
+                            Ok(mut results) => {
+                                if results.is_empty()
+                                    && self.yields.is_empty()
+                                    && !outer_row.cols.is_empty()
+                                    && get_test_procedure_fixture(&self.proc_name)
+                                        .is_some_and(|fixture| fixture.outputs.is_empty())
+                                {
+                                    // Procedures that expose no output columns should keep
+                                    // the incoming row cardinality in in-query CALL pipelines.
+                                    results.push(Row::default());
+                                }
                                 self.current_outer_row = Some(outer_row);
                                 self.current_results = results.into_iter();
                                 // Loop continues to yield from current_results

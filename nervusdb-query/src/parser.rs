@@ -175,19 +175,29 @@ impl TokenParser {
         }
 
         // 2. Parse arguments: (arg1, arg2)
-        self.consume(&TokenType::LeftParen, "Expected '(' after procedure name")?;
-        let arguments = self.parse_function_arguments()?;
-        // Note: parse_function_arguments already consumes RightParen
+        // openCypher also allows implicit argument passing with `CALL ns.proc` (no parentheses).
+        let arguments = if self.match_token(&TokenType::LeftParen) {
+            self.parse_function_arguments()?
+        } else {
+            Vec::new()
+        };
 
         // 3. Optional YIELD
         let mut yields = None;
         if self.match_token(&TokenType::Yield) {
-            let mut yield_items = Vec::new();
-            yield_items.push(self.parse_yield_item()?);
-            while self.match_token(&TokenType::Comma) {
+            if self.match_token(&TokenType::Asterisk) {
+                yields = Some(vec![YieldItem {
+                    name: "*".to_string(),
+                    alias: None,
+                }]);
+            } else {
+                let mut yield_items = Vec::new();
                 yield_items.push(self.parse_yield_item()?);
+                while self.match_token(&TokenType::Comma) {
+                    yield_items.push(self.parse_yield_item()?);
+                }
+                yields = Some(yield_items);
             }
-            yields = Some(yield_items);
         }
 
         Ok(ProcedureCall {
