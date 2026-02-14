@@ -266,3 +266,24 @@ fn test_aggregate_argument_invalid_toboolean_raises_runtime_type_error() {
         "expected InvalidArgumentValue, got: {err}"
     );
 }
+
+#[test]
+fn test_percentile_argument_invalid_toboolean_raises_runtime_type_error() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("t152_percentile_runtime_guard.ndb");
+    let db = Db::open(&db_path).unwrap();
+    let snapshot = db.snapshot();
+    let params = Default::default();
+
+    let query = nervusdb::query::prepare("RETURN percentileDisc(1, toBoolean(1)) AS p").unwrap();
+    let err = query
+        .execute_streaming(&snapshot, &params)
+        .collect::<Result<Vec<_>, _>>()
+        .expect_err("invalid percentile argument should raise runtime TypeError")
+        .to_string();
+
+    assert!(
+        err.contains("InvalidArgumentValue"),
+        "expected InvalidArgumentValue, got: {err}"
+    );
+}
