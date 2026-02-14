@@ -77,10 +77,89 @@ fn is_quantifier_call(call: &crate::ast::FunctionCall) -> bool {
     )
 }
 
+fn resolve_projection_source_expr<'a>(plan: &'a Plan, variable: &str) -> Option<&'a Expression> {
+    match plan {
+        Plan::Project { input, projections } => {
+            if let Some((_, expr)) = projections
+                .iter()
+                .rev()
+                .find(|(alias, _)| alias == variable)
+            {
+                Some(expr)
+            } else {
+                resolve_projection_source_expr(input, variable)
+            }
+        }
+        Plan::Filter { input, .. }
+        | Plan::OptionalWhereFixup {
+            filtered: input, ..
+        }
+        | Plan::OrderBy { input, .. }
+        | Plan::Skip { input, .. }
+        | Plan::Limit { input, .. }
+        | Plan::Distinct { input }
+        | Plan::Delete { input, .. }
+        | Plan::SetProperty { input, .. }
+        | Plan::SetPropertiesFromMap { input, .. }
+        | Plan::SetLabels { input, .. }
+        | Plan::RemoveProperty { input, .. }
+        | Plan::RemoveLabels { input, .. }
+        | Plan::Foreach { input, .. }
+        | Plan::Create { input, .. } => resolve_projection_source_expr(input, variable),
+        Plan::Aggregate { input, .. } => resolve_projection_source_expr(input, variable),
+        Plan::Unwind {
+            input,
+            alias,
+            expression,
+        } => {
+            if alias == variable {
+                Some(expression)
+            } else {
+                resolve_projection_source_expr(input, variable)
+            }
+        }
+        Plan::IndexSeek { fallback, .. } => resolve_projection_source_expr(fallback, variable),
+        Plan::Apply {
+            input, subquery, ..
+        } => resolve_projection_source_expr(subquery, variable)
+            .or_else(|| resolve_projection_source_expr(input, variable)),
+        Plan::CartesianProduct { left, right } | Plan::Union { left, right, .. } => {
+            resolve_projection_source_expr(right, variable)
+                .or_else(|| resolve_projection_source_expr(left, variable))
+        }
+        Plan::ProcedureCall { input, .. } | Plan::MatchBoundRel { input, .. } => {
+            resolve_projection_source_expr(input, variable)
+        }
+        Plan::Values { .. } => None,
+        Plan::MatchOut { input, .. }
+        | Plan::MatchOutVarLen { input, .. }
+        | Plan::MatchIn { input, .. }
+        | Plan::MatchUndirected { input, .. } => input
+            .as_deref()
+            .and_then(|inner| resolve_projection_source_expr(inner, variable)),
+        Plan::NodeScan { .. } | Plan::ReturnOne => None,
+    }
+}
+
+fn is_definitely_non_map_source(expr: &Expression, input_plan: &Plan, depth: usize) -> bool {
+    if depth > 8 {
+        return false;
+    }
+    match expr {
+        Expression::Map(_) => false,
+        Expression::Literal(crate::ast::Literal::Null) => false,
+        Expression::Literal(_) | Expression::List(_) => true,
+        Expression::Variable(name) => resolve_projection_source_expr(input_plan, name)
+            .is_some_and(|source| is_definitely_non_map_source(source, input_plan, depth + 1)),
+        _ => false,
+    }
+}
+
 fn validate_projection_expression_bindings(
     expr: &Expression,
     known_bindings: &BTreeMap<String, BindingKind>,
     local_scopes: &mut Vec<std::collections::HashSet<String>>,
+    input_plan: &Plan,
 ) -> Result<()> {
     match expr {
         Expression::Variable(var) => {
@@ -110,13 +189,35 @@ fn validate_projection_expression_bindings(
                     pa.variable
                 )));
             }
+            if !is_locally_bound(local_scopes, &pa.variable)
+                && matches!(known_bindings.get(&pa.variable), Some(BindingKind::Scalar))
+                && resolve_projection_source_expr(input_plan, &pa.variable)
+                    .is_some_and(|source| is_definitely_non_map_source(source, input_plan, 0))
+            {
+                return Err(Error::Other(
+                    "syntax error: InvalidArgumentType".to_string(),
+                ));
+            }
         }
-        Expression::Unary(u) => {
-            validate_projection_expression_bindings(&u.operand, known_bindings, local_scopes)?
-        }
+        Expression::Unary(u) => validate_projection_expression_bindings(
+            &u.operand,
+            known_bindings,
+            local_scopes,
+            input_plan,
+        )?,
         Expression::Binary(b) => {
-            validate_projection_expression_bindings(&b.left, known_bindings, local_scopes)?;
-            validate_projection_expression_bindings(&b.right, known_bindings, local_scopes)?;
+            validate_projection_expression_bindings(
+                &b.left,
+                known_bindings,
+                local_scopes,
+                input_plan,
+            )?;
+            validate_projection_expression_bindings(
+                &b.right,
+                known_bindings,
+                local_scopes,
+                input_plan,
+            )?;
         }
         Expression::FunctionCall(call) => {
             if is_quantifier_call(call) && call.args.len() == 3 {
@@ -124,6 +225,7 @@ fn validate_projection_expression_bindings(
                     &call.args[1],
                     known_bindings,
                     local_scopes,
+                    input_plan,
                 )?;
                 if let Expression::Variable(var) = &call.args[0] {
                     let mut scope = std::collections::HashSet::new();
@@ -133,6 +235,7 @@ fn validate_projection_expression_bindings(
                         &call.args[2],
                         known_bindings,
                         local_scopes,
+                        input_plan,
                     )?;
                     local_scopes.pop();
                 } else {
@@ -140,46 +243,97 @@ fn validate_projection_expression_bindings(
                         &call.args[2],
                         known_bindings,
                         local_scopes,
+                        input_plan,
                     )?;
                 }
             } else {
                 for arg in &call.args {
-                    validate_projection_expression_bindings(arg, known_bindings, local_scopes)?;
+                    validate_projection_expression_bindings(
+                        arg,
+                        known_bindings,
+                        local_scopes,
+                        input_plan,
+                    )?;
                 }
             }
         }
         Expression::List(items) => {
             for item in items {
-                validate_projection_expression_bindings(item, known_bindings, local_scopes)?;
+                validate_projection_expression_bindings(
+                    item,
+                    known_bindings,
+                    local_scopes,
+                    input_plan,
+                )?;
             }
         }
         Expression::Map(map) => {
             for pair in &map.properties {
-                validate_projection_expression_bindings(&pair.value, known_bindings, local_scopes)?;
+                validate_projection_expression_bindings(
+                    &pair.value,
+                    known_bindings,
+                    local_scopes,
+                    input_plan,
+                )?;
             }
         }
         Expression::Case(case_expr) => {
             if let Some(test_expr) = &case_expr.expression {
-                validate_projection_expression_bindings(test_expr, known_bindings, local_scopes)?;
+                validate_projection_expression_bindings(
+                    test_expr,
+                    known_bindings,
+                    local_scopes,
+                    input_plan,
+                )?;
             }
             for (when_expr, then_expr) in &case_expr.when_clauses {
-                validate_projection_expression_bindings(when_expr, known_bindings, local_scopes)?;
-                validate_projection_expression_bindings(then_expr, known_bindings, local_scopes)?;
+                validate_projection_expression_bindings(
+                    when_expr,
+                    known_bindings,
+                    local_scopes,
+                    input_plan,
+                )?;
+                validate_projection_expression_bindings(
+                    then_expr,
+                    known_bindings,
+                    local_scopes,
+                    input_plan,
+                )?;
             }
             if let Some(else_expr) = &case_expr.else_expression {
-                validate_projection_expression_bindings(else_expr, known_bindings, local_scopes)?;
+                validate_projection_expression_bindings(
+                    else_expr,
+                    known_bindings,
+                    local_scopes,
+                    input_plan,
+                )?;
             }
         }
         Expression::ListComprehension(list_comp) => {
-            validate_projection_expression_bindings(&list_comp.list, known_bindings, local_scopes)?;
+            validate_projection_expression_bindings(
+                &list_comp.list,
+                known_bindings,
+                local_scopes,
+                input_plan,
+            )?;
             let mut scope = std::collections::HashSet::new();
             scope.insert(list_comp.variable.clone());
             local_scopes.push(scope);
             if let Some(where_expr) = &list_comp.where_expression {
-                validate_projection_expression_bindings(where_expr, known_bindings, local_scopes)?;
+                validate_projection_expression_bindings(
+                    where_expr,
+                    known_bindings,
+                    local_scopes,
+                    input_plan,
+                )?;
             }
             if let Some(map_expr) = &list_comp.map_expression {
-                validate_projection_expression_bindings(map_expr, known_bindings, local_scopes)?;
+                validate_projection_expression_bindings(
+                    map_expr,
+                    known_bindings,
+                    local_scopes,
+                    input_plan,
+                )?;
             }
             local_scopes.pop();
         }
@@ -196,6 +350,7 @@ fn validate_projection_expression_bindings(
                                     &pair.value,
                                     known_bindings,
                                     local_scopes,
+                                    input_plan,
                                 )?;
                             }
                         }
@@ -207,6 +362,7 @@ fn validate_projection_expression_bindings(
                                     &pair.value,
                                     known_bindings,
                                     local_scopes,
+                                    input_plan,
                                 )?;
                             }
                         }
@@ -215,12 +371,18 @@ fn validate_projection_expression_bindings(
             }
 
             if let Some(where_expr) = &pattern_comp.where_expression {
-                validate_projection_expression_bindings(where_expr, known_bindings, local_scopes)?;
+                validate_projection_expression_bindings(
+                    where_expr,
+                    known_bindings,
+                    local_scopes,
+                    input_plan,
+                )?;
             }
             validate_projection_expression_bindings(
                 &pattern_comp.projection,
                 known_bindings,
                 local_scopes,
+                input_plan,
             )?;
 
             local_scopes.pop();
@@ -239,6 +401,7 @@ fn validate_projection_expression_bindings(
                                         &pair.value,
                                         known_bindings,
                                         local_scopes,
+                                        input_plan,
                                     )?;
                                 }
                             }
@@ -250,6 +413,7 @@ fn validate_projection_expression_bindings(
                                         &pair.value,
                                         known_bindings,
                                         local_scopes,
+                                        input_plan,
                                     )?;
                                 }
                             }
@@ -271,9 +435,10 @@ fn validate_projection_expression_bindings(
 fn validate_projection_bindings_root(
     expr: &Expression,
     known_bindings: &BTreeMap<String, BindingKind>,
+    input_plan: &Plan,
 ) -> Result<()> {
     let mut local_scopes: Vec<std::collections::HashSet<String>> = Vec::new();
-    validate_projection_expression_bindings(expr, known_bindings, &mut local_scopes)
+    validate_projection_expression_bindings(expr, known_bindings, &mut local_scopes, input_plan)
 }
 
 fn validate_projection_expression_semantics(
@@ -1193,7 +1358,7 @@ pub(super) fn compile_projection_aggregation(
     extract_output_var_kinds(&input, &mut input_bindings);
     for item in items {
         ensure_no_pattern_predicate(&item.expression)?;
-        validate_projection_bindings_root(&item.expression, &input_bindings)?;
+        validate_projection_bindings_root(&item.expression, &input_bindings, &input)?;
         validate_expression_types(&item.expression)?;
         validate_projection_expression_semantics(&item.expression, &input_bindings)?;
     }

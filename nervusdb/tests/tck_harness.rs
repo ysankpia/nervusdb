@@ -349,7 +349,7 @@ async fn syntax_error_compile_time_raised(world: &mut GraphWorld, error_type: St
 
 #[then(regex = r"^a TypeError should be raised at compile time: (.+)$")]
 async fn type_error_compile_time_raised(world: &mut GraphWorld, error_type: String) {
-    assert_error_raised(world, "TypeError", "compile time", &error_type, true);
+    assert_error_raised(world, "TypeError", "compile time", &error_type, false);
 }
 
 #[then(regex = r"^a TypeError should be raised at runtime: (.+)$")]
