@@ -11,6 +11,14 @@ pub(super) fn execute_index_seek<'a, S: GraphSnapshot + 'a>(
     fallback: &'a Plan,
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
+    if let Err(err) = super::plan_mid::ensure_runtime_expression_compatible(
+        value_expr,
+        &Row::default(),
+        snapshot,
+        params,
+    ) {
+        return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err))));
+    }
     let val = evaluate_expression_value(value_expr, &Row::default(), snapshot, params);
 
     let prop_val = match val {

@@ -115,8 +115,8 @@ fn test_index_seek_invalid_value_expression_raises_runtime_type_error() {
     }
 
     let snapshot = db.snapshot();
-    let query =
-        nervusdb::query::prepare("MATCH (n:Person) WHERE n.name = toBoolean(1) RETURN n").unwrap();
+    let query_text = "MATCH (n:Person) WHERE n.name = toBoolean(1) RETURN n";
+    let query = nervusdb::query::prepare(query_text).unwrap();
     let err = query
         .execute_streaming(&snapshot, &Default::default())
         .collect::<Result<Vec<_>, _>>()
