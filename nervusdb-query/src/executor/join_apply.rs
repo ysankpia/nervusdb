@@ -129,6 +129,14 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for ProcedureCallIter<'a, S> {
                     // 3. Evaluate arguments
                     let mut eval_args = Vec::with_capacity(self.args.len());
                     for arg in self.args {
+                        if let Err(err) = super::plan_mid::ensure_runtime_expression_compatible(
+                            arg,
+                            &outer_row,
+                            self.snapshot,
+                            self.params,
+                        ) {
+                            return Some(Err(err));
+                        }
                         let v =
                             evaluate_expression_value(arg, &outer_row, self.snapshot, self.params);
                         eval_args.push(v);

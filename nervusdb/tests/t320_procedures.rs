@@ -100,3 +100,24 @@ fn test_correlated_procedure_call() {
     assert!(vals.contains(&101.0));
     assert!(vals.contains(&201.0));
 }
+
+#[test]
+fn test_procedure_argument_expression_invalid_toboolean_raises_runtime_type_error() {
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path().join("test.ndb")).unwrap();
+    let snapshot = db.snapshot();
+    let params = Params::new();
+
+    let query = "CALL math.add(toBoolean(1), 2) YIELD result RETURN result";
+    let pq = prepare(query).unwrap();
+    let err = pq
+        .execute_streaming(&snapshot, &params)
+        .collect::<Result<Vec<_>, _>>()
+        .expect_err("invalid toBoolean argument in procedure arg should raise runtime TypeError")
+        .to_string();
+
+    assert!(
+        err.contains("InvalidArgumentValue"),
+        "expected InvalidArgumentValue, got: {err}"
+    );
+}
