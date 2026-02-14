@@ -14,7 +14,7 @@ where
 
 pub(super) fn in_list(left: &Value, right: &Value) -> Value {
     match (left, right) {
-        (Value::Null, _) | (_, Value::Null) => Value::Null,
+        (_, Value::Null) => Value::Null,
         (l, Value::List(items)) => {
             let mut saw_null = false;
             for item in items {
@@ -32,5 +32,30 @@ pub(super) fn in_list(left: &Value, right: &Value) -> Value {
             }
         }
         _ => Value::Null,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::in_list;
+    use crate::executor::Value;
+
+    #[test]
+    fn null_in_empty_list_is_false() {
+        assert_eq!(
+            in_list(&Value::Null, &Value::List(vec![])),
+            Value::Bool(false)
+        );
+    }
+
+    #[test]
+    fn null_in_non_empty_list_is_null() {
+        assert_eq!(
+            in_list(
+                &Value::Null,
+                &Value::List(vec![Value::Int(1), Value::Int(2), Value::Null])
+            ),
+            Value::Null
+        );
     }
 }

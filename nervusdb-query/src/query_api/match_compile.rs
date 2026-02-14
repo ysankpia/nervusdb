@@ -3,6 +3,7 @@ use super::{
     build_optional_unbind_aliases, extract_output_var_kinds, first_relationship_is_bound,
     maybe_reanchor_pattern, pattern_has_bound_relationship, validate_match_pattern_bindings,
 };
+use crate::query_api::ast_walk::extract_variables_from_expr;
 
 pub(super) fn compile_match_plan(
     input: Option<Plan>,
@@ -42,8 +43,10 @@ pub(super) fn compile_match_plan(
             Some(BindingKind::Node | BindingKind::Unknown)
         );
         let join_via_bound_relationship = pattern_has_bound_relationship(&pattern, &known_bindings);
+        let correlated_with_outer =
+            pattern_uses_outer_bindings(&pattern, &known_bindings, predicates);
 
-        if join_via_bound_node || join_via_bound_relationship {
+        if join_via_bound_node || join_via_bound_relationship || correlated_with_outer {
             // Join via expansion (bound start node) or via already-bound relationship variable.
             plan = Some(compile_pattern_chain(
                 plan,
@@ -139,37 +142,26 @@ fn compile_pattern_chain(
         } else {
             // No direct anchor on the first hop. Keep correlated bindings from `existing_plan`
             // and start this pattern from a fresh source scan.
+            // NOTE: filters may reference outer variables (e.g. `event.year` after UNWIND),
+            // so they must be applied after the Cartesian product.
             extend_predicates_from_properties(
                 &src_alias,
                 &src_node_el.properties,
                 &mut local_predicates,
             );
 
-            let mut start_plan = Plan::NodeScan {
+            let start_plan = Plan::NodeScan {
                 alias: src_alias.clone(),
                 label: src_label.clone(),
                 optional,
             };
 
-            if let Some(label_name) = &src_label
-                && let Some(var_preds) = local_predicates.get(&src_alias)
-                && let Some((field, val_expr)) = var_preds.iter().next()
-            {
-                start_plan = Plan::IndexSeek {
-                    alias: src_alias.clone(),
-                    label: label_name.clone(),
-                    field: field.clone(),
-                    value_expr: val_expr.clone(),
-                    fallback: Box::new(start_plan),
-                };
-            }
-
-            let scanned = apply_filters_for_alias(start_plan, &src_alias, &local_predicates);
-            let scanned = apply_label_filters_for_alias(scanned, &src_alias, &src_labels);
-            Plan::CartesianProduct {
+            let joined = Plan::CartesianProduct {
                 left: Box::new(existing_plan),
-                right: Box::new(scanned),
-            }
+                right: Box::new(start_plan),
+            };
+            let joined = apply_filters_for_alias(joined, &src_alias, &local_predicates);
+            apply_label_filters_for_alias(joined, &src_alias, &src_labels)
         }
     } else {
         // Build Initial Plan (Scan or IndexSeek)
@@ -556,4 +548,81 @@ fn extend_predicates_from_properties(
                 .insert(prop.key.clone(), prop.value.clone());
         }
     }
+}
+
+fn pattern_uses_outer_bindings(
+    pattern: &crate::ast::Pattern,
+    known_bindings: &BTreeMap<String, BindingKind>,
+    predicates: &BTreeMap<String, BTreeMap<String, Expression>>,
+) -> bool {
+    if known_bindings.is_empty() {
+        return false;
+    }
+
+    let mut local_aliases = BTreeSet::new();
+    if let Some(path_alias) = &pattern.variable {
+        local_aliases.insert(path_alias.clone());
+    }
+    for element in &pattern.elements {
+        match element {
+            crate::ast::PathElement::Node(node) => {
+                if let Some(alias) = &node.variable {
+                    local_aliases.insert(alias.clone());
+                }
+                if property_map_uses_outer_bindings(
+                    &node.properties,
+                    known_bindings,
+                    &local_aliases,
+                ) {
+                    return true;
+                }
+            }
+            crate::ast::PathElement::Relationship(rel) => {
+                if let Some(alias) = &rel.variable {
+                    local_aliases.insert(alias.clone());
+                }
+                if property_map_uses_outer_bindings(&rel.properties, known_bindings, &local_aliases)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    for (alias, fields) in predicates {
+        if !local_aliases.contains(alias) {
+            continue;
+        }
+        for expr in fields.values() {
+            if expression_uses_outer_bindings(expr, known_bindings, &local_aliases) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn property_map_uses_outer_bindings(
+    properties: &Option<crate::ast::PropertyMap>,
+    known_bindings: &BTreeMap<String, BindingKind>,
+    local_aliases: &BTreeSet<String>,
+) -> bool {
+    properties.as_ref().is_some_and(|props| {
+        props
+            .properties
+            .iter()
+            .any(|pair| expression_uses_outer_bindings(&pair.value, known_bindings, local_aliases))
+    })
+}
+
+fn expression_uses_outer_bindings(
+    expr: &Expression,
+    known_bindings: &BTreeMap<String, BindingKind>,
+    local_aliases: &BTreeSet<String>,
+) -> bool {
+    let mut refs = std::collections::HashSet::new();
+    extract_variables_from_expr(expr, &mut refs);
+    refs.into_iter()
+        .any(|name| known_bindings.contains_key(&name) && !local_aliases.contains(&name))
 }

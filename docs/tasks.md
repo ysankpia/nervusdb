@@ -96,7 +96,7 @@
 | **Beta Gate** | **SQLite-Beta 必达门槛**                                   |        |        |                             |                                                          |
 | BETA-01       | [Storage] 强制 `storage_format_epoch` 校验                 | High   | Done   | feat/TB1-beta-gate          | `StorageFormatMismatch` + Compatibility 映射已落地 |
 | BETA-02       | [CI] Tier-3 全量通过率统计与 95% 阈值阻断                  | High   | Done   | feat/TB1-beta-gate          | `scripts/tck_full_rate.sh` + `scripts/beta_gate.sh` + nightly/manual workflow |
-| BETA-03       | [TCK] 官方全量通过率冲刺至 ≥95%                            | High   | WIP    | feat/TB1-tck-95             | 2026-02-13 最新 Tier-3：3682/3897=94.48%（skipped 199，failed 16；见 `artifacts/tck/tier3-rate-2026-02-13.md`、`artifacts/tck/tier3-cluster-2026-02-13.md`）。当前主阻断：剩余 16 个失败场景（`ReturnOrderBy4`、`Merge5/6/7`、`Comparison2` 等）。R4~R7 定向簇已清零，最新证据见 `artifacts/tck/beta-03r7-*.log`。 |
+| BETA-03       | [TCK] 官方全量通过率冲刺至 ≥95%                            | High   | WIP    | feat/TB1-tck-95             | 最近一次 Tier-3 全量快照仍为 2026-02-13：3682/3897=94.48%（skipped 199，failed 16；见 `artifacts/tck/tier3-rate-2026-02-13.md`、`artifacts/tck/tier3-cluster-2026-02-13.md`）。R8 已清零其中关键剩余簇（`Create4`、`Delete3`、`Delete5`、`Unwind1`，并复验 `Merge5/6/7`、`ReturnOrderBy4`、`Pattern2`、`Comparison2`、`Null3`）；待下一次 Tier-3 全量复算更新总通过率。 |
 | BETA-03R1     | [Refactor] 拆分 `query_api.rs`（解析/校验/Plan 组装模块化） | High   | Done   | codex/feat/phase1b1c-bigbang | 已由 Phase 1a (R1) 覆盖完成，query_api/ 目录已拆分为多文件模块；PR #131 全门禁通过 |
 | BETA-03R2     | [Refactor] 拆分 `executor.rs`（读路径/写路径/排序投影）      | High   | Done   | codex/feat/phase1b1c-bigbang | 已由 Phase 1a (R2) 覆盖完成，executor/ 目录已拆分为 34 文件；PR #131 全门禁通过 |
 | BETA-03R3     | [Refactor] 拆分 `evaluator.rs` Temporal/Duration 子模块     | High   | Done   | codex/feat/phase1b1c-bigbang | 已由 Phase 1a (R3) 覆盖完成，evaluator/ 目录已拆分为 25 文件；PR #131 全门禁通过 |
@@ -135,6 +135,14 @@
 - R7-W3：回归补强：`t301_expression_ops` 对齐 list-vs-null 比较预期；新增 `binding_analysis` 单测 `extract_output_var_kinds_apply_preserves_input_aliases` 防回归。
 - Tier-3 全量复算：`3897 scenarios (3682 passed, 199 skipped, 16 failed)`，通过率 `94.48%`（见 `artifacts/tck/beta-03r7-w3-tier3-full-2026-02-13.log`、`artifacts/tck/tier3-rate-2026-02-13.md`、`artifacts/tck/tier3-cluster-2026-02-13.md`）。
 - 基线门禁复跑：`fmt + clippy + workspace_quick_test + tier0/1/2 + binding_smoke + contract_smoke` 全绿（见 `artifacts/tck/beta-03r7-w3-baseline-gates-rerun-2026-02-13.log`）。
+
+### BETA-03R8 子进展（2026-02-13）
+- R8-W1：修复 lexer 标识符首字符规则，允许 `_` 开头变量（清零 `Create4` 的 `Unexpected character: _` 语法报错簇）。
+- R8-W2：放宽 DELETE 实体表达式可达校验，补齐 `__getprop` 传递路径，支持 `DELETE rels.key.key[0]`（清零 `Delete5[6]`）。
+- R8-W3：修复关联 MATCH 编译锚点：当模式属性表达式引用外层已绑定变量时，按相关子查询语义构建执行计划，消除 `UNWIND + MATCH + MERGE` 丢行（清零 `Unwind1[6]`）。
+- R8-W4：TCK side-effects 标签口径修正：统计时排除 `UNLABELED` 哨兵标签，修复 `Create4[2]` `+labels` 与 `Delete3[1]` `-labels` 偏差。
+- 定向回归：`Merge5/6/7`、`ReturnOrderBy4`、`Pattern2`、`Comparison2`、`Null3`、`Create4`、`Delete3`、`Delete5`、`Unwind1` 全通过（非跳过）。
+- 证据日志：`artifacts/tck/beta-03r8-merge567-repro-2026-02-13.log`、`artifacts/tck/beta-03r8-merge567-fixed-2026-02-13.log`、`artifacts/tck/beta-03r8-next-cluster-repro-2026-02-13.log`、`artifacts/tck/beta-03r8-next-cluster-fixed-2026-02-13.log`、`artifacts/tck/beta-03r8-targeted-regression-clean-2026-02-13.log`。
 
 ## Archived (v1/Alpha)
 

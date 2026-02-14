@@ -3,6 +3,7 @@ use crate::idmap::InternalNodeId;
 use crate::snapshot::{EdgeKey, L0Run, RelTypeId};
 use std::collections::HashSet;
 
+#[allow(dead_code)]
 pub(crate) fn apply_run_tombstones(
     run: &L0Run,
     blocked_nodes: &mut HashSet<InternalNodeId>,

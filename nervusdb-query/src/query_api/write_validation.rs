@@ -127,6 +127,7 @@ fn delete_expression_may_yield_entity(
             let allows_entity_passthrough = call.name.eq_ignore_ascii_case("coalesce")
                 || call.name.eq_ignore_ascii_case("head")
                 || call.name.eq_ignore_ascii_case("last")
+                || call.name == "__getprop"
                 || call.name == "__index"
                 || call.name == "__slice";
 

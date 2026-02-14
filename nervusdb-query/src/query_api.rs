@@ -123,7 +123,9 @@ pub struct PreparedQuery {
     explain: Option<String>,
     write: WriteSemantics,
     merge_on_create_items: Vec<(String, String, Expression)>,
+    merge_on_create_map_items: Vec<(String, Expression, bool)>,
     merge_on_match_items: Vec<(String, String, Expression)>,
+    merge_on_match_map_items: Vec<(String, Expression, bool)>,
     merge_on_create_labels: Vec<(String, Vec<String>)>,
     merge_on_match_labels: Vec<(String, Vec<String>)>,
 }

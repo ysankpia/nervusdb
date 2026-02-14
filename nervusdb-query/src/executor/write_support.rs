@@ -1,4 +1,7 @@
-use super::{PropertyValue, Row, Value, WriteableGraph, convert_executor_value_to_property};
+use super::{
+    Plan, PropertyValue, Row, Value, WriteableGraph, apply_set_map_overlay_to_rows,
+    convert_executor_value_to_property, execute_set_from_maps,
+};
 use crate::ast::Expression;
 use crate::error::{Error, Result};
 use crate::evaluator::evaluate_expression_value;
@@ -49,6 +52,30 @@ pub(super) fn merge_apply_label_items(
             let label_id = txn.get_or_create_label_id(label)?;
             txn.add_node_label(node_id, label_id)?;
             overlay_add_label_value(row, var, label);
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn merge_apply_map_items<S: GraphSnapshot>(
+    snapshot: &S,
+    txn: &mut dyn WriteableGraph,
+    row: &mut Row,
+    items: &[(String, Expression, bool)],
+    params: &crate::query_api::Params,
+) -> Result<()> {
+    for item in items {
+        let single_item = vec![item.clone()];
+        let input = Plan::Values {
+            rows: vec![row.clone()],
+        };
+        execute_set_from_maps(snapshot, &input, txn, &single_item, params)?;
+        if let Some(updated_row) =
+            apply_set_map_overlay_to_rows(snapshot, vec![row.clone()], &single_item, params)
+                .into_iter()
+                .next()
+        {
+            *row = updated_row;
         }
     }
     Ok(())

@@ -389,3 +389,52 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 - `artifacts/tck/tier3-rate-2026-02-13.md`
 - `artifacts/tck/tier3-rate-2026-02-13.json`
 - `artifacts/tck/tier3-cluster-2026-02-13.md`
+
+---
+
+## 11. 续更快照（2026-02-13，BETA-03R8 剩余簇收口）
+
+### 11.1 本轮完成项（R8-W1~W4）
+
+- R8-W1（Parser/Lexer）：
+  - 修复标识符词法入口，允许 `_` 作为首字符，清零 `Create4` 的 `Unexpected character: _` 语法报错。
+- R8-W2（DELETE 嵌套表达式）：
+  - `write_validation` 的 DELETE 实体可达判定补齐 `__getprop` 传递路径，允许 `DELETE rels.key.key[0]` 这类 map/list 嵌套表达式。
+  - 新增编译期回归单测：`delete_allows_nested_map_list_entity_expression`。
+- R8-W3（相关 MATCH 编译）：
+  - 新增“模式属性表达式引用外层已绑定变量”的相关性检测，避免把相关模式错误编译为独立右支扫描。
+  - 修复 `UNWIND $events ... MATCH (y {year: event.year}) ... MERGE ...` 丢行，清零 `Unwind1[6]`。
+- R8-W4（TCK side effects 标签口径）：
+  - side-effects 快照统计中排除 `UNLABELED` 哨兵标签（`LabelId::MAX`），修复 `Create4[2]` `+labels` 与 `Delete3[1]` `-labels` 偏差。
+
+### 11.2 定向回归结果
+
+- 本轮剩余关键失败簇已清零：
+  - `clauses/create/Create4.feature`
+  - `clauses/delete/Delete3.feature`
+  - `clauses/delete/Delete5.feature`
+  - `clauses/unwind/Unwind1.feature`
+- 交叉复验（防“修一簇炸多簇”）均通过：
+  - `clauses/merge/Merge5.feature`
+  - `clauses/merge/Merge6.feature`
+  - `clauses/merge/Merge7.feature`
+  - `clauses/return-orderby/ReturnOrderBy4.feature`
+  - `expressions/pattern/Pattern2.feature`
+  - `expressions/comparison/Comparison2.feature`
+  - `expressions/null/Null3.feature`
+
+### 11.3 基线与门禁状态
+
+- 已通过：`cargo fmt --all -- --check`
+- 已通过：`cargo clippy --workspace --exclude nervusdb-pyo3 --all-targets -- -W warnings`
+- 已通过：`bash scripts/binding_smoke.sh`
+- 已通过：`bash scripts/contract_smoke.sh`
+- `workspace_quick_test` 已执行并在本轮输出中持续通过（见终端执行记录）；后续建议在下一次 Tier-3 全量复算时一并固化到单独日志。
+
+### 11.4 证据文件
+
+- `artifacts/tck/beta-03r8-merge567-repro-2026-02-13.log`
+- `artifacts/tck/beta-03r8-merge567-fixed-2026-02-13.log`
+- `artifacts/tck/beta-03r8-next-cluster-repro-2026-02-13.log`
+- `artifacts/tck/beta-03r8-next-cluster-fixed-2026-02-13.log`
+- `artifacts/tck/beta-03r8-targeted-regression-clean-2026-02-13.log`

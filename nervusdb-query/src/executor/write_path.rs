@@ -115,10 +115,27 @@ pub(super) fn execute_set_from_maps<S: GraphSnapshot>(
             if matches!(evaluated, Value::Null) {
                 continue;
             }
-            let Value::Map(map_values) = evaluated else {
-                return Err(Error::Other(
-                    "SET map operation expects a map expression".to_string(),
-                ));
+            let map_values = match evaluated {
+                Value::Map(map_values) => map_values,
+                Value::Node(node) => node.properties,
+                Value::Relationship(rel) => rel.properties,
+                Value::NodeId(node_id) => snapshot
+                    .node_properties(node_id)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), convert_api_property_to_value(v)))
+                    .collect(),
+                Value::EdgeKey(edge) => snapshot
+                    .edge_properties(edge)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), convert_api_property_to_value(v)))
+                    .collect(),
+                _ => {
+                    return Err(Error::Other(
+                        "SET map operation expects a map expression".to_string(),
+                    ));
+                }
             };
 
             if let Some(node_id) = row.get_node(var) {

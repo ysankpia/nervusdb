@@ -192,7 +192,7 @@ impl<'a> Lexer<'a> {
         }
 
         // Identifiers and Keywords
-        if char.is_alphabetic() {
+        if char.is_alphabetic() || char == '_' {
             return Ok(Some(self.read_identifier(
                 char,
                 start_line,

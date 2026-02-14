@@ -184,9 +184,8 @@ pub(super) fn merge_collect_edges_between<S: GraphSnapshot>(
             }
         }
         for edge in &overlay.edges {
-            if overlay.deleted_edges.contains(&edge.key) {
-                continue;
-            }
+            // Keep staged creations visible even if the same key was deleted earlier in this query.
+            // Deleted snapshot edges are still filtered by the snapshot-side guard above.
             if edge.key.src == src
                 && edge.key.dst == dst
                 && edge.key.rel == rel_type

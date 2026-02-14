@@ -223,6 +223,13 @@ pub(super) fn compile_return_plan(
     input: Plan,
     ret: &crate::ast::ReturnClause,
 ) -> Result<(Plan, Vec<String>)> {
+    let has_aggregation = ret
+        .items
+        .iter()
+        .any(|item| contains_aggregate_expression(&item.expression));
+    let mut input_bindings: BTreeMap<String, BindingKind> = BTreeMap::new();
+    extract_output_var_kinds(&input, &mut input_bindings);
+
     let (mut plan, project_cols) = compile_projection_aggregation(input, &ret.items, false)?;
 
     if let Some(order_by) = &ret.order_by {
@@ -241,13 +248,55 @@ pub(super) fn compile_return_plan(
             item.expression = rewrite_order_expression(&item.expression, &rewrite_bindings);
         }
 
-        validate_order_by_scope(&normalized, &project_cols, &ret.items, ret.distinct)?;
+        let mut order_scope_cols = project_cols.clone();
+        let mut order_passthrough: Vec<String> = Vec::new();
+        if !has_aggregation && !ret.distinct {
+            let projected: HashSet<String> = project_cols.iter().cloned().collect();
+            let mut used = HashSet::new();
+            for item in &normalized.items {
+                extract_variables_from_expr(&item.expression, &mut used);
+            }
+
+            order_passthrough = used
+                .into_iter()
+                .filter(|name| !projected.contains(name) && input_bindings.contains_key(name))
+                .collect();
+            order_passthrough.sort();
+            order_passthrough.dedup();
+
+            if !order_passthrough.is_empty()
+                && let Plan::Project {
+                    input,
+                    mut projections,
+                } = plan
+            {
+                for name in &order_passthrough {
+                    projections.push((name.clone(), Expression::Variable(name.clone())));
+                }
+                plan = Plan::Project { input, projections };
+            }
+
+            order_scope_cols.extend(order_passthrough.iter().cloned());
+        }
+
+        validate_order_by_scope(&normalized, &order_scope_cols, &ret.items, ret.distinct)?;
         validate_order_by_aggregate_semantics(order_by, &ret.items)?;
         let items = compile_order_by_items(&normalized)?;
         plan = Plan::OrderBy {
             input: Box::new(plan),
             items,
         };
+
+        if !order_passthrough.is_empty() {
+            plan = Plan::Project {
+                input: Box::new(plan),
+                projections: project_cols
+                    .iter()
+                    .cloned()
+                    .map(|name| (name.clone(), Expression::Variable(name)))
+                    .collect(),
+            };
+        }
     }
 
     if let Some(skip) = &ret.skip {

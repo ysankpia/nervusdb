@@ -99,7 +99,9 @@ pub fn execute_merge_with_rows<S: GraphSnapshot>(
     txn: &mut dyn WriteableGraph,
     params: &crate::query_api::Params,
     on_create_items: &[(String, String, Expression)],
+    on_create_map_items: &[(String, Expression, bool)],
     on_match_items: &[(String, String, Expression)],
+    on_match_map_items: &[(String, Expression, bool)],
     on_create_labels: &[(String, Vec<String>)],
     on_match_labels: &[(String, Vec<String>)],
 ) -> Result<(u32, Vec<Row>)> {
@@ -109,7 +111,9 @@ pub fn execute_merge_with_rows<S: GraphSnapshot>(
         txn,
         params,
         on_create_items,
+        on_create_map_items,
         on_match_items,
+        on_match_map_items,
         on_create_labels,
         on_match_labels,
     )
@@ -121,7 +125,9 @@ pub(crate) fn execute_merge<S: GraphSnapshot>(
     txn: &mut dyn WriteableGraph,
     params: &crate::query_api::Params,
     on_create_items: &[(String, String, Expression)],
+    on_create_map_items: &[(String, Expression, bool)],
     on_match_items: &[(String, String, Expression)],
+    on_match_map_items: &[(String, Expression, bool)],
     on_create_labels: &[(String, Vec<String>)],
     on_match_labels: &[(String, Vec<String>)],
 ) -> Result<u32> {
@@ -131,7 +137,9 @@ pub(crate) fn execute_merge<S: GraphSnapshot>(
         txn,
         params,
         on_create_items,
+        on_create_map_items,
         on_match_items,
+        on_match_map_items,
         on_create_labels,
         on_match_labels,
     )

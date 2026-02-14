@@ -1,7 +1,7 @@
 use crate::csr::CsrSegment;
 use crate::idmap::InternalNodeId;
 use crate::read_path_neighbors::{
-    apply_run_tombstones, edge_blocked_incoming, edge_blocked_outgoing, load_incoming_run_edges,
+    edge_blocked_incoming, edge_blocked_outgoing, load_incoming_run_edges,
     load_incoming_segment_edges, load_outgoing_run_edges, load_outgoing_segment_edges,
 };
 use crate::snapshot::{EdgeKey, L0Run, RelTypeId};
@@ -21,6 +21,8 @@ pub struct NeighborsIter {
     current_segment_edges: Vec<EdgeKey>,
     blocked_nodes: HashSet<InternalNodeId>,
     blocked_edges: HashSet<EdgeKey>,
+    pending_tombstoned_nodes: HashSet<InternalNodeId>,
+    pending_tombstoned_edges: HashSet<EdgeKey>,
     terminated: bool,
 }
 
@@ -45,7 +47,22 @@ impl NeighborsIter {
             current_segment_edges: Vec::with_capacity(16),
             blocked_nodes: HashSet::with_capacity(base_cap),
             blocked_edges: HashSet::with_capacity(base_cap),
+            pending_tombstoned_nodes: HashSet::with_capacity(base_cap),
+            pending_tombstoned_edges: HashSet::with_capacity(base_cap),
             terminated: false,
+        }
+    }
+
+    fn apply_pending_tombstones(&mut self) {
+        if self.pending_tombstoned_nodes.is_empty() && self.pending_tombstoned_edges.is_empty() {
+            return;
+        }
+        self.blocked_nodes
+            .extend(self.pending_tombstoned_nodes.drain());
+        self.blocked_edges
+            .extend(self.pending_tombstoned_edges.drain());
+        if self.blocked_nodes.contains(&self.src) {
+            self.terminated = true;
         }
     }
 
@@ -58,10 +75,19 @@ impl NeighborsIter {
             return;
         };
 
-        apply_run_tombstones(run, &mut self.blocked_nodes, &mut self.blocked_edges);
-
         if self.blocked_nodes.contains(&self.src) {
             self.terminated = true;
+            return;
+        }
+
+        self.pending_tombstoned_nodes.clear();
+        self.pending_tombstoned_nodes
+            .extend(run.iter_tombstoned_nodes());
+        self.pending_tombstoned_edges.clear();
+        self.pending_tombstoned_edges
+            .extend(run.iter_tombstoned_edges());
+
+        if self.pending_tombstoned_nodes.contains(&self.src) {
             return;
         }
 
@@ -91,9 +117,18 @@ impl Iterator for NeighborsIter {
         loop {
             if self.edge_idx >= self.current_edges.len() {
                 if self.run_idx < self.runs.len() {
+                    self.apply_pending_tombstones();
+                    if self.terminated {
+                        return None;
+                    }
                     self.load_run();
                     self.run_idx += 1;
                     continue;
+                }
+
+                self.apply_pending_tombstones();
+                if self.terminated {
+                    return None;
                 }
 
                 if self.segment_edge_idx >= self.current_segment_edges.len() {
@@ -147,6 +182,8 @@ pub struct IncomingNeighborsIter {
     current_segment_edges: Vec<EdgeKey>,
     blocked_nodes: HashSet<InternalNodeId>,
     blocked_edges: HashSet<EdgeKey>,
+    pending_tombstoned_nodes: HashSet<InternalNodeId>,
+    pending_tombstoned_edges: HashSet<EdgeKey>,
     terminated: bool,
 }
 
@@ -171,7 +208,22 @@ impl IncomingNeighborsIter {
             current_segment_edges: Vec::with_capacity(16),
             blocked_nodes: HashSet::with_capacity(base_cap),
             blocked_edges: HashSet::with_capacity(base_cap),
+            pending_tombstoned_nodes: HashSet::with_capacity(base_cap),
+            pending_tombstoned_edges: HashSet::with_capacity(base_cap),
             terminated: false,
+        }
+    }
+
+    fn apply_pending_tombstones(&mut self) {
+        if self.pending_tombstoned_nodes.is_empty() && self.pending_tombstoned_edges.is_empty() {
+            return;
+        }
+        self.blocked_nodes
+            .extend(self.pending_tombstoned_nodes.drain());
+        self.blocked_edges
+            .extend(self.pending_tombstoned_edges.drain());
+        if self.blocked_nodes.contains(&self.dst_node) {
+            self.terminated = true;
         }
     }
 
@@ -184,10 +236,19 @@ impl IncomingNeighborsIter {
             return;
         };
 
-        apply_run_tombstones(run, &mut self.blocked_nodes, &mut self.blocked_edges);
-
         if self.blocked_nodes.contains(&self.dst_node) {
             self.terminated = true;
+            return;
+        }
+
+        self.pending_tombstoned_nodes.clear();
+        self.pending_tombstoned_nodes
+            .extend(run.iter_tombstoned_nodes());
+        self.pending_tombstoned_edges.clear();
+        self.pending_tombstoned_edges
+            .extend(run.iter_tombstoned_edges());
+
+        if self.pending_tombstoned_nodes.contains(&self.dst_node) {
             return;
         }
 
@@ -222,9 +283,18 @@ impl Iterator for IncomingNeighborsIter {
         loop {
             if self.edge_idx >= self.current_edges.len() {
                 if self.run_idx < self.runs.len() {
+                    self.apply_pending_tombstones();
+                    if self.terminated {
+                        return None;
+                    }
                     self.load_run();
                     self.run_idx += 1;
                     continue;
+                }
+
+                self.apply_pending_tombstones();
+                if self.terminated {
+                    return None;
                 }
 
                 if self.segment_edge_idx >= self.current_segment_edges.len() {
@@ -262,5 +332,76 @@ impl Iterator for IncomingNeighborsIter {
 
             return Some(edge);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IncomingNeighborsIter, NeighborsIter};
+    use crate::snapshot::{EdgeKey, L0Run};
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
+
+    fn run_with_edge(
+        txid: u64,
+        edge: EdgeKey,
+        copies: usize,
+        tombstone_same_edge: bool,
+    ) -> Arc<L0Run> {
+        let mut out_edges = Vec::new();
+        let mut in_edges = Vec::new();
+        for _ in 0..copies {
+            out_edges.push(edge);
+            in_edges.push(edge);
+        }
+        Arc::new(L0Run::new(
+            txid,
+            BTreeMap::from([(edge.src, out_edges)]),
+            BTreeMap::from([(edge.dst, in_edges)]),
+            BTreeSet::new(),
+            if tombstone_same_edge {
+                BTreeSet::from([edge])
+            } else {
+                BTreeSet::new()
+            },
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        ))
+    }
+
+    #[test]
+    fn outgoing_neighbors_keep_current_run_edge_while_hiding_older_same_key() {
+        let edge = EdgeKey {
+            src: 1,
+            rel: 7,
+            dst: 2,
+        };
+        let runs = Arc::new(vec![
+            run_with_edge(2, edge, 1, true),
+            run_with_edge(1, edge, 2, false),
+        ]);
+        let segments = Arc::new(Vec::new());
+
+        let got: Vec<EdgeKey> = NeighborsIter::new(runs, segments, 1, Some(7)).collect();
+        assert_eq!(got, vec![edge]);
+    }
+
+    #[test]
+    fn incoming_neighbors_keep_current_run_edge_while_hiding_older_same_key() {
+        let edge = EdgeKey {
+            src: 3,
+            rel: 9,
+            dst: 4,
+        };
+        let runs = Arc::new(vec![
+            run_with_edge(2, edge, 1, true),
+            run_with_edge(1, edge, 3, false),
+        ]);
+        let segments = Arc::new(Vec::new());
+
+        let got: Vec<EdgeKey> = IncomingNeighborsIter::new(runs, segments, 4, Some(9)).collect();
+        assert_eq!(got, vec![edge]);
     }
 }

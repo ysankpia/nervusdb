@@ -43,13 +43,21 @@ where
     F: Fn(Ordering) -> bool,
 {
     for (l, r) in left.iter().zip(right.iter()) {
-        match compare_value_for_list_ordering(l, r) {
+        match compare_value_for_list_range(l, r) {
             Some(Ordering::Equal) => {}
             Some(ord) => return Value::Bool(cmp(ord)),
             None => return Value::Null,
         }
     }
     Value::Bool(cmp(left.len().cmp(&right.len())))
+}
+
+fn compare_value_for_list_range(left: &Value, right: &Value) -> Option<Ordering> {
+    match (left, right) {
+        (Value::Null, Value::Null) => Some(Ordering::Equal),
+        (Value::Null, _) | (_, Value::Null) => None,
+        _ => order_compare_non_null(left, right),
+    }
 }
 
 fn compare_value_for_list_ordering(left: &Value, right: &Value) -> Option<Ordering> {
@@ -262,6 +270,17 @@ mod tests {
                 Value::List(vec![Value::Int(1), Value::Null]),
                 Value::List(vec![Value::Int(1), Value::String("a".to_string())]),
             ]
+        );
+    }
+
+    #[test]
+    fn list_range_comparison_returns_null_when_deciding_element_is_null() {
+        let lhs = Value::List(vec![Value::Int(1), Value::Int(2)]);
+        let rhs = Value::List(vec![Value::Int(1), Value::Null]);
+        assert_eq!(
+            compare_values(&lhs, &rhs, |ord| ord == Ordering::Greater
+                || ord == Ordering::Equal),
+            Value::Null
         );
     }
 }

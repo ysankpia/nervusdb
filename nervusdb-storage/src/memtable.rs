@@ -22,7 +22,6 @@ pub struct MemTable {
 impl MemTable {
     pub fn create_edge(&mut self, src: InternalNodeId, rel: RelTypeId, dst: InternalNodeId) {
         let key = EdgeKey { src, rel, dst };
-        self.tombstoned_edges.remove(&key);
         self.out.entry(src).or_default().push(key);
         self.in_.entry(dst).or_default().push(key);
     }

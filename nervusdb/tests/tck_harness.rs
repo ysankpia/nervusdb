@@ -899,14 +899,26 @@ impl SideEffectsSnapshot {
             }
 
             if before_count > 0 && after_count > 0 {
+                if after_count > before_count {
+                    // With edge-key based identity, when multiplicity increases we cannot pair
+                    // "existing instance" vs "new instance" reliably for property maps.
+                    // Count only additive properties for newly created multiplicity.
+                    plus_properties += after_props.len() as i64 * (after_count - before_count);
+                    continue;
+                }
+
                 let (plus, minus) = diff_value_map(before_props, after_props);
                 plus_properties += plus;
                 minus_properties += minus;
 
-                if after_count > before_count {
-                    plus_properties += after_props.len() as i64 * (after_count - before_count);
-                } else if before_count > after_count {
+                if before_count > after_count {
                     minus_properties += before_props.len() as i64 * (before_count - after_count);
+                    if before_props != after_props {
+                        // Relationship identities are key-collapsed, so a delete+create that
+                        // reuses the same key shows up as count drop plus property rewrite.
+                        plus_relationships += 1;
+                        minus_relationships += 1;
+                    }
                 }
             }
         }
@@ -1001,7 +1013,11 @@ fn collect_side_effect_snapshot<S: GraphSnapshot>(snapshot: &S) -> SideEffectsSn
         }
 
         if let Some(labels) = snapshot.resolve_node_labels(node_id) {
-            node_labels.insert(node_id, labels.into_iter().collect());
+            let labels: BTreeSet<_> = labels
+                .into_iter()
+                .filter(|label_id| *label_id != nervusdb_api::LabelId::MAX)
+                .collect();
+            node_labels.insert(node_id, labels);
         }
 
         for edge in snapshot.neighbors(node_id, None) {

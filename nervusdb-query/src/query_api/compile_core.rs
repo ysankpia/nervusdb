@@ -11,7 +11,9 @@ pub(crate) struct CompiledQuery {
     pub(crate) plan: Plan,
     pub(crate) write: WriteSemantics,
     pub(crate) merge_on_create_items: Vec<(String, String, Expression)>,
+    pub(crate) merge_on_create_map_items: Vec<(String, Expression, bool)>,
     pub(crate) merge_on_match_items: Vec<(String, String, Expression)>,
+    pub(crate) merge_on_match_map_items: Vec<(String, Expression, bool)>,
     pub(crate) merge_on_create_labels: Vec<(String, Vec<String>)>,
     pub(crate) merge_on_match_labels: Vec<(String, Vec<String>)>,
 }
@@ -25,7 +27,9 @@ pub(crate) fn compile_m3_plan(
     let mut clauses = query.clauses.iter().peekable();
     let mut write_semantics = WriteSemantics::Default;
     let mut merge_on_create_items: Vec<(String, String, Expression)> = Vec::new();
+    let mut merge_on_create_map_items: Vec<(String, Expression, bool)> = Vec::new();
     let mut merge_on_match_items: Vec<(String, String, Expression)> = Vec::new();
+    let mut merge_on_match_map_items: Vec<(String, Expression, bool)> = Vec::new();
     let mut merge_on_create_labels: Vec<(String, Vec<String>)> = Vec::new();
     let mut merge_on_match_labels: Vec<(String, Vec<String>)> = Vec::new();
     let mut next_anon_id = 0u32;
@@ -199,7 +203,9 @@ pub(crate) fn compile_m3_plan(
                         plan: plan.unwrap(),
                         write: write_semantics,
                         merge_on_create_items,
+                        merge_on_create_map_items,
                         merge_on_match_items,
+                        merge_on_match_map_items,
                         merge_on_create_labels,
                         merge_on_match_labels,
                     });
@@ -219,9 +225,11 @@ pub(crate) fn compile_m3_plan(
                 let merge_vars = extract_merge_pattern_vars(&m.pattern);
                 let compiled_on_create = compile_merge_set_items(&merge_vars, sub.on_create)?;
                 merge_on_create_items = compiled_on_create.property_items;
+                merge_on_create_map_items = compiled_on_create.map_items;
                 merge_on_create_labels = compiled_on_create.label_items;
                 let compiled_on_match = compile_merge_set_items(&merge_vars, sub.on_match)?;
                 merge_on_match_items = compiled_on_match.property_items;
+                merge_on_match_map_items = compiled_on_match.map_items;
                 merge_on_match_labels = compiled_on_match.label_items;
                 plan = Some(compile_merge_plan(input, m.clone())?);
             }
@@ -288,7 +296,9 @@ pub(crate) fn compile_m3_plan(
             plan,
             write: write_semantics,
             merge_on_create_items,
+            merge_on_create_map_items,
             merge_on_match_items,
+            merge_on_match_map_items,
             merge_on_create_labels,
             merge_on_match_labels,
         });
@@ -430,5 +440,11 @@ mod tests {
         let err = compile_query("RETURN {k1: k2} AS literal")
             .expect_err("map value variable must be in scope");
         assert_eq!(err.to_string(), "syntax error: UndefinedVariable (k2)");
+    }
+
+    #[test]
+    fn delete_allows_nested_map_list_entity_expression() {
+        compile_query("MATCH ()-[r]->() WITH {key: {key: [r]}} AS rels DELETE rels.key.key[0]")
+            .expect("DELETE should accept nested map/list expressions that may yield entities");
     }
 }

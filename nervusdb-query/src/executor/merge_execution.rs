@@ -6,7 +6,7 @@ use super::merge_helpers::{
 use super::merge_overlay::{MergeOverlayEdge, MergeOverlayNode, MergeOverlayState};
 use super::property_bridge::merge_props_to_values;
 use super::write_support::{
-    merge_apply_label_items, merge_apply_set_items, merge_eval_props_on_row,
+    merge_apply_label_items, merge_apply_map_items, merge_apply_set_items, merge_eval_props_on_row,
 };
 use super::{
     EdgeKey, Error, GraphSnapshot, NodeValue, PathValue, Plan, RelationshipValue, Result, Row,
@@ -21,7 +21,9 @@ pub(super) fn execute_merge_create_from_rows<S: GraphSnapshot>(
     pattern: &Pattern,
     params: &crate::query_api::Params,
     on_create_items: &[(String, String, Expression)],
+    on_create_map_items: &[(String, Expression, bool)],
     on_match_items: &[(String, String, Expression)],
+    on_match_map_items: &[(String, Expression, bool)],
     on_create_labels: &[(String, Vec<String>)],
     on_match_labels: &[(String, Vec<String>)],
     overlay: &mut MergeOverlayState,
@@ -101,12 +103,30 @@ pub(super) fn execute_merge_create_from_rows<S: GraphSnapshot>(
                             params,
                         )?;
                     }
+                    if !on_create_map_items.is_empty() {
+                        merge_apply_map_items(
+                            snapshot,
+                            txn,
+                            &mut out_row,
+                            on_create_map_items,
+                            params,
+                        )?;
+                    }
                     if !on_create_labels.is_empty() {
                         merge_apply_label_items(txn, &mut out_row, on_create_labels)?;
                     }
                 } else {
                     if !on_match_items.is_empty() {
                         merge_apply_set_items(snapshot, txn, &mut out_row, on_match_items, params)?;
+                    }
+                    if !on_match_map_items.is_empty() {
+                        merge_apply_map_items(
+                            snapshot,
+                            txn,
+                            &mut out_row,
+                            on_match_map_items,
+                            params,
+                        )?;
                     }
                     if !on_match_labels.is_empty() {
                         merge_apply_label_items(txn, &mut out_row, on_match_labels)?;
@@ -254,6 +274,15 @@ pub(super) fn execute_merge_create_from_rows<S: GraphSnapshot>(
                     if !on_match_items.is_empty() {
                         merge_apply_set_items(snapshot, txn, &mut out_row, on_match_items, params)?;
                     }
+                    if !on_match_map_items.is_empty() {
+                        merge_apply_map_items(
+                            snapshot,
+                            txn,
+                            &mut out_row,
+                            on_match_map_items,
+                            params,
+                        )?;
+                    }
                     if !on_match_labels.is_empty() {
                         merge_apply_label_items(txn, &mut out_row, on_match_labels)?;
                     }
@@ -341,6 +370,9 @@ pub(super) fn execute_merge_create_from_rows<S: GraphSnapshot>(
         if !on_create_items.is_empty() {
             merge_apply_set_items(snapshot, txn, &mut out_row, on_create_items, params)?;
         }
+        if !on_create_map_items.is_empty() {
+            merge_apply_map_items(snapshot, txn, &mut out_row, on_create_map_items, params)?;
+        }
         if !on_create_labels.is_empty() {
             merge_apply_label_items(txn, &mut out_row, on_create_labels)?;
         }
@@ -410,7 +442,9 @@ pub(super) fn execute_merge<S: GraphSnapshot>(
     txn: &mut dyn WriteableGraph,
     params: &crate::query_api::Params,
     on_create_items: &[(String, String, Expression)],
+    on_create_map_items: &[(String, Expression, bool)],
     on_match_items: &[(String, String, Expression)],
+    on_match_map_items: &[(String, Expression, bool)],
     on_create_labels: &[(String, Vec<String>)],
     on_match_labels: &[(String, Vec<String>)],
 ) -> Result<u32> {
@@ -545,6 +579,11 @@ pub(super) fn execute_merge<S: GraphSnapshot>(
     } else {
         on_match_items
     };
+    let map_items = if created_any {
+        on_create_map_items
+    } else {
+        on_match_map_items
+    };
     let label_items = if created_any {
         on_create_labels
     } else {
@@ -552,6 +591,9 @@ pub(super) fn execute_merge<S: GraphSnapshot>(
     };
     if !set_items.is_empty() {
         merge_apply_set_items(snapshot, txn, &mut merge_row, set_items, params)?;
+    }
+    if !map_items.is_empty() {
+        merge_apply_map_items(snapshot, txn, &mut merge_row, map_items, params)?;
     }
     if !label_items.is_empty() {
         merge_apply_label_items(txn, &mut merge_row, label_items)?;
