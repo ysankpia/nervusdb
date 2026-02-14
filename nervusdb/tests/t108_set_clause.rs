@@ -319,6 +319,36 @@ fn test_set_parenthesized_target_variable() -> nervusdb::Result<()> {
 }
 
 #[test]
+fn test_set_invalid_toboolean_argument_raises_runtime_type_error() -> nervusdb::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("t108_set_invalid_toboolean.ndb");
+    let db = Db::open(&db_path)?;
+
+    {
+        let mut txn = db.begin_write();
+        let a = txn.get_or_create_label("A")?;
+        let node_id = txn.create_node(1, a)?;
+        txn.set_node_property(node_id, "flag".to_string(), PropertyValue::Bool(true))?;
+        txn.commit()?;
+    }
+
+    let snapshot = db.snapshot();
+    let mut txn = db.begin_write();
+    let q = "MATCH (n:A) SET n.flag = toBoolean(1)";
+    let err = nervusdb::query::prepare(q)?
+        .execute_write(&snapshot, &mut txn, &Default::default())
+        .expect_err("invalid toBoolean argument in SET should raise runtime TypeError")
+        .to_string();
+
+    assert!(
+        err.contains("InvalidArgumentValue"),
+        "expected InvalidArgumentValue, got: {err}"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn test_set_undefined_variable_in_expression_rejected_at_compile_time() {
     let err = nervusdb::query::prepare("MATCH (a) SET a.name = missing RETURN a")
         .expect_err("prepare should fail on undefined variable in SET expression")

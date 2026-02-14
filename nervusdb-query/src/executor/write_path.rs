@@ -44,6 +44,7 @@ pub(super) fn execute_set<S: GraphSnapshot>(
     for row in execute_plan(snapshot, input, params) {
         let row = row?;
         for (var, key, expr) in items {
+            super::plan_mid::ensure_runtime_expression_compatible(expr, &row, snapshot, params)?;
             // Evaluate expression
             let val = evaluate_expression_value(expr, &row, snapshot, params);
 
@@ -111,6 +112,7 @@ pub(super) fn execute_set_from_maps<S: GraphSnapshot>(
     for row in execute_plan(snapshot, input, params) {
         let row = row?;
         for (var, expr, append) in items {
+            super::plan_mid::ensure_runtime_expression_compatible(expr, &row, snapshot, params)?;
             let evaluated = evaluate_expression_value(expr, &row, snapshot, params);
             if matches!(evaluated, Value::Null) {
                 continue;

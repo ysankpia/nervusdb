@@ -818,3 +818,46 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 
 - `artifacts/tck/beta-04-r14w2-targeted-2026-02-14.log`
 - `artifacts/tck/beta-04-r14w2-tier0-2026-02-14.log`
+
+---
+
+## 21. 续更快照（2026-02-14，BETA-03R14-W3 写路径 runtime guard 收口）
+
+### 21.1 本轮完成项（R14-W3）
+
+- 以 TDD 方式补齐写路径表达式求值入口的 runtime 类型语义：
+  - 新增并先跑红：
+    - `test_set_invalid_toboolean_argument_raises_runtime_type_error`
+  - 修复实现：
+    - 在 `execute_set`、`execute_set_from_maps` 中，表达式求值前接入 `ensure_runtime_expression_compatible(...)`；
+    - 在 `merge_apply_set_items`、`merge_eval_props_on_row` 中同步接入 guard。
+- 行为变化：
+  - 修复此前写路径（`SET/MERGE`）对非法函数参数（如 `toBoolean(1)`）可能“静默变 `null` 并继续执行”的语义差异；
+  - 与既有 `Project/OrderBy/WHERE/UNWIND` 的 runtime TypeError 处理策略统一。
+
+### 21.2 回归结果
+
+- 定向测试：
+  - `cargo test -p nervusdb --test t108_set_clause -- --nocapture`：`11 passed`（含新增 runtime 错误断言）
+  - `cargo test -p nervusdb --test t105_merge_test -- --nocapture`：`2 passed`
+  - `cargo test -p nervusdb --test t323_merge_semantics -- --nocapture`：`4 passed`
+  - `cargo test -p nervusdb --test t306_unwind -- --nocapture`：`7 passed`
+  - `cargo test -p nervusdb --test t301_expression_ops test_where_invalid_list_index_raises_runtime_type_error -- --exact --nocapture`：`1 passed`
+  - `cargo test -p nervusdb --test t313_functions -- --nocapture`：`18 passed`
+- TCK 定向：
+  - `clauses/set/Set1.feature`、`expressions/list/List1.feature`、`expressions/graph/Graph4.feature` 全通过。
+- 门禁：
+  - `bash scripts/tck_tier_gate.sh tier0` 全通过；
+  - `cargo fmt --all -- --check` 通过。
+
+### 21.3 对后续 R14 的影响
+
+- R14-W3 完成后，runtime guard 已覆盖：
+  - 读路径：`Project`、`OrderBy`、`WHERE`、`UNWIND`
+  - 写路径：`SET`、`SET +=/=` map、`MERGE` 属性求值
+- 下一步可把审计范围扩到 `DELETE/FOREACH` 这类“非投影表达式入口”，继续清理未 guard 的直接求值点。
+
+### 21.4 证据文件
+
+- `artifacts/tck/beta-04-r14w3-write-guard-targeted-2026-02-14.log`
+- `artifacts/tck/beta-04-r14w3-write-guard-tier0-2026-02-14.log`

@@ -15,6 +15,7 @@ pub(super) fn merge_apply_set_items<S: GraphSnapshot>(
     params: &crate::query_api::Params,
 ) -> Result<()> {
     for (var, key, expr) in items {
+        super::plan_mid::ensure_runtime_expression_compatible(expr, row, snapshot, params)?;
         let val = evaluate_expression_value(expr, row, snapshot, params);
         let prop_val = convert_executor_value_to_property(&val)?;
         let is_remove = matches!(prop_val, PropertyValue::Null);
@@ -136,6 +137,12 @@ pub(super) fn merge_eval_props_on_row<S: GraphSnapshot>(
     let mut out = std::collections::BTreeMap::new();
     if let Some(props) = props {
         for pair in &props.properties {
+            super::plan_mid::ensure_runtime_expression_compatible(
+                &pair.value,
+                row,
+                snapshot,
+                params,
+            )?;
             let v = evaluate_expression_value(&pair.value, row, snapshot, params);
             out.insert(pair.key.clone(), convert_executor_value_to_property(&v)?);
         }
