@@ -944,3 +944,45 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 
 - `artifacts/tck/beta-04-r14w5-create-guard-targeted-2026-02-14.log`
 - `artifacts/tck/beta-04-r14w5-create-guard-tier0-2026-02-14.log`
+
+---
+
+## 24. 续更快照（2026-02-14，BETA-03R14-W6 CALL 参数入口收口）
+
+### 24.1 本轮完成项（R14-W6）
+
+- 以 TDD 方式补齐 `CALL` 参数表达式入口的 runtime 类型语义：
+  - 新增并先跑红：
+    - `test_procedure_argument_expression_invalid_toboolean_raises_runtime_type_error`
+  - 修复实现：
+    - 在 `ProcedureCallIter::next` 的参数求值循环中，对每个参数表达式先接入 `ensure_runtime_expression_compatible(...)`，guard 失败即返回执行错误。
+- 行为变化：
+  - 修复 `CALL math.add(toBoolean(1), 2)` 先进入过程内部并返回 `math.add requires numeric arguments` 的偏差；
+  - 将 `CALL` 参数入口统一到既有 `WHERE/UNWIND/SET/MERGE/FOREACH/DELETE/CREATE` 的 runtime `InvalidArgumentValue` 语义链路。
+
+### 24.2 回归结果
+
+- 定向测试：
+  - `cargo test -p nervusdb --test t320_procedures test_procedure_argument_expression_invalid_toboolean_raises_runtime_type_error -- --nocapture`：`1 passed`
+  - `cargo test -p nervusdb --test t324_foreach t324_foreach_invalid_toboolean_argument_raises_runtime_type_error -- --exact --nocapture`：`1 passed`
+  - `cargo test -p nervusdb --test t108_set_clause test_set_invalid_toboolean_argument_raises_runtime_type_error -- --exact --nocapture`：`1 passed`
+  - `cargo test -p nervusdb --test t306_unwind test_unwind_toboolean_invalid_argument_raises_runtime_type_error -- --exact --nocapture`：`1 passed`
+  - `cargo test -p nervusdb --test create_test test_create_property_with_invalid_toboolean_argument_raises_runtime_type_error -- --exact --nocapture`：`1 passed`
+  - `cargo test -p nervusdb --test t301_expression_ops test_where_invalid_list_index_raises_runtime_type_error -- --exact --nocapture`：`1 passed`
+- TCK 定向：
+  - `clauses/call/Call1.feature`、`clauses/call/Call2.feature`、`clauses/call/Call3.feature` 全通过。
+- 门禁：
+  - `bash scripts/tck_tier_gate.sh tier0` 全通过；
+  - `cargo fmt --all -- --check` 通过。
+
+### 24.3 对后续 R14 的影响
+
+- R14-W6 完成后，运行期表达式 guard 已覆盖主要读取、写入、尾部和过程调用入口；
+- 后续优先级可切换到“函数覆盖白名单审计 + 错误码一致性抽查”，重点防止新增函数路径绕过 guard。
+
+### 24.4 证据文件
+
+- `artifacts/tck/beta-04-r14w6-call-guard-unit-2026-02-14.log`
+- `artifacts/tck/beta-04-r14w6-call-guard-targeted-2026-02-14.log`
+- `artifacts/tck/beta-04-r14w6-call-guard-tier0-2026-02-14.log`
+- `artifacts/tck/beta-04-r14w6-call-guard-fmt-2026-02-14.log`
