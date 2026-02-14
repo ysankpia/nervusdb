@@ -650,3 +650,89 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 - `artifacts/tck/beta-04-r13w1-graph6-2026-02-14.log`
 - `artifacts/tck/beta-04-r13w1-regression-2026-02-14.log`
 - `artifacts/tck/beta-04-r13w1-gate-2026-02-14.log`
+
+---
+
+## 17. 续更快照（2026-02-14，BETA-03R13-W2 any-time TypeError 严格化）
+
+### 17.1 本轮完成项（R13-W2）
+
+- 将 TCK harness 中 `TypeError should be raised at any time` 从桥接模式切换为严格断言：
+  - `allow_success: true -> false`
+  - 影响：不再允许“未报错也通过”的过渡路径。
+- 收紧后暴露 `List1` 失败簇（`23 scenarios: 5 passed, 18 failed`），根因为 `__index` 在非法类型组合下返回 `null` 而非 runtime error。
+- 在执行层补齐最小 runtime 类型守卫：
+  - `Plan::Project` 投影计算前对顶层 `__index` 做类型兼容校验。
+  - 非法组合（如“非 list 用整型索引”“list 用非整型索引”等）直接返回 `runtime error: InvalidArgumentType`。
+  - 保持 `null` 参与索引仍走 `null` 语义。
+
+### 17.2 回归结果
+
+- 定向主簇：
+  - `expressions/list/List1.feature`：`23/23 passed`（从收紧后失败簇清零）
+- 扩展回归：
+  - `expressions/list/List11.feature`
+  - `expressions/map/Map1.feature`
+  - `expressions/map/Map2.feature`
+  - `expressions/graph/Graph6.feature`
+  - `clauses/return/Return2.feature`
+  - 以上均通过，无回退。
+- 基线门禁：
+  - `cargo fmt --all -- --check`
+  - `bash scripts/workspace_quick_test.sh`
+  - `bash scripts/tck_tier_gate.sh tier0`
+  - `bash scripts/tck_tier_gate.sh tier1`
+  - `bash scripts/tck_tier_gate.sh tier2`
+  - `bash scripts/binding_smoke.sh`
+  - `bash scripts/contract_smoke.sh`
+  - 全通过。
+
+### 17.3 对后续 R13 收紧的启示
+
+- any-time 收紧可直接暴露“运行期未抛错”的真实语义缺口，适合分簇清理。
+- 下一步可按同策略推进 `TypeError@runtime`：先定向 feature 列表审计，再分波次将桥接切换为严格断言。
+
+### 17.4 证据文件
+
+- `artifacts/tck/beta-04-r13w2-list1-anytime-2026-02-14.log`
+- `artifacts/tck/beta-04-r13w2-regression-2026-02-14.log`
+- `artifacts/tck/beta-04-r13w2-gate-2026-02-14.log`
+
+---
+
+## 18. 续更快照（2026-02-14，BETA-03R13-W3 runtime TypeError 严格化）
+
+### 18.1 本轮完成项（R13-W3）
+
+- 将 TCK harness 中 `TypeError should be raised at runtime` 从桥接模式切换为严格断言：
+  - `allow_success: true -> false`
+  - 影响：runtime 类型错误场景不再允许“未抛错也通过”。
+- 在执行层引入递归运行期表达式类型守卫（`Project` + `OrderBy`）：
+  - 覆盖函数：`__index`、`labels`、`type`、`toBoolean`、`toInteger`、`toFloat`、`toString`。
+  - 覆盖表达式结构：`Unary`、`Binary`、`FunctionCall`、`List`、`Map`、`Case`、`ListComprehension`、`PatternComprehension`。
+  - `ListComprehension` 按元素构造作用域行后递归检查，修复列表推导上下文中的漏拦截。
+- 写路径属性转换补齐非法属性类型拦截：
+  - 对 `Value::List` 元素新增约束，禁止 `Map/Node/Relationship/Path/ReifiedPath/NodeId/ExternalId/EdgeKey` 落盘，统一返回 `runtime error: InvalidPropertyType`。
+
+### 18.2 回归结果
+
+- runtime strict 首轮扫描暴露失败簇（8 个 feature）：
+  - `Map2`、`Graph3`、`Graph4`、`Set1`、`TypeConversion1`、`TypeConversion2`、`TypeConversion3`、`TypeConversion4`。
+- 修复后复扫结果：
+  - 上述 8 个 feature 全通过（0 failed）。
+- 基线门禁：
+  - 首次 `workspace_quick_test` 暴露 `t311_expressions` 的 duration roundtrip 回归（`toString` 守卫未放行 duration map）。
+  - 修复后复跑 `fmt + workspace_quick_test + tier0/1/2 + binding_smoke + contract_smoke` 全绿。
+
+### 18.3 对 BETA-04 稳定窗的影响
+
+- R13-W3 属于“错误断言从桥接到严格”的语义收紧，不改变稳定窗口径（仍以 `pass_rate` 与 `failed` 为准）。
+- 在保持 `failed=0` 的前提下补齐 runtime 类型错误语义，降低“桥接掩盖语义缺口”的回退风险。
+
+### 18.4 证据文件
+
+- `artifacts/tck/beta-04-r13w3-runtime-strict-scan-2026-02-14.log`
+- `artifacts/tck/beta-04-r13w3-runtime-strict-scan-remaining-2026-02-14.log`
+- `artifacts/tck/beta-04-r13w3-runtime-strict-rescan-2026-02-14.log`
+- `artifacts/tck/beta-04-r13w3-gate-2026-02-14.log`
+- `artifacts/tck/beta-04-r13w3-gate-rerun-2026-02-14.log`
