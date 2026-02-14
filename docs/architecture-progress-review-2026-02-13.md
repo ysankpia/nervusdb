@@ -1096,3 +1096,38 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 
 - `artifacts/tck/beta-04-r14w9-percentile-guard-targeted-2026-02-14.log`
 - `artifacts/tck/beta-04-r14w9-percentile-guard-fmt-2026-02-14.log`
+
+---
+
+## 28. 续更快照（2026-02-14，BETA-03R14-W10 IndexSeek 值表达式入口收口）
+
+### 28.1 本轮完成项（R14-W10）
+
+- 修复 `IndexSeek` 执行入口的 runtime guard 覆盖：
+  - 在 `execute_index_seek` 中对 `value_expr` 求值前接入 `ensure_runtime_expression_compatible(...)`；
+  - 行为目标：即使未来 planner/路径发生变化，也不会依赖 fallback 分支来“碰巧触发 runtime 错误”。
+- 回归用例保留：
+  - `test_index_seek_invalid_value_expression_raises_runtime_type_error` 锁定 `MATCH (n:Person) WHERE n.name = toBoolean(1) RETURN n` 抛 runtime `InvalidArgumentValue`。
+
+### 28.2 回归结果
+
+- 定向测试：
+  - `cargo test -p nervusdb --test t107_index_integration test_index_seek_invalid_value_expression_raises_runtime_type_error -- --nocapture`：`1 passed`
+  - `cargo test -p nervusdb --test t320_procedures test_procedure_argument_expression_invalid_toboolean_raises_runtime_type_error -- --nocapture`：`1 passed`
+  - `cargo test -p nervusdb --test t152_aggregation test_percentile_argument_invalid_toboolean_raises_runtime_type_error -- --nocapture`：`1 passed`
+- TCK 定向：
+  - `expressions/typeConversion/TypeConversion1.feature` 全通过。
+- 门禁：
+  - `bash scripts/tck_tier_gate.sh tier0` 全通过；
+  - `cargo fmt --all -- --check` 通过。
+
+### 28.3 对后续 R14 的影响
+
+- `IndexSeek` 值表达式路径的 runtime guard 已从“间接覆盖”提升为“入口强覆盖”；
+- 后续可继续按同模式对剩余低频入口做显式 guard 与回归断言锁定。
+
+### 28.4 证据文件
+
+- `artifacts/tck/beta-04-r14w10-index-seek-guard-targeted-2026-02-14.log`
+- `artifacts/tck/beta-04-r14w10-index-seek-guard-fmt-2026-02-14.log`
+- `artifacts/tck/beta-04-r14w10-index-seek-guard-tier0-2026-02-14.log`
