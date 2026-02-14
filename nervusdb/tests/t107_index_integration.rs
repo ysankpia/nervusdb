@@ -93,3 +93,38 @@ fn test_index_integration_e2e() -> nervusdb::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_index_seek_invalid_value_expression_raises_runtime_type_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("t107_runtime_guard.ndb");
+    let db = Db::open(&db_path).unwrap();
+    db.create_index("Person", "name").unwrap();
+
+    {
+        let mut txn = db.begin_write();
+        let person = txn.get_or_create_label("Person").unwrap();
+        let n = txn.create_node(1, person).unwrap();
+        txn.set_node_property(
+            n,
+            "name".to_string(),
+            PropertyValue::String("Alice".to_string()),
+        )
+        .unwrap();
+        txn.commit().unwrap();
+    }
+
+    let snapshot = db.snapshot();
+    let query =
+        nervusdb::query::prepare("MATCH (n:Person) WHERE n.name = toBoolean(1) RETURN n").unwrap();
+    let err = query
+        .execute_streaming(&snapshot, &Default::default())
+        .collect::<Result<Vec<_>, _>>()
+        .expect_err("invalid index-seek value expression should raise runtime TypeError")
+        .to_string();
+
+    assert!(
+        err.contains("InvalidArgumentValue"),
+        "expected InvalidArgumentValue, got: {err}"
+    );
+}
