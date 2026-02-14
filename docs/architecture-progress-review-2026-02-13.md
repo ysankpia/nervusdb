@@ -986,3 +986,47 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 - `artifacts/tck/beta-04-r14w6-call-guard-targeted-2026-02-14.log`
 - `artifacts/tck/beta-04-r14w6-call-guard-tier0-2026-02-14.log`
 - `artifacts/tck/beta-04-r14w6-call-guard-fmt-2026-02-14.log`
+
+---
+
+## 25. 续更快照（2026-02-14，BETA-03R14-W7 聚合参数入口收口）
+
+### 25.1 本轮完成项（R14-W7）
+
+- 以 TDD 方式补齐聚合执行入口的 runtime 类型语义：
+  - 新增并先跑红：
+    - `test_aggregate_argument_invalid_toboolean_raises_runtime_type_error`
+  - 红灯现象：
+    - `RETURN count(toBoolean(1)) AS c` 未抛错，错误返回 `c=0`（非法参数被吞成 `null` 后进入 `count`）。
+  - 修复实现：
+    - 在 `execute_aggregate` 的输入行处理阶段，新增 `validate_aggregate_runtime_expressions(...)`；
+    - 对 `count/sum/avg/min/max/collect/percentile` 的聚合参数表达式统一接入 `ensure_runtime_expression_compatible(...)`。
+- 行为变化：
+  - 聚合参数表达式与 `WHERE/UNWIND/SET/MERGE/FOREACH/DELETE/CREATE/CALL` 统一到同一 runtime TypeError 语义链路；
+  - 修复“非法函数参数在聚合中被静默吞掉”的剩余入口。
+
+### 25.2 回归结果
+
+- 定向测试：
+  - `cargo test -p nervusdb --test t152_aggregation test_aggregate_argument_invalid_toboolean_raises_runtime_type_error -- --nocapture`：
+    - 红灯阶段：返回 `Row { c: Int(0) }`
+    - 绿灯阶段：`1 passed`（抛 runtime `InvalidArgumentValue`）
+  - `cargo test -p nervusdb --test t320_procedures test_procedure_argument_expression_invalid_toboolean_raises_runtime_type_error -- --nocapture`：`1 passed`
+- TCK 定向：
+  - `expressions/aggregation/Aggregation1.feature` 全通过；
+  - `expressions/aggregation/Aggregation2.feature` 全通过；
+  - `expressions/typeConversion/TypeConversion1.feature` 全通过。
+- 门禁：
+  - `bash scripts/tck_tier_gate.sh tier0` 全通过；
+  - `cargo fmt --all -- --check` 通过。
+
+### 25.3 对后续 R14 的影响
+
+- R14-W7 完成后，运行期表达式 guard 已覆盖常见表达式执行面；
+- 后续剩余工作可聚焦到“低频入口白名单审计 + 错误码一致性抽样回归”，避免边缘路径重新引入 silent null。
+
+### 25.4 证据文件
+
+- `artifacts/tck/beta-04-r14w7-aggregate-guard-targeted-2026-02-14.log`
+- `artifacts/tck/beta-04-r14w7-aggregate-guard-tier0-2026-02-14.log`
+- `artifacts/tck/beta-04-r14w7-aggregate-guard-fmt-2026-02-14.log`
