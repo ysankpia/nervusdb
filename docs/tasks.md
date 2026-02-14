@@ -104,7 +104,7 @@
 | BETA-03R5     | [TCK] 失败簇滚动清零（Temporal/Return/List/With/Map/Union） | High   | Done   | codex/feat/phase1b1c-bigbang | 2026-02-13 已清零 `Temporal2/5`、`Aggregation2`、`Return2`、`List11`、`With1/5`、`WithOrderBy1`、`Union1/2/3`、`Map1/2`，并补齐 UnknownFunction、WITH DISTINCT、UNION 校验等编译期语义。 |
 | BETA-03R6     | [TCK] 失败簇滚动清零（Merge/With/Return/Graph/Skip-Limit）  | High   | Done   | codex/feat/phase1b1c-bigbang | 2026-02-13 已清零 `Merge1/2/3`、`Match8`、`Create1`、`With4`、`Return1/7`、`Graph3/4`、`ReturnSkipLimit1/2`、`Mathematical8`；见 `artifacts/tck/beta-03r6-*.log`。 |
 | BETA-03R7     | [TCK] 主干攻坚（Temporal/Aggregation/Set/Remove/Create/Subquery） | High   | Done   | codex/feat/phase1b1c-bigbang | 2026-02-13 已清零 `Temporal4`、`Aggregation6`、`Remove1/3`、`Set2/4/5`、`Create3`，修复 correlated subquery 作用域回归，Tier-3 提升至 94.48%（3682/3897）。 |
-| BETA-03R13    | [Hardening] `TypeError` 断言收紧（compile-time + any-time） | High   | WIP    | codex/feat/beta-04-r13w2-anytime-hardening | R13-W1 已完成 compile-time 严格化；R13-W2 已完成 any-time 严格化并补齐 `__index` runtime 类型守卫（`List1` 全通过，扩展回归+基线门禁全绿）。 |
+| BETA-03R13    | [Hardening] `TypeError` 断言收紧（compile-time + any-time + runtime） | High   | Done   | codex/feat/beta-04-r13w2-anytime-hardening | R13-W1/W2/W3 已全部完成：compile-time、any-time、runtime 三类 `TypeError` 断言均切换为严格模式；补齐递归运行期表达式类型守卫（含 list comprehension 作用域）与属性写入非法 list 元素拦截，定向簇与基线门禁全绿。 |
 | BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | WIP    | feat/TB1-stability-window   | 已新增 `scripts/stability_window.sh`（按最近 N 天 `tier3-rate-YYYY-MM-DD.json` 校验 `pass_rate>=95 且 failed=0`）；2026-02-14 最新快照 `100.00%`（`3897/3897`，`failed=0`），当前累计天数不足 7 天，继续滚动积累。 |
 | BETA-05       | [Perf] 大规模 SLO 封板（读120/写180/向量220 ms P99）       | High   | Plan   | feat/TB1-perf-slo           | 达标后方可发布 Beta |
 
@@ -247,6 +247,16 @@
   - 定向：`expressions/list/List1.feature` 全通过。
   - 扩展：`List11`、`Map1`、`Map2`、`Graph6`、`Return2` 全通过。
   - 基线门禁：`fmt + workspace_quick_test + tier0/1/2 + binding_smoke + contract_smoke` 全通过。
+- R13-W3（runtime 严格化）：
+  - 将 `TypeError should be raised at runtime` 从桥接放行切换为严格断言（`allow_success=false`）。
+  - 在执行层引入递归运行期表达式类型守卫（`Project`/`OrderBy` 路径）：
+    - 覆盖 `__index`、`labels`、`type`、`toBoolean`、`toInteger`、`toFloat`、`toString`。
+    - 支持 `ListComprehension` 作用域递归检查，修复 `TypeConversion1~4` 在列表推导内的漏拦截。
+  - 写路径属性转换补齐 `InvalidPropertyType` 校验：禁止将 `Map/Node/Relationship/Path/ReifiedPath/Id/EdgeKey` 作为 list 元素写入属性（修复 `Set1` 非法属性类型簇）。
+  - 定向严格化扫描与复扫：`Map2`、`Graph3`、`Graph4`、`Set1`、`TypeConversion1/2/3/4` 全通过。
+- R13-W3（基线门禁）：
+  - 首次门禁在 `workspace_quick_test` 暴露 `t311_expressions` 的 duration roundtrip 回归；修复 `toString` 守卫放行 duration map 后复跑全绿。
+  - 基线门禁最终通过：`fmt + workspace_quick_test + tier0/1/2 + binding_smoke + contract_smoke` 全通过。
 - 证据日志：
   - `artifacts/tck/beta-04-r13w1-map1-2026-02-14.log`
   - `artifacts/tck/beta-04-r13w1-graph6-2026-02-14.log`
@@ -255,6 +265,11 @@
   - `artifacts/tck/beta-04-r13w2-list1-anytime-2026-02-14.log`
   - `artifacts/tck/beta-04-r13w2-regression-2026-02-14.log`
   - `artifacts/tck/beta-04-r13w2-gate-2026-02-14.log`
+  - `artifacts/tck/beta-04-r13w3-runtime-strict-scan-2026-02-14.log`
+  - `artifacts/tck/beta-04-r13w3-runtime-strict-scan-remaining-2026-02-14.log`
+  - `artifacts/tck/beta-04-r13w3-runtime-strict-rescan-2026-02-14.log`
+  - `artifacts/tck/beta-04-r13w3-gate-2026-02-14.log`
+  - `artifacts/tck/beta-04-r13w3-gate-rerun-2026-02-14.log`
 
 ## Archived (v1/Alpha)
 

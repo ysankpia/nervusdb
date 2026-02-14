@@ -697,6 +697,21 @@ pub(super) fn convert_executor_value_to_property(value: &Value) -> Result<Proper
         Value::List(l) => {
             let mut list = Vec::with_capacity(l.len());
             for v in l {
+                if matches!(
+                    v,
+                    Value::Map(_)
+                        | Value::Node(_)
+                        | Value::Relationship(_)
+                        | Value::Path(_)
+                        | Value::ReifiedPath(_)
+                        | Value::NodeId(_)
+                        | Value::ExternalId(_)
+                        | Value::EdgeKey(_)
+                ) {
+                    return Err(Error::Other(
+                        "runtime error: InvalidPropertyType".to_string(),
+                    ));
+                }
                 list.push(convert_executor_value_to_property(v)?);
             }
             Ok(PropertyValue::List(list))
