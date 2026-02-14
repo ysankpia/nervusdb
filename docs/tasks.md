@@ -105,7 +105,7 @@
 | BETA-03R6     | [TCK] 失败簇滚动清零（Merge/With/Return/Graph/Skip-Limit）  | High   | Done   | codex/feat/phase1b1c-bigbang | 2026-02-13 已清零 `Merge1/2/3`、`Match8`、`Create1`、`With4`、`Return1/7`、`Graph3/4`、`ReturnSkipLimit1/2`、`Mathematical8`；见 `artifacts/tck/beta-03r6-*.log`。 |
 | BETA-03R7     | [TCK] 主干攻坚（Temporal/Aggregation/Set/Remove/Create/Subquery） | High   | Done   | codex/feat/phase1b1c-bigbang | 2026-02-13 已清零 `Temporal4`、`Aggregation6`、`Remove1/3`、`Set2/4/5`、`Create3`，修复 correlated subquery 作用域回归，Tier-3 提升至 94.48%（3682/3897）。 |
 | BETA-03R13    | [Hardening] `TypeError` 断言收紧（compile-time + any-time + runtime） | High   | Done   | codex/feat/beta-04-r13w2-anytime-hardening | R13-W1/W2/W3 已全部完成：compile-time、any-time、runtime 三类 `TypeError` 断言均切换为严格模式；补齐递归运行期表达式类型守卫（含 list comprehension 作用域）与属性写入非法 list 元素拦截，定向簇与基线门禁全绿。 |
-| BETA-03R14    | [Hardening] runtime 语义一致性收口（WHERE guard + type(rel)） | High   | WIP    | codex/feat/beta-04-r14w2-unwind-guard | R14-W1/W2/W3/W4/W5/W6/W7/W8 持续推进：完成 `WHERE` + `UNWIND` + 写路径（`SET/MERGE`）+ 尾部入口（`FOREACH/DELETE`）+ `CREATE` 属性表达式 + `CALL` 参数表达式 + 聚合参数表达式 runtime guard 收口，并补齐 `IndexSeek` 非法值表达式回归断言，覆盖 `type(rel)`、非法索引、非法 `toBoolean` 参数等场景；定向回归与 tier0/1/2 全绿。 |
+| BETA-03R14    | [Hardening] runtime 语义一致性收口（WHERE guard + type(rel)） | High   | WIP    | codex/feat/beta-04-r14w2-unwind-guard | R14-W1/W2/W3/W4/W5/W6/W7/W8/W9 持续推进：完成 `WHERE` + `UNWIND` + 写路径（`SET/MERGE`）+ 尾部入口（`FOREACH/DELETE`）+ `CREATE` 属性表达式 + `CALL` 参数表达式 + 聚合参数表达式 runtime guard 收口，并补齐 `IndexSeek` 与 `percentile` 非法参数回归断言，覆盖 `type(rel)`、非法索引、非法 `toBoolean` 参数等场景；定向回归与 tier0/1/2 全绿。 |
 | BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | WIP    | feat/TB1-stability-window   | 已新增 `scripts/stability_window.sh`（按最近 N 天 `tier3-rate-YYYY-MM-DD.json` 校验 `pass_rate>=95 且 failed=0`）；2026-02-14 最新快照 `100.00%`（`3897/3897`，`failed=0`），当前累计天数不足 7 天，继续滚动积累。 |
 | BETA-05       | [Perf] 大规模 SLO 封板（读120/写180/向量220 ms P99）       | High   | Plan   | feat/TB1-perf-slo           | 达标后方可发布 Beta |
 
@@ -354,6 +354,12 @@
   - 审计结论：
     - `MATCH (n:Person) WHERE n.name = toBoolean(1) RETURN n` 在索引路径下保持 runtime `InvalidArgumentValue` 语义，不会被“空结果”静默吞错。
   - 定向回归：`t107_index_integration` 新增用例通过；`expressions/typeConversion/TypeConversion1.feature` 全通过；`cargo fmt --all -- --check` 通过。
+- R14-W9（审计：`percentile` 双参数 guard 回归加固）：
+  - 新增回归用例：
+    - `test_percentile_argument_invalid_toboolean_raises_runtime_type_error`
+  - 审计结论：
+    - `RETURN percentileDisc(1, toBoolean(1))` 在聚合路径下稳定抛 runtime `InvalidArgumentValue`，`PercentileDisc/Cont` 的双表达式 guard 分支已被覆盖。
+  - 定向回归：`t152_aggregation`（新增 1 条）通过；`expressions/aggregation/Aggregation2.feature`、`expressions/typeConversion/TypeConversion1.feature` 全通过；`cargo fmt --all -- --check` 通过。
 - 证据日志：
   - `artifacts/tck/beta-04-r14w1-targeted-2026-02-14.log`
   - `artifacts/tck/beta-04-r14w1-tier0-2026-02-14.log`
@@ -375,6 +381,8 @@
   - `artifacts/tck/beta-04-r14w7-aggregate-guard-fmt-2026-02-14.log`
   - `artifacts/tck/beta-04-r14w8-index-seek-audit-targeted-2026-02-14.log`
   - `artifacts/tck/beta-04-r14w8-index-seek-audit-fmt-2026-02-14.log`
+  - `artifacts/tck/beta-04-r14w9-percentile-guard-targeted-2026-02-14.log`
+  - `artifacts/tck/beta-04-r14w9-percentile-guard-fmt-2026-02-14.log`
 
 ## Archived (v1/Alpha)
 

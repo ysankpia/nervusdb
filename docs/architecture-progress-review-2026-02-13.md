@@ -1062,3 +1062,37 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 
 - `artifacts/tck/beta-04-r14w8-index-seek-audit-targeted-2026-02-14.log`
 - `artifacts/tck/beta-04-r14w8-index-seek-audit-fmt-2026-02-14.log`
+
+---
+
+## 27. 续更快照（2026-02-14，BETA-03R14-W9 percentile 双参数审计加固）
+
+### 27.1 本轮完成项（R14-W9）
+
+- 补齐 `percentile` 双参数路径的 runtime 回归断言：
+  - 新增测试：
+    - `test_percentile_argument_invalid_toboolean_raises_runtime_type_error`
+- 场景与结论：
+  - 场景：`RETURN percentileDisc(1, toBoolean(1)) AS p`
+  - 结论：稳定抛 runtime `InvalidArgumentValue`，`PercentileDisc/PercentileCont` 双表达式 guard 分支语义稳定。
+
+### 27.2 回归结果
+
+- 定向测试：
+  - `cargo test -p nervusdb --test t152_aggregation test_aggregate_argument_invalid_toboolean_raises_runtime_type_error -- --nocapture`：`1 passed`
+  - `cargo test -p nervusdb --test t152_aggregation test_percentile_argument_invalid_toboolean_raises_runtime_type_error -- --nocapture`：`1 passed`
+- TCK 定向：
+  - `expressions/aggregation/Aggregation2.feature` 全通过；
+  - `expressions/typeConversion/TypeConversion1.feature` 全通过。
+- 门禁：
+  - `cargo fmt --all -- --check` 通过。
+
+### 27.3 对后续 R14 的影响
+
+- `percentile` 聚合路径的双参数 guard 现已有独立回归锁定；
+- 后续可进一步转向“遗漏入口枚举清单 + 自动扫描脚本”来量化 R14 收口完成度。
+
+### 27.4 证据文件
+
+- `artifacts/tck/beta-04-r14w9-percentile-guard-targeted-2026-02-14.log`
+- `artifacts/tck/beta-04-r14w9-percentile-guard-fmt-2026-02-14.log`
