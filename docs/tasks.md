@@ -104,7 +104,7 @@
 | BETA-03R5     | [TCK] 失败簇滚动清零（Temporal/Return/List/With/Map/Union） | High   | Done   | codex/feat/phase1b1c-bigbang | 2026-02-13 已清零 `Temporal2/5`、`Aggregation2`、`Return2`、`List11`、`With1/5`、`WithOrderBy1`、`Union1/2/3`、`Map1/2`，并补齐 UnknownFunction、WITH DISTINCT、UNION 校验等编译期语义。 |
 | BETA-03R6     | [TCK] 失败簇滚动清零（Merge/With/Return/Graph/Skip-Limit）  | High   | Done   | codex/feat/phase1b1c-bigbang | 2026-02-13 已清零 `Merge1/2/3`、`Match8`、`Create1`、`With4`、`Return1/7`、`Graph3/4`、`ReturnSkipLimit1/2`、`Mathematical8`；见 `artifacts/tck/beta-03r6-*.log`。 |
 | BETA-03R7     | [TCK] 主干攻坚（Temporal/Aggregation/Set/Remove/Create/Subquery） | High   | Done   | codex/feat/phase1b1c-bigbang | 2026-02-13 已清零 `Temporal4`、`Aggregation6`、`Remove1/3`、`Set2/4/5`、`Create3`，修复 correlated subquery 作用域回归，Tier-3 提升至 94.48%（3682/3897）。 |
-| BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | Plan   | feat/TB1-stability-window   | 任一阻断失败即重置计数 |
+| BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | WIP    | feat/TB1-stability-window   | 已新增 `scripts/stability_window.sh`（按最近 N 天 `tier3-rate-YYYY-MM-DD.json` 校验 `pass_rate>=95 且 failed=0`）；当前累计天数不足 7 天，继续滚动积累。 |
 | BETA-05       | [Perf] 大规模 SLO 封板（读120/写180/向量220 ms P99）       | High   | Plan   | feat/TB1-perf-slo           | 达标后方可发布 Beta |
 
 ### BETA-03R4 子进展（2026-02-13）
@@ -169,6 +169,17 @@
   - `artifacts/tck/beta-03r9-baseline-gates-2026-02-14.log`
   - `artifacts/tck/tier3-rate-2026-02-14.md`
   - `artifacts/tck/tier3-cluster-2026-02-14.md`
+
+### BETA-04 子进展（2026-02-14）
+- 新增稳定窗门禁脚本：`scripts/stability_window.sh`
+  - 输入：`artifacts/tck/tier3-rate-YYYY-MM-DD.json`
+  - 默认门禁：最近 `7` 天均满足 `pass_rate >= 95` 且 `failed = 0`
+  - 支持环境变量：`STABILITY_DAYS`、`TCK_MIN_PASS_RATE`、`TCK_REPORT_DIR`
+- 与现有门禁衔接：
+  - `scripts/tck_full_rate.sh` 负责产出每日 rate 快照
+  - `scripts/beta_gate.sh` 负责单次阈值阻断
+  - `scripts/stability_window.sh` 负责连续天数窗口阻断
+- 当前状态：仅 `2026-02-14` 快照已达标，稳定窗累计仍在进行中。
 
 ## Archived (v1/Alpha)
 

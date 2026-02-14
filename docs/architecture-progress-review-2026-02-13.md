@@ -107,7 +107,7 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 | 门槛 | 目标 | 当前 | 状态 |
 |------|------|------|------|
 | TCK Tier-3 全量通过率 | ≥95% | 95.43%（3719/3897） | 已达成（0 failed） |
-| 连续 7 天稳定窗 | 7 天全绿 | 未启动（BETA-04 Plan） | 阻塞于 TCK |
+| 连续 7 天稳定窗 | 7 天全绿 | 进行中（BETA-04 WIP） | 已解锁（等待 7 天累计） |
 | 性能 SLO 封板 | P99 读≤120ms/写≤180ms/向量≤220ms | 未启动（BETA-05 Plan） | 阻塞于稳定窗 |
 
 ### 3.2 TCK 收敛进展
@@ -156,6 +156,7 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 
 ### 短期（当前冲刺）
 - 启动 BETA-04（7 天稳定窗）：把 `tier3 + beta_gate + nightly` 连续稳定性作为新阻断项
+- 落地 `scripts/stability_window.sh`，可对 nightly 产物执行连续天数判定
 - 继续消除剩余 8 个 `NotImplemented`（优先处理影响稳定窗与可维护性的项）
 
 ### 中期（Beta 发布后）
@@ -462,6 +463,8 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
   - `cargo clippy --workspace --exclude nervusdb-pyo3 --all-targets -- -W warnings`
   - `bash scripts/binding_smoke.sh`
   - `bash scripts/contract_smoke.sh`
+- R9-W5（BETA-04 起步）：
+  - 新增 `scripts/stability_window.sh`，对最近 N 天 `tier3-rate-YYYY-MM-DD.json` 执行稳定窗判定（默认 N=7，门槛 `pass_rate>=95` 且 `failed=0`）。
 
 ### 12.2 风险与后续重点
 
@@ -481,3 +484,4 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 - `artifacts/tck/tier3-rate-2026-02-14.md`
 - `artifacts/tck/tier3-rate-2026-02-14.json`
 - `artifacts/tck/tier3-cluster-2026-02-14.md`
+- `scripts/stability_window.sh`
