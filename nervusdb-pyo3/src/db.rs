@@ -1,7 +1,7 @@
 use super::types::{py_to_value, value_to_py};
 use super::WriteTxn;
 use crate::{classify_nervus_error, QueryStream};
-use nervusdb_v2::Db as RustDb;
+use nervusdb::Db as RustDb;
 use pyo3::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -30,9 +30,9 @@ impl Db {
             .as_ref()
             .ok_or_else(|| classify_nervus_error("database is closed"))?;
         let snapshot = inner.snapshot();
-        let prepared = nervusdb_v2_query::prepare(query).map_err(classify_nervus_error)?;
+        let prepared = nervusdb_query::prepare(query).map_err(classify_nervus_error)?;
 
-        let mut query_params = nervusdb_v2_query::Params::new();
+        let mut query_params = nervusdb_query::Params::new();
         if let Some(p) = params {
             for (k, v) in p {
                 let val_bound = v.bind(py);

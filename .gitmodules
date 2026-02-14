@@ -1,3 +1,3 @@
-[submodule "nervusdb-v2/tests/opencypher_tck"]
-	path = nervusdb-v2/tests/opencypher_tck
+[submodule "nervusdb/tests/opencypher_tck"]
+	path = nervusdb/tests/opencypher_tck
 	url = https://github.com/opencypher/openCypher.git

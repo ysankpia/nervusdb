@@ -1,6 +1,6 @@
 use crate::classify_nervus_error;
 use crate::db::Db;
-use nervusdb_v2::WriteTxn as RustWriteTxn;
+use nervusdb::WriteTxn as RustWriteTxn;
 use pyo3::prelude::*;
 use std::mem::transmute;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -64,10 +64,10 @@ impl WriteTxn {
             .ok_or_else(|| classify_nervus_error("Database is closed"))?;
         let snapshot = inner_db.snapshot();
 
-        let prepared = nervusdb_v2_query::prepare(query).map_err(classify_nervus_error)?;
+        let prepared = nervusdb_query::prepare(query).map_err(classify_nervus_error)?;
 
         prepared
-            .execute_write(&snapshot, txn, &nervusdb_v2_query::Params::new())
+            .execute_write(&snapshot, txn, &nervusdb_query::Params::new())
             .map_err(classify_nervus_error)?;
 
         Ok(())

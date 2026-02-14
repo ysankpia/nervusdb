@@ -5,7 +5,7 @@
 ## 运行
 
 ```bash
-cargo run --example bench_v2 -p nervusdb-v2-storage --release -- \
+cargo run --example bench_v2 -p nervusdb-storage --release -- \
   --nodes 50000 --degree 8 --iters 2000
 ```
 
@@ -78,7 +78,7 @@ bash scripts/v2_bench.sh --nodes 50000 --degree 8 --iters 2000
 
 ```bash
 # 运行基准
-cargo run --example bench_v2 -p nervusdb-v2-storage --release -- \
+cargo run --example bench_v2 -p nervusdb-storage --release -- \
   --nodes 50000 --degree 8 --iters 2000
 
 # 输出示例：

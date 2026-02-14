@@ -6,7 +6,7 @@
 
 ## 1. 目标
 
-- 拆分 `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor.rs`。
+- 拆分 `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor.rs`。
 - 按“写路径 -> 读路径 -> 排序投影”顺序完成模块化。
 - 保持行为等价，不混入语义修复。
 
@@ -20,41 +20,41 @@
 
 ### 3.1 必改文件
 
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor.rs`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor.rs`
 
 ### 3.2 新增文件（建议结构）
 
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/property_bridge.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/binding_utils.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/path_usage.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/label_constraint.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/write_support.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/merge_helpers.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/merge_execute_support.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/merge_overlay.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/write_path.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/read_path.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/projection_sort.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/join_apply.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/write_orchestration.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/create_delete_ops.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/merge_execution.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/foreach_ops.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/write_dispatch.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/txn_engine_impl.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/index_seek_plan.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/procedure_registry.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/plan_tail.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/plan_head.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/plan_mid.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/match_bound_rel_plan.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/match_in_undirected_plan.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/match_out_plan.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/plan_iterators.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/write_forwarders.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/plan_types.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/core_types.rs`（已完成）
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor/plan_dispatch.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/property_bridge.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/binding_utils.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/path_usage.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/label_constraint.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/write_support.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/merge_helpers.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/merge_execute_support.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/merge_overlay.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/write_path.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/read_path.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/projection_sort.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/join_apply.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/write_orchestration.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/create_delete_ops.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/merge_execution.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/foreach_ops.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/write_dispatch.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/txn_engine_impl.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/index_seek_plan.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/procedure_registry.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/plan_tail.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/plan_head.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/plan_mid.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/match_bound_rel_plan.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/match_in_undirected_plan.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/match_out_plan.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/plan_iterators.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/write_forwarders.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/plan_types.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/core_types.rs`（已完成）
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor/plan_dispatch.rs`（已完成）
 
 ## 4. 当前进展（2026-02-12）
 
@@ -177,105 +177,105 @@
    - `executor.rs` 保留原入口函数签名并转发到新模块，外部调用路径与行为保持不变。
    - 当前 `executor.rs` 行数已进一步降到 `196`。
 33. 回归结果
-   - `cargo test -p nervusdb-v2-query executor::property_bridge::tests --lib` 通过。
-   - `cargo test -p nervusdb-v2-query executor::binding_utils::tests --lib` 通过。
-   - `cargo test -p nervusdb-v2-query --lib` 通过。
-   - `cargo test -p nervusdb-v2 --test t105_merge_test` 通过。
-   - `cargo test -p nervusdb-v2 --test t323_merge_semantics` 通过。
-   - `cargo test -p nervusdb-v2 --test t108_set_clause` 通过。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-8后）通过。
-   - `cargo test -p nervusdb-v2 --test t323_merge_semantics`（切片-8后）通过。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-9后）通过。
-   - `cargo test -p nervusdb-v2 --test t323_merge_semantics`（切片-9后）通过。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-10后）通过。
-   - `cargo test -p nervusdb-v2 --test t323_merge_semantics`（切片-10后）通过。
+   - `cargo test -p nervusdb-query executor::property_bridge::tests --lib` 通过。
+   - `cargo test -p nervusdb-query executor::binding_utils::tests --lib` 通过。
+   - `cargo test -p nervusdb-query --lib` 通过。
+   - `cargo test -p nervusdb --test t105_merge_test` 通过。
+   - `cargo test -p nervusdb --test t323_merge_semantics` 通过。
+   - `cargo test -p nervusdb --test t108_set_clause` 通过。
+   - `cargo test -p nervusdb-query --lib`（切片-8后）通过。
+   - `cargo test -p nervusdb --test t323_merge_semantics`（切片-8后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-9后）通过。
+   - `cargo test -p nervusdb --test t323_merge_semantics`（切片-9后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-10后）通过。
+   - `cargo test -p nervusdb --test t323_merge_semantics`（切片-10后）通过。
    - `cargo fmt --all`（切片-11后）通过。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-11后）通过。
-   - `cargo test -p nervusdb-v2 --test t108_set_clause`（切片-11后）通过。
-   - `cargo test -p nervusdb-v2 --test t323_merge_semantics`（切片-11后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-11后）通过。
+   - `cargo test -p nervusdb --test t108_set_clause`（切片-11后）通过。
+   - `cargo test -p nervusdb --test t323_merge_semantics`（切片-11后）通过。
    - `bash scripts/workspace_quick_test.sh`（切片-11后）通过（全绿）。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-12后）通过。
-   - `cargo test -p nervusdb-v2 --test t319_subquery`（切片-12后）通过。
-   - `cargo test -p nervusdb-v2 --test t320_procedures`（切片-12后）通过。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-13后）通过。
-   - `cargo test -p nervusdb-v2 --test t152_aggregation`（切片-13后）通过。
-   - `cargo test -p nervusdb-v2 --test t62_order_by_skip_test`（切片-13后）通过。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-14后）通过。
-   - `cargo test -p nervusdb-v2 --test t318_paths`（切片-14后）通过。
-   - `cargo test -p nervusdb-v2 --test t333_varlen_direction`（切片-14后）通过。
-   - `cargo test -p nervusdb-v2 --test t151_optional_match`（切片-14后）通过。
-   - `cargo test -p nervusdb-v2 --test t321_incoming`（切片-14后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-12后）通过。
+   - `cargo test -p nervusdb --test t319_subquery`（切片-12后）通过。
+   - `cargo test -p nervusdb --test t320_procedures`（切片-12后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-13后）通过。
+   - `cargo test -p nervusdb --test t152_aggregation`（切片-13后）通过。
+   - `cargo test -p nervusdb --test t62_order_by_skip_test`（切片-13后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-14后）通过。
+   - `cargo test -p nervusdb --test t318_paths`（切片-14后）通过。
+   - `cargo test -p nervusdb --test t333_varlen_direction`（切片-14后）通过。
+   - `cargo test -p nervusdb --test t151_optional_match`（切片-14后）通过。
+   - `cargo test -p nervusdb --test t321_incoming`（切片-14后）通过。
    - `bash scripts/workspace_quick_test.sh`（切片-14后）通过（全绿）。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-15后）通过。
-   - `cargo test -p nervusdb-v2 --test t108_set_clause`（切片-15后）通过。
-   - `cargo test -p nervusdb-v2 --test t323_merge_semantics`（切片-15后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-15后）通过。
+   - `cargo test -p nervusdb --test t108_set_clause`（切片-15后）通过。
+   - `cargo test -p nervusdb --test t323_merge_semantics`（切片-15后）通过。
    - `bash scripts/workspace_quick_test.sh`（切片-15后）通过（全绿）。
    - `bash scripts/contract_smoke.sh`（切片-15后）通过。
    - `bash scripts/binding_smoke.sh`（切片-15后）通过。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-16后）通过。
-   - `cargo test -p nervusdb-v2 --test create_test`（切片-16后）通过。
-   - `cargo test -p nervusdb-v2 --test t108_set_clause`（切片-16后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-16后）通过。
+   - `cargo test -p nervusdb --test create_test`（切片-16后）通过。
+   - `cargo test -p nervusdb --test t108_set_clause`（切片-16后）通过。
    - `bash scripts/contract_smoke.sh` 通过。
    - `bash scripts/binding_smoke.sh` 通过（保留既有 `pyo3 gil-refs` warning）。
    - `bash scripts/workspace_quick_test.sh` 通过（全绿）。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-17后）通过。
-   - `cargo test -p nervusdb-v2 --test t323_merge_semantics`（切片-17后）通过。
-   - `cargo test -p nervusdb-v2 --test create_test`（切片-17后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-17后）通过。
+   - `cargo test -p nervusdb --test t323_merge_semantics`（切片-17后）通过。
+   - `cargo test -p nervusdb --test create_test`（切片-17后）通过。
    - `bash scripts/workspace_quick_test.sh`（切片-17后）通过（全绿）。
    - `bash scripts/contract_smoke.sh`（切片-17后）通过。
    - `bash scripts/binding_smoke.sh`（切片-17后）通过（保留既有 `pyo3 gil-refs` warning）。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-18后）通过。
-   - `cargo test -p nervusdb-v2 --test t324_foreach`（切片-18后）通过。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-19后）通过。
-   - `cargo test -p nervusdb-v2 --test t108_set_clause`（切片-19后）通过。
-   - `cargo test -p nervusdb-v2 --test t324_foreach`（切片-19后）通过。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-20后）通过。
-   - `cargo test -p nervusdb-v2 --test create_test`（切片-20后）通过。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-21后）通过。
-   - `cargo test -p nervusdb-v2 --test t156_optimizer`（切片-21后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-18后）通过。
+   - `cargo test -p nervusdb --test t324_foreach`（切片-18后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-19后）通过。
+   - `cargo test -p nervusdb --test t108_set_clause`（切片-19后）通过。
+   - `cargo test -p nervusdb --test t324_foreach`（切片-19后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-20后）通过。
+   - `cargo test -p nervusdb --test create_test`（切片-20后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-21后）通过。
+   - `cargo test -p nervusdb --test t156_optimizer`（切片-21后）通过。
    - `bash scripts/workspace_quick_test.sh`（切片-21后）通过（全绿）。
    - `bash scripts/contract_smoke.sh`（切片-21后）通过。
    - `bash scripts/binding_smoke.sh`（切片-21后）通过（保留既有 `pyo3 gil-refs` warning）。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-22后）通过。
-   - `cargo test -p nervusdb-v2 --test t320_procedures`（切片-22后）通过。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-23后）通过。
-   - `cargo test -p nervusdb-v2 --test t306_unwind`（切片-23后）通过。
-   - `cargo test -p nervusdb-v2 --test t307_union`（切片-23后）通过。
-   - `cargo test -p nervusdb-v2 --test t62_order_by_skip_test`（切片-23后）通过。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-24后）通过。
-   - `cargo test -p nervusdb-v2 --test t64_node_scan_test`（切片-24后）通过。
-   - `cargo test -p nervusdb-v2 --test t319_subquery`（切片-24后）通过。
-   - `cargo test -p nervusdb-v2 --test t320_procedures`（切片-24后）通过。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-25后）通过。
-   - `cargo test -p nervusdb-v2 --test t305_with_clause`（切片-25后）通过。
-   - `cargo test -p nervusdb-v2 --test t152_aggregation`（切片-25后）通过。
-   - `cargo test -p nervusdb-v2 --test t62_order_by_skip_test`（切片-25后）通过。
-   - `cargo test -p nervusdb-v2 --test t304_remove_clause`（切片-25后）通过。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-26后）通过。
-   - `cargo test -p nervusdb-v2 --test t321_incoming`（切片-26后）通过。
-   - `cargo test -p nervusdb-v2 --test t334_named_path`（切片-26后）通过。
-   - `cargo test -p nervusdb-v2 --test t325_pattern_props`（切片-26后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-22后）通过。
+   - `cargo test -p nervusdb --test t320_procedures`（切片-22后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-23后）通过。
+   - `cargo test -p nervusdb --test t306_unwind`（切片-23后）通过。
+   - `cargo test -p nervusdb --test t307_union`（切片-23后）通过。
+   - `cargo test -p nervusdb --test t62_order_by_skip_test`（切片-23后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-24后）通过。
+   - `cargo test -p nervusdb --test t64_node_scan_test`（切片-24后）通过。
+   - `cargo test -p nervusdb --test t319_subquery`（切片-24后）通过。
+   - `cargo test -p nervusdb --test t320_procedures`（切片-24后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-25后）通过。
+   - `cargo test -p nervusdb --test t305_with_clause`（切片-25后）通过。
+   - `cargo test -p nervusdb --test t152_aggregation`（切片-25后）通过。
+   - `cargo test -p nervusdb --test t62_order_by_skip_test`（切片-25后）通过。
+   - `cargo test -p nervusdb --test t304_remove_clause`（切片-25后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-26后）通过。
+   - `cargo test -p nervusdb --test t321_incoming`（切片-26后）通过。
+   - `cargo test -p nervusdb --test t334_named_path`（切片-26后）通过。
+   - `cargo test -p nervusdb --test t325_pattern_props`（切片-26后）通过。
    - `bash scripts/workspace_quick_test.sh`（切片-26后）通过（全绿）。
    - `bash scripts/contract_smoke.sh`（切片-26后）通过。
    - `bash scripts/binding_smoke.sh`（切片-26后）通过（保留既有 `pyo3 gil-refs` warning）。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-27后）通过。
-   - `cargo test -p nervusdb-v2 --test t321_incoming`（切片-27后）通过。
-   - `cargo test -p nervusdb-v2 --test t315_direction`（切片-27后）通过。
-   - `cargo test -p nervusdb-v2 --test t334_named_path`（切片-27后）通过。
-   - `cargo test -p nervusdb-v2 --test t325_pattern_props`（切片-27后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-27后）通过。
+   - `cargo test -p nervusdb --test t321_incoming`（切片-27后）通过。
+   - `cargo test -p nervusdb --test t315_direction`（切片-27后）通过。
+   - `cargo test -p nervusdb --test t334_named_path`（切片-27后）通过。
+   - `cargo test -p nervusdb --test t325_pattern_props`（切片-27后）通过。
    - `bash scripts/workspace_quick_test.sh`（切片-27后）通过（全绿）。
    - `bash scripts/contract_smoke.sh`（切片-27后）通过。
    - `bash scripts/binding_smoke.sh`（切片-27后）通过（保留既有 `pyo3 gil-refs` warning）。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-28后）通过。
-   - `cargo test -p nervusdb-v2 --test t52_query_api`（切片-28后）通过。
-   - `cargo test -p nervusdb-v2 --test t333_varlen_direction`（切片-28后）通过。
-   - `cargo test -p nervusdb-v2 --test t60_variable_length_test`（切片-28后）通过。
-   - `cargo test -p nervusdb-v2 --test t321_incoming`（切片-28后）通过。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-29后）通过。
-   - `cargo test -p nervusdb-v2 --test t52_query_api`（切片-29后）通过。
-   - `cargo test -p nervusdb-v2 --test t305_with_clause`（切片-29后）通过。
-   - `cargo test -p nervusdb-v2 --test t317_joins`（切片-29后）通过。
-   - `cargo test -p nervusdb-v2 --test t64_node_scan_test`（切片-29后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-28后）通过。
+   - `cargo test -p nervusdb --test t52_query_api`（切片-28后）通过。
+   - `cargo test -p nervusdb --test t333_varlen_direction`（切片-28后）通过。
+   - `cargo test -p nervusdb --test t60_variable_length_test`（切片-28后）通过。
+   - `cargo test -p nervusdb --test t321_incoming`（切片-28后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-29后）通过。
+   - `cargo test -p nervusdb --test t52_query_api`（切片-29后）通过。
+   - `cargo test -p nervusdb --test t305_with_clause`（切片-29后）通过。
+   - `cargo test -p nervusdb --test t317_joins`（切片-29后）通过。
+   - `cargo test -p nervusdb --test t64_node_scan_test`（切片-29后）通过。
    - `bash scripts/workspace_quick_test.sh`（切片-29后）通过（全绿）。
    - `bash scripts/contract_smoke.sh`（切片-29后）通过。
    - `bash scripts/binding_smoke.sh`（切片-29后）通过（保留既有 `pyo3 gil-refs` warning）。
@@ -284,20 +284,20 @@
    - `bash scripts/tck_tier_gate.sh tier1`（切片-29后）通过。
    - `bash scripts/tck_tier_gate.sh tier2`（切片-29后）通过。
    - `cargo fmt --all`（切片-30后）通过。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-30后）通过。
-   - `cargo test -p nervusdb-v2 --test create_test`（切片-30后）通过。
-   - `cargo test -p nervusdb-v2 --test t324_foreach`（切片-30后）通过。
-   - `cargo test -p nervusdb-v2 --test t323_merge_semantics`（切片-30后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-30后）通过。
+   - `cargo test -p nervusdb --test create_test`（切片-30后）通过。
+   - `cargo test -p nervusdb --test t324_foreach`（切片-30后）通过。
+   - `cargo test -p nervusdb --test t323_merge_semantics`（切片-30后）通过。
    - `cargo fmt --all`（切片-31后）通过。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-31后）通过。
-   - `cargo test -p nervusdb-v2 --test create_test`（切片-31后）通过。
-   - `cargo test -p nervusdb-v2 --test t324_foreach`（切片-31后）通过。
-   - `cargo test -p nervusdb-v2 --test t323_merge_semantics`（切片-31后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-31后）通过。
+   - `cargo test -p nervusdb --test create_test`（切片-31后）通过。
+   - `cargo test -p nervusdb --test t324_foreach`（切片-31后）通过。
+   - `cargo test -p nervusdb --test t323_merge_semantics`（切片-31后）通过。
    - `cargo fmt --all`（切片-32后）通过。
-   - `cargo test -p nervusdb-v2-query --lib`（切片-32后）通过。
-   - `cargo test -p nervusdb-v2 --test create_test`（切片-32后）通过。
-   - `cargo test -p nervusdb-v2 --test t324_foreach`（切片-32后）通过。
-   - `cargo test -p nervusdb-v2 --test t323_merge_semantics`（切片-32后）通过。
+   - `cargo test -p nervusdb-query --lib`（切片-32后）通过。
+   - `cargo test -p nervusdb --test create_test`（切片-32后）通过。
+   - `cargo test -p nervusdb --test t324_foreach`（切片-32后）通过。
+   - `cargo test -p nervusdb --test t323_merge_semantics`（切片-32后）通过。
    - `bash scripts/workspace_quick_test.sh`（切片-32后）通过（全绿）。
    - `bash scripts/contract_smoke.sh`（切片-32后）通过。
    - `bash scripts/binding_smoke.sh`（切片-32后）通过（保留既有 `pyo3 gil-refs` warning）。
@@ -313,11 +313,11 @@
 
 ## 6. 测试清单
 
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/tests/t105_merge_test.rs`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/tests/t108_set_clause.rs`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/tests/t323_merge_semantics.rs`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/tests/t62_order_by_skip_test.rs`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/tests/t151_optional_match.rs`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/tests/t105_merge_test.rs`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/tests/t108_set_clause.rs`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/tests/t323_merge_semantics.rs`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/tests/t62_order_by_skip_test.rs`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/tests/t151_optional_match.rs`
 
 ## 7. 风险与回滚
 

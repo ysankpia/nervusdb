@@ -29,6 +29,10 @@ parse_from_summary() {
     echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[3]} ${BASH_REMATCH[4]} summary"
     return 0
   fi
+  if [[ "$line" =~ ^([0-9]+)[[:space:]]+scenarios[[:space:]]+\(([0-9]+)[[:space:]]+passed,[[:space:]]+([0-9]+)[[:space:]]+skipped\)$ ]]; then
+    echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[3]} 0 summary"
+    return 0
+  fi
   if [[ "$line" =~ ^([0-9]+)[[:space:]]+scenarios[[:space:]]+\(([0-9]+)[[:space:]]+passed,[[:space:]]+([0-9]+)[[:space:]]+failed\)$ ]]; then
     echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]} 0 ${BASH_REMATCH[3]} summary"
     return 0

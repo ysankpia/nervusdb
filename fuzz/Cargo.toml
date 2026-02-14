@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-nervusdb-v2-query = { path = "../nervusdb-v2-query" }
+nervusdb-query = { path = "../nervusdb-query" }
 
 [[bin]]
 name = "query_prepare"

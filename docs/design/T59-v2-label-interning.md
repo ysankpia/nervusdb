@@ -143,7 +143,7 @@ impl Executor for Scan {
 
 ### Phase 1: Core Interner (2d)
 
-1. Create `label_interner.rs` in `nervusdb-v2-storage`
+1. Create `label_interner.rs` in `nervusdb-storage`
 2. Implement `LabelInterner` struct with HashMap + Vec
 3. Add `get_id()`, `get_name()`, `get_or_create()`
 4. Add WAL event serialization
@@ -220,13 +220,13 @@ fn test_match_by_label() {
 
 | File | Changes |
 |------|---------|
-| `nervusdb-v2-storage/src/label_interner.rs` | New file |
-| `nervusdb-v2-storage/src/engine.rs` | Add `LabelInterner` field, `get_or_create_label()`, `scan_by_label()` |
-| `nervusdb-v2-storage/src/wal.rs` | Add `CreateLabel` WAL event |
-| `nervusdb-v2-storage/src/manifest.rs` | Add label table serialization |
-| `nervusdb-v2-api/src/lib.rs` | Update `GraphSnapshot` trait |
-| `nervusdb-v2-query/src/planner.rs` | Resolve label strings to IDs |
-| `nervusdb-v2-query/src/executor.rs` | Add label filter in Scan |
+| `nervusdb-storage/src/label_interner.rs` | New file |
+| `nervusdb-storage/src/engine.rs` | Add `LabelInterner` field, `get_or_create_label()`, `scan_by_label()` |
+| `nervusdb-storage/src/wal.rs` | Add `CreateLabel` WAL event |
+| `nervusdb-storage/src/manifest.rs` | Add label table serialization |
+| `nervusdb-api/src/lib.rs` | Update `GraphSnapshot` trait |
+| `nervusdb-query/src/planner.rs` | Resolve label strings to IDs |
+| `nervusdb-query/src/executor.rs` | Add label filter in Scan |
 
 ## 7. Risks
 
@@ -253,6 +253,6 @@ fn test_match_by_label() {
 
 ## 10. References
 
-- `nervusdb-v2-storage/src/idmap.rs` (similar persistence pattern)
-- `nervusdb-v2-storage/src/wal.rs` (WAL event format)
-- `nervusdb-v2-query/src/ast.rs` (Label syntax)
+- `nervusdb-storage/src/idmap.rs` (similar persistence pattern)
+- `nervusdb-storage/src/wal.rs` (WAL event format)
+- `nervusdb-query/src/ast.rs` (Label syntax)

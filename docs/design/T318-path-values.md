@@ -36,7 +36,7 @@
 
 ### 4.1 Core Data Structure
 
-在 `nervusdb-v2-query/src/executor.rs` 中：
+在 `nervusdb-query/src/executor.rs` 中：
 
 ```rust
 #[derive(Debug, Clone, PartialEq, PartialOrd)]

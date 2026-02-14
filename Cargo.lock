@@ -774,13 +774,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
+name = "nervusdb"
+version = "2.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "csv",
+ "cucumber",
+ "futures",
+ "nervusdb-api",
+ "nervusdb-query",
+ "nervusdb-storage",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "nervusdb-api"
+version = "2.0.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "nervusdb-cli"
 version = "2.0.0"
 dependencies = [
  "clap",
- "nervusdb-v2",
- "nervusdb-v2-api",
- "nervusdb-v2-query",
+ "nervusdb",
+ "nervusdb-api",
+ "nervusdb-query",
  "rustyline",
  "serde_json",
 ]
@@ -789,54 +814,29 @@ dependencies = [
 name = "nervusdb-pyo3"
 version = "0.1.0"
 dependencies = [
- "nervusdb-v2",
- "nervusdb-v2-query",
+ "nervusdb",
+ "nervusdb-query",
  "pyo3",
 ]
 
 [[package]]
-name = "nervusdb-v2"
-version = "2.0.0"
-dependencies = [
- "anyhow",
- "clap",
- "csv",
- "cucumber",
- "futures",
- "nervusdb-v2-api",
- "nervusdb-v2-query",
- "nervusdb-v2-storage",
- "proptest",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "nervusdb-v2-api"
-version = "2.0.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "nervusdb-v2-query"
+name = "nervusdb-query"
 version = "2.0.0"
 dependencies = [
  "chrono",
- "nervusdb-v2-api",
- "nervusdb-v2-storage",
+ "nervusdb-api",
+ "nervusdb-storage",
  "serde",
  "tempfile",
 ]
 
 [[package]]
-name = "nervusdb-v2-storage"
+name = "nervusdb-storage"
 version = "2.0.0"
 dependencies = [
  "chrono",
  "crc32fast",
- "nervusdb-v2-api",
+ "nervusdb-api",
  "ordered-float",
  "rand 0.8.5",
  "serde",

@@ -22,12 +22,12 @@ run_tck_harness_entry() {
   local scenario="${2:-}"
   if [[ -n "$scenario" ]]; then
     run_case "${feature} :: ${scenario}" \
-      cargo test -p nervusdb-v2 --test tck_harness -- \
+      cargo test -p nervusdb --test tck_harness -- \
       --input "$feature" \
       --name "$scenario"
   else
     run_case "${feature}" \
-      cargo test -p nervusdb-v2 --test tck_harness -- \
+      cargo test -p nervusdb --test tck_harness -- \
       --input "$feature"
   fi
 }
@@ -69,7 +69,7 @@ run_tier3() {
   echo "[tck-tier3] running full TCK harness, log -> $log_file"
 
   set +e
-  cargo test -p nervusdb-v2 --test tck_harness 2>&1 | tee "$log_file"
+  cargo test -p nervusdb --test tck_harness 2>&1 | tee "$log_file"
   local rc=${PIPESTATUS[0]}
   set -e
 

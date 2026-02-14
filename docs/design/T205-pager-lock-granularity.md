@@ -44,7 +44,7 @@
 
 ### Step 1: 抽象只读读取接口（Risk: High）
 
-- File: `nervusdb-v2-storage/src/pager.rs`
+- File: `nervusdb-storage/src/pager.rs`
 - 产出：`PagerReader`（只读 open + read_page_raw），并确保不改变现有写路径语义
 
 ### Step 2: Snapshot / Index / BlobStore 改用 Reader（Risk: High）

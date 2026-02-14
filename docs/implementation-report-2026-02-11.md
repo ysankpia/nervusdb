@@ -18,9 +18,9 @@
 ### PR #128
 - 标题：`feat(TBETA-03): fix DELETE compile validation and null semantics`
 - 关键改动：
-  - `nervusdb-v2-query/src/query_api.rs`
-  - `nervusdb-v2-query/src/executor.rs`
-  - `nervusdb-v2/tests/create_test.rs`
+  - `nervusdb-query/src/query_api.rs`
+  - `nervusdb-query/src/executor.rs`
+  - `nervusdb/tests/create_test.rs`
 - 修复点：
   - `DELETE` 编译期校验补全：`UndefinedVariable`、`InvalidDelete`、`InvalidArgumentType`。
   - `DELETE` 支持表达式求值后的实体删除（node/relationship/path/list/map）。
@@ -76,7 +76,7 @@
 1. `cd /Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb`
 2. `git status --short --branch`
 3. `git checkout codex/feat/TBETA-03-returnorderby2-fixes`
-4. `cargo test -p nervusdb-v2 --test tck_harness -- --input clauses/return-orderby/ReturnOrderBy2.feature`
+4. `cargo test -p nervusdb --test tck_harness -- --input clauses/return-orderby/ReturnOrderBy2.feature`
 5. 修复后按短 PR 门禁跑：
    - `cargo fmt --all -- --check`
    - `cargo clippy --workspace --exclude nervusdb-pyo3 --all-targets -- -W warnings`
@@ -86,7 +86,7 @@
    - `bash scripts/tck_tier_gate.sh tier2`
    - `bash scripts/binding_smoke.sh`
    - `bash scripts/contract_smoke.sh`
-   - `cargo test -p nervusdb-v2 --test tck_harness -- --input clauses/return-orderby/ReturnOrderBy2.feature`
+   - `cargo test -p nervusdb --test tck_harness -- --input clauses/return-orderby/ReturnOrderBy2.feature`
 6. 提交/PR：
    - `git push -u origin codex/feat/TBETA-03-returnorderby2-fixes`
    - `gh pr create --base main --head codex/feat/TBETA-03-returnorderby2-fixes`

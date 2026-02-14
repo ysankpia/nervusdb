@@ -3,7 +3,7 @@ name: Crash Gate v2
 on:
   pull_request:
     paths:
-      - "nervusdb-v2-*/**"
+      - "nervusdb-*/**"
       - ".github/workflows/crash-gate-v2.yml"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -44,9 +44,8 @@ jobs:
 
       - name: Crash gate v2 (PR smoke)
         if: ${{ github.event_name == 'pull_request' }}
-        run: cargo run -p nervusdb-v2-storage --bin nervusdb-v2-crash-test -- driver tmp-v2-crash-gate --iterations 50 --min-ms 2 --max-ms 20 --batch 200 --node-pool 200 --rel-pool 16 --verify-retries 30 --verify-backoff-ms 20
+        run: cargo run -p nervusdb-storage --bin nervusdb-v2-crash-test -- driver tmp-v2-crash-gate --iterations 50 --min-ms 2 --max-ms 20 --batch 200 --node-pool 200 --rel-pool 16 --verify-retries 30 --verify-backoff-ms 20
 
       - name: Crash gate v2 (nightly/release)
         if: ${{ github.event_name != 'pull_request' }}
-        run: cargo run -p nervusdb-v2-storage --bin nervusdb-v2-crash-test -- driver tmp-v2-crash-gate --iterations 300 --min-ms 2 --max-ms 20 --batch 200 --node-pool 200 --rel-pool 16 --verify-retries 50 --verify-backoff-ms 20
-
+        run: cargo run -p nervusdb-storage --bin nervusdb-v2-crash-test -- driver tmp-v2-crash-gate --iterations 300 --min-ms 2 --max-ms 20 --batch 200 --node-pool 200 --rel-pool 16 --verify-retries 50 --verify-backoff-ms 20

@@ -1,4 +1,4 @@
-use nervusdb_v2_query::Value;
+use nervusdb_query::Value;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::BTreeMap;

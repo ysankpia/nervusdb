@@ -90,7 +90,7 @@ Since v2 is **Single Writer**, `MERGE` is safe from race conditions (no "Double 
 
 ### 3.2 Transaction Exposure
 
-Currently, `nervusdb-v2` API implicitly creates transactions. We need explicit control for bindings.
+Currently, `nervusdb` API implicitly creates transactions. We need explicit control for bindings.
 
 ```rust
 // New API
@@ -123,7 +123,7 @@ We will introduce a new crate `nervusdb-uniffi`.
 
 ```text
 nervusdb/
-  ├── nervusdb-v2/         (Rust API)
+  ├── nervusdb/         (Rust API)
   └── nervusdb-uniffi/     (Foreign Binding Layer)
       ├── src/lib.rs       (UDL/Proc Macros)
       └── build.rs

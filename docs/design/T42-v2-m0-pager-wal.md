@@ -46,11 +46,11 @@ T42 的目标不是“图数据库”，而是先把 v2 内核最硬的地基写
 
 最小落地只建 v2 存储 crate：
 
-- `nervusdb-v2-storage/`
+- `nervusdb-storage/`
   - 只负责 pager/wal/allocator/replay（不包含 query）
   - 对外暴露最小 API（M0 先暴露 page-level API，M1 再扩图语义）
 
-> 其他 v2 crates（`nervusdb-v2`, `nervusdb-v2-query`, `nervusdb-v2-cli`）此任务不创建，避免范围失控。
+> 其他 v2 crates（`nervusdb`, `nervusdb-query`, `nervusdb-cli`）此任务不创建，避免范围失控。
 
 ## 4. API（M0）
 
@@ -137,6 +137,6 @@ M0 先用单层 bitmap（page 1）：
 
 ## 9. Acceptance Criteria（明确到一条命令）
 
-- `cargo test -p nervusdb-v2-storage` 全绿
+- `cargo test -p nervusdb-storage` 全绿
 - 关键集成测试通过：replay 后 `.ndb` 内容与预期一致，尾部损坏 WAL 不导致 panic/数据污染
 

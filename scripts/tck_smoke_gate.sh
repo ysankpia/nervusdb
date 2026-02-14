@@ -16,40 +16,40 @@ run_case() {
 
 run_core() {
   run_case "binding validation regression" \
-    cargo test -p nervusdb-v2 --test t332_binding_validation
+    cargo test -p nervusdb --test t332_binding_validation
 
   run_case "variable-length direction regression" \
-    cargo test -p nervusdb-v2 --test t333_varlen_direction
+    cargo test -p nervusdb --test t333_varlen_direction
 
   run_case "merge executor regression" \
-    cargo test -p nervusdb-v2 --test merge_test
+    cargo test -p nervusdb --test merge_test
 
   run_case "merge idempotency regression" \
-    cargo test -p nervusdb-v2 --test t105_merge_test
+    cargo test -p nervusdb --test t105_merge_test
 
   run_case "merge on-create/on-match regression" \
-    cargo test -p nervusdb-v2 --test t323_merge_semantics
+    cargo test -p nervusdb --test t323_merge_semantics
 
   run_case "tck Match2 variable conflict scenario" \
-    cargo test -p nervusdb-v2 --test tck_harness -- \
+    cargo test -p nervusdb --test tck_harness -- \
       --name "Fail when a node has the same variable in a preceding MATCH" \
       --input tests/opencypher_tck/tck/features/clauses/match/Match2.feature
 
   run_case "tck Match6 variable conflict scenario" \
-    cargo test -p nervusdb-v2 --test tck_harness -- \
+    cargo test -p nervusdb --test tck_harness -- \
       --name "Fail when a node has the same variable in a preceding MATCH" \
       --input tests/opencypher_tck/tck/features/clauses/match/Match6.feature
 }
 
 run_extended() {
   run_case "direction clause regression" \
-    cargo test -p nervusdb-v2 --test t315_direction
+    cargo test -p nervusdb --test t315_direction
 
   run_case "variable-length suite regression" \
-    cargo test -p nervusdb-v2 --test t60_variable_length_test
+    cargo test -p nervusdb --test t60_variable_length_test
 
   run_case "literals feature sanity" \
-    cargo test -p nervusdb-v2 --test tck_harness -- \
+    cargo test -p nervusdb --test tck_harness -- \
       --input tests/opencypher_tck/tck/features/expressions/literals/Literals1.feature
 }
 

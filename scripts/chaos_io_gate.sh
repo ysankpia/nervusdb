@@ -26,7 +26,7 @@ run_expect_fail() {
 }
 
 echo "[chaos] crash-test smoke" | tee -a "$LOG_FILE"
-cargo run -p nervusdb-v2-storage --bin nervusdb-v2-crash-test -- \
+cargo run -p nervusdb-storage --bin nervusdb-v2-crash-test -- \
   driver "$TMP_DIR/crash-db" \
   --iterations 20 --min-ms 2 --max-ms 8 --batch 64 --node-pool 64 --rel-pool 8 \
   --verify-retries 20 --verify-backoff-ms 10 | tee -a "$LOG_FILE"

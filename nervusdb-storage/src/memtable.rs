@@ -1,0 +1,203 @@
+use crate::idmap::InternalNodeId;
+use crate::property::PropertyValue;
+use crate::snapshot::{EdgeKey, L0Run, RelTypeId};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+#[derive(Debug, Default)]
+pub struct MemTable {
+    out: HashMap<InternalNodeId, Vec<EdgeKey>>,
+    in_: HashMap<InternalNodeId, Vec<EdgeKey>>,
+    tombstoned_nodes: BTreeSet<InternalNodeId>,
+    tombstoned_edges: BTreeSet<EdgeKey>,
+    // Node properties: node_id -> { key -> value }
+    node_properties: HashMap<InternalNodeId, HashMap<String, PropertyValue>>,
+    // Edge properties: edge_key -> { key -> value }
+    edge_properties: HashMap<EdgeKey, HashMap<String, PropertyValue>>,
+    // Removed node properties: node_id -> set of keys
+    removed_node_properties: HashMap<InternalNodeId, BTreeSet<String>>,
+    // Removed edge properties: edge_key -> set of keys
+    removed_edge_properties: HashMap<EdgeKey, BTreeSet<String>>,
+}
+
+impl MemTable {
+    pub fn create_edge(&mut self, src: InternalNodeId, rel: RelTypeId, dst: InternalNodeId) {
+        let key = EdgeKey { src, rel, dst };
+        self.out.entry(src).or_default().push(key);
+        self.in_.entry(dst).or_default().push(key);
+    }
+
+    pub fn tombstone_node(&mut self, node: InternalNodeId) {
+        self.tombstoned_nodes.insert(node);
+    }
+
+    pub fn tombstone_edge(&mut self, src: InternalNodeId, rel: RelTypeId, dst: InternalNodeId) {
+        let key = EdgeKey { src, rel, dst };
+        if let Some(edges) = self.out.get_mut(&src) {
+            edges.retain(|edge| *edge != key);
+            if edges.is_empty() {
+                self.out.remove(&src);
+            }
+        }
+        if let Some(edges) = self.in_.get_mut(&dst) {
+            edges.retain(|edge| *edge != key);
+            if edges.is_empty() {
+                self.in_.remove(&dst);
+            }
+        }
+        self.tombstoned_edges.insert(key);
+    }
+
+    pub fn set_node_property(&mut self, node: InternalNodeId, key: String, value: PropertyValue) {
+        self.node_properties
+            .entry(node)
+            .or_default()
+            .insert(key.clone(), value);
+        // If we set a property, ensure it's not marked as removed in this tx
+        if let Some(removed) = self.removed_node_properties.get_mut(&node) {
+            removed.remove(&key);
+        }
+    }
+
+    pub fn remove_node_property(&mut self, node: InternalNodeId, key: &str) {
+        if let Some(props) = self.node_properties.get_mut(&node) {
+            props.remove(key);
+            if props.is_empty() {
+                self.node_properties.remove(&node);
+            }
+        }
+        self.removed_node_properties
+            .entry(node)
+            .or_default()
+            .insert(key.to_string());
+    }
+
+    pub fn set_edge_property(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+        key: String,
+        value: PropertyValue,
+    ) {
+        let edge = EdgeKey { src, rel, dst };
+        self.edge_properties
+            .entry(edge)
+            .or_default()
+            .insert(key.clone(), value);
+        // If we set, un-remove
+        if let Some(removed) = self.removed_edge_properties.get_mut(&edge) {
+            removed.remove(&key);
+        }
+    }
+
+    pub fn remove_edge_property(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+        key: &str,
+    ) {
+        let edge = EdgeKey { src, rel, dst };
+        if let Some(props) = self.edge_properties.get_mut(&edge) {
+            props.remove(key);
+            if props.is_empty() {
+                self.edge_properties.remove(&edge);
+            }
+        }
+        self.removed_edge_properties
+            .entry(edge)
+            .or_default()
+            .insert(key.to_string());
+    }
+
+    /// Get removed node properties for WAL writing.
+    pub fn removed_node_properties_for_wal(&self) -> Vec<(InternalNodeId, String)> {
+        self.removed_node_properties
+            .iter()
+            .flat_map(|(node, keys)| keys.iter().map(move |key| (*node, key.clone())))
+            .collect()
+    }
+
+    /// Get removed edge properties for WAL writing.
+    pub fn removed_edge_properties_for_wal(
+        &self,
+    ) -> Vec<(InternalNodeId, RelTypeId, InternalNodeId, String)> {
+        self.removed_edge_properties
+            .iter()
+            .flat_map(|(edge, keys)| {
+                keys.iter()
+                    .map(move |key| (edge.src, edge.rel, edge.dst, key.clone()))
+            })
+            .collect()
+    }
+
+    /// Get all node properties for WAL writing.
+    pub fn node_properties_for_wal(&self) -> Vec<(InternalNodeId, String, PropertyValue)> {
+        self.node_properties
+            .iter()
+            .flat_map(|(node, props)| {
+                props
+                    .iter()
+                    .map(move |(key, value)| (*node, key.clone(), value.clone()))
+            })
+            .collect()
+    }
+
+    /// Get all edge properties for WAL writing.
+    pub fn edge_properties_for_wal(
+        &self,
+    ) -> Vec<(
+        InternalNodeId,
+        RelTypeId,
+        InternalNodeId,
+        String,
+        PropertyValue,
+    )> {
+        self.edge_properties
+            .iter()
+            .flat_map(|(edge, props)| {
+                props.iter().map(move |(key, value)| {
+                    (edge.src, edge.rel, edge.dst, key.clone(), value.clone())
+                })
+            })
+            .collect()
+    }
+
+    pub fn freeze_into_run(self, txid: u64) -> L0Run {
+        let mut edges_by_src: BTreeMap<InternalNodeId, Vec<EdgeKey>> = BTreeMap::new();
+        for (src, mut edges) in self.out {
+            edges.sort();
+            edges_by_src.insert(src, edges);
+        }
+
+        let mut edges_by_dst: BTreeMap<InternalNodeId, Vec<EdgeKey>> = BTreeMap::new();
+        for (dst, mut edges) in self.in_ {
+            edges.sort();
+            edges_by_dst.insert(dst, edges);
+        }
+
+        // Convert HashMap to BTreeMap for L0Run
+        let node_properties: BTreeMap<_, _> = self
+            .node_properties
+            .into_iter()
+            .map(|(k, v)| (k, v.into_iter().collect()))
+            .collect();
+        let edge_properties: BTreeMap<_, _> = self
+            .edge_properties
+            .into_iter()
+            .map(|(k, v)| (k, v.into_iter().collect()))
+            .collect();
+
+        L0Run::new(
+            txid,
+            edges_by_src,
+            edges_by_dst,
+            self.tombstoned_nodes,
+            self.tombstoned_edges,
+            node_properties,
+            edge_properties,
+            self.removed_node_properties.into_iter().collect(), // HashMap -> BTreeMap
+            self.removed_edge_properties.into_iter().collect(), // HashMap -> BTreeMap
+        )
+    }
+}

@@ -193,9 +193,9 @@ fn test_match_path_variable() {
 
 | File | Changes |
 |------|---------|
-| `nervusdb-v2-query/src/planner.rs` | Update `plan_pattern()`, add `ExpandVariableNode` |
-| `nervusdb-v2-query/src/executor.rs` | Implement DFS for variable-length expand |
-| `nervusdb-v2-query/tests/var_length_test.rs` | New integration tests |
+| `nervusdb-query/src/planner.rs` | Update `plan_pattern()`, add `ExpandVariableNode` |
+| `nervusdb-query/src/executor.rs` | Implement DFS for variable-length expand |
+| `nervusdb-query/tests/var_length_test.rs` | New integration tests |
 
 ## 6. Risks
 
@@ -220,6 +220,6 @@ fn test_match_path_variable() {
 
 ## 9. References
 
-- `nervusdb-v2-query/src/ast.rs` (VariableLength struct)
-- `nervusdb-v2-query/src/planner.rs` (plan_pattern function)
-- `nervusdb-v2-query/src/executor.rs` (ExpandNode executor)
+- `nervusdb-query/src/ast.rs` (VariableLength struct)
+- `nervusdb-query/src/planner.rs` (plan_pattern function)
+- `nervusdb-query/src/executor.rs` (ExpandNode executor)

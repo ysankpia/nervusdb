@@ -1,8 +1,8 @@
 [patch.crates-io]
-nervusdb-v2-api = { path = "nervusdb-v2-api" }
-nervusdb-v2-storage = { path = "nervusdb-v2-storage" }
-nervusdb-v2-query = { path = "nervusdb-v2-query" }
-nervusdb-v2 = { path = "nervusdb-v2" }
+nervusdb-api = { path = "nervusdb-api" }
+nervusdb-storage = { path = "nervusdb-storage" }
+nervusdb-query = { path = "nervusdb-query" }
+nervusdb = { path = "nervusdb" }
 
 [target.x86_64-apple-darwin]
 rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]

@@ -2,7 +2,7 @@
 
 > **Status**: Draft
 > **Parent**: T100 (Architecture)
-> **Implementation Target**: `nervusdb-v2-storage/src/index/btree.rs`
+> **Implementation Target**: `nervusdb-storage/src/index/btree.rs`
 
 ## 0. Non-Goals (Read This First)
 

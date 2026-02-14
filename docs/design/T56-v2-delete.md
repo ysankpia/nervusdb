@@ -334,9 +334,9 @@ fn test_delete_by_matching() {
 
 | File | Changes |
 |------|---------|
-| `/Volumes/WorkDrive/Develop/github/nervusdb/nervusdb/nervusdb-v2-query/src/executor.rs` | Add `execute_delete_with_match` |
-| `/Volumes/WorkDrive/Develop/github/nervusdb/nervusdb/nervusdb-v2-query/src/query_api.rs` | Update docs for two-phase DELETE |
-| `/Volumes/WorkDrive/Develop/github/nervusdb/nervusdb/nervusdb-v2-query/tests/delete_test.rs` | New integration tests |
+| `/Volumes/WorkDrive/Develop/github/nervusdb/nervusdb/nervusdb-query/src/executor.rs` | Add `execute_delete_with_match` |
+| `/Volumes/WorkDrive/Develop/github/nervusdb/nervusdb/nervusdb-query/src/query_api.rs` | Update docs for two-phase DELETE |
+| `/Volumes/WorkDrive/Develop/github/nervusdb/nervusdb/nervusdb-query/tests/delete_test.rs` | New integration tests |
 
 ---
 

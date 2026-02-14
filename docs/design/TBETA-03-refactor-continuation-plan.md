@@ -2,10 +2,10 @@
 
 ## 1. 背景与目标
 
-当前 `nervusdb-v2-query` 核心文件体量已进入高风险区：
-- `nervusdb-v2-query/src/executor.rs`: 6524 行
-- `nervusdb-v2-query/src/evaluator.rs`: 4832 行
-- `nervusdb-v2-query/src/query_api.rs`: 4187 行
+当前 `nervusdb-query` 核心文件体量已进入高风险区：
+- `nervusdb-query/src/executor.rs`: 6524 行
+- `nervusdb-query/src/evaluator.rs`: 4832 行
+- `nervusdb-query/src/query_api.rs`: 4187 行
 
 目标：先做受控重构，再继续 TCK 清簇，避免在超大单文件持续叠加导致回归半径扩大。
 

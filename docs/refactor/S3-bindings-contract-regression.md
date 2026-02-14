@@ -1,8 +1,8 @@
 # S3：Bindings 契约回归（Python/Node）
 
-更新时间：2026-02-11  
+更新时间：2026-02-13  
 任务类型：Phase 2  
-任务状态：Plan
+任务状态：Done
 
 ## 1. 目标
 
@@ -59,3 +59,37 @@
 - Python/Node 契约用例通过。
 - 跨语言错误模型与 spec 保持一致。
 - 所有相关 PR 的 bindings smoke/contract smoke 全绿。
+
+## 8. 当前进展（2026-02-13）
+
+1. 已完成 Node 侧错误契约加固
+   - 文件：`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-node/src/lib.rs`。
+   - 新增/补强用例：
+     - `napi_err_maps_syntax_messages_to_syntax_category`
+     - `napi_err_maps_expected_prefix_to_syntax_category`
+     - `napi_err_maps_storage_messages_for_fs_failures`
+     - `napi_err_falls_back_to_execution_category`
+     - `classify_err_message_keeps_compatibility_priority`
+   - 修正点：补齐 `permission denied / no such file / disk full / Expected ...` 的分类规则，保持 `code/category/message` payload 稳定。
+
+2. 已完成 Python 侧分类一致性收敛
+   - 文件：`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-pyo3/src/lib.rs`。
+   - 调整 `classify_error_text` 优先级为：
+     `Compatibility > Syntax > Storage > Execution`。
+   - 新增/补强用例：
+     - `classify_maps_syntax_errors`（补 `Expected ...`）
+     - `classify_maps_storage_errors`（补 `permission denied / disk full`）
+     - `classify_prioritizes_compatibility_when_multiple_keywords_exist`
+
+3. 已完成 contract smoke 脚本契约断言增强
+   - 文件：`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/scripts/contract_smoke.sh`。
+   - Node runtime 增加错误路径断言：
+     - 语法错误必须输出 `NERVUS_SYNTAX/syntax`
+     - 关闭数据库后错误必须输出 `NERVUS_STORAGE/storage`
+     - payload 必须包含 `code/category/message` 三字段且为字符串
+
+4. 验证结果
+   - `cargo test -p nervusdb-pyo3`：Pass
+   - `cargo test --manifest-path nervusdb-node/Cargo.toml --lib`：Pass
+   - `bash scripts/contract_smoke.sh`：Pass
+   - `bash scripts/binding_smoke.sh`：Pass

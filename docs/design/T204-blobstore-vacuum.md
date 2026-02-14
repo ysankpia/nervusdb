@@ -61,12 +61,12 @@ MVP 方案：生成新文件并原子替换：
 
 ### Step 1: 建立可达页扫描器（Risk: High）
 
-- File: `nervusdb-v2-storage/src/blob_store.rs`、`nervusdb-v2-storage/src/index/btree.rs`、`nervusdb-v2-storage/src/wal.rs`
+- File: `nervusdb-storage/src/blob_store.rs`、`nervusdb-storage/src/index/btree.rs`、`nervusdb-storage/src/wal.rs`
 - 产出：给定 roots，枚举所有可达 blob_id 与相关页
 
 ### Step 2: 生成 vacuum 输出文件（Risk: High）
 
-- File: `nervusdb-v2-storage/src/pager.rs`（新增辅助 API：按 page_id 读写 raw）
+- File: `nervusdb-storage/src/pager.rs`（新增辅助 API：按 page_id 读写 raw）
 - 产出：`vacuum_to(target_path)`
 
 ### Step 3: CLI/工具入口（Risk: Medium）

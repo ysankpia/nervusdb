@@ -31,15 +31,15 @@ Beta 硬门槛（必须同时满足）:
 
 ```
 nervusdb/                              当前目录名 (带 -v2)          发布目标
-├── nervusdb-v2-api/       # Layer 0   → nervusdb-api              crates.io (内部)
-├── nervusdb-v2-storage/   # Layer 1   → nervusdb-storage          crates.io (内部)
-├── nervusdb-v2-query/     # Layer 2   → nervusdb-query            crates.io (内部)
-├── nervusdb-v2/           # Layer 3   → nervusdb                  crates.io (对外)
+├── nervusdb-api/       # Layer 0   → nervusdb-api              crates.io (内部)
+├── nervusdb-storage/   # Layer 1   → nervusdb-storage          crates.io (内部)
+├── nervusdb-query/     # Layer 2   → nervusdb-query            crates.io (内部)
+├── nervusdb/           # Layer 3   → nervusdb                  crates.io (对外)
 ├── nervusdb-cli/          # CLI       → nervusdb-cli              crates.io (对外)
 ├── nervusdb-pyo3/         # Python    → nervusdb (PyPI)           Rust 稳定后发布
 ├── nervusdb-node/         # Node.js   → nervusdb (npm)            Rust 稳定后发布
 │                          # [独立 workspace，不在根 Cargo.toml 中]
-├── fuzz/                  # Fuzzing   → nervusdb-fuzz             独立 workspace，依赖 nervusdb-v2-query
+├── fuzz/                  # Fuzzing   → nervusdb-fuzz             独立 workspace，依赖 nervusdb-query
 └── scripts/               # 脚本      — TCK 门控、基准测试、发布等
 ```
 
@@ -59,7 +59,7 @@ nervusdb (Facade)
 ### 开发阶段（当前）
 
 当前 crate 名仍带 `-v2` 后缀，内部开发使用。Phase 1a 包名收敛时统一去掉 `-v2`，同时：
-- 去掉代码中残留的版本数字（如 `nervusdb_v2_api::` → `nervusdb_api::`）
+- 去掉代码中残留的版本数字（如 `nervusdb_api::` → `nervusdb_api::`）
 - TCK 测试文件名中的 `tXXX_` 数字前缀（如 t155_edge_persistence, t306_unwind）在 TCK 通过率达到 100% 后统一重构为语义化命名
 
 ### 发布阶段（Rust 稳定后）
@@ -85,7 +85,7 @@ nervusdb (Facade)
 - 主包 `nervusdb` 完整 re-export 所有公共 API（包括 `GraphStore` trait、`vacuum`、`backup` 等）
   - **当前缺口**：`GraphStore` 只有 `use` 没有 `pub use`（lib.rs:50）；vacuum/backup/bulkload 模块未 re-export
 - CLI 只依赖 `nervusdb` 主包，不直接引用内部子包
-  - **当前缺口**：main.rs:6 和 repl.rs:5 直接引用 `nervusdb-v2-storage`
+  - **当前缺口**：main.rs:6 和 repl.rs:5 直接引用 `nervusdb-storage`
 - 用户 `cargo add nervusdb` 即可获得全部功能，无需了解内部分包
 
 ## 3. 整体架构
@@ -95,23 +95,23 @@ nervusdb (Facade)
 │  Language Bindings                                   │
 │  Python (PyO3) │ Node.js (N-API)                     │
 ├──────────────────────────────────────────────────────┤
-│  nervusdb-v2 (Facade)                                │
+│  nervusdb (Facade)                                │
 │  Db │ ReadTxn │ WriteTxn │ DbSnapshot                │
 ├──────────────────────────────────────────────────────┤
-│  nervusdb-v2-query (查询引擎)                         │
+│  nervusdb-query (查询引擎)                         │
 │  Lexer → Parser → AST → query_api → Executor         │
 ├──────────────────────────────────────────────────────┤
-│  nervusdb-v2-storage (存储引擎)                       │
+│  nervusdb-storage (存储引擎)                       │
 │  WAL │ MemTable │ L0Run │ CSR │ Pager │ Index        │
 ├──────────────────────────────────────────────────────┤
-│  nervusdb-v2-api (类型 + Trait)                       │
+│  nervusdb-api (类型 + Trait)                       │
 │  GraphStore │ GraphSnapshot │ PropertyValue │ EdgeKey │
 ├──────────────────────────────────────────────────────┤
 │  OS (pread/pwrite, fsync)                            │
 └──────────────────────────────────────────────────────┘
 ```
 
-## 4. 存储引擎 (nervusdb-v2-storage)
+## 4. 存储引擎 (nervusdb-storage)
 
 ### 4.1 架构概览：LSM-Tree 变体
 
@@ -131,7 +131,7 @@ Read Path:
 ### 4.2 Pager (页面管理器)
 
 ```rust
-// nervusdb-v2-storage/src/pager.rs
+// nervusdb-storage/src/pager.rs
 const PAGE_SIZE: usize = 8192;  // 8KB 硬编码
 
 文件布局:
@@ -161,7 +161,7 @@ const PAGE_SIZE: usize = 8192;  // 8KB 硬编码
 ### 4.3 WAL (Write-Ahead Log)
 
 ```rust
-// nervusdb-v2-storage/src/wal.rs
+// nervusdb-storage/src/wal.rs
 enum WalRecord {
     BeginTx { txid: u64 },
     CommitTx { txid: u64 },
@@ -193,7 +193,7 @@ enum WalRecord {
 ### 4.4 MemTable (写缓冲)
 
 ```rust
-// nervusdb-v2-storage/src/memtable.rs
+// nervusdb-storage/src/memtable.rs
 struct MemTable {
     out: HashMap<InternalNodeId, Vec<EdgeKey>>,      // 出边
     in_: HashMap<InternalNodeId, Vec<EdgeKey>>,      // 入边
@@ -211,7 +211,7 @@ struct MemTable {
 ### 4.5 L0Run (内存快照)
 
 ```rust
-// nervusdb-v2-storage/src/snapshot.rs
+// nervusdb-storage/src/snapshot.rs
 struct L0Run {
     txid: u64,
     edges_by_src: BTreeMap<InternalNodeId, Vec<EdgeKey>>,
@@ -230,7 +230,7 @@ L0Run 是 MemTable 的不可变快照，保留在内存中直到 compact。
 ### 4.6 CsrSegment (磁盘段)
 
 ```rust
-// nervusdb-v2-storage/src/csr.rs
+// nervusdb-storage/src/csr.rs
 struct CsrSegment {
     id: SegmentId,
     meta_page_id: u64,
@@ -259,7 +259,7 @@ compact 时属性 sink 到 B-Tree：
 ### 4.8 GraphEngine (引擎核心)
 
 ```rust
-// nervusdb-v2-storage/src/engine.rs
+// nervusdb-storage/src/engine.rs
 struct GraphEngine {
     pager: Arc<RwLock<Pager>>,
     wal: Mutex<Wal>,
@@ -280,7 +280,7 @@ struct GraphEngine {
 ### 4.9 StorageSnapshot (桥接层)
 
 ```rust
-// nervusdb-v2-storage/src/api.rs
+// nervusdb-storage/src/api.rs
 struct StorageSnapshot {
     inner: snapshot::Snapshot,           // 内部快照（L0Run + CsrSegment，无锁 Arc clone）
     i2e: Arc<Vec<I2eRecord>>,            // 全量 i2e 拷贝（snapshot() 时 O(N) 扫描）
@@ -296,7 +296,7 @@ struct StorageSnapshot {
 2. B-Tree 持久化属性 → 需要 `self.pager.read().unwrap()` 获取 Pager 读锁
 
 类型转换函数：
-- `conv()`: `snapshot::EdgeKey` → `nervusdb_v2_api::EdgeKey`（字段相同，类型不同）
+- `conv()`: `snapshot::EdgeKey` → `nervusdb_api::EdgeKey`（字段相同，类型不同）
 - `convert_property_value()`: `storage::PropertyValue` → `api::PropertyValue`（逐变体映射）
 - `to_storage()`: 反向转换
 
@@ -327,7 +327,7 @@ Cypher String → Lexer → Parser → AST → query_api::prepare() → Prepared
 ### 5.2 AST (完整 Cypher 语法树)
 
 ```rust
-// nervusdb-v2-query/src/ast.rs
+// nervusdb-query/src/ast.rs
 enum Clause {
     Match, Create, Merge, Unwind, Call, Return,
     Where, With, Set, Remove, Delete, Union, Foreach,
@@ -387,7 +387,7 @@ enum Expression {
 ## 8. 数据模型
 
 ```rust
-// nervusdb-v2-api/src/lib.rs
+// nervusdb-api/src/lib.rs
 type ExternalId = u64;       // 用户指定的节点 ID
 type InternalNodeId = u32;   // 内部自增 ID
 type LabelId = u32;          // 标签 ID
@@ -446,8 +446,8 @@ enum PropertyValue {
 | P2 | 页面大小硬编码 8KB | 不可配置 |
 | P2 | 没有页面校验和 | 数据损坏不可检测 |
 | P2 | 属性键无字符串字典 | 内存和存储浪费 |
-| P1 | CLI 直接引用 nervusdb-v2-storage（GraphEngine + vacuum_in_place），绕过 Db 门面层 | CLI 的 main.rs（line 6: GraphEngine, line 261: vacuum_in_place）和 repl.rs（line 5: GraphEngine）直接引用 nervusdb-v2-storage，绕过 Db 门面层，导致同一数据库文件被打开两次，破坏单写者保证 |
-| P2 | crates.io 包名碎片化 | 7 个 nervusdb 相关包（5 个 v2 + 2 个 v1 遗留），用户不知道该 `cargo add` 哪个；目录名和代码引用中残留 `-v2` 后缀；nervusdb-v2 的 re-export 不完整（缺 `GraphStore` trait（lib.rs:50 只有 `use` 没有 `pub use`）、vacuum 模块、backup 模块、bulkload 模块、storage 层常量（PAGE_SIZE 等）） |
+| P1 | CLI 直接引用 nervusdb-storage（GraphEngine + vacuum_in_place），绕过 Db 门面层 | CLI 的 main.rs（line 6: GraphEngine, line 261: vacuum_in_place）和 repl.rs（line 5: GraphEngine）直接引用 nervusdb-storage，绕过 Db 门面层，导致同一数据库文件被打开两次，破坏单写者保证 |
+| P2 | crates.io 包名碎片化 | 7 个 nervusdb 相关包（5 个 v2 + 2 个 v1 遗留），用户不知道该 `cargo add` 哪个；目录名和代码引用中残留 `-v2` 后缀；nervusdb 的 re-export 不完整（缺 `GraphStore` trait（lib.rs:50 只有 `use` 没有 `pub use`）、vacuum 模块、backup 模块、bulkload 模块、storage 层常量（PAGE_SIZE 等）） |
 | P2 | TCK 文件名含数字前缀 | 测试文件使用 `tXXX_` 数字前缀命名（如 t155_edge_persistence, t306_unwind, t62_order_by_skip_test），TCK 100% 后统一重构为语义化命名 |
 
 ---
@@ -1048,9 +1048,9 @@ index_catalog: Mutex        → RwLock
 
 ```
 当前:
-  nervusdb-v2-api::PropertyValue     (公共)
-  nervusdb-v2-storage::PropertyValue  (存储层，几乎相同)
-  nervusdb-v2-query::Value            (查询运行时，必须保留，含 NodeId/EdgeKey 等运行时变体)
+  nervusdb-api::PropertyValue     (公共)
+  nervusdb-storage::PropertyValue  (存储层，几乎相同)
+  nervusdb-query::Value            (查询运行时，必须保留，含 NodeId/EdgeKey 等运行时变体)
   + convert_property_value() / to_storage() 转换函数 (api.rs:444-480)
 
 改进:
@@ -1065,8 +1065,8 @@ index_catalog: Mutex        → RwLock
 
 ```
 当前:
-  nervusdb-v2-api::EdgeKey
-  nervusdb-v2-storage::snapshot::EdgeKey  (重复定义)
+  nervusdb-api::EdgeKey
+  nervusdb-storage::snapshot::EdgeKey  (重复定义)
   + conv() 转换函数
 
 改进:
@@ -1173,7 +1173,7 @@ struct IndexDef {
 | 任务 | 说明 | 影响 |
 |------|------|------|
 | 统一 PropertyValue/EdgeKey | 消除 api/storage 层重复定义和转换代码 | 减少 ~100 行转换代码 |
-| 包名收敛 | 去掉 -v2 后缀（目录名 + Cargo.toml + 代码中的 `nervusdb_v2_*` 引用），抢注 nervusdb 包名，补全 re-export（`GraphStore` trait（lib.rs:50 只有 `use` 没有 `pub use`）、vacuum 模块、backup 模块、bulkload 模块、storage 层常量（PAGE_SIZE 等）） | 用户只需 `cargo add nervusdb` |
+| 包名收敛 | 去掉 -v2 后缀（目录名 + Cargo.toml + 代码中的 `nervusdb_*` 引用），抢注 nervusdb 包名，补全 re-export（`GraphStore` trait（lib.rs:50 只有 `use` 没有 `pub use`）、vacuum 模块、backup 模块、bulkload 模块、storage 层常量（PAGE_SIZE 等）） | 用户只需 `cargo add nervusdb` |
 | TCK 文件名清理 | TCK 通过率达到 100% 后，清理测试文件名中的 `tXXX_` 数字前缀（如 t155_edge_persistence, t306_unwind），统一重构为语义化命名 | 代码整洁度 |
 
 ### Phase 1c: 引入 LogicalPlan（需在 Phase 1a 后进行，改变查询管线）

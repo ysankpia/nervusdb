@@ -3,7 +3,7 @@
 ## 1. Background
 
 Currently, NervusDB v2's storage engine supports B-Tree indexes (`IndexCatalog`, `BTreeIndex`), but the query engine does not use them. All queries use `NodeScan` (O(N)), which is unacceptable for production use.
-This task aims to bridge `nervusdb-v2-storage` and `nervusdb-v2-query` to enable O(logN) lookups.
+This task aims to bridge `nervusdb-storage` and `nervusdb-query` to enable O(logN) lookups.
 
 ## 2. Goals
 
@@ -14,13 +14,13 @@ This task aims to bridge `nervusdb-v2-storage` and `nervusdb-v2-query` to enable
 
 ## 3. Architecture Changes
 
-### 3.1 Storage Layer (`nervusdb-v2-storage`)
+### 3.1 Storage Layer (`nervusdb-storage`)
 
 - **Requirement**: The `Database` struct or a Facade must expose `lookup_index(label, prop, value) -> Option<NodeId>`.
 - **Current State**: `IndexCatalog` exists but might be internal.
 - **Change**: ensure `IndexCatalog` is accessible via `Storage` trait impl.
 
-### 3.2 Query Layer (`nervusdb-v2-query`)
+### 3.2 Query Layer (`nervusdb-query`)
 
 - **Absctraction**: The `Storage` trait (in `facade.rs`) allows the query engine to talk to storage.
 - **Change**: Add `get_index_entry(&self, label: &str, field: &str, value: &Value) -> Result<Option<NodeId>>` to the `Storage` trait.

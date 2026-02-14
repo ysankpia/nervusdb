@@ -271,10 +271,10 @@ Refs: #T326
 
 ```
 nervusdb/
-├── nervusdb-v2/              # 核心数据库 (package)
-│   ├── nervusdb-v2-storage/  # 存储引擎
-│   ├── nervusdb-v2-query/    # 查询引擎
-│   └── nervusdb-v2-api/      # API 层
+├── nervusdb/              # 核心数据库 (package)
+│   ├── nervusdb-storage/  # 存储引擎
+│   ├── nervusdb-query/    # 查询引擎
+│   └── nervusdb-api/      # API 层
 ├── nervusdb-cli/             # CLI 工具
 ├── nervusdb-pyo3/            # Python 绑定
 ├── docs/                     # 文档

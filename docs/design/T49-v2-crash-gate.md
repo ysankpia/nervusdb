@@ -14,7 +14,7 @@ v1 已经有 crash-gate 思路。v2 引入 manifest/segments/compaction 后，�
 
 ## 3. Harness 设计
 
-- binary：`nervusdb-v2-crash-test`（未来 crate 或 v2-storage 的 bin）
+- binary：`nervusdb-crash-test`（未来 crate 或 v2-storage 的 bin）
 - 三段式：
   1. `driver`：循环 N 次启动子进程（writer/verify）
   2. `writer`：执行随机事务序列（create_node/create_edge/tombstone/compact）

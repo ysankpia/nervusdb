@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-当前查询执行器 (`nervusdb-v2-query/src/executor.rs`) 使用 `Box<dyn Iterator<Item = Result<Row>>>` 作为统一返回类型。这带来以下开销：
+当前查询执行器 (`nervusdb-query/src/executor.rs`) 使用 `Box<dyn Iterator<Item = Result<Row>>>` 作为统一返回类型。这带来以下开销：
 
 1. **堆分配**：每个 Plan 节点返回 boxed iterator
 2. **虚函数调用**：每次 `.next()` 需要动态分发
@@ -116,7 +116,7 @@ PlanIterator::Filter
 
 ### Step 1: Define PlanIterator Enum (Risk: Medium)
 
-- File: `nervusdb-v2-query/src/executor.rs`
+- File: `nervusdb-query/src/executor.rs`
 - 定义 `PlanIterator` 枚举
 - 实现 `Iterator` trait
 
@@ -147,7 +147,7 @@ PlanIterator::Filter
 ### 6.1 Unit Tests
 
 ```bash
-cd nervusdb-v2-query && cargo test executor -- --nocapture
+cd nervusdb-query && cargo test executor -- --nocapture
 ```
 
 确保所有现有测试通过。
@@ -155,13 +155,13 @@ cd nervusdb-v2-query && cargo test executor -- --nocapture
 ### 6.2 Integration Tests
 
 ```bash
-cargo test --package nervusdb-v2 --test query_integration
+cargo test --package nervusdb --test query_integration
 ```
 
 ### 6.3 Benchmark
 
 ```bash
-cargo bench --package nervusdb-v2 -- query
+cargo bench --package nervusdb -- query
 ```
 
 或使用现有 CLI benchmark：

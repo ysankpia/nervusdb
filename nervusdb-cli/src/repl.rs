@@ -1,6 +1,6 @@
-use nervusdb_v2::Db;
-use nervusdb_v2_query::Value;
-use nervusdb_v2_query::prepare;
+use nervusdb::Db;
+use nervusdb_query::Value;
+use nervusdb_query::prepare;
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 use std::collections::BTreeMap;
@@ -134,7 +134,7 @@ pub fn run_repl(db_path: &Path) -> Result<(), String> {
                     Ok(query) => {
                         // For MVP REPL we just dump as JSON-like lines or a simple table
                         // Reusing the logic from main.rs basically, but simpler output for now
-                        let mut params = nervusdb_v2_query::Params::new();
+                        let mut params = nervusdb_query::Params::new();
                         for (k, v) in &param_store {
                             params.insert(k.clone(), v.clone());
                         }

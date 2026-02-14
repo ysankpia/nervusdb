@@ -6,10 +6,10 @@
 
 ```
 nervusdb/
-├── nervusdb-v2-storage/           # v2 存储内核（pager/WAL/segments/compaction）
-├── nervusdb-v2-query/             # v2 查询引擎（parser/planner/executor）
-├── nervusdb-v2-api/               # v2 查询↔存储边界 trait
-├── nervusdb-v2/                   # v2 facade（Db/ReadTxn/WriteTxn）
+├── nervusdb-storage/           # v2 存储内核（pager/WAL/segments/compaction）
+├── nervusdb-query/             # v2 查询引擎（parser/planner/executor）
+├── nervusdb-api/               # v2 查询↔存储边界 trait
+├── nervusdb/                   # v2 facade（Db/ReadTxn/WriteTxn）
 ├── nervusdb-cli/                  # CLI（v2 write/query，NDJSON 输出）
 ├── docs/                          # 设计/任务/性能报告
 ├── _legacy_v1_archive/            # v1/redb 与旧绑定的归档（不参与 workspace/不再维护）
@@ -20,9 +20,9 @@ nervusdb/
 
 ```mermaid
 graph LR
-    v2s[nervusdb-v2-storage] --> v2[nervusdb-v2]
-    v2s --> api[nervusdb-v2-api]
-    api --> q[nervusdb-v2-query]
+    v2s[nervusdb-storage] --> v2[nervusdb]
+    v2s --> api[nervusdb-api]
+    api --> q[nervusdb-query]
     v2 --> cli[nervusdb-cli]
 ```
 

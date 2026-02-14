@@ -6,7 +6,7 @@
 
 ## 1. 目标
 
-- 去除 CLI 对 `nervusdb_v2_storage::engine::GraphEngine` 的直接依赖。
+- 去除 CLI 对 `nervusdb_storage::engine::GraphEngine` 的直接依赖。
 - 统一通过 facade/Db 层完成查询执行与快照访问。
 - 保持 CLI 参数、输出文本协议、错误映射不变。
 
@@ -31,8 +31,8 @@
 
 - 历史问题（已收敛）：CLI `vacuum` 直连 storage 实现层。
   - 当前修复点：`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-cli/src/main.rs:248`
-  - 门面入口：`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/src/lib.rs:212`
-- 依赖收敛证据：CLI 依赖中不再声明 `nervusdb-v2-storage`。
+  - 门面入口：`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/src/lib.rs:212`
+- 依赖收敛证据：CLI 依赖中不再声明 `nervusdb-storage`。
   - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-cli/Cargo.toml:15`
 
 ## 5. TDD 步骤
@@ -43,8 +43,8 @@
 
 ## 6. 测试清单
 
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/tests/t202_import_cli.rs`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/tests/smoke.rs`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/tests/t202_import_cli.rs`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/tests/smoke.rs`
 - `bash scripts/workspace_quick_test.sh`
 
 ## 7. 回滚步骤
@@ -60,7 +60,7 @@
 
 ## 9. 当前进展（2026-02-11）
 
-- 已移除 CLI 对 `nervusdb_v2_storage::engine::GraphEngine` 的直接依赖：
+- 已移除 CLI 对 `nervusdb_storage::engine::GraphEngine` 的直接依赖：
   - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-cli/src/main.rs:2`
   - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-cli/src/repl.rs:1`
 - Query/Write/Repl 均改为通过 `Db::snapshot()` 获取快照：
@@ -69,19 +69,19 @@
   - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-cli/src/repl.rs:131`
 - 已通过 CLI 与回归验证：
   - `cargo test -p nervusdb-cli`
-  - `cargo test -p nervusdb-v2 --test t202_import_cli -- --nocapture`
+  - `cargo test -p nervusdb --test t202_import_cli -- --nocapture`
   - `bash scripts/workspace_quick_test.sh`（退出码 0）
 
 ## 10. 补充进展（2026-02-12）
 
-- 新增 `nervusdb-v2` 门面真空入口，CLI 不再调用 storage 真空实现：
-  - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/src/lib.rs:62`
-  - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/src/lib.rs:212`
+- 新增 `nervusdb` 门面真空入口，CLI 不再调用 storage 真空实现：
+  - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/src/lib.rs:62`
+  - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/src/lib.rs:212`
   - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-cli/src/main.rs:2`
   - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-cli/src/main.rs:248`
 - 新增门面单测（先红后绿）：
-  - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/src/lib.rs:496`
-  - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/src/lib.rs:507`
+  - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/src/lib.rs:496`
+  - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/src/lib.rs:507`
 - 本轮验证通过：
-  - `cargo test -p nervusdb-v2 --lib`
+  - `cargo test -p nervusdb --lib`
   - `cargo check -p nervusdb-cli`

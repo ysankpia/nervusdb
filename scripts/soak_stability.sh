@@ -20,7 +20,7 @@ HISTORY_FILE="$SOAK_OUT_DIR/history.jsonl"
 echo "[soak] minutes=$MINUTES iterations=$ITERS" | tee "$LOG_FILE"
 START_EPOCH="$(date +%s)"
 set +e
-cargo run -p nervusdb-v2-storage --bin nervusdb-v2-crash-test -- \
+cargo run -p nervusdb-storage --bin nervusdb-v2-crash-test -- \
   driver "$TMP_DIR/soak-db" \
   --iterations "$ITERS" --min-ms 2 --max-ms 20 --batch 200 --node-pool 200 --rel-pool 16 \
   --verify-retries 50 --verify-backoff-ms 20 | tee -a "$LOG_FILE"

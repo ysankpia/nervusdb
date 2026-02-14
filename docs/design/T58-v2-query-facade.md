@@ -4,16 +4,16 @@
 
 当前用户使用 v2 查询需要引入多个 crate：
 ```rust
-use nervusdb_v2::Db;
-use nervusdb_v2_api::GraphSnapshot;
-use nervusdb_v2_query::{prepare, Params};
+use nervusdb::Db;
+use nervusdb_api::GraphSnapshot;
+use nervusdb_query::{prepare, Params};
 ```
 
 目标：提供 "SQLite 体验"——一个入口，统一 API。
 
 ## 2. Goals
 
-- 在 `nervusdb-v2` crate 中提供便捷查询方法
+- 在 `nervusdb` crate 中提供便捷查询方法
 - 减少用户代码量
 - 保持架构解耦
 
@@ -27,10 +27,10 @@ use nervusdb_v2_query::{prepare, Params};
 ### 4.1 添加 feature gate
 
 ```toml
-# nervusdb-v2/Cargo.toml
+# nervusdb/Cargo.toml
 [features]
 default = []
-query = ["nervusdb-v2-query"]
+query = ["nervusdb-query"]
 ```
 
 ### 4.2 便捷方法
@@ -63,9 +63,9 @@ impl ReadTxn {
 
 **当前**（需要 3 个 import）:
 ```rust
-use nervusdb_v2::Db;
-use nervusdb_v2_query::prepare;
-use nervusdb_v2_query::Params;
+use nervusdb::Db;
+use nervusdb_query::prepare;
+use nervusdb_query::Params;
 
 let db = Db::open("graph.ndb")?;
 let query = prepare("MATCH (n)-[:1]->(m) RETURN n, m")?;
@@ -75,7 +75,7 @@ let rows: Vec<_> = query.execute_streaming(&db.snapshot(), &Params::new()).colle
 **优化后**（1 个 import）:
 ```rust
 #[cfg(feature = "query")]
-use nervusdb_v2::Db;
+use nervusdb::Db;
 
 let db = Db::open("graph.ndb")?;
 let query = db.query("MATCH (n)-[:1]->(m) RETURN n, m")?;
@@ -87,7 +87,7 @@ let rows: Vec<_> = query.execute_streaming(&db.snapshot(), &Default::default()).
 ```rust
 // lib.rs
 #[cfg(feature = "query")]
-pub use nervusdb_v2_query::{prepare, Params, PreparedQuery, Row, Value, Error, Result};
+pub use nervusdb_query::{prepare, Params, PreparedQuery, Row, Value, Error, Result};
 ```
 
 ## 5. Implementation Plan
@@ -129,10 +129,10 @@ pub use nervusdb_v2_query::{prepare, Params, PreparedQuery, Row, Value, Error, R
 ## 9. Dependencies
 
 - 无外部依赖
-- 依赖 `nervusdb-v2-query` crate
+- 依赖 `nervusdb-query` crate
 
 ## 10. References
 
-- `nervusdb-v2/src/lib.rs`
-- `nervusdb-v2-query/src/query_api.rs`
+- `nervusdb/src/lib.rs`
+- `nervusdb-query/src/query_api.rs`
 - `docs/memos/v2-next-steps.md`

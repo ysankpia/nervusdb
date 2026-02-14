@@ -188,33 +188,33 @@ name = "nervusdb-fuzz"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
- "nervusdb-v2-query",
+ "nervusdb-query",
 ]
 
 [[package]]
-name = "nervusdb-v2-api"
+name = "nervusdb-api"
 version = "2.0.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
-name = "nervusdb-v2-query"
+name = "nervusdb-query"
 version = "2.0.0"
 dependencies = [
  "chrono",
- "nervusdb-v2-api",
- "nervusdb-v2-storage",
+ "nervusdb-api",
+ "nervusdb-storage",
  "serde",
 ]
 
 [[package]]
-name = "nervusdb-v2-storage"
+name = "nervusdb-storage"
 version = "2.0.0"
 dependencies = [
  "chrono",
  "crc32fast",
- "nervusdb-v2-api",
+ "nervusdb-api",
  "ordered-float",
  "rand",
  "serde",
@@ -566,5 +566,5 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4de98dfa5d5b7fef4ee834d0073d560c9ca7b6c46a71d058c48db7960f8cfaf7"
 
 [[patch.unused]]
-name = "nervusdb-v2"
+name = "nervusdb"
 version = "2.0.0"

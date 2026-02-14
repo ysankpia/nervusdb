@@ -116,7 +116,7 @@ This project is **NOT production-ready**. The following critical gaps exist:
 
 ## NotImplemented Inventory
 
-From `nervusdb-v2-query`:
+From `nervusdb-query`:
 
 | File           | Count | Key Gaps                                    |
 | -------------- | ----- | ------------------------------------------- |

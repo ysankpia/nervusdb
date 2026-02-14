@@ -182,7 +182,7 @@ pub struct BackupInfo {
 
 #### 步骤 1：创建 BackupManager 骨架（Low Risk）
 
-**文件**：`nervusdb-v2-storage/src/backup.rs`
+**文件**：`nervusdb-storage/src/backup.rs`
 
 **任务**：
 1. 定义 `BackupManager`、`BackupHandle`、`BackupStatus` 结构体

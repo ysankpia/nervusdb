@@ -4,6 +4,6 @@ use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(input) = std::str::from_utf8(data) {
-        let _ = nervusdb_v2_query::prepare(input);
+        let _ = nervusdb_query::prepare(input);
     }
 });

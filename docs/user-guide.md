@@ -28,7 +28,7 @@ cargo install nervusdb-cli
 ### Install from Crates.io
 
 ```bash
-cargo add nervusdb-v2
+cargo add nervusdb
 ```
 
 ### Download Binary
@@ -42,7 +42,7 @@ Download prebuilt binaries from [GitHub Releases](https://github.com/LuQing-Stud
 ### Opening a Database
 
 ```rust
-use nervusdb_v2::Db;
+use nervusdb::Db;
 
 // Open or create a database at the specified path
 let db = Db::open_paths(["/path/to/mygraph.ndb"]).unwrap();
@@ -75,7 +75,7 @@ MATCH (a)-[*1..5]->(b) WHERE a.name = 'Alice' RETURN a, b
 ### Rust API
 
 ```rust
-use nervusdb_v2::Db;
+use nervusdb::Db;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Open database
@@ -214,7 +214,7 @@ MATCH (n) SET n:Premium
 ### Creating a Backup
 
 ```rust
-use nervusdb_v2::Db;
+use nervusdb::Db;
 
 let db = Db::open_paths(["/tmp/graph.ndb"])?;
 
@@ -231,7 +231,7 @@ db.complete_backup(&handle)?;
 ### Restoring from Backup
 
 ```rust
-use nervusdb_v2::Db;
+use nervusdb::Db;
 
 // Restore to a new location
 Db::restore_from_backup("/tmp/backup", "/tmp/restored.ndb")?;
@@ -244,7 +244,7 @@ Db::restore_from_backup("/tmp/backup", "/tmp/restored.ndb")?;
 ### Database Options
 
 ```rust
-use nervusdb_v2::DbOptions;
+use nervusdb::DbOptions;
 
 let options = DbOptions::default()
     .with_cache_size(1024 * 1024 * 100); // 100MB cache
@@ -341,4 +341,4 @@ RUST_LOG=debug nervusdb-cli v2 query --db /tmp/graph --cypher "MATCH (n) RETURN 
 
 - [CLI Reference](cli.md)
 - [Cypher Support Details](reference/cypher_support.md)
-- [API Documentation](https://docs.rs/nervusdb-v2)
+- [API Documentation](https://docs.rs/nervusdb)

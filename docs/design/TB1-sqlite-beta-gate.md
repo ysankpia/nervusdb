@@ -71,8 +71,8 @@
 
 ## 7. Validation Plan
 ### 7.1 Unit Tests
-- `cargo test -p nervusdb-v2-storage pager::tests::*`
-- `cargo test -p nervusdb-v2 error::tests::*`
+- `cargo test -p nervusdb-storage pager::tests::*`
+- `cargo test -p nervusdb error::tests::*`
 - `cargo test -p nervusdb-pyo3`
 - `cargo test --manifest-path nervusdb-node/Cargo.toml`
 

@@ -37,7 +37,7 @@ FOREACH ( x IN [1, 2, 3] | CREATE (:Node {id: x}) )
 
 ## 3. 设计方案
 
-### 3.1 AST (`nervusdb-v2-query/src/ast.rs`)
+### 3.1 AST (`nervusdb-query/src/ast.rs`)
 
 新增 `Clause::Foreach`:
 
@@ -54,14 +54,14 @@ pub struct ForeachClause {
 }
 ```
 
-### 3.2 Parser (`nervusdb-v2-query/src/parser.rs`)
+### 3.2 Parser (`nervusdb-query/src/parser.rs`)
 
 - 新增 `parse_foreach()`
 - 识别 `FOREACH` -> `(` -> variable -> `IN` -> expr -> `|` -> clauses -> `)`
 - 需要复用现有的 `parse_clause` 但限制允许的类型，或者递归调用通用 parse 但后校验。
 - 鉴于 `updatingClauses` 可以包含多个子句（如 `CREATE ... SET ...`），parser 需要能解析子句列表直到遇到 `)`。
 
-### 3.3 Planner (`nervusdb-v2-query/src/query_api.rs`)
+### 3.3 Planner (`nervusdb-query/src/query_api.rs`)
 
 - 扩展 `Plan` enum：
 
@@ -79,7 +79,7 @@ pub enum Plan {
 
 - 编译时，将 `updates` 列表编译为 `sub_plan` 链。
 
-### 3.4 Executor (`nervusdb-v2-query/src/executor.rs`)
+### 3.4 Executor (`nervusdb-query/src/executor.rs`)
 
 - 实现 `execute_plan` for `Plan::Foreach`.
 - 逻辑：

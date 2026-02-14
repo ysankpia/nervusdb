@@ -29,10 +29,10 @@ Cargo.toml (workspace)
   nervusdb-cli/           # v1 CLI (existing)
   nervusdb-temporal/      # v1 optional (existing)
   nervusdb-wasm/          # v1 wasm (existing)
-  nervusdb-v2/            # v2 public facade (new)
-  nervusdb-v2-storage/    # v2 pager + wal + lsm graph (new)
-  nervusdb-v2-query/      # v2 cypher frontend + planner/executor (new)
-  nervusdb-v2-cli/        # v2 cli (new)
+  nervusdb/            # v2 public facade (new)
+  nervusdb-storage/    # v2 pager + wal + lsm graph (new)
+  nervusdb-query/      # v2 cypher frontend + planner/executor (new)
+  nervusdb-cli/        # v2 cli (new)
 bindings/
   ...                     # v1 bindings (existing)
   v2/                     # v2 bindings (future)
@@ -41,13 +41,13 @@ docs/design/              # design docs
 
 ### 4.2 为什么要拆 `storage/query/facade`
 
-- `nervusdb-v2-storage`：最底层、最难写对、最需要测试保护。必须不依赖 query。
-- `nervusdb-v2-query`：依赖 storage 的 trait（`GraphStore`），实现 AST/Planner/Executor。
-- `nervusdb-v2`：对外稳定入口（`Connection/Transaction/Statement`），只做组合与薄封装。
+- `nervusdb-storage`：最底层、最难写对、最需要测试保护。必须不依赖 query。
+- `nervusdb-query`：依赖 storage 的 trait（`GraphStore`），实现 AST/Planner/Executor。
+- `nervusdb`：对外稳定入口（`Connection/Transaction/Statement`），只做组合与薄封装。
 
 ## 5. API Boundaries（最小接口）
 
-### 5.1 `nervusdb-v2-storage` 对外 trait
+### 5.1 `nervusdb-storage` 对外 trait
 
 v2 query 不该直接碰 pager/wal 细节，只依赖一个最小图存储接口（随 M0/M1/M2 递进扩展）：
 
@@ -60,21 +60,21 @@ v2 query 不该直接碰 pager/wal 细节，只依赖一个最小图存储接口
 
 > 注意：属性与 schema 在 M1 只存在于 WAL/MemTable；接口不要过早把 columnar/typed props 暴露出去。
 
-### 5.2 `nervusdb-v2-query` 的依赖策略
+### 5.2 `nervusdb-query` 的依赖策略
 
 短期（M1/M2）建议：
 
-- 直接复制 v1 的 Cypher parser/AST/planner 到 `nervusdb-v2-query`（保持独立）
+- 直接复制 v1 的 Cypher parser/AST/planner 到 `nervusdb-query`（保持独立）
 - 等 v2 稳定后再考虑抽成共享 crate（例如 `nervusdb-cypher`），避免 early refactor 把 v1 搞坏
 
 ## 6. Feature Gates / Target Policy
 
 ### 6.1 Native vs WASM
 
-- `nervusdb-v2-storage`：
+- `nervusdb-storage`：
   - `cfg(not(target_arch = "wasm32"))`：提供磁盘引擎（pager+wal）
   - `cfg(target_arch = "wasm32")`：不提供磁盘格式，仅提供 in-memory 实现或直接不编译（由 facade 做选择）
-- `nervusdb-v2`：对 wasm 提供与 native 等价的 API，但后端选择 in-memory
+- `nervusdb`：对 wasm 提供与 native 等价的 API，但后端选择 in-memory
 
 ### 6.2 Background Compaction
 
@@ -88,8 +88,8 @@ v2 query 不该直接碰 pager/wal 细节，只依赖一个最小图存储接口
 
 - v1 现有 CI 不应因 v2 新增而变慢或不稳定
 - v2 先增加最小测试集：
-  - `nervusdb-v2-storage`：WAL replay / crash consistency / snapshot isolation
-  - `nervusdb-v2-query`：小集合 e2e（MATCH expand + filter）
+  - `nervusdb-storage`：WAL replay / crash consistency / snapshot isolation
+  - `nervusdb-query`：小集合 e2e（MATCH expand + filter）
 - crash 类测试要可控：默认在 CI 跑小次数，长时间 fuzz/stress 用手动 job 或 nightly
 
 ## 8. Migration / Compatibility（明确“不做”）

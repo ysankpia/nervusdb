@@ -2,7 +2,7 @@
 
 ## 1. Context
 
-v2 已经具备可验证的存储内核（Pager/WAL/Snapshot/L0Runs/CSR segments）。查询层缺口在 executor：必须把“计划节点”映射到 `nervusdb-v2-api::GraphSnapshot` 的 streaming 访问，而不是把结果 collect 到内存。
+v2 已经具备可验证的存储内核（Pager/WAL/Snapshot/L0Runs/CSR segments）。查询层缺口在 executor：必须把“计划节点”映射到 `nervusdb-api::GraphSnapshot` 的 streaming 访问，而不是把结果 collect 到内存。
 
 当前 `GraphSnapshot` 只有 `neighbors()`，没有 node scan / label / id 映射能力，因此无法实现最基本的 `MATCH (n)`。
 
@@ -10,7 +10,7 @@ v2 已经具备可验证的存储内核（Pager/WAL/Snapshot/L0Runs/CSR segments
 
 - 实现一个 **Pull-based** 的 streaming executor（iterator pipeline）
 - 支持最小可用图查询（MVP），以便验证 v2 的读路径与执行器边界
-- **不破坏现有 v2 内核**：只允许在 `nervusdb-v2-api` 增加“向后兼容”的扩展（默认实现），并在 `nervusdb-v2-storage` 里补实现
+- **不破坏现有 v2 内核**：只允许在 `nervusdb-api` 增加“向后兼容”的扩展（默认实现），并在 `nervusdb-storage` 里补实现
 
 ## 3. Non-Goals
 
@@ -20,7 +20,7 @@ v2 已经具备可验证的存储内核（Pager/WAL/Snapshot/L0Runs/CSR segments
 
 ## 4. API Boundary Updates（必要时）
 
-为支撑 `MATCH (n)` 与 label 过滤，允许在 `nervusdb-v2-api` 追加以下接口（都提供默认实现，保证向后兼容）：
+为支撑 `MATCH (n)` 与 label 过滤，允许在 `nervusdb-api` 追加以下接口（都提供默认实现，保证向后兼容）：
 
 ```text
 trait GraphSnapshot {
@@ -58,7 +58,7 @@ Row 表示（MVP）：
 
 ## 6. Testing Strategy
 
-- `nervusdb-v2-storage` + `nervusdb-v2-query` 的集成测试：
+- `nervusdb-storage` + `nervusdb-query` 的集成测试：
   - 构造小图（3-5 节点，几条边），执行 `MATCH` 单跳，断言返回行数与内容
   - 覆盖 snapshot isolation：读快照在写提交后仍稳定（可复用现有 v2 tests 模式）
 - executor 单测：算子组合（Scan → Expand → Limit）的行为测试（不依赖解析器）

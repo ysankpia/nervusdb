@@ -3,7 +3,7 @@
 > **Status**: Draft
 > **Parent**: T100 (Architecture)
 > **Depends On**: T101 (B+Tree page layout & cursor)
-> **Implementation Target**: `nervusdb-v2-storage/src/index/catalog.rs`
+> **Implementation Target**: `nervusdb-storage/src/index/catalog.rs`
 
 ## 0. Scope (Don’t Make This a Tar Pit)
 

@@ -24,7 +24,7 @@ echo "[v2 bench] nodes=$nodes degree=$degree iters=$iters"
 
 # Capture the last line (JSON) only.
 json_line="$(
-  cargo run --example bench_v2 -p nervusdb-v2-storage --release -- \
+  cargo run --example bench_v2 -p nervusdb-storage --release -- \
     --nodes "$nodes" --degree "$degree" --iters "$iters" \
     | tail -n 1
 )"

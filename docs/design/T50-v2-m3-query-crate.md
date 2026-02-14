@@ -2,13 +2,13 @@
 
 ## 1. Context
 
-v2（`nervusdb-v2-storage`）已经提供 `nervusdb-v2-api::{GraphStore, GraphSnapshot}` 的 streaming 边界（见 `docs/design/T47-v2-query-storage-boundary.md`）。目前缺口在查询层：Cypher 文本 → AST/Plan → 基于 `GraphSnapshot` 的 executor。
+v2（`nervusdb-storage`）已经提供 `nervusdb-api::{GraphStore, GraphSnapshot}` 的 streaming 边界（见 `docs/design/T47-v2-query-storage-boundary.md`）。目前缺口在查询层：Cypher 文本 → AST/Plan → 基于 `GraphSnapshot` 的 executor。
 
 v1 的 `nervusdb-core/src/query` 里 parser/AST/planner 质量不错，但 executor 深度绑定 `redb`，无法直接复用。
 
 ## 2. Goals
 
-- 在 workspace 新增 crate：`nervusdb-v2-query`
+- 在 workspace 新增 crate：`nervusdb-query`
 - **复用策略务实**：先“复制” v1 的 `query/{ast,lexer,parser,planner}` 到 v2-query（避免早期抽共享导致两边互相拖死）
 - 定义 v2-query 的公开入口（先不承诺完整 openCypher）：`parse_cypher()` / `plan()` 的最小 API
 - 明确 M3 的 Cypher 最小子集（为 T51/T52 的 executor/API 做输入边界）
@@ -23,14 +23,14 @@ v1 的 `nervusdb-core/src/query` 里 parser/AST/planner 质量不错，但 execu
 
 ### 4.1 Workspace / Crate
 
-- 新增 `nervusdb-v2-query/`
+- 新增 `nervusdb-query/`
   - `src/ast.rs` / `src/lexer.rs` / `src/parser.rs` / `src/planner.rs`
   - `src/lib.rs` 统一 re-export，并提供稳定入口函数
 
 Cargo 依赖原则：
 
 - 只允许小而确定的 crates（如 `thiserror`），禁止引入大型运行时
-- v2-query **不得**依赖 `nervusdb-v2-storage`，只能依赖 `nervusdb-v2-api`（通过 trait 交互）
+- v2-query **不得**依赖 `nervusdb-storage`，只能依赖 `nervusdb-api`（通过 trait 交互）
 
 ### 4.2 Minimal Cypher Subset (M3)
 
@@ -60,7 +60,7 @@ T50 只需要保证 planner 的输出能够驱动一个极简 executor：
 
 ## 5. Testing Strategy
 
-- `nervusdb-v2-query` 单元测试：
+- `nervusdb-query` 单元测试：
   - parser：最小子集的正例与 NotSupported 的反例
   - planner：把 AST 转成 plan 的结构测试（不触发存储）
 - 不引入快照 golden 文件（先用结构断言，避免早期测试变成维护负担）

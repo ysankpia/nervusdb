@@ -23,7 +23,7 @@ cargo doc --no-deps --open
 ### 使用
 ```rust
 // Rust API
-use nervusdb_v2::Db;
+use nervusdb::Db;
 
 let db = Db::open_paths(["/tmp/demo.ndb"])?;
 db.execute("CREATE (a {name: 'Alice'})", None)?;

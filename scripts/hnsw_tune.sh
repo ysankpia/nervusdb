@@ -30,7 +30,7 @@ for m in $(split_csv "$M_LIST"); do
     for efs in $(split_csv "$EF_SEARCH_LIST"); do
       echo "[hnsw-tune] running m=$m ef_construction=$efc ef_search=$efs"
       line="$({
-        cargo run --example hnsw_tune -p nervusdb-v2-storage --release -- \
+        cargo run --example hnsw_tune -p nervusdb-storage --release -- \
           --nodes "$NODES" --dim "$DIM" --queries "$QUERIES" --k "$K" \
           --m "$m" --ef-construction "$efc" --ef-search "$efs";
       } | tail -n 1)"

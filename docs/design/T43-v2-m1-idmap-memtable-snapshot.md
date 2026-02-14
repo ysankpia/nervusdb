@@ -171,7 +171,7 @@ M1 Snapshot 至少包含：
 
 ## 9. Implementation Plan（按文件/模块）
 
-在 `nervusdb-v2-storage` 内新增：
+在 `nervusdb-storage` 内新增：
 
 - `idmap.rs`：I2E 持久化 + 启动重建 E2I
 - `memtable.rs`：可变邻接表 + tombstone
@@ -181,7 +181,7 @@ M1 Snapshot 至少包含：
 
 ## 10. Acceptance Criteria
 
-- `cargo test -p nervusdb-v2-storage` 全绿
+- `cargo test -p nervusdb-storage` 全绿
 - M1 的 3 个关键集成测全通过：
   - commit 可恢复
   - 未 commit 不可见

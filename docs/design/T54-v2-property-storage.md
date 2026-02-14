@@ -111,7 +111,7 @@ pub enum WalRecord {
 
 ### 4.5 GraphSnapshot trait 扩展
 
-在 `nervusdb-v2-api` 中扩展 `GraphSnapshot`：
+在 `nervusdb-api` 中扩展 `GraphSnapshot`：
 
 ```rust
 pub trait GraphSnapshot {
@@ -126,7 +126,7 @@ pub trait GraphSnapshot {
 
 ### 4.6 WriteTxn API 扩展
 
-在 `nervusdb-v2` facade 中扩展 `WriteTxn`：
+在 `nervusdb` facade 中扩展 `WriteTxn`：
 
 ```rust
 impl<'a> WriteTxn<'a> {
@@ -212,7 +212,7 @@ impl<'a> WriteTxn<'a> {
 
 ### 6.3 Crash Gate
 
-- 扩展 `nervusdb-v2-crash-test` 验证属性一致性
+- 扩展 `nervusdb-crash-test` 验证属性一致性
 - 验证崩溃恢复后属性数据正确
 
 ## 7. Risks
@@ -251,6 +251,6 @@ impl<'a> WriteTxn<'a> {
 
 - `docs/memos/v2-status-assessment.md` - 项目状态评估
 - `docs/spec.md` - v2 产品规格
-- `nervusdb-v2-storage/src/memtable.rs` - MemTable 实现
-- `nervusdb-v2-storage/src/wal.rs` - WAL 实现
-- `nervusdb-v2-storage/src/snapshot.rs` - Snapshot 实现
+- `nervusdb-storage/src/memtable.rs` - MemTable 实现
+- `nervusdb-storage/src/wal.rs` - WAL 实现
+- `nervusdb-storage/src/snapshot.rs` - Snapshot 实现

@@ -22,7 +22,7 @@ cargo run -p nervusdb-cli -- v2 query --db ./demo --cypher "MATCH (a)-[:1]->(b) 
 ### Rust
 
 ```rust
-use nervusdb_v2::Db;
+use nervusdb::Db;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = Db::open("/tmp/demo")?;
@@ -84,7 +84,7 @@ TCK_MIN_PASS_RATE=95 bash scripts/beta_gate.sh
 - **两文件**：`<path>.ndb`（page store / segments / manifest）+ `<path>.wal`（redo log）
 - **事务模型**：Single Writer + Snapshot Readers
 - **存储形态**：MemTable（delta）+ 不可变 runs/segments（CSR）+ 显式 compaction/checkpoint
-- **查询边界**：Query 通过 `nervusdb-v2-api::{GraphStore, GraphSnapshot}` 访问图层
+- **查询边界**：Query 通过 `nervusdb-api::{GraphStore, GraphSnapshot}` 访问图层
 
 ## 开发
 

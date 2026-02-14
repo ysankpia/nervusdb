@@ -28,7 +28,7 @@ Implement a **native, page-backed HNSW (Hierarchical Navigable Small World)** in
 
 ### 3.1 Architecture Components
 
-We will introduce two new internal structures within `nervusdb-v2-storage/src/index/hnsw/`:
+We will introduce two new internal structures within `nervusdb-storage/src/index/hnsw/`:
 
 1.  **`VectorStore`**: storage for the raw vector data.
 2.  **`HnswGraph`**: storage for the navigation graph layers.
@@ -65,26 +65,26 @@ _Rationale_: This avoids writing complex custom pager logic for linked lists. B-
 
 ### Step 1: `VectorIndex` Trait & Mock (Risk: Low)
 
-- FILE: `nervusdb-v2-storage/src/index/vector.rs`
+- FILE: `nervusdb-storage/src/index/vector.rs`
 - Define trait `VectorIndex`: `insert(id, vector)`, `search(vector, k)`.
 - Implement a simple `BruteForceIndex` (Linear Scan) to validate correctness of distance functions.
 
 ### Step 2: HNSW Logic (Memory-Based) (Risk: Medium)
 
-- FILE: `nervusdb-v2-storage/src/index/hnsw/logic.rs`
+- FILE: `nervusdb-storage/src/index/hnsw/logic.rs`
 - Implement the HNSW algorithms (insert, search_layer) using generic `Graph` and `VectorStorage` traits.
 - Unit test with in-memory storage.
 
 ### Step 3: Pager Integration (Persistence) (Risk: High)
 
-- FILE: `nervusdb-v2-storage/src/index/hnsw/persistent.rs`
+- FILE: `nervusdb-storage/src/index/hnsw/persistent.rs`
 - Implement `VectorStorage` using the existing `BTree`.
 - Implement `Graph` storage using the existing `BTree`.
 - This binds the abstract HNSW logic to the disk pager.
 
 ### Step 4: Cypher/API Integration (Risk: Medium)
 
-- FILE: `nervusdb-v2/src/lib.rs`
+- FILE: `nervusdb/src/lib.rs`
 - Add `Db::create_vector_index(label, property, dim)`.
 - Add `Db::query_vector(label, property, query, k)`.
 

@@ -15,11 +15,11 @@ git push origin main vX.Y.Z
 
 ## crates.io（可选）
 
-如果你要发布 crates（例如 `nervusdb-v2` / `nervusdb-v2-query` / `nervusdb-cli`），先在本地 dry-run：
+如果你要发布 crates（例如 `nervusdb` / `nervusdb-query` / `nervusdb-cli`），先在本地 dry-run：
 
 ```bash
-cargo publish -p nervusdb-v2 --dry-run
-cargo publish -p nervusdb-v2-query --dry-run
+cargo publish -p nervusdb --dry-run
+cargo publish -p nervusdb-query --dry-run
 cargo publish -p nervusdb-cli --dry-run
 ```
 

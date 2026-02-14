@@ -2,9 +2,9 @@
 members = [
     "nervusdb-cli",
     "nervusdb-pyo3",
-    "nervusdb-v2",
-    "nervusdb-v2-api",
-    "nervusdb-v2-query",
-    "nervusdb-v2-storage",
+    "nervusdb",
+    "nervusdb-api",
+    "nervusdb-query",
+    "nervusdb-storage",
 ]
 resolver = "2"

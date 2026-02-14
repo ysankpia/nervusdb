@@ -2,7 +2,7 @@
 
 ## 1. Context
 
-NervusDB v2.0.0 introduces a new query engine (`nervusdb-v2-query`) with:
+NervusDB v2.0.0 introduces a new query engine (`nervusdb-query`) with:
 - Modern parser, planner, and executor
 - Streaming execution model
 - Property graph storage
@@ -12,7 +12,7 @@ The existing Python bindings (`bindings/python/nervusdb-py`) use v1 API. This ta
 ## 2. Goals
 
 - Expose v2 query API to Python via UniFFI
-- Provide Pythonic API similar to `nervusdb_v2_query::facade`
+- Provide Pythonic API similar to `nervusdb_query::facade`
 - Support streaming row iteration
 - Reuse existing UniFFI infrastructure in `bindings/uniffi/nervusdb-uniffi`
 
@@ -48,10 +48,10 @@ bindings/uniffi/nervusdb-uniffi/
 ```rust
 // bindings/uniffi/nervusdb-uniffi/src/v2_lib.rs
 
-uniffi::include_scaffolding!("nervusdb_v2");
+uniffi::include_scaffolding!("nervusdb");
 
 // Re-export types from v2-query
-pub use nervusdb_v2_query as v2_query;
+pub use nervusdb_query as v2_query;
 
 // v2 Database wrapper for Python
 pub struct V2Database {

@@ -394,55 +394,55 @@ dependencies = [
 ]
 
 [[package]]
+name = "nervusdb"
+version = "2.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "csv",
+ "nervusdb-api",
+ "nervusdb-query",
+ "nervusdb-storage",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "nervusdb-api"
+version = "2.0.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "nervusdb-node"
 version = "0.1.0"
 dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
- "nervusdb-v2",
- "nervusdb-v2-query",
+ "nervusdb",
+ "nervusdb-query",
  "serde_json",
 ]
 
 [[package]]
-name = "nervusdb-v2"
-version = "2.0.0"
-dependencies = [
- "anyhow",
- "clap",
- "csv",
- "nervusdb-v2-api",
- "nervusdb-v2-query",
- "nervusdb-v2-storage",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "nervusdb-v2-api"
-version = "2.0.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "nervusdb-v2-query"
+name = "nervusdb-query"
 version = "2.0.0"
 dependencies = [
  "chrono",
- "nervusdb-v2-api",
- "nervusdb-v2-storage",
+ "nervusdb-api",
+ "nervusdb-storage",
  "serde",
 ]
 
 [[package]]
-name = "nervusdb-v2-storage"
+name = "nervusdb-storage"
 version = "2.0.0"
 dependencies = [
  "chrono",
  "crc32fast",
- "nervusdb-v2-api",
+ "nervusdb-api",
  "ordered-float",
  "rand",
  "serde",

@@ -23,7 +23,7 @@ cargo run -p nervusdb-cli -- v2 query --db /tmp/demo --cypher "MATCH (a)-[:1]->(
 ### Rust
 
 ```rust
-use nervusdb_v2::Db;
+use nervusdb::Db;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = Db::open("/tmp/demo")?;

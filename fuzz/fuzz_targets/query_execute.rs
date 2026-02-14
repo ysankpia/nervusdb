@@ -1,7 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nervusdb_v2_query::{EdgeKey, GraphSnapshot, InternalNodeId, Params, RelTypeId};
+use nervusdb_query::{EdgeKey, GraphSnapshot, InternalNodeId, Params, RelTypeId};
 
 struct EmptySnapshot;
 
@@ -33,7 +33,7 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
 
-    let Ok(prepared) = nervusdb_v2_query::prepare(input) else {
+    let Ok(prepared) = nervusdb_query::prepare(input) else {
         return;
     };
 

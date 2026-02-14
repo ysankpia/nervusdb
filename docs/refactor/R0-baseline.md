@@ -22,9 +22,9 @@
 |---|---|---|
 | Tier-3 通过率 | 81.93%（3193/3897） | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/artifacts/tck/tier3-rate.json:11` |
 | Tier-3 失败数 | 178 | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/artifacts/tck/tier3-rate.json:9` |
-| Query API 文件规模 | 4187 行 | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/query_api.rs:4187` |
-| Executor 文件规模 | 6524 行 | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor.rs:6524` |
-| Evaluator 文件规模 | 4832 行 | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/evaluator.rs:4832` |
+| Query API 文件规模 | 4187 行 | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/query_api.rs:4187` |
+| Executor 文件规模 | 6524 行 | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor.rs:6524` |
+| Evaluator 文件规模 | 4832 行 | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/evaluator.rs:4832` |
 | CLI 直连 Storage 依赖 | 存在 | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-cli/src/main.rs:6`；`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-cli/src/repl.rs:5` |
 | 必跑门禁集合 | 5 项已定义 | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/spec.md:38`；`/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/spec.md:42` |
 
@@ -33,13 +33,13 @@
 以下清单是每个重构 PR 的“最小回归面”：
 
 1. Query 解析/校验/执行主路径：
-   - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/tests/t52_query_api.rs`
-   - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/tests/t311_expressions.rs`
-   - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/tests/t333_varlen_direction.rs`
+   - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/tests/t52_query_api.rs`
+   - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/tests/t311_expressions.rs`
+   - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/tests/t333_varlen_direction.rs`
 2. 排序与分页语义：
-   - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/tests/t62_order_by_skip_test.rs`
+   - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/tests/t62_order_by_skip_test.rs`
 3. 跨语言契约：
-   - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/tests/t332_binding_validation.rs`
+   - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/tests/t332_binding_validation.rs`
    - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-pyo3/tests/test_basic.py`
 4. 当前已知失败簇（后置处理）：
    - ReturnOrderBy2 仍有 2 个失败（`InvalidAggregation` / `UndefinedVariable`）

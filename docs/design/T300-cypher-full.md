@@ -7,7 +7,7 @@
 
 ## 1. Overview
 
-当前 v2 的查询引擎（`nervusdb-v2-query`）已经具备一套可工作的 M3 子集，但整体仍是“白名单子集 + fail-fast”的定位。  
+当前 v2 的查询引擎（`nervusdb-query`）已经具备一套可工作的 M3 子集，但整体仍是“白名单子集 + fail-fast”的定位。  
 本任务的目标是把“Cypher 兼容”从口号变成**可验收的工程契约**：明确我们要兼容哪一版 Cypher、哪些不做（或做成扩展），并用自动化测试（优先 TCK）作为发布门禁。
 
 > 重要：这里的“Full Cypher”不是一句话的许愿，而是一组**可执行的验收标准**（tests as contract）。没有这一步，任何“全量支持”的说法都会变成文档诈骗。
@@ -96,12 +96,12 @@
 
 以下为方向性草案，具体以对应子任务设计为准：
 
-- `nervusdb-v2-api::GraphSnapshot`
+- `nervusdb-api::GraphSnapshot`
   - 增加 incoming 遍历接口（或统一的 `neighbors(src, dir, rel)`）
   - 增加多 label 查询接口（例如 `node_labels(iid) -> &[LabelId]` 或迭代器）
   - 增加取 node/edge 结构化信息的方法（用于返回值与 TCK）
 
-- `nervusdb-v2-query`
+- `nervusdb-query`
   - `Expression`：补齐优先级、算术/字符串/IN/CASE/EXISTS 等
   - `Plan`：引入 `Join/Unwind/Union/SubqueryApply/...`
   - `Executor`：实现对应算子与类型系统
@@ -182,7 +182,7 @@
 
 ### 6.2 Integration / E2E
 
-- `nervusdb-v2/tests/*`：新增覆盖 WITH/UNWIND/UNION 等端到端用例
+- `nervusdb/tests/*`：新增覆盖 WITH/UNWIND/UNION 等端到端用例
 - CLI/Python binding：至少一组“用户视角黄金用例”防回归
 
 ### 6.3 Compatibility Gate（建议）

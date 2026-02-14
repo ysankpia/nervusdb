@@ -24,7 +24,7 @@ v2 M3 的目标不是把 Cypher 写完，而是把 **“最小子集 + 稳定行
 ### 4.1 Fixture
 
 - 使用 `tempfile::tempdir()` 创建独立的 `.ndb/.wal`
-- 用 `nervusdb-v2` 写事务构造小图（固定 external ids/label/rel ids）
+- 用 `nervusdb` 写事务构造小图（固定 external ids/label/rel ids）
 
 ### 4.2 Test Cases（M3 最小子集）
 

@@ -16,7 +16,7 @@ REPORT_MD="$OUT_DIR/concurrency-${TS}.md"
 
 echo "[concurrency] running bench_v2 for latency profile"
 LINE="$({
-  cargo run --example bench_v2 -p nervusdb-v2-storage --release -- \
+  cargo run --example bench_v2 -p nervusdb-storage --release -- \
     --nodes "$NODES" --degree "$DEGREE" --iters "$ITERS";
 } | tail -n 1)"
 

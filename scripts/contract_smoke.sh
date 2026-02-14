@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 echo "[contract-smoke] Rust query API sanity"
-cargo test -p nervusdb-v2 --test t52_query_api
+cargo test -p nervusdb --test t52_query_api
 
 echo "[contract-smoke] Python binding sanity"
 cargo test -p nervusdb-pyo3
@@ -44,7 +44,43 @@ const rows = db.query(\"MATCH (n:Person) RETURN n LIMIT 1\");
 if (!rows.length) throw new Error('node contract result empty');
 const value = rows[0].n;
 if (!value || value.type !== 'node') throw new Error('node contract type mismatch');
+
+const parsePayload = (err) => {
+  let payload;
+  try {
+    payload = JSON.parse(err?.message ?? '');
+  } catch {
+    throw new Error('node contract error payload is not valid JSON');
+  }
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('node contract error payload is not object');
+  }
+  if (typeof payload.code !== 'string' || typeof payload.category !== 'string' || typeof payload.message !== 'string') {
+    throw new Error('node contract payload fields missing');
+  }
+  return payload;
+};
+
+try {
+  db.query(\"MATCH (n RETURN n\");
+  throw new Error('node contract syntax error was not raised');
+} catch (err) {
+  const payload = parsePayload(err);
+  if (payload.code !== 'NERVUS_SYNTAX' || payload.category !== 'syntax') {
+    throw new Error('node contract syntax payload mismatch');
+  }
+}
+
 db.close();
+try {
+  db.query(\"RETURN 1\");
+  throw new Error('node contract closed-db error was not raised');
+} catch (err) {
+  const payload = parsePayload(err);
+  if (payload.code !== 'NERVUS_STORAGE' || payload.category !== 'storage') {
+    throw new Error('node contract storage payload mismatch');
+  }
+}
 console.log('node-contract-smoke ok');
 " "$addon_path" "$tmp_db"
 else

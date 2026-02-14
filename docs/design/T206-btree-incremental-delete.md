@@ -85,19 +85,19 @@ impl BTree {
 
 ### Step 1: Implement `delete_from_leaf` (Risk: Low)
 
-- File: `nervusdb-v2-storage/src/index/btree.rs`
+- File: `nervusdb-storage/src/index/btree.rs`
 - 添加 `fn shift_slots_left(&mut self, idx: usize)` 方法
 - 添加 `fn delete_from_leaf(&mut self, page: &mut Page, idx: usize) -> Result<()>`
 
 ### Step 2: Implement `BTree::delete` (Risk: Medium)
 
-- File: `nervusdb-v2-storage/src/index/btree.rs`
+- File: `nervusdb-storage/src/index/btree.rs`
 - 复用 `insert` 的 path 下降逻辑
 - 找到 leaf 后调用 `delete_from_leaf`
 
 ### Step 3: Update call sites (Risk: Low)
 
-- File: `nervusdb-v2-storage/src/engine.rs:885`
+- File: `nervusdb-storage/src/engine.rs:885`
 - 替换 `delete_exact_rebuild` 为 `delete`
 
 ### Step 4: Deprecate old method (Risk: Low)
@@ -112,7 +112,7 @@ impl BTree {
 ### 5.1 Unit Tests
 
 ```bash
-cd nervusdb-v2-storage && cargo test btree -- --nocapture
+cd nervusdb-storage && cargo test btree -- --nocapture
 ```
 
 新增测试用例：
@@ -123,7 +123,7 @@ cd nervusdb-v2-storage && cargo test btree -- --nocapture
 ### 5.2 Integration Tests
 
 ```bash
-cargo test --package nervusdb-v2-storage --test index_integration
+cargo test --package nervusdb-storage --test index_integration
 ```
 
 ### 5.3 回归测试

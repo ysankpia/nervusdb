@@ -16,7 +16,7 @@ REPORT_MD="$OUT_DIR/benchmark-report-${TS}.md"
 
 echo "[bench-compare] running NervusDB benchmark"
 NERVUS_LINE="$({
-  cargo run --example bench_v2 -p nervusdb-v2-storage --release -- \
+  cargo run --example bench_v2 -p nervusdb-storage --release -- \
     --nodes "$NODES" --degree "$DEGREE" --iters "$ITERS";
 } | tail -n 1)"
 

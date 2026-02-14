@@ -26,24 +26,24 @@
 - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/spec.md:18`
 - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/artifacts/tck/tier3-rate.json:2`
 - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/artifacts/tck/tier3-rate.json:11`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/parser.rs:1127`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/query_api.rs:834`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/query_api.rs:925`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor.rs:3467`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor.rs:3983`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor.rs:4776`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor.rs:5442`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor.rs:5446`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor.rs:6235`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/pager.rs:103`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/error.rs:17`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/parser.rs:1127`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/query_api.rs:834`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/query_api.rs:925`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor.rs:3467`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor.rs:3983`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor.rs:4776`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor.rs:5442`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor.rs:5446`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor.rs:6235`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/pager.rs:103`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/error.rs:17`
 
 ## 2. Workspace 结构
 
 ### 事实栏（As-Is）
-- 根 workspace 当前成员包含 `nervusdb-cli`、`nervusdb-pyo3`、`nervusdb-v2`、`nervusdb-v2-api`、`nervusdb-v2-query`、`nervusdb-v2-storage`。
+- 根 workspace 当前成员包含 `nervusdb-cli`、`nervusdb-pyo3`、`nervusdb`、`nervusdb-api`、`nervusdb-query`、`nervusdb-storage`。
 - `nervusdb-node` 不在根 workspace 列表中，采用独立 `Cargo.toml` 路径构建方式。
-- `fuzz` 是独立 fuzz workspace，直接依赖 `nervusdb-v2-query`。
+- `fuzz` 是独立 fuzz workspace，直接依赖 `nervusdb-query`。
 
 ### 优化栏（To-Be）
 - 保持“核心 workspace + 外挂 workspace（node/fuzz）”策略，但在根 README 固化边界说明与统一命令入口。
@@ -62,8 +62,8 @@
 
 ### 事实栏（As-Is）
 - 当前 crate 命名仍带 `-v2` 后缀，尚未完成包名收敛。
-- 主包 `nervusdb-v2` 已 re-export 常用类型与 query crate，但未公开 re-export `GraphStore` trait。
-- CLI 仍直接依赖并使用 `nervusdb-v2-storage` 的 `GraphEngine`，未完全收敛到仅依赖门面层。
+- 主包 `nervusdb` 已 re-export 常用类型与 query crate，但未公开 re-export `GraphStore` trait。
+- CLI 仍直接依赖并使用 `nervusdb-storage` 的 `GraphEngine`，未完全收敛到仅依赖门面层。
 - Python/Node 错误模型已开始向 `Syntax/Execution/Storage/Compatibility` 靠拢。
 
 ### 优化栏（To-Be）
@@ -74,9 +74,9 @@
 - 将 bindings 错误 payload 结构定义升级为契约文档并接入 contract smoke。
 
 ### 证据
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/Cargo.toml:2`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/src/lib.rs:50`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/src/lib.rs:58`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/Cargo.toml:2`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/src/lib.rs:50`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/src/lib.rs:58`
 - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-cli/Cargo.toml:21`
 - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-cli/src/main.rs:6`
 - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-cli/src/repl.rs:5`
@@ -96,13 +96,13 @@
 - 在架构图中区分“当前实现链路”和“目标链路”，防止同图混写。
 
 ### 证据
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/src/lib.rs:92`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/src/lib.rs:108`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/lib.rs:33`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/lib.rs:40`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/query_api.rs:108`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/src/lib.rs:92`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/src/lib.rs:108`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/lib.rs:33`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/lib.rs:40`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/query_api.rs:108`
 
-## 4. 存储引擎（nervusdb-v2-storage）
+## 4. 存储引擎（nervusdb-storage）
 
 ### 事实栏（As-Is）
 - Pager 页大小固定 8KB，bitmap 仍是单页位图模型，容量上限由 `BITMAP_BITS` 推导。
@@ -118,16 +118,16 @@
 - 索引回填建议走后台批任务+可见状态位，而非同步阻塞式 create。
 
 ### 证据
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/lib.rs:21`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/pager.rs:31`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/pager.rs:45`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/pager.rs:103`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/engine.rs:44`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/engine.rs:48`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/wal.rs:10`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/engine.rs:164`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/lib.rs:1`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/lib.rs:17`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/lib.rs:21`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/pager.rs:31`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/pager.rs:45`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/pager.rs:103`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/engine.rs:44`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/engine.rs:48`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/wal.rs:10`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/engine.rs:164`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/lib.rs:1`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/lib.rs:17`
 
 ## 6. 并发模型
 
@@ -142,13 +142,13 @@
 - 在不改外部 API 的前提下引入读路径缓存层，先改抽象再改性能策略。
 
 ### 证据
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/engine.rs:57`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/engine.rs:303`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/api.rs:29`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/api.rs:20`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/api.rs:21`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/api.rs:97`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/api.rs:110`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/engine.rs:57`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/engine.rs:303`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/api.rs:29`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/api.rs:20`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/api.rs:21`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/api.rs:97`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/api.rs:110`
 
 ## 7. 索引系统
 
@@ -165,13 +165,13 @@
 - 第三步再考虑全文索引，避免同时引入多套写放大路径。
 
 ### 证据
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/index/mod.rs:1`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/index/mod.rs:5`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/index/catalog.rs:18`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/index/catalog.rs:147`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/engine.rs:164`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/lib.rs:1`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/lib.rs:17`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/index/mod.rs:1`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/index/mod.rs:5`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/index/catalog.rs:18`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/index/catalog.rs:147`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/engine.rs:164`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/lib.rs:1`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/lib.rs:17`
 
 ## 8. 数据模型
 
@@ -186,13 +186,13 @@
 - 绑定层模型升级应与核心模型升级解耦，先做兼容适配层。
 
 ### 证据
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-api/src/lib.rs:7`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-api/src/lib.rs:13`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-api/src/lib.rs:38`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-api/src/lib.rs:84`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/property.rs:5`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/snapshot.rs:10`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/api.rs:54`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-api/src/lib.rs:7`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-api/src/lib.rs:13`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-api/src/lib.rs:38`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-api/src/lib.rs:84`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/property.rs:5`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/snapshot.rs:10`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/api.rs:54`
 
 ## 9. 现状评估
 
@@ -256,12 +256,12 @@
 - 每次拆分只做一个子域，必须先锁定回归集（feature + tier0/1/2）。
 
 ### 证据
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/lib.rs:35`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/lib.rs:36`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/lib.rs:40`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/query_api.rs:73`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/query_api.rs:108`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/error.rs:10`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/lib.rs:35`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/lib.rs:36`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/lib.rs:40`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/query_api.rs:73`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/query_api.rs:108`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/error.rs:10`
 - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/tasks.md:100`
 - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/tasks.md:103`
 
@@ -280,11 +280,11 @@
 - 所有 storage 增强必须在 `storage_format_epoch` 语义下显式声明兼容策略。
 
 ### 证据
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/lib.rs:1`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/lib.rs:17`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/pager.rs:31`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/index/catalog.rs:147`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/error.rs:17`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/lib.rs:1`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/lib.rs:17`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/pager.rs:31`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/index/catalog.rs:147`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/error.rs:17`
 
 ## 13. 并发模型改进
 
@@ -300,10 +300,10 @@
 - 并发优化必须绑定可重复基准（读热点、混合读写、长查询）。
 
 ### 证据
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/engine.rs:44`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/engine.rs:57`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/api.rs:29`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/api.rs:110`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/engine.rs:44`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/engine.rs:57`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/api.rs:29`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/api.rs:110`
 - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/tasks.md:90`
 
 ## 14. 数据模型增强
@@ -318,11 +318,11 @@
 - 绑定层输出模型保持兼容，新增字段走可选扩展。
 
 ### 证据
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-api/src/lib.rs:38`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-api/src/lib.rs:84`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/property.rs:5`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/snapshot.rs:10`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/executor.rs:164`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-api/src/lib.rs:38`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-api/src/lib.rs:84`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/property.rs:5`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/snapshot.rs:10`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/executor.rs:164`
 
 ## 15. 索引增强
 
@@ -337,10 +337,10 @@
 - 标签索引优先于全文索引，先解决主路径过滤性能。
 
 ### 证据
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/engine.rs:164`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/index/catalog.rs:20`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/index/mod.rs:1`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/index/mod.rs:5`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/engine.rs:164`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/index/catalog.rs:20`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/index/mod.rs:1`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/index/mod.rs:5`
 
 ## 16. 重构优先级与路线图（4-6 周，可执行）
 
@@ -378,15 +378,15 @@
 ### 优化栏（To-Be）
 - 推荐保守结构重组：
 - 保持根级 crate 不变。
-- 在 `nervusdb-v2-query/src` 内先完成 `planner/`、`executor/`、`evaluator/` 子目录拆分。
-- 在 `nervusdb-v2-storage/src` 内先新增 `read_path/` 与 `indexing/` 子域，不强制一次性迁移。
+- 在 `nervusdb-query/src` 内先完成 `planner/`、`executor/`、`evaluator/` 子目录拆分。
+- 在 `nervusdb-storage/src` 内先新增 `read_path/` 与 `indexing/` 子域，不强制一次性迁移。
 - 目标是降低回归半径，不追求一次性“漂亮目录”。
 
 ### 证据
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/lib.rs:33`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/lib.rs:40`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/lib.rs:1`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/lib.rs:17`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/lib.rs:33`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/lib.rs:40`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/lib.rs:1`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/lib.rs:17`
 
 ## 18. 关键设计决策对照
 
@@ -405,10 +405,10 @@
 | 文档治理 | 手工口径漂移 | 指标自动注入 | artifacts 单一事实源 |
 
 ### 证据
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-query/src/query_api.rs:73`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-query/src/query_api.rs:73`
 - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-cli/src/main.rs:211`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/api.rs:29`
-- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/engine.rs:164`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/api.rs:29`
+- `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/engine.rs:164`
 - `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/artifacts/tck/tier3-rate.json:11`
 
 ---
@@ -420,8 +420,8 @@
 | C1 | 当前里程碑口径 | 当前应按 Beta 收敛线表达，不应写成 M3 Alpha 当前态 | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/spec.md:1`, `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/docs/tasks.md:99` |
 | C2 | TCK 当前值 | 当前基线是 `81.93%`（2026-02-11） | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/artifacts/tck/tier3-rate.json:11` |
 | C3 | 门面层边界 | CLI 仍有直连 storage 的实现，不是纯门面接入 | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-cli/src/main.rs:6`, `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-cli/src/repl.rs:5` |
-| C4 | 主包 re-export 完整性 | `GraphStore` 目前未 `pub use` | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/src/lib.rs:50`, `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2/src/lib.rs:58` |
-| C5 | Storage 增强落地状态 | BufferPool/VFS/LabelIndex 当前尚未落地模块声明 | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/lib.rs:1`, `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-v2-storage/src/lib.rs:17` |
+| C4 | 主包 re-export 完整性 | `GraphStore` 目前未 `pub use` | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/src/lib.rs:50`, `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb/src/lib.rs:58` |
+| C5 | Storage 增强落地状态 | BufferPool/VFS/LabelIndex 当前尚未落地模块声明 | `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/lib.rs:1`, `/Volumes/WorkDrive/Code/github.com/LuQing-Studio/rust/nervusdb/nervusdb-storage/src/lib.rs:17` |
 
 ## 优先级执行矩阵（可直接映射 `docs/refactor/`）
 

@@ -1,9 +1,9 @@
 use napi::bindgen_prelude::Result;
 use napi::Error;
 use napi_derive::napi;
-use nervusdb_v2::Db as RustDb;
-use nervusdb_v2::Error as V2Error;
-use nervusdb_v2_query::{Params, Value};
+use nervusdb::Db as RustDb;
+use nervusdb::Error as V2Error;
+use nervusdb_query::{Params, Value};
 use serde_json::{json, Map as JsonMap, Value as JsonValue};
 
 fn error_payload(code: &str, category: &str, message: impl ToString) -> String {
@@ -22,11 +22,15 @@ fn classify_err_message(msg: &str) -> (&'static str, &'static str) {
     } else if lower.contains("syntax")
         || lower.contains("parse")
         || lower.contains("unexpected token")
+        || lower.starts_with("expected ")
     {
         ("NERVUS_SYNTAX", "syntax")
     } else if lower.contains("wal")
         || lower.contains("checkpoint")
         || lower.contains("io error")
+        || lower.contains("permission denied")
+        || lower.contains("no such file")
+        || lower.contains("disk full")
         || lower.contains("database is closed")
     {
         ("NERVUS_STORAGE", "storage")
@@ -117,7 +121,7 @@ fn value_to_json(v: Value) -> JsonValue {
 }
 
 fn run_query(db: &RustDb, cypher: &str) -> std::result::Result<Vec<JsonValue>, String> {
-    let prepared = nervusdb_v2_query::prepare(cypher).map_err(|e| e.to_string())?;
+    let prepared = nervusdb_query::prepare(cypher).map_err(|e| e.to_string())?;
     let snapshot = db.snapshot();
     let rows: Vec<_> = prepared
         .execute_streaming(&snapshot, &Params::new())
@@ -168,7 +172,7 @@ impl Db {
             .inner
             .as_ref()
             .ok_or_else(|| napi_err("database is closed"))?;
-        let prepared = nervusdb_v2_query::prepare(&cypher).map_err(napi_err)?;
+        let prepared = nervusdb_query::prepare(&cypher).map_err(napi_err)?;
         let snapshot = db.snapshot();
         let mut txn = db.begin_write();
         let created = prepared
@@ -208,7 +212,7 @@ impl WriteTxn {
     #[napi]
     pub fn query(&mut self, cypher: String) -> Result<()> {
         // compile fast-fail at enqueue time
-        let _ = nervusdb_v2_query::prepare(&cypher).map_err(napi_err)?;
+        let _ = nervusdb_query::prepare(&cypher).map_err(napi_err)?;
         self.staged_queries.push(cypher);
         Ok(())
     }
@@ -226,7 +230,7 @@ impl WriteTxn {
 
         let mut total = 0u32;
         for cypher in self.staged_queries.drain(..) {
-            let prepared = nervusdb_v2_query::prepare(&cypher).map_err(napi_err)?;
+            let prepared = nervusdb_query::prepare(&cypher).map_err(napi_err)?;
             total += prepared
                 .execute_write(&snapshot, &mut txn, &Params::new())
                 .map_err(napi_err)?;
@@ -239,7 +243,12 @@ impl WriteTxn {
 
 #[cfg(test)]
 mod tests {
-    use super::napi_err;
+    use super::{classify_err_message, napi_err};
+    use serde_json::Value;
+
+    fn parse_payload(reason: &str) -> Value {
+        serde_json::from_str(reason).expect("napi reason should be valid json payload")
+    }
 
     #[test]
     fn napi_err_uses_structured_compatibility_payload() {
@@ -247,5 +256,46 @@ mod tests {
         let reason = err.reason;
         assert!(reason.contains("\"category\":\"compatibility\""));
         assert!(reason.contains("\"code\":\"NERVUS_COMPATIBILITY\""));
+    }
+
+    #[test]
+    fn napi_err_maps_syntax_messages_to_syntax_category() {
+        let err = napi_err("syntax error: unexpected token");
+        let payload = parse_payload(&err.reason);
+        assert_eq!(payload["code"], "NERVUS_SYNTAX");
+        assert_eq!(payload["category"], "syntax");
+        assert_eq!(payload["message"], "syntax error: unexpected token");
+    }
+
+    #[test]
+    fn napi_err_maps_expected_prefix_to_syntax_category() {
+        let err = napi_err("Expected ')'");
+        let payload = parse_payload(&err.reason);
+        assert_eq!(payload["code"], "NERVUS_SYNTAX");
+        assert_eq!(payload["category"], "syntax");
+    }
+
+    #[test]
+    fn napi_err_maps_storage_messages_for_fs_failures() {
+        let err = napi_err("permission denied while opening wal");
+        let payload = parse_payload(&err.reason);
+        assert_eq!(payload["code"], "NERVUS_STORAGE");
+        assert_eq!(payload["category"], "storage");
+    }
+
+    #[test]
+    fn napi_err_falls_back_to_execution_category() {
+        let err = napi_err("not implemented: expression");
+        let payload = parse_payload(&err.reason);
+        assert_eq!(payload["code"], "NERVUS_EXECUTION");
+        assert_eq!(payload["category"], "execution");
+    }
+
+    #[test]
+    fn classify_err_message_keeps_compatibility_priority() {
+        let (code, category) =
+            classify_err_message("compatibility warning with parse token details");
+        assert_eq!(code, "NERVUS_COMPATIBILITY");
+        assert_eq!(category, "compatibility");
     }
 }

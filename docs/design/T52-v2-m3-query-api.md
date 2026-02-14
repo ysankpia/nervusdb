@@ -12,7 +12,7 @@ v2 M3 必须把这个形态“重新定义为 v2 的公共 API”，并明确：
 
 ## 2. Goals
 
-- 为 `nervusdb-v2-query` 提供稳定入口：
+- 为 `nervusdb-query` 提供稳定入口：
   - `prepare()`：解析 + 规划（可选缓存）
   - `execute_streaming()`：在给定 `GraphSnapshot` 上执行并返回 iterator
 - 定义 `Params`、`Row`、`Value`、`QueryError` 的最小集合
@@ -22,11 +22,11 @@ v2 M3 必须把这个形态“重新定义为 v2 的公共 API”，并明确：
 
 - 不做 SQL/Cypher 的统一接口（只做 Cypher）
 - 不在 M3 做 plan cache/LRU（后置）
-- 不在 M3 暴露事务（读写事务仍由 `nervusdb-v2` facade 管）
+- 不在 M3 暴露事务（读写事务仍由 `nervusdb` facade 管）
 
 ## 4. Proposed API（Rust）
 
-建议在 `nervusdb-v2-query` 暴露如下接口（具体命名以实现为准）：
+建议在 `nervusdb-query` 暴露如下接口（具体命名以实现为准）：
 
 ```text
 pub struct PreparedQuery { /* AST + Plan */ }

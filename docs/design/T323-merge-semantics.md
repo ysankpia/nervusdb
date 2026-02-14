@@ -80,11 +80,11 @@
 
 ## 5. 实施步骤
 
-1. 新增测试（先红）：`nervusdb-v2/tests/t323_merge_semantics.rs`
+1. 新增测试（先红）：`nervusdb/tests/t323_merge_semantics.rs`
 2. Parser 增强：支持吞掉并收集 `ON CREATE/MATCH SET`
 3. Planner/PreparedQuery 透传 merge 子句的 set items
 4. Executor 执行：在 merge 完成后按条件执行 SET
-5. 跑本地相关测试：`cargo test -p nervusdb-v2 --test t323_merge_semantics`
+5. 跑本地相关测试：`cargo test -p nervusdb --test t323_merge_semantics`
 
 ## 6. 风险与折衷
 
