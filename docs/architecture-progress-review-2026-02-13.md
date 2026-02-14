@@ -1030,3 +1030,35 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 - `artifacts/tck/beta-04-r14w7-aggregate-guard-targeted-2026-02-14.log`
 - `artifacts/tck/beta-04-r14w7-aggregate-guard-tier0-2026-02-14.log`
 - `artifacts/tck/beta-04-r14w7-aggregate-guard-fmt-2026-02-14.log`
+
+---
+
+## 26. 续更快照（2026-02-14，BETA-03R14-W8 IndexSeek 入口审计加固）
+
+### 26.1 本轮完成项（R14-W8）
+
+- 进行低频入口审计，聚焦 `IndexSeek` 值表达式路径：
+  - 新增回归测试：
+    - `test_index_seek_invalid_value_expression_raises_runtime_type_error`
+- 场景与结论：
+  - 场景：`MATCH (n:Person) WHERE n.name = toBoolean(1) RETURN n`
+  - 结论：在索引路径下仍抛 runtime `InvalidArgumentValue`，不存在“被索引短路为空结果”的静默吞错。
+
+### 26.2 回归结果
+
+- 定向测试：
+  - `cargo test -p nervusdb --test t107_index_integration test_index_seek_invalid_value_expression_raises_runtime_type_error -- --nocapture`：`1 passed`
+- TCK 定向：
+  - `expressions/typeConversion/TypeConversion1.feature` 全通过。
+- 门禁：
+  - `cargo fmt --all -- --check` 通过。
+
+### 26.3 对后续 R14 的影响
+
+- 审计结果表明 `IndexSeek` 路径在非法值表达式上未引入新的 runtime 语义偏差；
+- 下一步可继续对剩余低频入口做同类“先断言、再验证”的薄层审计，逐步关闭回归面。
+
+### 26.4 证据文件
+
+- `artifacts/tck/beta-04-r14w8-index-seek-audit-targeted-2026-02-14.log`
+- `artifacts/tck/beta-04-r14w8-index-seek-audit-fmt-2026-02-14.log`
