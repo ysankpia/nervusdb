@@ -28,17 +28,17 @@ jobs:
       - name: Run fuzz target (query_prepare)
         run: |
           cd fuzz
-          cargo +nightly fuzz run query_prepare -- -max_total_time=240
+          cargo +nightly fuzz run query_prepare -- -max_total_time=240 -max_len=1024 -rss_limit_mb=4096
 
       - name: Run fuzz target (query_parse)
         run: |
           cd fuzz
-          cargo +nightly fuzz run query_parse -- -max_total_time=240
+          cargo +nightly fuzz run query_parse -- -max_total_time=240 -max_len=2048 -rss_limit_mb=4096
 
       - name: Run fuzz target (query_execute)
         run: |
           cd fuzz
-          cargo +nightly fuzz run query_execute -- -max_total_time=240
+          cargo +nightly fuzz run query_execute -- -max_total_time=240 -max_len=2048 -rss_limit_mb=4096
 
       - name: Upload fuzz artifacts
         if: always()

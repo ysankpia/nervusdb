@@ -32,7 +32,7 @@ jobs:
       - name: Run HNSW tuning sweep
         run: |
           mkdir -p artifacts/hnsw
-          HNSW_OUT_DIR=artifacts/hnsw HNSW_SYNC_DOCS=0 bash scripts/hnsw_tune.sh
+          HNSW_OUT_DIR=artifacts/hnsw HNSW_SYNC_DOCS=0 HNSW_TUNE_M_LIST=8,16 bash scripts/hnsw_tune.sh
 
       - name: Upload benchmark artifacts
         if: always()

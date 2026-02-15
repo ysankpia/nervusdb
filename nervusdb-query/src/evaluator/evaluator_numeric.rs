@@ -100,12 +100,19 @@ pub(super) fn numeric_binop<FInt, FFloat>(
     float_op: FFloat,
 ) -> Value
 where
-    FInt: FnOnce(i64, i64) -> i64,
+    FInt: FnOnce(i128, i128) -> i128,
     FFloat: FnOnce(f64, f64) -> f64,
 {
     match (left, right) {
         (Value::Null, _) | (_, Value::Null) => Value::Null,
-        (Value::Int(l), Value::Int(r)) => Value::Int(int_op(*l, *r)),
+        (Value::Int(l), Value::Int(r)) => {
+            let int_out = int_op(i128::from(*l), i128::from(*r));
+            if (i64::MIN as i128..=i64::MAX as i128).contains(&int_out) {
+                Value::Int(int_out as i64)
+            } else {
+                Value::Float(float_op(*l as f64, *r as f64))
+            }
+        }
         (Value::Int(l), Value::Float(r)) => Value::Float(float_op(*l as f64, *r)),
         (Value::Float(l), Value::Int(r)) => Value::Float(float_op(*l, *r as f64)),
         (Value::Float(l), Value::Float(r)) => Value::Float(float_op(*l, *r)),
@@ -117,7 +124,10 @@ pub(super) fn numeric_div(left: &Value, right: &Value) -> Value {
     match (left, right) {
         (Value::Null, _) | (_, Value::Null) => Value::Null,
         (Value::Int(_), Value::Int(0)) => Value::Null,
-        (Value::Int(l), Value::Int(r)) => Value::Int(*l / *r),
+        (Value::Int(l), Value::Int(r)) => match l.checked_div(*r) {
+            Some(v) => Value::Int(v),
+            None => Value::Float(*l as f64 / *r as f64),
+        },
         (Value::Int(l), Value::Float(r)) => Value::Float(*l as f64 / *r),
         (Value::Float(l), Value::Int(r)) => Value::Float(*l / *r as f64),
         (Value::Float(l), Value::Float(r)) => Value::Float(*l / *r),
@@ -130,7 +140,7 @@ pub(super) fn numeric_mod(left: &Value, right: &Value) -> Value {
         (Value::Null, _) | (_, Value::Null) => Value::Null,
         (_, Value::Int(0)) => Value::Null,
         (_, Value::Float(r)) if *r == 0.0 => Value::Null,
-        (Value::Int(l), Value::Int(r)) => Value::Int(l % r),
+        (Value::Int(l), Value::Int(r)) => Value::Int((i128::from(*l) % i128::from(*r)) as i64),
         (Value::Int(l), Value::Float(r)) => Value::Float((*l as f64) % *r),
         (Value::Float(l), Value::Int(r)) => Value::Float(*l % (*r as f64)),
         (Value::Float(l), Value::Float(r)) => Value::Float(*l % *r),

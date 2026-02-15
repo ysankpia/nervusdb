@@ -106,3 +106,44 @@ pub(super) fn divide_values(left: &Value, right: &Value) -> Value {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Value, add_values, divide_values, multiply_values, subtract_values};
+
+    #[test]
+    fn multiply_int_overflow_does_not_panic() {
+        let out = multiply_values(&Value::Int(i64::MAX), &Value::Int(2));
+        match out {
+            Value::Float(v) => assert!(v.is_finite()),
+            other => panic!("expected finite float on int overflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn add_int_overflow_does_not_panic() {
+        let out = add_values(&Value::Int(i64::MAX), &Value::Int(1));
+        match out {
+            Value::Float(v) => assert!(v.is_finite()),
+            other => panic!("expected finite float on int overflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn subtract_int_overflow_does_not_panic() {
+        let out = subtract_values(&Value::Int(i64::MIN), &Value::Int(1));
+        match out {
+            Value::Float(v) => assert!(v.is_finite()),
+            other => panic!("expected finite float on int overflow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn divide_int_min_by_negative_one_does_not_panic() {
+        let out = divide_values(&Value::Int(i64::MIN), &Value::Int(-1));
+        match out {
+            Value::Float(v) => assert!(v.is_finite()),
+            other => panic!("expected finite float on div overflow, got {other:?}"),
+        }
+    }
+}
