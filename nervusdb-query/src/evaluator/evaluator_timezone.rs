@@ -81,6 +81,9 @@ pub(super) fn parse_fixed_offset(s: &str) -> Option<FixedOffset> {
     if s.is_empty() {
         return None;
     }
+    if !s.is_ascii() {
+        return None;
+    }
 
     let sign = if s.starts_with('+') {
         1
@@ -266,5 +269,15 @@ fn nth_weekday_of_month(year: i32, month: u32, weekday: chrono::Weekday, nth: u3
         Some(target.day())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_fixed_offset;
+
+    #[test]
+    fn parse_fixed_offset_rejects_non_ascii_input_without_panicking() {
+        assert_eq!(parse_fixed_offset("-𪱢IN"), None);
     }
 }
