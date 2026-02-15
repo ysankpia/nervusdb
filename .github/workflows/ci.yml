@@ -47,6 +47,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --exclude nervusdb-pyo3 --all-targets -- -W warnings
 
+      - name: Runtime guard hotspot audit
+        run: bash scripts/runtime_guard_audit.sh --fail-on-hotspot
+
       - name: TCK Tier-0 (smoke)
         if: runner.os == 'Linux'
         run: make tck-tier0
