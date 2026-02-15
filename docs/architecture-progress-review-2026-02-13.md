@@ -107,7 +107,7 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 | 门槛 | 目标 | 当前 | 状态 |
 |------|------|------|------|
 | TCK Tier-3 全量通过率 | ≥95% | 100.00%（3897/3897） | 已达成（0 failed） |
-| 连续 7 天稳定窗 | 7 天全绿 | 进行中（BETA-04 WIP） | 已解锁（等待 7 天累计） |
+| 连续 7 天稳定窗 | 7 天全绿 | 进行中（BETA-04 WIP，strict Day1 已记账） | 已解锁（当前 0/7，最早 2026-02-21） |
 | 性能 SLO 封板 | P99 读≤120ms/写≤180ms/向量≤220ms | 未启动（BETA-05 Plan） | 阻塞于稳定窗 |
 
 ### 3.2 TCK 收敛进展
@@ -122,6 +122,7 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 | 2026-02-14（R10 复算） | 3738 | 3897 | 95.92% | 0 | +19 场（较 R9 复算） |
 | 2026-02-14（R11 复算） | 3790 | 3897 | 97.25% | 0 | +52 场（较 R10 复算） |
 | 2026-02-14（R12 复算） | 3897 | 3897 | 100.00% | 0 | +107 场（较 R11 复算） |
+| 2026-02-15（R14-W13 复算） | 3897 | 3897 | 100.00% | 0 | 持平（全绿保持） |
 
 ### 3.3 NotImplemented 残留（8 处）
 
@@ -1180,3 +1181,64 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 - `artifacts/tck/beta-04-r14w12-runtime-guard-hotspot-fix-2026-02-14.log`
 - `artifacts/tck/beta-04-r14w12-runtime-guard-hotspot-fix-tier0-2026-02-14.log`
 - `artifacts/tck/beta-04-r14w12-runtime-guard-hotspot-fix-fmt-2026-02-14.log`
+
+---
+
+## 31. 续更快照（2026-02-15，BETA-03R14-W13 收尾 + BETA-04 strict 稳定窗 Day1）
+
+### 31.1 本轮完成项（R14-W13-A）
+
+- runtime guard 审计脚本收口到可发布形态：
+  - `scripts/runtime_guard_audit.sh` 正式支持 `--root <dir>`、`--fail-on-hotspot`、`--help`；
+  - 在无 `rg` 环境下自动回退 `grep -RIn`，保持可执行性。
+- CI 门禁前置接线：
+  - `ci.yml` 增加 `bash scripts/runtime_guard_audit.sh --fail-on-hotspot`；
+  - 位置放在 `fmt/clippy` 后、`workspace_quick_test` 前，做到尽早失败。
+- 写路径语义补点（Temporal4 失败簇收口）：
+  - 修复 list 属性转换对 duration map 的误拦截；
+  - 允许 `List<Duration>` 写入属性，普通 map list 仍保持 `InvalidPropertyType` 拦截；
+  - 新增双向回归测试：允许 duration map list / 拒绝普通 map list。
+
+### 31.2 验证结果（W13-A）
+
+- 核心门禁链全绿：
+  - `cargo fmt --all -- --check`
+  - `cargo clippy --workspace --exclude nervusdb-pyo3 --all-targets -- -W warnings`
+  - `bash scripts/runtime_guard_audit.sh --fail-on-hotspot`
+  - `bash scripts/workspace_quick_test.sh`
+  - `bash scripts/tck_tier_gate.sh tier0`
+  - `bash scripts/tck_tier_gate.sh tier1`
+  - `bash scripts/tck_tier_gate.sh tier2`
+  - `bash scripts/binding_smoke.sh`
+  - `bash scripts/contract_smoke.sh`
+- Tier-3 全量保持全绿：
+  - `3897 scenarios (3897 passed)`，失败簇报告 `No step failures found`。
+
+### 31.3 BETA-04 strict 稳定窗 Day1（W13-B/W13-C）
+
+- 基建已落地：
+  - `ci-daily-snapshot.yml`
+  - `stability-window-daily.yml`
+  - `scripts/stability_window.sh`（strict 模式）
+  - `scripts/beta_release_gate.sh`
+  - `release.yml` 接入发布阻断（仅发布阻断，不阻断日常 PR）。
+- Day1（2026-02-15）产物已写入：
+  - `artifacts/tck/tier3-rate-2026-02-15.json`（`pass_rate=100.00`，`failed=0`）
+  - `artifacts/tck/ci-daily-2026-02-15.json`（`all_passed=true`）
+  - `artifacts/tck/stability-daily-2026-02-15.json`
+  - `artifacts/tck/stability-window.json`
+  - `artifacts/tck/stability-window.md`
+- strict 窗口状态（截至 2026-02-15）：
+  - `consecutive_days=0/7`
+  - `window_passed=false`
+  - 本地运行因 `github_data_unavailable`（nightly workflow 历史需主分支运行后可回填）未形成连续计数。
+- 若后续每日全通过且无重置，最早达标日期：`2026-02-21`。
+
+### 31.4 证据文件
+
+- `artifacts/tck/beta-04-r14w13-runtime-guard-gate-2026-02-15.log`
+- `artifacts/tck/beta-04-r14w13-core-gates-2026-02-15.log`
+- `artifacts/tck/beta-04-r14w13-tier3-full-2026-02-15.log`
+- `artifacts/tck/beta-04-r14w13-tier3-full-2026-02-15.cluster.md`
+- `artifacts/tck/beta-04-r14w13-stability-window-day1-2026-02-15.log`
+- `artifacts/tck/beta-04-r14w13-stability-window-day1-2026-02-15.rc`

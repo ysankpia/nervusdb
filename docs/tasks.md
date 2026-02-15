@@ -105,8 +105,8 @@
 | BETA-03R6     | [TCK] 失败簇滚动清零（Merge/With/Return/Graph/Skip-Limit）  | High   | Done   | codex/feat/phase1b1c-bigbang | 2026-02-13 已清零 `Merge1/2/3`、`Match8`、`Create1`、`With4`、`Return1/7`、`Graph3/4`、`ReturnSkipLimit1/2`、`Mathematical8`；见 `artifacts/tck/beta-03r6-*.log`。 |
 | BETA-03R7     | [TCK] 主干攻坚（Temporal/Aggregation/Set/Remove/Create/Subquery） | High   | Done   | codex/feat/phase1b1c-bigbang | 2026-02-13 已清零 `Temporal4`、`Aggregation6`、`Remove1/3`、`Set2/4/5`、`Create3`，修复 correlated subquery 作用域回归，Tier-3 提升至 94.48%（3682/3897）。 |
 | BETA-03R13    | [Hardening] `TypeError` 断言收紧（compile-time + any-time + runtime） | High   | Done   | codex/feat/beta-04-r13w2-anytime-hardening | R13-W1/W2/W3 已全部完成：compile-time、any-time、runtime 三类 `TypeError` 断言均切换为严格模式；补齐递归运行期表达式类型守卫（含 list comprehension 作用域）与属性写入非法 list 元素拦截，定向簇与基线门禁全绿。 |
-| BETA-03R14    | [Hardening] runtime 语义一致性收口（WHERE guard + type(rel)） | High   | WIP    | codex/feat/beta-04-r14w2-unwind-guard | R14-W1/W2/W3/W4/W5/W6/W7/W8/W9/W10/W11/W12 持续推进：完成 `WHERE` + `UNWIND` + 写路径（`SET/MERGE`）+ 尾部入口（`FOREACH/DELETE`）+ `CREATE` 属性表达式 + `CALL` 参数表达式 + 聚合参数表达式 + `IndexSeek` 值表达式 runtime guard 收口；并新增/执行 runtime guard 审计脚本（识别 executor 直接求值点），已清零 executor 热点文件；定向回归与 tier0/1/2 全绿。 |
-| BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | WIP    | feat/TB1-stability-window   | 已新增 `scripts/stability_window.sh`（按最近 N 天 `tier3-rate-YYYY-MM-DD.json` 校验 `pass_rate>=95 且 failed=0`）；2026-02-14 最新快照 `100.00%`（`3897/3897`，`failed=0`），当前累计天数不足 7 天，继续滚动积累。 |
+| BETA-03R14    | [Hardening] runtime 语义一致性收口（WHERE guard + type(rel)） | High   | Done   | codex/feat/beta-04-r14w2-unwind-guard | R14-W1~W13 已完成：`WHERE/UNWIND/SET/MERGE/FOREACH/DELETE/CREATE/CALL/Aggregate/IndexSeek` 入口 runtime guard 全覆盖，`runtime_guard_audit` 热点清零并接入 CI；W13-A 全量证据：core gates 全绿、Tier-3 全量 `3897/3897` 全通过。 |
+| BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | WIP    | feat/TB1-stability-window   | strict 稳定窗基建已落地（`ci-daily-snapshot` + `stability_window.sh --mode strict` + `beta_release_gate.sh` + release 接线）；Day1（2026-02-15）快照已写入，当前 `consecutive_days=0/7`（nightly GitHub 数据待主分支 workflow 运行后累计）。 |
 | BETA-05       | [Perf] 大规模 SLO 封板（读120/写180/向量220 ms P99）       | High   | Plan   | feat/TB1-perf-slo           | 达标后方可发布 Beta |
 
 ### BETA-03R4 子进展（2026-02-13）
@@ -405,10 +405,46 @@
   - `artifacts/tck/beta-04-r14w10-index-seek-guard-targeted-2026-02-14.log`
   - `artifacts/tck/beta-04-r14w10-index-seek-guard-fmt-2026-02-14.log`
   - `artifacts/tck/beta-04-r14w10-index-seek-guard-tier0-2026-02-14.log`
-  - `artifacts/tck/beta-04-r14w11-runtime-guard-audit-2026-02-14.log`
-  - `artifacts/tck/beta-04-r14w12-runtime-guard-hotspot-fix-2026-02-14.log`
-  - `artifacts/tck/beta-04-r14w12-runtime-guard-hotspot-fix-tier0-2026-02-14.log`
-  - `artifacts/tck/beta-04-r14w12-runtime-guard-hotspot-fix-fmt-2026-02-14.log`
+- `artifacts/tck/beta-04-r14w11-runtime-guard-audit-2026-02-14.log`
+- `artifacts/tck/beta-04-r14w12-runtime-guard-hotspot-fix-2026-02-14.log`
+- `artifacts/tck/beta-04-r14w12-runtime-guard-hotspot-fix-tier0-2026-02-14.log`
+- `artifacts/tck/beta-04-r14w12-runtime-guard-hotspot-fix-fmt-2026-02-14.log`
+
+### BETA-03R14 子进展（2026-02-15，W13 收尾）
+- R14-W13-A（收口与门禁）：
+  - `runtime_guard_audit` CLI 固化：保留 `--root`、`--fail-on-hotspot`、`--help`，并支持无 `rg` 时回退 `grep -RIn`。
+  - CI 接线：`ci.yml` 已加入 `bash scripts/runtime_guard_audit.sh --fail-on-hotspot`（位于 `fmt/clippy` 后、`workspace_quick_test` 前）。
+  - W13 核心门禁复跑全绿：`fmt + clippy + runtime_guard + workspace_quick_test + tier0/1/2 + binding_smoke + contract_smoke` 全通过。
+  - Tier-3 全量复跑保持全绿：`3897 scenarios (3897 passed)`，失败簇报告 `No step failures found.`。
+- R14-W13-A（语义补点）：
+  - 修复写路径 list 属性转换对 duration map 的误拦截，允许 `List<Duration>` 写入属性；普通 map list 仍维持 `InvalidPropertyType`。
+  - 新增回归单测：
+    - `allows_duration_maps_inside_list_properties`
+    - `rejects_regular_map_inside_list_properties`
+- 证据日志：
+  - `artifacts/tck/beta-04-r14w13-runtime-guard-gate-2026-02-15.log`
+  - `artifacts/tck/beta-04-r14w13-core-gates-2026-02-15.log`
+  - `artifacts/tck/beta-04-r14w13-tier3-full-2026-02-15.log`
+  - `artifacts/tck/beta-04-r14w13-tier3-full-2026-02-15.cluster.md`
+
+### BETA-04 子进展（2026-02-15，strict 稳定窗 Day1）
+- W13-B（基建）：
+  - 已落地 `ci-daily-snapshot.yml`、`stability-window-daily.yml`、`beta_release_gate.sh`、strict 模式 `stability_window.sh`，并接入发布流程阻断（不阻断日常 PR）。
+- W13-C（Day1 记账）：
+  - 当日快照产物：
+    - `artifacts/tck/tier3-rate-2026-02-15.json`（`pass_rate=100.00`，`failed=0`）
+    - `artifacts/tck/ci-daily-2026-02-15.json`（`all_passed=true`）
+    - `artifacts/tck/stability-daily-2026-02-15.json`
+    - `artifacts/tck/stability-window.json`
+    - `artifacts/tck/stability-window.md`
+  - strict 窗口当前状态：
+    - `consecutive_days=0/7`
+    - `window_passed=false`
+    - 本地 Day1 统计因 `github_data_unavailable`（nightly 工作流历史需在主分支运行后回填）未计入连续通过天数。
+  - 计划完成日（若后续连续 7 天全通过）：最早 `2026-02-21`。
+  - 证据日志：
+    - `artifacts/tck/beta-04-r14w13-stability-window-day1-2026-02-15.log`
+    - `artifacts/tck/beta-04-r14w13-stability-window-day1-2026-02-15.rc`
 
 ## Archived (v1/Alpha)
 
