@@ -25,6 +25,7 @@ impl<'a> Parser<'a> {
         let tokens = lexer.tokenize().map_err(Error::Other)?;
         let mut parser = TokenParser::new(tokens);
         let query = parser.parse_query()?;
+        parser.ensure_budget()?;
         Ok((query, parser.merge_subclauses))
     }
 }
@@ -33,6 +34,9 @@ struct TokenParser {
     tokens: Vec<Token>,
     position: usize,
     merge_subclauses: Vec<MergeSubclauses>,
+    parse_steps: usize,
+    max_parse_steps: usize,
+    budget_exhausted: bool,
 }
 
 impl TokenParser {
@@ -47,16 +51,48 @@ impl TokenParser {
     const BP_POW: u8 = 70;
     const BP_PREFIX: u8 = 80;
     const BP_NOT: u8 = 40;
+    const PARSE_STEP_FACTOR: usize = 2_048;
+    const PARSE_STEP_FLOOR: usize = 50_000;
 
     fn new(tokens: Vec<Token>) -> Self {
+        let max_parse_steps = Self::max_parse_steps_for(tokens.len());
         Self {
             tokens,
             position: 0,
             merge_subclauses: Vec::new(),
+            parse_steps: 0,
+            max_parse_steps,
+            budget_exhausted: false,
+        }
+    }
+
+    #[cfg(test)]
+    fn new_with_step_budget(tokens: Vec<Token>, max_parse_steps: usize) -> Self {
+        let mut parser = Self::new(tokens);
+        parser.max_parse_steps = max_parse_steps.max(1);
+        parser
+    }
+
+    fn max_parse_steps_for(tokens_len: usize) -> usize {
+        tokens_len
+            .saturating_mul(Self::PARSE_STEP_FACTOR)
+            .max(Self::PARSE_STEP_FLOOR)
+    }
+
+    fn parser_complexity_error() -> Error {
+        Error::Other("syntax error: ParserComplexityLimitExceeded".to_string())
+    }
+
+    fn ensure_budget(&self) -> Result<(), Error> {
+        if self.budget_exhausted {
+            Err(Self::parser_complexity_error())
+        } else {
+            Ok(())
         }
     }
 
     fn parse_query(&mut self) -> Result<Query, Error> {
+        self.ensure_budget()?;
         let mut clauses = self.parse_single_query_clauses()?;
         let mut union_mode: Option<bool> = None;
 
@@ -80,10 +116,12 @@ impl TokenParser {
             }));
         }
 
+        self.ensure_budget()?;
         Ok(Query { clauses })
     }
 
     fn parse_single_query_clauses(&mut self) -> Result<Vec<Clause>, Error> {
+        self.ensure_budget()?;
         let mut clauses = Vec::new();
         while !self.is_at_end()
             && !self.check(&TokenType::Union)
@@ -99,6 +137,7 @@ impl TokenParser {
     }
 
     fn parse_clause(&mut self) -> Result<Option<Clause>, Error> {
+        self.ensure_budget()?;
         // Ignore optional trailing semicolons.
         if self.match_token(&TokenType::Semicolon) {
             return Ok(None);
@@ -534,6 +573,7 @@ impl TokenParser {
     }
 
     fn parse_pattern(&mut self) -> Result<Pattern, Error> {
+        self.ensure_budget()?;
         let variable = if self.peek_is_identifier() && self.check_next(&TokenType::Equals) {
             let var = self.parse_identifier("path variable")?;
             self.consume(&TokenType::Equals, "Expected '='")?;
@@ -611,6 +651,7 @@ impl TokenParser {
     }
 
     fn parse_relationship_pattern(&mut self) -> Result<RelationshipPattern, Error> {
+        self.ensure_budget()?;
         let mut direction = if self.match_token(&TokenType::LeftArrow) {
             RelationshipDirection::RightToLeft
         } else if self.match_token(&TokenType::Dash) {
@@ -932,10 +973,12 @@ impl TokenParser {
     }
 
     fn parse_expression(&mut self) -> Result<Expression, Error> {
+        self.ensure_budget()?;
         self.parse_expression_bp(0)
     }
 
     fn parse_expression_bp(&mut self, min_bp: u8) -> Result<Expression, Error> {
+        self.ensure_budget()?;
         let mut lhs = self.parse_prefix_expression()?;
 
         // Postfix null predicates: <expr> IS [NOT] NULL
@@ -1022,6 +1065,7 @@ impl TokenParser {
     }
 
     fn parse_prefix_expression(&mut self) -> Result<Expression, Error> {
+        self.ensure_budget()?;
         if self.match_token(&TokenType::Not) {
             let operand = self.parse_expression_bp(Self::BP_NOT)?;
             return Ok(Expression::Unary(Box::new(UnaryExpression {
@@ -1057,6 +1101,7 @@ impl TokenParser {
     }
 
     fn parse_primary_expression(&mut self) -> Result<Expression, Error> {
+        self.ensure_budget()?;
         let mut expr = match &self.peek().token_type {
             TokenType::LeftParen => {
                 if let Some(pattern) = self.try_parse_relationship_pattern_predicate() {
@@ -1370,6 +1415,7 @@ impl TokenParser {
     }
 
     fn parse_exists_expression(&mut self) -> Result<ExistsExpression, Error> {
+        self.ensure_budget()?;
         self.consume(&TokenType::LeftBrace, "Expected '{' after EXISTS")?;
         if self.check(&TokenType::Match)
             || self.check(&TokenType::With)
@@ -1440,6 +1486,7 @@ impl TokenParser {
     }
 
     fn parse_case_expression(&mut self) -> Result<CaseExpression, Error> {
+        self.ensure_budget()?;
         // Supported forms:
         // 1) Searched CASE:
         //    CASE WHEN <cond> THEN <expr> ... [ELSE <expr>] END
@@ -1625,6 +1672,7 @@ impl TokenParser {
     }
 
     fn parse_list_or_comprehension(&mut self) -> Result<Expression, Error> {
+        self.ensure_budget()?;
         if self.check(&TokenType::RightBracket) {
             self.advance();
             return Ok(Expression::List(vec![]));
@@ -1679,6 +1727,7 @@ impl TokenParser {
     }
 
     fn parse_pattern_comprehension(&mut self) -> Result<Expression, Error> {
+        self.ensure_budget()?;
         let pattern = self.parse_pattern()?;
         let where_expression = if self.match_token(&TokenType::Where) {
             Some(self.parse_expression()?)
@@ -1701,6 +1750,7 @@ impl TokenParser {
     }
 
     fn parse_list(&mut self) -> Result<Vec<Expression>, Error> {
+        self.ensure_budget()?;
         let mut items = Vec::new();
 
         // Handle empty list: []
@@ -1793,10 +1843,18 @@ impl TokenParser {
     }
 
     fn advance(&mut self) -> &Token {
+        self.parse_steps = self.parse_steps.saturating_add(1);
+        if self.parse_steps > self.max_parse_steps {
+            self.budget_exhausted = true;
+            self.position = self.tokens.len().saturating_sub(1);
+            return &self.tokens[self.position];
+        }
+
+        let current = self.position;
         if !self.is_at_end() {
             self.position += 1;
         }
-        &self.tokens[self.position - 1]
+        &self.tokens[current]
     }
 }
 
@@ -1812,8 +1870,9 @@ fn parse_non_negative_u64(raw: &str, ctx: &str) -> Result<u64, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::Parser;
+    use super::{Parser, TokenParser};
     use crate::ast::{Clause, Expression, Literal};
+    use crate::lexer::Lexer;
 
     #[test]
     fn rejects_mixed_union_and_union_all() {
@@ -1861,5 +1920,19 @@ mod tests {
             ret.items[2].expression,
             Expression::Literal(Literal::Null)
         ));
+    }
+
+    #[test]
+    fn parser_complexity_guard_trips_with_tiny_budget() {
+        let mut lexer = Lexer::new("WITH x AS y RETURN y");
+        let tokens = lexer.tokenize().expect("tokenize should succeed");
+        let mut parser = TokenParser::new_with_step_budget(tokens, 1);
+        let err = parser
+            .parse_query()
+            .expect_err("tiny budget should trigger complexity guard");
+        assert_eq!(
+            err.to_string(),
+            "syntax error: ParserComplexityLimitExceeded"
+        );
     }
 }

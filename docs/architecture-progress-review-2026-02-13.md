@@ -1287,3 +1287,19 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 - `artifacts/tck/w13-perf-after-A.json`
 - `artifacts/tck/w13-perf-after-B.json`
 - `artifacts/tck/w13-perf-final.json`
+
+### 32.5 监控后补丁（2026-02-15，Fuzz Nightly `query_parse` timeout 收口）
+
+- 触发背景：
+  - PR 监控中，`Fuzz Nightly` 在 `query_parse` 目标出现 `libFuzzer: timeout`，
+    导致后续 `query_execute` 阶段被跳过。
+- 根因与修复：
+  - 在 `nervusdb-query/src/parser.rs` 增加解析复杂度步数预算护栏；
+  - 预算耗尽统一返回 `syntax error: ParserComplexityLimitExceeded`，避免病态输入长时间占用 worker；
+  - 新增单元测试 `parser_complexity_guard_trips_with_tiny_budget` 防回归。
+- 回归样本固化：
+  - 新增 `fuzz/regressions/query_parse/timeout-0150b9c6c52d68d4492ee8debb67edad1c52a05f`。
+- 实测结果（同一 failing input）：
+  - 本地回放从此前约 `9.3s` 降至 `~71ms`，显著低于 workflow 的 `-timeout=10` 阈值。
+- 证据：
+  - `artifacts/tck/w13-perf-query-parse-timeout-fix-2026-02-15.log`

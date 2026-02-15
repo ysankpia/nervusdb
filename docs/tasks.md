@@ -463,6 +463,9 @@
 - W13-C（CI/Fuzz 策略）：
   - `fuzz-nightly.yml` 中 `query_execute` 增加 `-timeout=5`，保留 `rss_limit_mb=4096`。
   - Node/Python 错误分类补齐 `ResourceLimitExceeded` 路径（归类 execution）。
+  - 监控后追加 `query_parse` timeout 收口：parser 增加复杂度步数预算（`ParserComplexityLimitExceeded`），并将 failing 样本固化到
+    `fuzz/regressions/query_parse/timeout-0150b9c6c52d68d4492ee8debb67edad1c52a05f`。
+  - 本地回放同一超时样本耗时降至 `71ms`（由此前 ~9s 级降到毫秒级，避免 nightly 在 `query_parse` 阶段提前失败）。
 - 回归与门禁（本轮）：
   - 定向：`Match4`、`Match9` 全通过；
   - 扩展矩阵：`Match1/2/3/6/7 + Path1/2/3 + Quantifier1/2` 全通过；
@@ -472,6 +475,7 @@
   - `artifacts/tck/w13-perf-after-A.json`
   - `artifacts/tck/w13-perf-after-B.json`
   - `artifacts/tck/w13-perf-final.json`
+  - `artifacts/tck/w13-perf-query-parse-timeout-fix-2026-02-15.log`
   - 说明：8h Fuzz 指标（`slowest/rss/exec_s`）需在主分支 Nightly 跑完后补录到 final 快照。
 
 ## Archived (v1/Alpha)
