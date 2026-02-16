@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: "15 2 * * *"
   workflow_dispatch:
+    inputs:
+      run_beta_gate:
+        description: "Run manual beta threshold gate (>=95%)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -20,6 +26,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -78,13 +86,15 @@ jobs:
           path: artifacts/tck/
 
   beta-gate-manual:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_beta_gate == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 240
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

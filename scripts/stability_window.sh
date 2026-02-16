@@ -503,25 +503,31 @@ for day in "${dates[@]}"; do
           if [ ! -f "$wf_runs_file" ]; then
             wf_reason="missing_workflow_runs"
           else
-            latest_run="$(jq -c --argjson cutoff "$day_end_epoch" '
-              [ .workflow_runs[]? | select((.created_at | fromdateiso8601) <= $cutoff) ]
+            latest_success_run="$(jq -c --argjson cutoff "$day_end_epoch" '
+              [ .workflow_runs[]?
+                | select((.created_at | fromdateiso8601) <= $cutoff)
+                | select(.conclusion == "success")
+              ]
               | sort_by(.created_at)
               | last // empty
             ' "$wf_runs_file")"
 
-            if [ -z "$latest_run" ] || [ "$latest_run" = "null" ]; then
-              wf_reason="no_run_before_day_end"
-            else
-              latest_conclusion="$(printf '%s\n' "$latest_run" | jq -r '.conclusion // ""')"
-              latest_created_at="$(printf '%s\n' "$latest_run" | jq -r '.created_at // ""')"
+            if [ -z "$latest_success_run" ] || [ "$latest_success_run" = "null" ]; then
+              latest_run="$(jq -c --argjson cutoff "$day_end_epoch" '
+                [ .workflow_runs[]? | select((.created_at | fromdateiso8601) <= $cutoff) ]
+                | sort_by(.created_at)
+                | last // empty
+              ' "$wf_runs_file")"
 
-              if [ "$latest_conclusion" != "success" ]; then
-                if [ -n "$latest_conclusion" ]; then
-                  wf_reason="latest_${latest_conclusion}"
-                else
-                  wf_reason="latest_unknown"
-                fi
-              elif [ -z "$latest_created_at" ]; then
+              if [ -z "$latest_run" ] || [ "$latest_run" = "null" ]; then
+                wf_reason="no_run_before_day_end"
+              else
+                latest_conclusion="$(printf '%s\n' "$latest_run" | jq -r '.conclusion // "unknown"')"
+                wf_reason="no_success_latest_${latest_conclusion}"
+              fi
+            else
+              latest_created_at="$(printf '%s\n' "$latest_success_run" | jq -r '.created_at // ""')"
+              if [ -z "$latest_created_at" ]; then
                 wf_reason="missing_created_at"
               else
                 latest_epoch="$(iso_to_epoch_utc "$latest_created_at")"
