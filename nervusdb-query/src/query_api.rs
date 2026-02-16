@@ -239,9 +239,7 @@ impl Params {
         // large-range summation case (1,000,001 items) under default options.
         // Explicit caller overrides always win and are not relaxed.
         let limit = if configured_limit == ExecuteOptions::default().max_collection_items
-            && (stage == "Function(range)"
-                || stage == "Unwind.list"
-                || stage == "Aggregate.rows")
+            && (stage == "Function(range)" || stage == "Unwind.list" || stage == "Aggregate.rows")
         {
             configured_limit.max(1_100_000)
         } else {
