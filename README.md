@@ -44,18 +44,23 @@ python - <<'PY'
 import nervusdb
 
 db = nervusdb.open('/tmp/demo-py')
-db.query("CREATE (n:Person {name: 'Alice'})")
+db.execute_write("CREATE (n:Person {name: 'Alice'})")
 for row in db.query_stream("MATCH (n:Person) RETURN n LIMIT 1"):
     print(row)
 db.close()
 PY
 ```
 
+> Note: write statements (for example `CREATE/MERGE/DELETE/SET`) must go through
+> `execute_write(...)` or a write transaction. Running them with `query(...)`
+> raises `ExecutionError`.
+
 ### Node (N-API binding)
 
 ```bash
-# build + runtime smoke (create/query/txn)
-bash scripts/binding_smoke.sh
+cargo build --manifest-path nervusdb-node/Cargo.toml --release
+npm --prefix examples/ts-local ci
+npm --prefix examples/ts-local run smoke
 ```
 
 ## What Is Considered “Supported”

@@ -43,18 +43,23 @@ python - <<'PY'
 import nervusdb
 
 db = nervusdb.open('/tmp/demo-py')
-db.query("CREATE (n:Person {name: 'Alice'})")
+db.execute_write("CREATE (n:Person {name: 'Alice'})")
 for row in db.query_stream("MATCH (n:Person) RETURN n LIMIT 1"):
     print(row)
 db.close()
 PY
 ```
 
+> 注意：写语句（如 `CREATE/MERGE/DELETE/SET`）必须使用
+> `execute_write(...)` 或写事务接口；用 `query(...)` 执行写语句会抛
+> `ExecutionError`。
+
 ### Node（N-API 绑定）
 
 ```bash
-# 构建 + 运行时 smoke（create/query/txn）
-bash scripts/binding_smoke.sh
+cargo build --manifest-path nervusdb-node/Cargo.toml --release
+npm --prefix examples/ts-local ci
+npm --prefix examples/ts-local run smoke
 ```
 
 v2 当前能力边界以 `docs/reference/cypher_support.md` 为准；是否“支持”以门禁结果为准。
