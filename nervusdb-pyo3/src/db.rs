@@ -105,6 +105,42 @@ impl Db {
         Ok(QueryStream::new(rows))
     }
 
+    /// Execute a Cypher write query and return affected count.
+    ///
+    /// Use this for CREATE/MERGE/SET/DELETE style statements. Read-only queries
+    /// should use `query` or `query_stream`.
+    #[pyo3(signature = (query, params=None))]
+    fn execute_write(
+        &self,
+        query: &str,
+        params: Option<HashMap<String, Py<PyAny>>>,
+        py: Python<'_>,
+    ) -> PyResult<u32> {
+        let inner = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| classify_nervus_error("database is closed"))?;
+
+        let prepared = nervusdb_query::prepare(query).map_err(classify_nervus_error)?;
+
+        let mut query_params = nervusdb_query::Params::new();
+        if let Some(p) = params {
+            for (k, v) in p {
+                let val_bound = v.bind(py);
+                let val = py_to_value(val_bound)?;
+                query_params.insert(k, val);
+            }
+        }
+
+        let snapshot = inner.snapshot();
+        let mut txn = inner.begin_write();
+        let affected = prepared
+            .execute_write(&snapshot, &mut txn, &query_params)
+            .map_err(classify_nervus_error)?;
+        txn.commit().map_err(classify_nervus_error)?;
+        Ok(affected)
+    }
+
     /// Search for similar vectors.
     ///
     /// Args:
