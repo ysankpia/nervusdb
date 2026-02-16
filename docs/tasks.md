@@ -83,7 +83,7 @@
 | M4-10         | [Query/CI] Merge Core Semantics + TCK Smoke Gate          | High   | Done   | feat/M4-10-merge-core       | Added binding conflict validation + varlen `<-/->/-` + CI smoke gate |
 | M4-11         | [Query] MERGE Regression Hardening                         | High   | Done   | feat/M4-10-merge-core       | Fixed MERGE execution on wrapped plans, rel source indexing, ON CREATE/ON MATCH updates, correlated MATCH binding typing |
 | **M5**        | **Bindings + Docs + Perf 基础设施**                        |        |        |                             |                                                          |
-| M5-01         | [Binding] Python + Node.js 可用性收敛（PyO3 + N-API）      | High   | WIP    | feat/M5-01-bindings         | 已补齐 Rust 基线 API 面（Db/WriteTxn/maintenance）与 zero-skip capability 套件；新增 `docs/binding-parity-matrix.md` + `scripts/binding_parity_gate.sh` + CI parity 阻断，后续聚焦 Rust 核心缺口（非 binding 差异）清零 |
+| M5-01         | [Binding] Python + Node.js 可用性收敛（PyO3 + N-API）      | High   | WIP    | feat/M5-01-bindings         | 已补齐 Rust 基线 API 面（Db/WriteTxn/maintenance）与 zero-skip capability 套件；新增 `docs/binding-parity.md` + `scripts/binding_parity_gate.sh` + CI parity 阻断；已清零首批核心缺口（多标签子集匹配、MERGE 关系幂等），剩余核心缺口聚焦 `left/right` 与 `shortestPath` |
 | M5-02         | [Docs] 用户文档与支持矩阵对齐                             | High   | WIP    | feat/M5-02-user-guide       | 已切换到 Beta 收敛口径；待补 95%/7天稳定窗发布说明与日报模板 |
 | M5-03         | [Benchmark] NervusDB vs Neo4j/Memgraph 对标               | Medium | WIP    | feat/M5-03-benchmark        | 已有流程；待绑定 Beta 发布 SLO 阻断 |
 | M5-04         | [Performance] 并发读热点优化                               | Medium | WIP    | feat/M5-04-concurrency      | 已有基线；待收敛到 Beta P99 门槛 |
@@ -495,6 +495,27 @@
   - `artifacts/tck/w13-perf-final.json`
   - `artifacts/tck/w13-perf-query-parse-timeout-fix-2026-02-15.log`
   - 说明：8h Fuzz 指标（`slowest/rss/exec_s`）需在主分支 Nightly 跑完后补录到 final 快照。
+
+### BETA-04 子进展（2026-02-17，主线 B：内核缺口首批清零）
+- 目标达成（硬断言）：
+  - `MATCH (n:Manager)` 对多标签节点按标签包含关系匹配（不再依赖主标签）。
+  - `MATCH ... MERGE (a)-[:LINK]->(b)` 关系语义修复为幂等（重复执行不重复建边）。
+- 代码落点：
+  - `nervusdb-query/src/executor/plan_iterators.rs`
+  - `nervusdb-query/src/executor/merge_execution.rs`
+  - `nervusdb-query/src/executor.rs`
+  - `nervusdb/tests/t342_label_merge_regressions.rs`
+- 三端能力测试改为硬断言（去 soft-pass）：
+  - `examples-test/nervusdb-rust-test/tests/test_capabilities.rs`
+  - `examples-test/nervusdb-node-test/src/test-capabilities.ts`
+  - `examples-test/nervusdb-python-test/test_capabilities.py`
+- 定向验证：
+  - `cargo test -p nervusdb --test t342_label_merge_regressions`
+  - `bash examples-test/run_all.sh`
+  - `cargo test -p nervusdb --test tck_harness -- --input clauses/match/Match1.feature`
+  - `cargo test -p nervusdb --test tck_harness -- --input clauses/merge/Merge1.feature`
+  - `cargo test -p nervusdb --test tck_harness -- --input clauses/merge/Merge2.feature`
+  - 结果：全部通过。
 
 ## Archived (v1/Alpha)
 

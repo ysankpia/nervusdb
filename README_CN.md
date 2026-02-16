@@ -17,6 +17,7 @@
 - **崩溃安全** — 基于 WAL 的存储，单写者 + 快照读者事务模型。
 - **多平台绑定** — Rust、Python (PyO3)、Node.js (N-API)、CLI。
 - **向量搜索** — 内置 HNSW 索引，支持图 + 向量混合查询。
+- **三端一致性门禁** — `examples-test` 对 Rust/Node/Python 执行硬断言同态校验。
 
 ## 快速开始
 
@@ -90,6 +91,7 @@ cargo run -p nervusdb-cli -- v2 query \
 | Rust 单元 + 集成测试 | 153 | 全部通过 |
 | Python (PyO3) | 138 | 全部通过 |
 | Node.js (N-API) | 109 | 全部通过 |
+| examples-test 三端一致性（Rust + Node + Python） | 601 / 601 | 全部通过 |
 
 ## 文档
 
