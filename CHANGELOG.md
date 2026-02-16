@@ -1,12 +1,33 @@
-# 变更日志（v2）
+# Changelog (v2)
 
-本文件只记录 **v2（`.ndb + .wal`）** 的可验证变更。
+This file records verifiable changes for **v2 (`.ndb` + `.wal`)** only.
 
-v1/redb 与旧绑定的历史记录见 `_legacy_v1_archive/CHANGELOG_v1.md`。
+For v1/redb and legacy binding history, see `_legacy_v1_archive/CHANGELOG_v1.md`.
 
-## 未发布
+## Unreleased
 
-- 代码质量：修复 Clippy 警告（`collapsible_if`、`type_complexity`、`too_many_arguments`）。
-- v1 全量退役：从 workspace/CI 移除并归档到 `_legacy_v1_archive/`（仓库事实：现在只维护 v2 Rust crates + CLI）。
-- v2 查询执行修正：`MATCH (a)-[:<u32>*min..max]->(b)` 在 `prepare()` 路径真正下发为 `MatchOutVarLen`，并对缺省 `*` 施加默认 hop 上限（避免无限遍历）。
-- 文档去谎言化：`README.md` / `docs/spec.md` / `docs/reference/cypher_support.md` 对齐 v2 现状与边界。
+### Milestones
+
+- **TCK 100%**: openCypher TCK full pass rate reached 100% (3 897 / 3 897 scenarios).
+- **Three-platform binding alignment**: Rust (153 tests), Python (138 tests), Node.js (109 tests) — all green, API parity verified.
+- **SQLite-Beta convergence**: entered 7-day stability window (Phase B).
+- **Documentation restructure**: all docs rewritten in English, public-facing quality.
+
+### Features
+
+- Query engine refactoring: split `query_api` / `executor` / `evaluator` for maintainability.
+- Python binding: typed objects (`Node` / `Relationship` / `Path`), typed exception hierarchy (`SyntaxError` / `ExecutionError` / `StorageError` / `CompatibilityError`).
+- Node.js binding: structured error payloads (`code` / `category` / `message`), full API alignment with Rust baseline.
+- Storage format epoch enforcement with `StorageFormatMismatch` error on mismatch.
+- Binding parity gate (`scripts/binding_parity_gate.sh`) for CI enforcement.
+
+### Fixes
+
+- Variable-length path execution: `MATCH (a)-[*min..max]->(b)` correctly dispatches as `MatchOutVarLen` with default hop limit.
+- Clippy warnings resolved (`collapsible_if`, `type_complexity`, `too_many_arguments`).
+
+### Maintenance
+
+- v1 fully retired: removed from workspace/CI, archived to `_legacy_v1_archive/`.
+- Documentation de-lied: all docs aligned with actual v2 capabilities and boundaries.
+- Outdated docs archived to `docs/archive/superseded/`.

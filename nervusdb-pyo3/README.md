@@ -1,11 +1,15 @@
-# nervusdb
+# nervusdb (Python)
 
-An embeddable property graph database written in Rust with Python bindings.
+Python bindings for [NervusDB](../README.md), a Rust-native embedded property graph database.
+
+Built with PyO3. Provides typed graph objects (`Node`, `Relationship`, `Path`) and
+typed exceptions (`SyntaxError`, `ExecutionError`, `StorageError`, `CompatibilityError`).
 
 ## Installation
 
 ```bash
-pip install nervusdb
+pip install maturin
+maturin develop -m nervusdb-pyo3/Cargo.toml
 ```
 
 ## Usage
@@ -13,28 +17,40 @@ pip install nervusdb
 ```python
 import nervusdb
 
-# Open or create a database
-db = nervusdb.open("my_graph.ndb")
+db = nervusdb.open("/tmp/mydb")
 
-# Create nodes (write statements must use execute_write or transaction APIs)
+# Write (must use execute_write or a write transaction)
 db.execute_write("CREATE (n:Person {name: 'Alice', age: 30})")
 
-# Query the graph
-result = db.query("MATCH (n:Person) RETURN n")
-for row in result:
+# Read
+for row in db.query("MATCH (n:Person) RETURN n.name, n.age"):
     print(row)
 
-# Close the database
+# Streaming
+for row in db.query_stream("MATCH (n) RETURN n LIMIT 100"):
+    print(row)
+
+# Transactions
+txn = db.begin_write()
+txn.query("CREATE (a:Person {name: 'Bob'})")
+txn.commit()
+
+# Maintenance
+db.create_index("Person", "name")
+db.compact()
+db.checkpoint()
+
 db.close()
 ```
 
-If you run a write statement through `db.query(...)`, NervusDB raises
-`ExecutionError` (for example: `CREATE must be executed via execute_write`).
+## API Parity
 
-Local runnable smoke example:
+All APIs are aligned with the Rust baseline. See [Binding Parity](../docs/binding-parity.md).
 
-- `examples/py-local/smoke.py`
+| Tests | Status |
+|-------|--------|
+| Capability tests | 138 all green |
 
 ## License
 
-MIT
+[AGPL-3.0](../LICENSE)

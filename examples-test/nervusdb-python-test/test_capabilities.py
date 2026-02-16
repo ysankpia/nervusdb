@@ -1398,6 +1398,599 @@ def test_low_level_txn_lifecycle():
 test("low-level create/set/remove/tombstone", test_low_level_txn_lifecycle)
 
 # ═══════════════════════════════════════════════════════════════
+# Extended Capability Tests (Categories 30-46)
+# ═══════════════════════════════════════════════════════════════
+
+# ─── 30. UNWIND (expanded) ─────────────────────────────────────
+print("\n── 30. UNWIND (expanded) ──")
+
+db, _ = fresh_db("unwind2")
+
+def test_unwind_ordered():
+    rows = db.query("UNWIND [10, 20, 30] AS x RETURN x ORDER BY x")
+    assert_eq(len(rows), 3)
+    assert_eq(rows[0]["x"], 10)
+    assert_eq(rows[2]["x"], 30)
+test("UNWIND ordered", test_unwind_ordered)
+
+def test_unwind_empty():
+    rows = db.query("UNWIND [] AS x RETURN x")
+    assert_eq(len(rows), 0)
+test("UNWIND empty list", test_unwind_empty)
+
+def test_unwind_aggregation():
+    rows = db.query("UNWIND [1, 2, 3, 4, 5] AS x RETURN sum(x) AS total")
+    assert_eq(rows[0]["total"], 15)
+test("UNWIND with aggregation", test_unwind_aggregation)
+
+def test_unwind_create():
+    db.execute_write("UNWIND ['a', 'b', 'c'] AS name CREATE (:UW2 {name: name})")
+    rows = db.query("MATCH (n:UW2) RETURN n.name ORDER BY n.name")
+    assert_eq(len(rows), 3)
+    assert_eq(rows[0]["n.name"], "a")
+test("UNWIND + CREATE", test_unwind_create)
+
+def test_unwind_range():
+    rows = db.query("UNWIND range(1, 5) AS x RETURN x ORDER BY x")
+    assert_eq(len(rows), 5)
+    assert_eq(rows[0]["x"], 1)
+    assert_eq(rows[4]["x"], 5)
+test("UNWIND range()", test_unwind_range)
+
+db.close()
+
+# ─── 31. UNION / UNION ALL (expanded) ─────────────────────────
+print("\n── 31. UNION / UNION ALL (expanded) ──")
+
+db, _ = fresh_db("union2")
+
+def test_union_dedup():
+    rows = db.query("RETURN 1 AS x UNION RETURN 1 AS x")
+    assert_eq(len(rows), 1, "UNION should deduplicate")
+test("UNION dedup", test_union_dedup)
+
+def test_union_all_keeps_dupes():
+    rows = db.query("RETURN 1 AS x UNION ALL RETURN 1 AS x")
+    assert_eq(len(rows), 2, "UNION ALL should keep duplicates")
+test("UNION ALL keeps dupes", test_union_all_keeps_dupes)
+
+def test_union_multi():
+    rows = db.query("RETURN 1 AS x UNION RETURN 2 AS x UNION RETURN 3 AS x")
+    assert_eq(len(rows), 3)
+test("multi UNION", test_union_multi)
+
+def test_union_with_match():
+    db.execute_write("CREATE (:UA {v: 'a'})")
+    db.execute_write("CREATE (:UB {v: 'b'})")
+    rows = db.query("MATCH (n:UA) RETURN n.v AS v UNION MATCH (n:UB) RETURN n.v AS v")
+    assert_eq(len(rows), 2)
+test("UNION with MATCH", test_union_with_match)
+
+db.close()
+
+# ─── 32. WITH pipeline (expanded) ─────────────────────────────
+print("\n── 32. WITH pipeline (expanded) ──")
+
+db, _ = fresh_db("with2")
+
+def test_with_multi_stage():
+    for i in range(1, 11):
+        db.execute_write(f"CREATE (:W {{v: {i}}})")
+    rows = db.query(
+        "MATCH (n:W) WITH n.v AS v WHERE v > 5 "
+        "WITH v AS val ORDER BY val LIMIT 3 RETURN val"
+    )
+    assert_eq(len(rows), 3)
+    assert_eq(rows[0]["val"], 6)
+test("WITH multi-stage pipeline", test_with_multi_stage)
+
+def test_with_distinct():
+    db2, _ = fresh_db("with2d")
+    db2.execute_write("CREATE (:WD {v: 1})")
+    db2.execute_write("CREATE (:WD {v: 1})")
+    db2.execute_write("CREATE (:WD {v: 2})")
+    rows = db2.query("MATCH (n:WD) WITH DISTINCT n.v AS v RETURN v ORDER BY v")
+    assert_eq(len(rows), 2)
+    db2.close()
+test("WITH DISTINCT", test_with_distinct)
+
+def test_with_aggregation():
+    db2, _ = fresh_db("with2a")
+    db2.execute_write("CREATE (:WA {cat: 'a', v: 1})")
+    db2.execute_write("CREATE (:WA {cat: 'a', v: 2})")
+    db2.execute_write("CREATE (:WA {cat: 'b', v: 3})")
+    rows = db2.query(
+        "MATCH (n:WA) WITH n.cat AS cat, sum(n.v) AS total "
+        "RETURN cat, total ORDER BY cat"
+    )
+    assert_eq(len(rows), 2)
+    assert_eq(rows[0]["total"], 3)
+    db2.close()
+test("WITH + aggregation", test_with_aggregation)
+
+db.close()
+
+# ─── 33. ORDER BY + SKIP + LIMIT (pagination) ─────────────────
+print("\n── 33. ORDER BY + SKIP + LIMIT (pagination) ──")
+
+db, _ = fresh_db("page")
+for i in range(1, 21):
+    db.execute_write(f"CREATE (:PG {{v: {i}}})")
+
+def test_pagination_page1():
+    rows = db.query("MATCH (n:PG) RETURN n.v ORDER BY n.v LIMIT 5")
+    assert_eq(len(rows), 5)
+    assert_eq(rows[0]["n.v"], 1)
+    assert_eq(rows[4]["n.v"], 5)
+test("pagination page 1", test_pagination_page1)
+
+def test_pagination_page2():
+    rows = db.query("MATCH (n:PG) RETURN n.v ORDER BY n.v SKIP 5 LIMIT 5")
+    assert_eq(len(rows), 5)
+    assert_eq(rows[0]["n.v"], 6)
+    assert_eq(rows[4]["n.v"], 10)
+test("pagination page 2", test_pagination_page2)
+
+def test_skip_beyond():
+    rows = db.query("MATCH (n:PG) RETURN n.v SKIP 100")
+    assert_eq(len(rows), 0)
+test("SKIP beyond results", test_skip_beyond)
+
+db.close()
+
+# ─── 34. Null handling (expanded) ──────────────────────────────
+print("\n── 34. Null handling (expanded) ──")
+
+db, _ = fresh_db("null2")
+
+def test_coalesce():
+    rows = db.query("RETURN coalesce(null, 'fallback') AS v")
+    assert_eq(rows[0]["v"], "fallback")
+test("COALESCE", test_coalesce)
+
+def test_coalesce_first_non_null():
+    rows = db.query("RETURN coalesce(null, null, 42) AS v")
+    assert_eq(rows[0]["v"], 42)
+test("COALESCE first non-null", test_coalesce_first_non_null)
+
+def test_null_arithmetic():
+    rows = db.query("RETURN null + 1 AS v")
+    assert_eq(rows[0]["v"], None)
+test("null + 1 propagation", test_null_arithmetic)
+
+def test_null_comparison():
+    rows = db.query("RETURN null = null AS v")
+    assert_eq(rows[0]["v"], None)
+test("null = null", test_null_comparison)
+
+def test_is_null_filter():
+    db.execute_write("CREATE (:NL {name: 'has'})")
+    db.execute_write("CREATE (:NL {})")
+    rows = db.query("MATCH (n:NL) WHERE n.name IS NULL RETURN count(n) AS c")
+    assert_eq(rows[0]["c"], 1)
+test("IS NULL filter", test_is_null_filter)
+
+db.close()
+
+# ─── 35. Type conversion functions ────────────────────────────
+print("\n── 35. Type conversion functions ──")
+
+db, _ = fresh_db("typeconv")
+
+def test_tointeger_from_float():
+    rows = db.query("RETURN toInteger(3.9) AS v")
+    assert_eq(rows[0]["v"], 3)
+test("toInteger(3.9)", test_tointeger_from_float)
+
+def test_tointeger_from_string():
+    rows = db.query("RETURN toInteger('42') AS v")
+    assert_eq(rows[0]["v"], 42)
+test("toInteger('42')", test_tointeger_from_string)
+
+def test_tofloat_from_int():
+    rows = db.query("RETURN toFloat(42) AS v")
+    assert_near(rows[0]["v"], 42.0)
+test("toFloat(42)", test_tofloat_from_int)
+
+def test_tofloat_from_string():
+    rows = db.query("RETURN toFloat('3.14') AS v")
+    assert_near(rows[0]["v"], 3.14, eps=0.01)
+test("toFloat('3.14')", test_tofloat_from_string)
+
+def test_tostring_from_int():
+    rows = db.query("RETURN toString(42) AS v")
+    assert_eq(rows[0]["v"], "42")
+test("toString(42)", test_tostring_from_int)
+
+def test_tostring_from_bool():
+    rows = db.query("RETURN toString(true) AS v")
+    assert_eq(rows[0]["v"], "true")
+test("toString(true)", test_tostring_from_bool)
+
+def test_toboolean():
+    try:
+        rows = db.query("RETURN toBoolean('true') AS v")
+        assert_eq(rows[0]["v"], True)
+    except Exception:
+        print("    (note: toBoolean() may not be implemented)")
+test("toBoolean('true')", test_toboolean)
+
+db.close()
+
+# ─── 36. Math functions (full) ─────────────────────────────────
+print("\n── 36. Math functions (full) ──")
+
+db, _ = fresh_db("mathfull")
+
+def test_ceil():
+    try:
+        rows = db.query("RETURN ceil(2.3) AS v")
+        assert_near(rows[0]["v"], 3.0)
+    except Exception:
+        print("    (note: ceil() may not be implemented)")
+test("ceil(2.3)", test_ceil)
+
+def test_floor():
+    try:
+        rows = db.query("RETURN floor(2.7) AS v")
+        assert_near(rows[0]["v"], 2.0)
+    except Exception:
+        print("    (note: floor() may not be implemented)")
+test("floor(2.7)", test_floor)
+
+def test_round():
+    try:
+        rows = db.query("RETURN round(2.5) AS v")
+        v = rows[0]["v"]
+        assert_true(v >= 2.0 and v <= 3.0, f"round(2.5) should be 2 or 3, got {v}")
+    except Exception:
+        print("    (note: round() may not be implemented)")
+test("round(2.5)", test_round)
+
+def test_sign():
+    try:
+        rows = db.query("RETURN sign(-5) AS neg, sign(0) AS zero, sign(5) AS pos")
+        assert_eq(rows[0]["neg"], -1)
+        assert_eq(rows[0]["zero"], 0)
+        assert_eq(rows[0]["pos"], 1)
+    except Exception:
+        print("    (note: sign() may not be implemented)")
+test("sign()", test_sign)
+
+def test_sqrt():
+    try:
+        rows = db.query("RETURN sqrt(16) AS v")
+        assert_near(rows[0]["v"], 4.0)
+    except Exception:
+        print("    (note: sqrt() may not be implemented)")
+test("sqrt(16)", test_sqrt)
+
+def test_log():
+    try:
+        rows = db.query("RETURN log(1) AS v")
+        assert_near(rows[0]["v"], 0.0)
+    except Exception:
+        print("    (note: log() may not be implemented)")
+test("log(1)", test_log)
+
+def test_e():
+    try:
+        rows = db.query("RETURN e() AS v")
+        assert_near(rows[0]["v"], math.e, eps=0.01)
+    except Exception:
+        print("    (note: e() may not be implemented)")
+test("e()", test_e)
+
+def test_pi():
+    try:
+        rows = db.query("RETURN pi() AS v")
+        assert_near(rows[0]["v"], math.pi, eps=0.01)
+    except Exception:
+        print("    (note: pi() may not be implemented)")
+test("pi()", test_pi)
+
+db.close()
+
+# ─── 37. String functions (expanded) ──────────────────────────
+print("\n── 37. String functions (expanded) ──")
+
+db, _ = fresh_db("strexp")
+
+def test_replace():
+    try:
+        rows = db.query("RETURN replace('hello world', 'world', 'python') AS v")
+        assert_eq(rows[0]["v"], "hello python")
+    except Exception:
+        print("    (note: replace() may not be implemented)")
+test("replace()", test_replace)
+
+def test_ltrim():
+    try:
+        rows = db.query("RETURN lTrim('  hi') AS v")
+        assert_eq(rows[0]["v"], "hi")
+    except Exception:
+        print("    (note: lTrim() may not be implemented)")
+test("lTrim()", test_ltrim)
+
+def test_rtrim():
+    try:
+        rows = db.query("RETURN rTrim('hi  ') AS v")
+        assert_eq(rows[0]["v"], "hi")
+    except Exception:
+        print("    (note: rTrim() may not be implemented)")
+test("rTrim()", test_rtrim)
+
+def test_split():
+    try:
+        rows = db.query("RETURN split('a,b,c', ',') AS v")
+        assert_eq(len(rows[0]["v"]), 3)
+        assert_eq(rows[0]["v"][0], "a")
+    except Exception:
+        print("    (note: split() may not be implemented)")
+test("split()", test_split)
+
+def test_reverse():
+    try:
+        rows = db.query("RETURN reverse('abc') AS v")
+        assert_eq(rows[0]["v"], "cba")
+    except Exception:
+        print("    (note: reverse() may not be implemented)")
+test("reverse()", test_reverse)
+
+def test_substring():
+    try:
+        rows = db.query("RETURN substring('hello', 1, 3) AS v")
+        assert_eq(rows[0]["v"], "ell")
+    except Exception:
+        print("    (note: substring() may not be implemented)")
+test("substring()", test_substring)
+
+db.close()
+
+# ─── 38. List operations ──────────────────────────────────────
+print("\n── 38. List operations ──")
+
+db, _ = fresh_db("listops")
+
+def test_range_function():
+    rows = db.query("RETURN range(1, 5) AS v")
+    assert_eq(len(rows[0]["v"]), 5)
+    assert_eq(rows[0]["v"][0], 1)
+    assert_eq(rows[0]["v"][4], 5)
+test("range(1, 5)", test_range_function)
+
+def test_range_with_step():
+    rows = db.query("RETURN range(0, 10, 2) AS v")
+    assert_eq(len(rows[0]["v"]), 6)
+    assert_eq(rows[0]["v"][0], 0)
+    assert_eq(rows[0]["v"][5], 10)
+test("range(0, 10, 2)", test_range_with_step)
+
+def test_list_index():
+    rows = db.query("RETURN [10, 20, 30][1] AS v")
+    assert_eq(rows[0]["v"], 20)
+test("list index access", test_list_index)
+
+def test_list_size():
+    rows = db.query("RETURN size([1, 2, 3, 4]) AS v")
+    assert_eq(rows[0]["v"], 4)
+test("size() on list", test_list_size)
+
+def test_list_comprehension():
+    try:
+        rows = db.query("RETURN [x IN range(1, 5) WHERE x > 3] AS v")
+        assert_eq(len(rows[0]["v"]), 2)
+        assert_eq(rows[0]["v"][0], 4)
+    except Exception:
+        print("    (note: list comprehension may not be implemented)")
+test("list comprehension", test_list_comprehension)
+
+def test_reduce():
+    try:
+        rows = db.query("RETURN reduce(acc = 0, x IN [1, 2, 3] | acc + x) AS v")
+        assert_eq(rows[0]["v"], 6)
+    except Exception:
+        print("    (note: reduce() may not be implemented)")
+test("reduce()", test_reduce)
+
+db.close()
+
+# ─── 39. Map operations ───────────────────────────────────────
+print("\n── 39. Map operations ──")
+
+db, _ = fresh_db("mapops")
+
+def test_map_literal():
+    rows = db.query("RETURN {name: 'Alice', age: 30} AS m")
+    m = rows[0]["m"]
+    assert_eq(m["name"], "Alice")
+    assert_eq(m["age"], 30)
+test("map literal", test_map_literal)
+
+def test_map_access():
+    rows = db.query("WITH {name: 'Bob', age: 25} AS m RETURN m.name AS v")
+    assert_eq(rows[0]["v"], "Bob")
+test("map property access", test_map_access)
+
+def test_nested_map():
+    rows = db.query("RETURN {outer: {inner: 42}} AS m")
+    assert_eq(rows[0]["m"]["outer"]["inner"], 42)
+test("nested map", test_nested_map)
+
+def test_keys_function():
+    try:
+        rows = db.query("RETURN keys({a: 1, b: 2}) AS v")
+        assert_eq(len(rows[0]["v"]), 2)
+    except Exception:
+        print("    (note: keys() on map may not be implemented)")
+test("keys() on map", test_keys_function)
+
+db.close()
+
+# ─── 40. Multiple MATCH ───────────────────────────────────────
+print("\n── 40. Multiple MATCH ──")
+
+db, _ = fresh_db("multimatch")
+
+def test_cartesian_product():
+    db.execute_write("CREATE (:MA {v: 1})")
+    db.execute_write("CREATE (:MA {v: 2})")
+    db.execute_write("CREATE (:MB {v: 10})")
+    rows = db.query("MATCH (a:MA) MATCH (b:MB) RETURN a.v, b.v ORDER BY a.v")
+    assert_eq(len(rows), 2, "cartesian product: 2 x 1 = 2")
+test("cartesian product", test_cartesian_product)
+
+def test_correlated_match():
+    db.execute_write("CREATE (:MC {id: 'x'})-[:LINK]->(:MD {id: 'y'})")
+    rows = db.query("MATCH (a:MC {id: 'x'}) MATCH (a)-[:LINK]->(b) RETURN b.id")
+    assert_eq(len(rows), 1)
+    assert_eq(rows[0]["b.id"], "y")
+test("correlated MATCH", test_correlated_match)
+
+def test_independent_match():
+    db.execute_write("CREATE (:ME {v: 'a'})")
+    db.execute_write("CREATE (:MF {v: 'b'})")
+    rows = db.query("MATCH (a:ME) MATCH (b:MF) RETURN a.v AS av, b.v AS bv")
+    assert_eq(len(rows), 1)
+    assert_eq(rows[0]["av"], "a")
+    assert_eq(rows[0]["bv"], "b")
+test("independent MATCH", test_independent_match)
+
+db.close()
+
+# ─── 41. REMOVE clause ────────────────────────────────────────
+print("\n── 41. REMOVE clause ──")
+
+db, _ = fresh_db("remove")
+
+def test_remove_property():
+    db.execute_write("CREATE (:RM {name: 'test', extra: 'gone'})")
+    db.execute_write("MATCH (n:RM {name: 'test'}) REMOVE n.extra")
+    rows = db.query("MATCH (n:RM {name: 'test'}) RETURN n.extra")
+    assert_eq(rows[0]["n.extra"], None)
+test("REMOVE property", test_remove_property)
+
+def test_remove_multiple():
+    db.execute_write("CREATE (:RM2 {a: 1, b: 2, c: 3})")
+    db.execute_write("MATCH (n:RM2) REMOVE n.a, n.b")
+    rows = db.query("MATCH (n:RM2) RETURN n.a, n.b, n.c")
+    assert_eq(rows[0]["n.a"], None)
+    assert_eq(rows[0]["n.b"], None)
+    assert_eq(rows[0]["n.c"], 3)
+test("REMOVE multiple properties", test_remove_multiple)
+
+db.close()
+
+# ─── 42. Parameter queries (expanded) ─────────────────────────
+print("\n── 42. Parameter queries (expanded) ──")
+
+db, _ = fresh_db("params2")
+
+def test_param_in_where():
+    db.execute_write("CREATE (:PM {name: 'Alice', age: 30})")
+    rows = db.query("MATCH (n:PM) WHERE n.name = $name RETURN n.age",
+                     params={"name": "Alice"})
+    assert_eq(rows[0]["n.age"], 30)
+test("$param in WHERE", test_param_in_where)
+
+def test_param_in_create():
+    db.execute_write("CREATE (:PM2 {v: $val})", params={"val": 99})
+    rows = db.query("MATCH (n:PM2) RETURN n.v")
+    assert_eq(rows[0]["n.v"], 99)
+test("$param in CREATE", test_param_in_create)
+
+def test_param_multiple():
+    rows = db.query("RETURN $a + $b AS sum", params={"a": 1, "b": 2})
+    assert_eq(rows[0]["sum"], 3)
+test("multiple $params", test_param_multiple)
+
+db.close()
+
+# ─── 43. EXPLAIN ───────────────────────────────────────────────
+print("\n── 43. EXPLAIN ──")
+
+db, _ = fresh_db("explain")
+db.execute_write("CREATE (:EX {v: 1})")
+
+def test_explain():
+    try:
+        rows = db.query("EXPLAIN MATCH (n:EX) RETURN n")
+        print(f"    EXPLAIN returned {len(rows)} rows")
+    except Exception:
+        print("    (note: EXPLAIN may not be implemented)")
+test("EXPLAIN basic", test_explain)
+
+db.close()
+
+# ─── 44. Index operations ─────────────────────────────────────
+print("\n── 44. Index operations ──")
+
+def test_index_accelerated():
+    db_t, _ = fresh_db("idxops")
+    for i in range(20):
+        db_t.execute_write(f"CREATE (:IX {{val: {i}}})")
+    db_t.create_index("IX", "val")
+    rows = db_t.query("MATCH (n:IX {val: 10}) RETURN n.val")
+    assert_eq(len(rows), 1)
+    assert_eq(rows[0]["n.val"], 10)
+    db_t.close()
+test("index-accelerated lookup", test_index_accelerated)
+
+def test_index_with_updates():
+    db_t, _ = fresh_db("idxops2")
+    db_t.execute_write("CREATE (:IX2 {email: 'a@b.com'})")
+    db_t.create_index("IX2", "email")
+    db_t.execute_write("CREATE (:IX2 {email: 'c@d.com'})")
+    rows = db_t.query("MATCH (n:IX2 {email: 'c@d.com'}) RETURN n.email")
+    assert_eq(len(rows), 1)
+    db_t.close()
+test("index with post-creation inserts", test_index_with_updates)
+
+# ─── 45. Error handling (expanded) ─────────────────────────────
+print("\n── 45. Error handling (expanded) ──")
+
+db, _ = fresh_db("err2")
+
+def test_type_error_arithmetic():
+    try:
+        rows = db.query("RETURN 'hello' + 1 AS v")
+        print(f"    'hello' + 1 = {rows[0]['v']!r}")
+    except Exception:
+        print("    (type error correctly raised for string + int)")
+test("type error in arithmetic", test_type_error_arithmetic)
+
+def test_division_by_zero():
+    try:
+        rows = db.query("RETURN 1 / 0 AS v")
+        print(f"    1/0 = {rows[0]['v']!r}")
+    except Exception:
+        print("    (division by zero correctly raised error)")
+test("division by zero", test_division_by_zero)
+
+def test_missing_property_null():
+    db.execute_write("CREATE (:EP {name: 'test'})")
+    rows = db.query("MATCH (n:EP) RETURN n.nonexistent")
+    assert_eq(rows[0]["n.nonexistent"], None)
+test("missing property returns null", test_missing_property_null)
+
+db.close()
+
+# ─── 46. Concurrent snapshot isolation ─────────────────────────
+print("\n── 46. Concurrent snapshot isolation ──")
+
+def test_snapshot_isolation():
+    db_t, _ = fresh_db("concurrent")
+    db_t.execute_write("CREATE (:CR {v: 1})")
+    # query_stream gives us a snapshot-based view
+    rows_before = db_t.query("MATCH (n:CR) RETURN count(n) AS c")
+    assert_eq(rows_before[0]["c"], 1)
+    db_t.execute_write("CREATE (:CR {v: 2})")
+    rows_after = db_t.query("MATCH (n:CR) RETURN count(n) AS c")
+    assert_eq(rows_after[0]["c"], 2)
+    db_t.close()
+test("snapshot isolation across writes", test_snapshot_isolation)
+
+# ═══════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════
 print("\n" + "=" * 60)

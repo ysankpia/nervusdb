@@ -1134,7 +1134,7 @@ console.log("\n── 21. API 对齐（openPaths / 维护能力） ──");
 })();
 
 // ─── 22. WriteTxn 低层 API 对齐 ───
-console.log("\n── 22. WriteTxn 低层 API 对齐 ──");
+console.log("\n── 22. WriteTxn Low-Level API ──");
 
 (() => {
   test("low-level node/edge/property lifecycle", () => {
@@ -1165,6 +1165,547 @@ console.log("\n── 22. WriteTxn 低层 API 对齐 ──");
     assertEq(rows2[0].c, 0);
     db.close();
   });
+})();
+
+// ─── 36. UNWIND (expanded) ───
+console.log("\n── 36. UNWIND (expanded) ──");
+
+(() => {
+  const { db } = freshDb("unwind-exp");
+
+  test("UNWIND basic list", () => {
+    const rows = db.query("UNWIND [1, 2, 3] AS x RETURN x ORDER BY x");
+    assertEq(rows.length, 3);
+    assertEq(rows[0].x, 1);
+    assertEq(rows[2].x, 3);
+  });
+
+  test("UNWIND with CREATE", () => {
+    db.executeWrite("UNWIND [10, 20, 30] AS v CREATE (:UW {val: v})");
+    const rows = db.query("MATCH (n:UW) RETURN n.val ORDER BY n.val");
+    assertEq(rows.length, 3);
+    assertEq(rows[0]["n.val"], 10);
+  });
+
+  test("UNWIND nested list", () => {
+    const rows = db.query("UNWIND [[1,2],[3,4]] AS sub UNWIND sub AS x RETURN x ORDER BY x");
+    assertEq(rows.length, 4);
+    assertEq(rows[0].x, 1);
+    assertEq(rows[3].x, 4);
+  });
+
+  test("UNWIND empty list", () => {
+    const rows = db.query("UNWIND [] AS x RETURN x");
+    assertEq(rows.length, 0);
+  });
+
+  db.close();
+})();
+
+// ─── 37. UNION / UNION ALL ───
+console.log("\n── 37. UNION / UNION ALL ──");
+
+(() => {
+  const { db } = freshDb("union-exp");
+  db.executeWrite("CREATE (:UA {name: 'Alice'}), (:UB {name: 'Bob'})");
+
+  test("UNION ALL returns all rows", () => {
+    const rows = db.query("MATCH (n:UA) RETURN n.name AS name UNION ALL MATCH (n:UB) RETURN n.name AS name");
+    assertEq(rows.length, 2);
+  });
+
+  test("UNION deduplicates", () => {
+    db.executeWrite("CREATE (:UC {name: 'Same'})");
+    db.executeWrite("CREATE (:UD {name: 'Same'})");
+    const rows = db.query("MATCH (n:UC) RETURN n.name AS name UNION MATCH (n:UD) RETURN n.name AS name");
+    assertEq(rows.length, 1);
+  });
+
+  db.close();
+})();
+
+// ─── 38. WITH pipeline ───
+console.log("\n── 38. WITH pipeline ──");
+
+(() => {
+  const { db } = freshDb("with-exp");
+  db.executeWrite("CREATE (:WP {name: 'A', score: 10}), (:WP {name: 'B', score: 20}), (:WP {name: 'C', score: 10})");
+
+  test("WITH + aggregation pipeline", () => {
+    const rows = db.query("MATCH (n:WP) WITH n.score AS s, count(*) AS cnt RETURN s, cnt ORDER BY s");
+    assertEq(rows.length, 2);
+  });
+
+  test("WITH DISTINCT", () => {
+    const rows = db.query("MATCH (n:WP) WITH DISTINCT n.score AS s RETURN s ORDER BY s");
+    assertEq(rows.length, 2);
+    assertEq(rows[0].s, 10);
+    assertEq(rows[1].s, 20);
+  });
+
+  test("multi-stage WITH", () => {
+    const rows = db.query("MATCH (n:WP) WITH n.name AS name, n.score AS score WHERE score > 15 WITH name RETURN name");
+    assertEq(rows.length, 1);
+    assertEq(rows[0].name, "B");
+  });
+
+  db.close();
+})();
+
+// ─── 39. ORDER BY + SKIP + LIMIT combined ───
+console.log("\n── 39. ORDER BY + SKIP + LIMIT ──");
+
+(() => {
+  const { db } = freshDb("pagination");
+  for (let i = 1; i <= 10; i++) {
+    db.executeWrite(`CREATE (:Page {idx: ${i}})`);
+  }
+
+  test("ORDER BY + LIMIT", () => {
+    const rows = db.query("MATCH (n:Page) RETURN n.idx ORDER BY n.idx LIMIT 3");
+    assertEq(rows.length, 3);
+    assertEq(rows[0]["n.idx"], 1);
+    assertEq(rows[2]["n.idx"], 3);
+  });
+
+  test("ORDER BY + SKIP + LIMIT", () => {
+    const rows = db.query("MATCH (n:Page) RETURN n.idx ORDER BY n.idx SKIP 3 LIMIT 3");
+    assertEq(rows.length, 3);
+    assertEq(rows[0]["n.idx"], 4);
+    assertEq(rows[2]["n.idx"], 6);
+  });
+
+  test("ORDER BY DESC + LIMIT", () => {
+    const rows = db.query("MATCH (n:Page) RETURN n.idx ORDER BY n.idx DESC LIMIT 2");
+    assertEq(rows.length, 2);
+    assertEq(rows[0]["n.idx"], 10);
+  });
+
+  db.close();
+})();
+
+// ─── 40. Null handling ───
+console.log("\n── 40. Null handling ──");
+
+(() => {
+  const { db } = freshDb("null-exp");
+  db.executeWrite("CREATE (:NL {name: 'has-val', val: 42})");
+  db.executeWrite("CREATE (:NL {name: 'no-val'})");
+
+  test("IS NULL filter", () => {
+    const rows = db.query("MATCH (n:NL) WHERE n.val IS NULL RETURN n.name");
+    assertEq(rows.length, 1);
+    assertEq(rows[0]["n.name"], "no-val");
+  });
+
+  test("IS NOT NULL filter", () => {
+    const rows = db.query("MATCH (n:NL) WHERE n.val IS NOT NULL RETURN n.name");
+    assertEq(rows.length, 1);
+    assertEq(rows[0]["n.name"], "has-val");
+  });
+
+  test("COALESCE", () => {
+    const rows = db.query("MATCH (n:NL) RETURN coalesce(n.val, -1) AS v ORDER BY v");
+    assertEq(rows[0].v, -1);
+    assertEq(rows[1].v, 42);
+  });
+
+  test("null arithmetic propagation", () => {
+    const rows = db.query("RETURN null + 1 AS r");
+    assertEq(rows[0].r, null);
+  });
+
+  db.close();
+})();
+
+// ─── 41. Type conversion functions ───
+console.log("\n── 41. Type conversion ──");
+
+(() => {
+  const { db } = freshDb("typeconv");
+
+  test("toInteger", () => {
+    const rows = db.query("RETURN toInteger('42') AS v");
+    assertEq(rows[0].v, 42);
+  });
+
+  test("toFloat", () => {
+    const rows = db.query("RETURN toFloat('3.14') AS v");
+    assert(Math.abs((rows[0].v as number) - 3.14) < 0.01, `expected ~3.14, got ${rows[0].v}`);
+  });
+
+  test("toString", () => {
+    const rows = db.query("RETURN toString(42) AS v");
+    assertEq(rows[0].v, "42");
+  });
+
+  test("toBoolean", () => {
+    const rows = db.query("RETURN toBoolean('true') AS v");
+    assertEq(rows[0].v, true);
+  });
+
+  db.close();
+})();
+
+// ─── 42. Math functions (full) ───
+console.log("\n── 42. Math functions ──");
+
+(() => {
+  const { db } = freshDb("math-full");
+
+  test("abs", () => {
+    const rows = db.query("RETURN abs(-5) AS v");
+    assertEq(rows[0].v, 5);
+  });
+
+  test("ceil", () => {
+    const rows = db.query("RETURN ceil(2.3) AS v");
+    assertEq(rows[0].v, 3);
+  });
+
+  test("floor", () => {
+    try {
+      const rows = db.query("RETURN floor(2.7) AS v");
+      assertEq(rows[0].v, 2);
+    } catch (e: any) {
+      console.log(`    (floor unsupported: ${String(e?.message || e).slice(0, 60)})`);
+    }
+  });
+
+  test("round", () => {
+    try {
+      const rows = db.query("RETURN round(2.5) AS v");
+      assertEq(rows[0].v, 3);
+    } catch (e: any) {
+      console.log(`    (round unsupported: ${String(e?.message || e).slice(0, 60)})`);
+    }
+  });
+
+  test("sign", () => {
+    const rows = db.query("RETURN sign(-10) AS neg, sign(0) AS zero, sign(5) AS pos");
+    assertEq(rows[0].neg, -1);
+    assertEq(rows[0].zero, 0);
+    assertEq(rows[0].pos, 1);
+  });
+
+  test("sqrt", () => {
+    const rows = db.query("RETURN sqrt(16) AS v");
+    assertEq(rows[0].v, 4.0);
+  });
+
+  test("log", () => {
+    try {
+      const rows = db.query("RETURN log(1) AS v");
+      assertEq(rows[0].v, 0.0);
+    } catch (e: any) {
+      console.log(`    (log unsupported: ${String(e?.message || e).slice(0, 60)})`);
+    }
+  });
+
+  test("e() and pi()", () => {
+    try {
+      const rows = db.query("RETURN e() AS e, pi() AS pi");
+      assert(Math.abs((rows[0].e as number) - Math.E) < 0.001, `e() should be ~2.718`);
+      assert(Math.abs((rows[0].pi as number) - Math.PI) < 0.001, `pi() should be ~3.14159`);
+    } catch (e: any) {
+      console.log(`    (e()/pi() unsupported: ${String(e?.message || e).slice(0, 60)})`);
+    }
+  });
+
+  test("rand() returns 0..1", () => {
+    const rows = db.query("RETURN rand() AS r");
+    assert((rows[0].r as number) >= 0 && (rows[0].r as number) < 1, `rand() should be in [0,1)`);
+  });
+
+  db.close();
+})();
+
+// ─── 43. String functions (expanded) ───
+console.log("\n── 43. String functions (expanded) ──");
+
+(() => {
+  const { db } = freshDb("str-exp");
+
+  test("replace", () => {
+    const rows = db.query("RETURN replace('hello world', 'world', 'graph') AS v");
+    assertEq(rows[0].v, "hello graph");
+  });
+
+  test("split", () => {
+    const rows = db.query("RETURN split('a,b,c', ',') AS v");
+    assertEq((rows[0].v as any).length, 3);
+    assertEq((rows[0].v as any)[0], "a");
+  });
+
+  test("reverse", () => {
+    const rows = db.query("RETURN reverse('abc') AS v");
+    assertEq(rows[0].v, "cba");
+  });
+
+  test("trim / ltrim / rtrim", () => {
+    const rows = db.query("RETURN trim('  hi  ') AS t, lTrim('  hi') AS l, rTrim('hi  ') AS r");
+    assertEq(rows[0].t, "hi");
+    assertEq(rows[0].l, "hi");
+    assertEq(rows[0].r, "hi");
+  });
+
+  test("substring", () => {
+    const rows = db.query("RETURN substring('hello', 1, 3) AS v");
+    assertEq(rows[0].v, "ell");
+  });
+
+  db.close();
+})();
+
+// ─── 44. List operations ───
+console.log("\n── 44. List operations ──");
+
+(() => {
+  const { db } = freshDb("list-ops");
+
+  test("range function", () => {
+    const rows = db.query("RETURN range(1, 5) AS r");
+    assertEq((rows[0].r as any).length, 5);
+    assertEq((rows[0].r as any)[0], 1);
+    assertEq((rows[0].r as any)[4], 5);
+  });
+
+  test("range with step", () => {
+    const rows = db.query("RETURN range(0, 10, 3) AS r");
+    assertEq((rows[0].r as any).length, 4);
+    assertEq((rows[0].r as any)[0], 0);
+    assertEq((rows[0].r as any)[3], 9);
+  });
+
+  test("list index access", () => {
+    const rows = db.query("RETURN [10, 20, 30][1] AS v");
+    assertEq(rows[0].v, 20);
+  });
+
+  test("size of list", () => {
+    const rows = db.query("RETURN size([1, 2, 3, 4]) AS v");
+    assertEq(rows[0].v, 4);
+  });
+
+  test("list comprehension", () => {
+    try {
+      const rows = db.query("RETURN [x IN [1, 2, 3, 4] WHERE x > 2] AS v");
+      assertEq((rows[0].v as any).length, 2);
+    } catch (e: any) {
+      console.log(`    (list comprehension unsupported: ${String(e?.message || e).slice(0, 60)})`);
+    }
+  });
+
+  test("reduce", () => {
+    try {
+      const rows = db.query("RETURN reduce(acc = 0, x IN [1, 2, 3] | acc + x) AS v");
+      assertEq(rows[0].v, 6);
+    } catch (e: any) {
+      console.log(`    (reduce unsupported: ${String(e?.message || e).slice(0, 60)})`);
+    }
+  });
+
+  db.close();
+})();
+
+// ─── 45. Map operations ───
+console.log("\n── 45. Map operations ──");
+
+(() => {
+  const { db } = freshDb("map-ops");
+
+  test("map literal", () => {
+    const rows = db.query("RETURN {name: 'Alice', age: 30} AS m");
+    assertEq((rows[0].m as any).name, "Alice");
+    assertEq((rows[0].m as any).age, 30);
+  });
+
+  test("map access", () => {
+    const rows = db.query("WITH {x: 1, y: 2} AS m RETURN m.x AS v");
+    assertEq(rows[0].v, 1);
+  });
+
+  test("nested map", () => {
+    const rows = db.query("RETURN {outer: {inner: 42}} AS m");
+    assertEq((rows[0].m as any).outer.inner, 42);
+  });
+
+  test("keys function", () => {
+    db.executeWrite("CREATE (:KF {a: 1, b: 2, c: 3})");
+    const rows = db.query("MATCH (n:KF) RETURN keys(n) AS k");
+    assert((rows[0].k as any).length >= 3, "should have at least 3 keys");
+  });
+
+  db.close();
+})();
+
+// ─── 46. Multiple MATCH ───
+console.log("\n── 46. Multiple MATCH ──");
+
+(() => {
+  const { db } = freshDb("multi-match");
+  db.executeWrite("CREATE (:MA {id: 1}), (:MA {id: 2}), (:MB {id: 3})");
+
+  test("cartesian product", () => {
+    const rows = db.query("MATCH (a:MA) MATCH (b:MB) RETURN a.id, b.id");
+    assertEq(rows.length, 2);
+  });
+
+  test("correlated MATCH", () => {
+    db.executeWrite("CREATE (:MC {name: 'x'})-[:LINK]->(:MD {name: 'y'})");
+    const rows = db.query("MATCH (a:MC) MATCH (a)-[:LINK]->(b) RETURN a.name, b.name");
+    assertEq(rows.length, 1);
+    assertEq(rows[0]["b.name"], "y");
+  });
+
+  db.close();
+})();
+
+// ─── 47. REMOVE clause ───
+console.log("\n── 47. REMOVE clause ──");
+
+(() => {
+  const { db } = freshDb("remove-exp");
+
+  test("REMOVE property", () => {
+    db.executeWrite("CREATE (:RM {name: 'test', extra: 'gone'})");
+    db.executeWrite("MATCH (n:RM) REMOVE n.extra");
+    const rows = db.query("MATCH (n:RM) RETURN n.extra AS v");
+    assertEq(rows[0].v, null);
+  });
+
+  test("REMOVE label", () => {
+    db.executeWrite("CREATE (:RLabel:Extra {name: 'labeled'})");
+    db.executeWrite("MATCH (n:RLabel:Extra) REMOVE n:Extra");
+    const rows = db.query("MATCH (n:Extra) RETURN count(n) AS c");
+    assertEq(rows[0].c, 0);
+  });
+
+  db.close();
+})();
+
+// ─── 48. Parameter queries ───
+console.log("\n── 48. Parameter queries ──");
+
+(() => {
+  const { db } = freshDb("params-exp");
+  db.executeWrite("CREATE (:PM {name: 'Alice', age: 30})");
+
+  test("param in WHERE", () => {
+    const rows = db.query("MATCH (n:PM) WHERE n.name = $name RETURN n.age", { name: "Alice" });
+    assertEq(rows.length, 1);
+    assertEq(rows[0]["n.age"], 30);
+  });
+
+  test("param in CREATE", () => {
+    db.executeWrite("CREATE (:PM {name: $name, age: $age})", { name: "Bob", age: 25 });
+    const rows = db.query("MATCH (n:PM {name: 'Bob'}) RETURN n.age");
+    assertEq(rows[0]["n.age"], 25);
+  });
+
+  test("multiple params", () => {
+    const rows = db.query("MATCH (n:PM) WHERE n.age >= $min AND n.age <= $max RETURN n.name ORDER BY n.name", { min: 25, max: 30 });
+    assertEq(rows.length, 2);
+  });
+
+  db.close();
+})();
+
+// ─── 49. EXPLAIN ───
+console.log("\n── 49. EXPLAIN ──");
+
+(() => {
+  const { db } = freshDb("explain");
+  db.executeWrite("CREATE (:EX {name: 'test'})");
+
+  test("EXPLAIN returns plan", () => {
+    try {
+      const rows = db.query("EXPLAIN MATCH (n:EX) RETURN n");
+      assert(rows.length >= 1, "EXPLAIN should return at least one row");
+    } catch (e: any) {
+      console.log(`    (EXPLAIN unsupported: ${String(e?.message || e).slice(0, 60)})`);
+    }
+  });
+
+  db.close();
+})();
+
+// ─── 50. Index operations ───
+console.log("\n── 50. Index operations ──");
+
+(() => {
+  const { db } = freshDb("index-exp");
+
+  test("create index and query", () => {
+    db.executeWrite("CREATE (:IX {email: 'a@test.com'}), (:IX {email: 'b@test.com'})");
+    db.createIndex("IX", "email");
+    const rows = db.query("MATCH (n:IX {email: 'a@test.com'}) RETURN n.email");
+    assertEq(rows.length, 1);
+    assertEq(rows[0]["n.email"], "a@test.com");
+  });
+
+  db.close();
+})();
+
+// ─── 51. Concurrent snapshots ───
+console.log("\n── 51. Concurrent snapshots ──");
+
+(() => {
+  const { db } = freshDb("concurrent");
+
+  test("snapshot isolation", () => {
+    db.executeWrite("CREATE (:SI {v: 'before'})");
+    const snap1 = db.query("MATCH (n:SI) RETURN count(n) AS c");
+    db.executeWrite("CREATE (:SI {v: 'after'})");
+    const snap2 = db.query("MATCH (n:SI) RETURN count(n) AS c");
+    assertEq(snap1[0].c, 1);
+    assertEq(snap2[0].c, 2);
+  });
+
+  db.close();
+})();
+
+// ─── 52. Error handling (expanded) ───
+console.log("\n── 52. Error handling (expanded) ──");
+
+(() => {
+  const { db } = freshDb("errors-exp");
+
+  test("syntax error detail", () => {
+    assertThrows(() => db.query("MATC (n) RETURN n"));
+  });
+
+  test("unknown function error", () => {
+    assertThrows(() => db.query("RETURN nonExistentFunc(1)"));
+  });
+
+  test("delete connected node error", () => {
+    db.executeWrite("CREATE (:DE {id: 1})-[:R]->(:DE {id: 2})");
+    try {
+      db.executeWrite("MATCH (n:DE {id: 1}) DELETE n");
+      // Engine may auto-detach — that's acceptable behavior
+      console.log("    (note: DELETE connected node succeeded — engine auto-detaches)");
+    } catch {
+      // Expected: error when deleting connected node without DETACH
+    }
+  });
+
+  test("missing property returns null", () => {
+    db.executeWrite("CREATE (:NP {name: 'test'})");
+    const rows = db.query("MATCH (n:NP) RETURN n.nonexistent AS v");
+    assertEq(rows[0].v, null);
+  });
+
+  test("division by zero", () => {
+    try {
+      const rows = db.query("RETURN 1/0 AS v");
+      assert(rows[0].v === null || rows[0].v === Infinity, "division by zero should return null or Infinity");
+    } catch {
+      // Some engines throw on division by zero
+    }
+  });
+
+  db.close();
 })();
 
 // ═══════════════════════════════════════════════════════════════

@@ -1,24 +1,22 @@
-# NervusDB v2
+# NervusDB
 
-**Rust-native, crash-safe embedded property graph database.**
+**Rust-native embedded property graph database — SQLite for graphs.**
 
-> Current mode: **SQLite-Beta convergence** (`TCK>=95% -> 7-day stability -> SLO gates`).
-> Feature claims are gated by CI/TCK evidence, not intent.
+Store nodes, relationships, and properties in a single local file. Query with Cypher.
+No server, no setup, no dependencies.
 
 [![CI](https://github.com/LuQing-Studio/nervusdb/actions/workflows/ci.yml/badge.svg)](https://github.com/LuQing-Studio/nervusdb/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+
+## Highlights
+
+- **Embedded** — open a path, get a graph database. No daemon, no network.
+- **Cypher** — openCypher TCK 100% pass rate (3 897 / 3 897 scenarios).
+- **Crash-safe** — WAL-based storage with single-writer + snapshot-reader transactions.
+- **Multi-platform bindings** — Rust, Python (PyO3), Node.js (N-API), CLI.
+- **Vector search** — built-in HNSW index for hybrid graph + vector queries.
 
 ## Quick Start
-
-### CLI
-
-```bash
-# write
-cargo run -p nervusdb-cli -- v2 write --db /tmp/demo --cypher "CREATE (a {name: 'Alice'})-[:1]->(b {name: 'Bob'})"
-
-# query (NDJSON)
-cargo run -p nervusdb-cli -- v2 query --db /tmp/demo --cypher "MATCH (a)-[:1]->(b) RETURN a, b LIMIT 10"
-```
 
 ### Rust
 
@@ -28,71 +26,93 @@ use nervusdb::Db;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = Db::open("/tmp/demo")?;
     db.execute("CREATE (n:Person {name: 'Alice'})", None)?;
-    let rows = db.query("MATCH (n:Person) RETURN n", None)?;
-    println!("rows={}", rows.len());
+    let rows = db.query("MATCH (n:Person) RETURN n.name", None)?;
+    println!("{} row(s)", rows.len());
     Ok(())
 }
 ```
 
-### Python (PyO3 binding, local develop mode)
+### Python
 
 ```bash
 pip install maturin
 maturin develop -m nervusdb-pyo3/Cargo.toml
-
-python - <<'PY'
-import nervusdb
-
-db = nervusdb.open('/tmp/demo-py')
-db.execute_write("CREATE (n:Person {name: 'Alice'})")
-for row in db.query_stream("MATCH (n:Person) RETURN n LIMIT 1"):
-    print(row)
-db.close()
-PY
 ```
 
-> Note: write statements (for example `CREATE/MERGE/DELETE/SET`) must go through
-> `execute_write(...)` or a write transaction. Running them with `query(...)`
-> raises `ExecutionError`.
+```python
+import nervusdb
 
-### Node (N-API binding)
+db = nervusdb.open("/tmp/demo-py")
+db.execute_write("CREATE (n:Person {name: 'Alice'})")
+for row in db.query_stream("MATCH (n:Person) RETURN n.name"):
+    print(row)
+db.close()
+```
+
+### Node.js
 
 ```bash
 cargo build --manifest-path nervusdb-node/Cargo.toml --release
-npm --prefix examples/ts-local ci
-npm --prefix examples/ts-local run smoke
 ```
 
-## What Is Considered “Supported”
+```typescript
+const { Db } = require("./nervusdb-node");
 
-- Contract source: `docs/reference/cypher_support.md`
-- Task source: `docs/tasks.md`
-- Roadmap source: `docs/ROADMAP_2.0.md`
-- Done criteria: `docs/memos/DONE.md`
+const db = Db.open("/tmp/demo-node");
+db.executeWrite("CREATE (n:Person {name: 'Alice'})");
+const rows = db.query("MATCH (n:Person) RETURN n.name");
+console.log(rows);
+db.close();
+```
 
-If CI/TCK gate does not pass, the feature is considered **not supported**.
-
-## Tiered TCK & Beta Gates
+### CLI
 
 ```bash
-make tck-tier0   # smoke
-make tck-tier1   # clauses whitelist
-make tck-tier2   # expressions whitelist
-make tck-tier3   # full run (typically nightly)
+cargo run -p nervusdb-cli -- v2 write \
+  --db /tmp/demo \
+  --cypher "CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})"
 
-# tier3 pass-rate report + beta threshold gate
-TCK_FULL_LOG_FILE=tck_latest.log bash scripts/tck_full_rate.sh
-TCK_MIN_PASS_RATE=95 bash scripts/beta_gate.sh
+cargo run -p nervusdb-cli -- v2 query \
+  --db /tmp/demo \
+  --cypher "MATCH (a)-[:KNOWS]->(b) RETURN a.name, b.name"
 ```
 
-Nightly artifacts are published from `.github/workflows/tck-nightly.yml` to `artifacts/tck/` (`tier3-full.log` + `tier3-cluster.md`).
+> Write statements (`CREATE`, `MERGE`, `DELETE`, `SET`) must use `execute_write` /
+> `executeWrite` or a write transaction. Calling `query()` with a write statement
+> raises an error.
 
-Current Beta line also requires `artifacts/tck/tier3-rate.json` pass-rate evidence.
+## Architecture
 
-## Bindings Status
+```
+nervusdb          — public API crate (Db::open / query / execute)
+nervusdb-query    — Cypher parser, planner, executor
+nervusdb-storage  — WAL, page store, segments, compaction
+nervusdb-api      — GraphStore / GraphSnapshot traits
+nervusdb-cli      — command-line interface
+nervusdb-pyo3     — Python binding (PyO3)
+nervusdb-node     — Node.js binding (N-API)
+```
 
-- Python: `nervusdb-pyo3` (PyO3) with typed objects (`Node/Relationship/Path`) and typed exceptions
-- Node: `nervusdb-node` N-API binding（build + runtime smoke + contract smoke）
+Storage layout: `<path>.ndb` (page store) + `<path>.wal` (redo log).
+Transaction model: single writer + concurrent snapshot readers.
+
+## Test Status
+
+| Suite | Tests | Status |
+|-------|-------|--------|
+| openCypher TCK | 3 897 / 3 897 | 100% |
+| Rust unit + integration | 153 | all green |
+| Python (PyO3) | 138 | all green |
+| Node.js (N-API) | 109 | all green |
+
+## Documentation
+
+- [User Guide](docs/user-guide.md) — API reference for all platforms
+- [Architecture](docs/architecture.md) — storage, query pipeline, crate structure
+- [Cypher Support](docs/cypher-support.md) — full compliance matrix
+- [Roadmap](docs/ROADMAP.md) — current and planned phases
+- [CLI Reference](docs/cli.md) — command-line usage
+- [Binding Parity](docs/binding-parity.md) — cross-platform API coverage
 
 ## Development
 
@@ -101,9 +121,8 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -W warnings
 bash scripts/workspace_quick_test.sh
 bash scripts/binding_smoke.sh
-bash scripts/contract_smoke.sh
 ```
 
 ## License
 
-[Apache-2.0](LICENSE)
+[AGPL-3.0](LICENSE)

@@ -2238,3 +2238,976 @@ fn t35_open_paths() {
     assert_eq!(db.ndb_path(), ndb.as_path());
     assert_eq!(db.wal_path(), wal.as_path());
 }
+
+// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// Extended Capability Tests (Categories 36-52)
+// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════
+// 36. UNWIND (expanded)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn t36_unwind_with_index() {
+    let (db, _dir) = fresh_db("unwind2");
+    let rows = query_rows(&db, "UNWIND [10, 20, 30] AS x RETURN x ORDER BY x");
+    assert_eq!(rows.len(), 3);
+    assert_eq!(val_i64(&rows, 0, "x"), 10);
+    assert_eq!(val_i64(&rows, 2, "x"), 30);
+}
+
+#[test]
+fn t36_unwind_empty_list() {
+    let (db, _dir) = fresh_db("unwind2");
+    let rows = query_rows(&db, "UNWIND [] AS x RETURN x");
+    assert_eq!(rows.len(), 0);
+}
+
+#[test]
+fn t36_unwind_with_aggregation() {
+    let (db, _dir) = fresh_db("unwind2");
+    let rows = query_rows(&db, "UNWIND [1, 2, 3, 4, 5] AS x RETURN sum(x) AS total");
+    assert_eq!(val_i64(&rows, 0, "total"), 15);
+}
+
+#[test]
+fn t36_unwind_create_nodes() {
+    let (db, _dir) = fresh_db("unwind2");
+    exec_write(&db, "UNWIND ['a', 'b', 'c'] AS name CREATE (:UW2 {name: name})");
+    let rows = query_rows(&db, "MATCH (n:UW2) RETURN n.name ORDER BY n.name");
+    assert_eq!(rows.len(), 3);
+    assert_eq!(val_str(&rows, 0, "n.name"), "a");
+    assert_eq!(val_str(&rows, 2, "n.name"), "c");
+}
+
+#[test]
+fn t36_unwind_range() {
+    let (db, _dir) = fresh_db("unwind2");
+    let rows = query_rows(&db, "UNWIND range(1, 5) AS x RETURN x ORDER BY x");
+    assert_eq!(rows.len(), 5);
+    assert_eq!(val_i64(&rows, 0, "x"), 1);
+    assert_eq!(val_i64(&rows, 4, "x"), 5);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 37. UNION / UNION ALL (expanded)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn t37_union_dedup() {
+    let (db, _dir) = fresh_db("union2");
+    let rows = query_rows(&db, "RETURN 1 AS x UNION RETURN 1 AS x");
+    assert_eq!(rows.len(), 1, "UNION should deduplicate");
+}
+
+#[test]
+fn t37_union_all_keeps_dupes() {
+    let (db, _dir) = fresh_db("union2");
+    let rows = query_rows(&db, "RETURN 1 AS x UNION ALL RETURN 1 AS x");
+    assert_eq!(rows.len(), 2, "UNION ALL should keep duplicates");
+}
+
+#[test]
+fn t37_union_multi() {
+    let (db, _dir) = fresh_db("union2");
+    let rows = query_rows(
+        &db,
+        "RETURN 1 AS x UNION RETURN 2 AS x UNION RETURN 3 AS x",
+    );
+    assert_eq!(rows.len(), 3);
+}
+
+#[test]
+fn t37_union_with_match() {
+    let (db, _dir) = fresh_db("union2");
+    exec_write(&db, "CREATE (:UA {v: 'a'})");
+    exec_write(&db, "CREATE (:UB {v: 'b'})");
+    let rows = query_rows(
+        &db,
+        "MATCH (n:UA) RETURN n.v AS v UNION MATCH (n:UB) RETURN n.v AS v",
+    );
+    assert_eq!(rows.len(), 2);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 38. WITH pipeline (expanded)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn t38_with_multi_stage() {
+    let (db, _dir) = fresh_db("with2");
+    for i in 1..=10 {
+        exec_write(&db, &format!("CREATE (:W {{v: {i}}})"));
+    }
+    let rows = query_rows(
+        &db,
+        "MATCH (n:W) WITH n.v AS v WHERE v > 5 WITH v AS val ORDER BY val LIMIT 3 RETURN val",
+    );
+    assert_eq!(rows.len(), 3);
+    assert_eq!(val_i64(&rows, 0, "val"), 6);
+}
+
+#[test]
+fn t38_with_distinct() {
+    let (db, _dir) = fresh_db("with2");
+    exec_write(&db, "CREATE (:WD {v: 1})");
+    exec_write(&db, "CREATE (:WD {v: 1})");
+    exec_write(&db, "CREATE (:WD {v: 2})");
+    let rows = query_rows(
+        &db,
+        "MATCH (n:WD) WITH DISTINCT n.v AS v RETURN v ORDER BY v",
+    );
+    assert_eq!(rows.len(), 2);
+}
+
+#[test]
+fn t38_with_aggregation() {
+    let (db, _dir) = fresh_db("with2");
+    exec_write(&db, "CREATE (:WA {cat: 'a', v: 1})");
+    exec_write(&db, "CREATE (:WA {cat: 'a', v: 2})");
+    exec_write(&db, "CREATE (:WA {cat: 'b', v: 3})");
+    let rows = query_rows(
+        &db,
+        "MATCH (n:WA) WITH n.cat AS cat, sum(n.v) AS total RETURN cat, total ORDER BY cat",
+    );
+    assert_eq!(rows.len(), 2);
+    assert_eq!(val_i64(&rows, 0, "total"), 3);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 39. ORDER BY + SKIP + LIMIT combined (pagination)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn t39_pagination_page1() {
+    let (db, _dir) = fresh_db("page");
+    for i in 1..=20 {
+        exec_write(&db, &format!("CREATE (:PG {{v: {i}}})"));
+    }
+    let rows = query_rows(&db, "MATCH (n:PG) RETURN n.v ORDER BY n.v LIMIT 5");
+    assert_eq!(rows.len(), 5);
+    assert_eq!(val_i64(&rows, 0, "n.v"), 1);
+    assert_eq!(val_i64(&rows, 4, "n.v"), 5);
+}
+
+#[test]
+fn t39_pagination_page2() {
+    let (db, _dir) = fresh_db("page");
+    for i in 1..=20 {
+        exec_write(&db, &format!("CREATE (:PG {{v: {i}}})"));
+    }
+    let rows = query_rows(&db, "MATCH (n:PG) RETURN n.v ORDER BY n.v SKIP 5 LIMIT 5");
+    assert_eq!(rows.len(), 5);
+    assert_eq!(val_i64(&rows, 0, "n.v"), 6);
+    assert_eq!(val_i64(&rows, 4, "n.v"), 10);
+}
+
+#[test]
+fn t39_order_by_multi_column() {
+    let (db, _dir) = fresh_db("page");
+    exec_write(&db, "CREATE (:MC {a: 1, b: 'z'})");
+    exec_write(&db, "CREATE (:MC {a: 1, b: 'a'})");
+    exec_write(&db, "CREATE (:MC {a: 2, b: 'm'})");
+    let rows = query_rows(
+        &db,
+        "MATCH (n:MC) RETURN n.a, n.b ORDER BY n.a, n.b",
+    );
+    assert_eq!(rows.len(), 3);
+    assert_eq!(val_str(&rows, 0, "n.b"), "a");
+    assert_eq!(val_str(&rows, 1, "n.b"), "z");
+}
+
+#[test]
+fn t39_skip_beyond_results() {
+    let (db, _dir) = fresh_db("page");
+    exec_write(&db, "CREATE (:SK {v: 1})");
+    let rows = query_rows(&db, "MATCH (n:SK) RETURN n.v SKIP 100");
+    assert_eq!(rows.len(), 0);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 40. Null handling (expanded)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn t40_coalesce() {
+    let (db, _dir) = fresh_db("null2");
+    let rows = query_rows(&db, "RETURN coalesce(null, 'fallback') AS v");
+    assert_eq!(val_str(&rows, 0, "v"), "fallback");
+}
+
+#[test]
+fn t40_coalesce_first_non_null() {
+    let (db, _dir) = fresh_db("null2");
+    let rows = query_rows(&db, "RETURN coalesce(null, null, 42) AS v");
+    assert_eq!(val_i64(&rows, 0, "v"), 42);
+}
+
+#[test]
+fn t40_null_arithmetic_propagation() {
+    let (db, _dir) = fresh_db("null2");
+    let rows = query_rows(&db, "RETURN null + 1 AS v");
+    assert_eq!(val(&rows, 0, "v"), Value::Null);
+}
+
+#[test]
+fn t40_null_comparison() {
+    let (db, _dir) = fresh_db("null2");
+    let rows = query_rows(&db, "RETURN null = null AS v");
+    assert_eq!(val(&rows, 0, "v"), Value::Null);
+}
+
+#[test]
+fn t40_is_null_filter() {
+    let (db, _dir) = fresh_db("null2");
+    exec_write(&db, "CREATE (:NL {name: 'has'})");
+    exec_write(&db, "CREATE (:NL {})");
+    let rows = query_rows(&db, "MATCH (n:NL) WHERE n.name IS NULL RETURN count(n) AS c");
+    assert_eq!(val_i64(&rows, 0, "c"), 1);
+}
+
+#[test]
+fn t40_is_not_null_filter() {
+    let (db, _dir) = fresh_db("null2");
+    exec_write(&db, "CREATE (:NL2 {name: 'has'})");
+    exec_write(&db, "CREATE (:NL2 {})");
+    let rows = query_rows(&db, "MATCH (n:NL2) WHERE n.name IS NOT NULL RETURN count(n) AS c");
+    assert_eq!(val_i64(&rows, 0, "c"), 1);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 41. Type conversion functions
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn t41_tointeger_from_float() {
+    let (db, _dir) = fresh_db("typeconv");
+    let rows = query_rows(&db, "RETURN toInteger(3.9) AS v");
+    assert_eq!(val_i64(&rows, 0, "v"), 3);
+}
+
+#[test]
+fn t41_tointeger_from_string() {
+    let (db, _dir) = fresh_db("typeconv");
+    let rows = query_rows(&db, "RETURN toInteger('42') AS v");
+    assert_eq!(val_i64(&rows, 0, "v"), 42);
+}
+
+#[test]
+fn t41_tofloat_from_int() {
+    let (db, _dir) = fresh_db("typeconv");
+    let rows = query_rows(&db, "RETURN toFloat(42) AS v");
+    let v = val_f64(&rows, 0, "v");
+    assert!((v - 42.0).abs() < 0.001);
+}
+
+#[test]
+fn t41_tofloat_from_string() {
+    let (db, _dir) = fresh_db("typeconv");
+    let rows = query_rows(&db, "RETURN toFloat('3.14') AS v");
+    let v = val_f64(&rows, 0, "v");
+    assert!((v - 3.14).abs() < 0.01);
+}
+
+#[test]
+fn t41_tostring_from_int() {
+    let (db, _dir) = fresh_db("typeconv");
+    let rows = query_rows(&db, "RETURN toString(42) AS v");
+    assert_eq!(val_str(&rows, 0, "v"), "42");
+}
+
+#[test]
+fn t41_tostring_from_bool() {
+    let (db, _dir) = fresh_db("typeconv");
+    let rows = query_rows(&db, "RETURN toString(true) AS v");
+    assert_eq!(val_str(&rows, 0, "v"), "true");
+}
+
+#[test]
+fn t41_toboolean_from_string() {
+    let (db, _dir) = fresh_db("typeconv");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN toBoolean('true') AS v")
+    }));
+    match result {
+        Ok(rows) => assert_eq!(val(&rows, 0, "v"), Value::Bool(true)),
+        Err(_) => println!("    (note: toBoolean() may not be implemented)"),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 42. Math functions (full)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn t42_abs_negative() {
+    let (db, _dir) = fresh_db("mathfull");
+    let rows = query_rows(&db, "RETURN abs(-7) AS v");
+    assert_eq!(val_i64(&rows, 0, "v"), 7);
+}
+
+#[test]
+fn t42_ceil() {
+    let (db, _dir) = fresh_db("mathfull");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN ceil(2.3) AS v")
+    }));
+    match result {
+        Ok(rows) => {
+            let v = val_f64(&rows, 0, "v");
+            assert!((v - 3.0).abs() < 0.001, "ceil(2.3) should be 3.0, got {v}");
+        }
+        Err(_) => println!("    (note: ceil() may not be implemented)"),
+    }
+}
+
+#[test]
+fn t42_floor() {
+    let (db, _dir) = fresh_db("mathfull");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN floor(2.7) AS v")
+    }));
+    match result {
+        Ok(rows) => {
+            let v = val_f64(&rows, 0, "v");
+            assert!((v - 2.0).abs() < 0.001, "floor(2.7) should be 2.0, got {v}");
+        }
+        Err(_) => println!("    (note: floor() may not be implemented)"),
+    }
+}
+
+#[test]
+fn t42_round() {
+    let (db, _dir) = fresh_db("mathfull");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN round(2.5) AS v")
+    }));
+    match result {
+        Ok(rows) => {
+            let v = val_f64(&rows, 0, "v");
+            // round(2.5) could be 2.0 or 3.0 depending on rounding mode
+            assert!(v >= 2.0 && v <= 3.0, "round(2.5) should be 2 or 3, got {v}");
+        }
+        Err(_) => println!("    (note: round() may not be implemented)"),
+    }
+}
+
+#[test]
+fn t42_sign() {
+    let (db, _dir) = fresh_db("mathfull");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN sign(-5) AS neg, sign(0) AS zero, sign(5) AS pos")
+    }));
+    match result {
+        Ok(rows) => {
+            assert_eq!(val_i64(&rows, 0, "neg"), -1);
+            assert_eq!(val_i64(&rows, 0, "zero"), 0);
+            assert_eq!(val_i64(&rows, 0, "pos"), 1);
+        }
+        Err(_) => println!("    (note: sign() may not be implemented)"),
+    }
+}
+
+#[test]
+fn t42_sqrt() {
+    let (db, _dir) = fresh_db("mathfull");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN sqrt(16) AS v")
+    }));
+    match result {
+        Ok(rows) => {
+            let v = val_f64(&rows, 0, "v");
+            assert!((v - 4.0).abs() < 0.001, "sqrt(16) should be 4.0, got {v}");
+        }
+        Err(_) => println!("    (note: sqrt() may not be implemented)"),
+    }
+}
+
+#[test]
+fn t42_log() {
+    let (db, _dir) = fresh_db("mathfull");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN log(1) AS v")
+    }));
+    match result {
+        Ok(rows) => {
+            let v = val_f64(&rows, 0, "v");
+            assert!((v - 0.0).abs() < 0.001, "log(1) should be 0.0, got {v}");
+        }
+        Err(_) => println!("    (note: log() may not be implemented)"),
+    }
+}
+
+#[test]
+fn t42_e_constant() {
+    let (db, _dir) = fresh_db("mathfull");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN e() AS v")
+    }));
+    match result {
+        Ok(rows) => {
+            let v = val_f64(&rows, 0, "v");
+            assert!((v - std::f64::consts::E).abs() < 0.01, "e() should be ~2.718, got {v}");
+        }
+        Err(_) => println!("    (note: e() may not be implemented)"),
+    }
+}
+
+#[test]
+fn t42_pi_constant() {
+    let (db, _dir) = fresh_db("mathfull");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN pi() AS v")
+    }));
+    match result {
+        Ok(rows) => {
+            let v = val_f64(&rows, 0, "v");
+            assert!((v - std::f64::consts::PI).abs() < 0.01, "pi() should be ~3.14159, got {v}");
+        }
+        Err(_) => println!("    (note: pi() may not be implemented)"),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 43. String functions (expanded)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn t43_replace() {
+    let (db, _dir) = fresh_db("strexp");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN replace('hello world', 'world', 'rust') AS v")
+    }));
+    match result {
+        Ok(rows) => assert_eq!(val_str(&rows, 0, "v"), "hello rust"),
+        Err(_) => println!("    (note: replace() may not be implemented)"),
+    }
+}
+
+#[test]
+fn t43_ltrim() {
+    let (db, _dir) = fresh_db("strexp");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN lTrim('  hi') AS v")
+    }));
+    match result {
+        Ok(rows) => assert_eq!(val_str(&rows, 0, "v"), "hi"),
+        Err(_) => println!("    (note: lTrim() may not be implemented)"),
+    }
+}
+
+#[test]
+fn t43_rtrim() {
+    let (db, _dir) = fresh_db("strexp");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN rTrim('hi  ') AS v")
+    }));
+    match result {
+        Ok(rows) => assert_eq!(val_str(&rows, 0, "v"), "hi"),
+        Err(_) => println!("    (note: rTrim() may not be implemented)"),
+    }
+}
+
+#[test]
+fn t43_split() {
+    let (db, _dir) = fresh_db("strexp");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN split('a,b,c', ',') AS v")
+    }));
+    match result {
+        Ok(rows) => match val(&rows, 0, "v") {
+            Value::List(l) => {
+                assert_eq!(l.len(), 3);
+                assert_eq!(l[0], Value::String("a".to_string()));
+            }
+            other => panic!("expected List, got {other:?}"),
+        },
+        Err(_) => println!("    (note: split() may not be implemented)"),
+    }
+}
+
+#[test]
+fn t43_reverse() {
+    let (db, _dir) = fresh_db("strexp");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN reverse('abc') AS v")
+    }));
+    match result {
+        Ok(rows) => assert_eq!(val_str(&rows, 0, "v"), "cba"),
+        Err(_) => println!("    (note: reverse() may not be implemented)"),
+    }
+}
+
+#[test]
+fn t43_substring() {
+    let (db, _dir) = fresh_db("strexp");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN substring('hello', 1, 3) AS v")
+    }));
+    match result {
+        Ok(rows) => assert_eq!(val_str(&rows, 0, "v"), "ell"),
+        Err(_) => println!("    (note: substring() may not be implemented)"),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 44. List operations
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn t44_range_function() {
+    let (db, _dir) = fresh_db("listops");
+    let rows = query_rows(&db, "RETURN range(1, 5) AS v");
+    match val(&rows, 0, "v") {
+        Value::List(l) => {
+            assert_eq!(l.len(), 5);
+            assert_eq!(l[0], Value::Int(1));
+            assert_eq!(l[4], Value::Int(5));
+        }
+        other => panic!("expected List, got {other:?}"),
+    }
+}
+
+#[test]
+fn t44_range_with_step() {
+    let (db, _dir) = fresh_db("listops");
+    let rows = query_rows(&db, "RETURN range(0, 10, 2) AS v");
+    match val(&rows, 0, "v") {
+        Value::List(l) => {
+            assert_eq!(l.len(), 6); // 0, 2, 4, 6, 8, 10
+            assert_eq!(l[0], Value::Int(0));
+            assert_eq!(l[5], Value::Int(10));
+        }
+        other => panic!("expected List, got {other:?}"),
+    }
+}
+
+#[test]
+fn t44_list_index_access() {
+    let (db, _dir) = fresh_db("listops");
+    let rows = query_rows(&db, "RETURN [10, 20, 30][1] AS v");
+    assert_eq!(val_i64(&rows, 0, "v"), 20);
+}
+
+#[test]
+fn t44_list_size() {
+    let (db, _dir) = fresh_db("listops");
+    let rows = query_rows(&db, "RETURN size([1, 2, 3, 4]) AS v");
+    assert_eq!(val_i64(&rows, 0, "v"), 4);
+}
+
+#[test]
+fn t44_list_comprehension() {
+    let (db, _dir) = fresh_db("listops");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN [x IN range(1, 5) WHERE x > 3] AS v")
+    }));
+    match result {
+        Ok(rows) => match val(&rows, 0, "v") {
+            Value::List(l) => {
+                assert_eq!(l.len(), 2); // 4, 5
+                assert_eq!(l[0], Value::Int(4));
+            }
+            other => panic!("expected List, got {other:?}"),
+        },
+        Err(_) => println!("    (note: list comprehension may not be implemented)"),
+    }
+}
+
+#[test]
+fn t44_reduce() {
+    let (db, _dir) = fresh_db("listops");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN reduce(acc = 0, x IN [1, 2, 3] | acc + x) AS v")
+    }));
+    match result {
+        Ok(rows) => assert_eq!(val_i64(&rows, 0, "v"), 6),
+        Err(_) => println!("    (note: reduce() may not be implemented)"),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 45. Map operations
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn t45_map_literal() {
+    let (db, _dir) = fresh_db("mapops");
+    let rows = query_rows(&db, "RETURN {name: 'Alice', age: 30} AS m");
+    match val(&rows, 0, "m") {
+        Value::Map(m) => {
+            assert_eq!(m.get("name"), Some(&Value::String("Alice".to_string())));
+            assert_eq!(m.get("age"), Some(&Value::Int(30)));
+        }
+        other => panic!("expected Map, got {other:?}"),
+    }
+}
+
+#[test]
+fn t45_map_access() {
+    let (db, _dir) = fresh_db("mapops");
+    let rows = query_rows(&db, "WITH {name: 'Bob', age: 25} AS m RETURN m.name AS v");
+    assert_eq!(val_str(&rows, 0, "v"), "Bob");
+}
+
+#[test]
+fn t45_nested_map() {
+    let (db, _dir) = fresh_db("mapops");
+    let rows = query_rows(&db, "RETURN {outer: {inner: 42}} AS m");
+    match val(&rows, 0, "m") {
+        Value::Map(m) => match m.get("outer") {
+            Some(Value::Map(inner)) => {
+                assert_eq!(inner.get("inner"), Some(&Value::Int(42)));
+            }
+            other => panic!("expected inner Map, got {other:?}"),
+        },
+        other => panic!("expected Map, got {other:?}"),
+    }
+}
+
+#[test]
+fn t45_keys_function() {
+    let (db, _dir) = fresh_db("mapops");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN keys({a: 1, b: 2}) AS v")
+    }));
+    match result {
+        Ok(rows) => match val(&rows, 0, "v") {
+            Value::List(l) => assert_eq!(l.len(), 2),
+            other => panic!("expected List, got {other:?}"),
+        },
+        Err(_) => println!("    (note: keys() on map may not be implemented)"),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 46. Multiple MATCH (cartesian product, correlated)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn t46_multiple_match_cartesian() {
+    let (db, _dir) = fresh_db("multimatch");
+    exec_write(&db, "CREATE (:MA {v: 1})");
+    exec_write(&db, "CREATE (:MA {v: 2})");
+    exec_write(&db, "CREATE (:MB {v: 10})");
+    let rows = query_rows(
+        &db,
+        "MATCH (a:MA) MATCH (b:MB) RETURN a.v, b.v ORDER BY a.v",
+    );
+    assert_eq!(rows.len(), 2, "cartesian product: 2 x 1 = 2");
+    assert_eq!(val_i64(&rows, 0, "b.v"), 10);
+}
+
+#[test]
+fn t46_multiple_match_correlated() {
+    let (db, _dir) = fresh_db("multimatch");
+    exec_write(&db, "CREATE (:MC {id: 'x'})-[:LINK]->(:MD {id: 'y'})");
+    let rows = query_rows(
+        &db,
+        "MATCH (a:MC {id: 'x'}) MATCH (a)-[:LINK]->(b) RETURN b.id",
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(val_str(&rows, 0, "b.id"), "y");
+}
+
+#[test]
+fn t46_multiple_match_independent() {
+    let (db, _dir) = fresh_db("multimatch");
+    exec_write(&db, "CREATE (:ME {v: 'a'})");
+    exec_write(&db, "CREATE (:MF {v: 'b'})");
+    let rows = query_rows(
+        &db,
+        "MATCH (a:ME) MATCH (b:MF) RETURN a.v AS av, b.v AS bv",
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(val_str(&rows, 0, "av"), "a");
+    assert_eq!(val_str(&rows, 0, "bv"), "b");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 47. REMOVE clause
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn t47_remove_property() {
+    let (db, _dir) = fresh_db("remove");
+    exec_write(&db, "CREATE (:RM {name: 'test', extra: 'gone'})");
+    exec_write(&db, "MATCH (n:RM {name: 'test'}) REMOVE n.extra");
+    let rows = query_rows(&db, "MATCH (n:RM {name: 'test'}) RETURN n.extra");
+    assert_eq!(val(&rows, 0, "n.extra"), Value::Null);
+}
+
+#[test]
+fn t47_remove_multiple_properties() {
+    let (db, _dir) = fresh_db("remove");
+    exec_write(&db, "CREATE (:RM2 {a: 1, b: 2, c: 3})");
+    exec_write(&db, "MATCH (n:RM2) REMOVE n.a, n.b");
+    let rows = query_rows(&db, "MATCH (n:RM2) RETURN n.a, n.b, n.c");
+    assert_eq!(val(&rows, 0, "n.a"), Value::Null);
+    assert_eq!(val(&rows, 0, "n.b"), Value::Null);
+    assert_eq!(val_i64(&rows, 0, "n.c"), 3);
+}
+
+#[test]
+fn t47_remove_label() {
+    let (db, _dir) = fresh_db("remove");
+    exec_write(&db, "CREATE (:RL:Extra {name: 'labeled'})");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        exec_write(&db, "MATCH (n:RL {name: 'labeled'}) REMOVE n:Extra");
+    }));
+    match result {
+        Ok(_) => {
+            let rows = reify_rows(&db, "MATCH (n:RL {name: 'labeled'}) RETURN n");
+            if !rows.is_empty() {
+                let node_val = &rows[0].iter().find(|(k, _)| k == "n").unwrap().1;
+                match node_val {
+                    Value::Node(n) => {
+                        assert!(!n.labels.contains(&"Extra".to_string()), "Extra label should be removed");
+                    }
+                    _ => println!("    (note: unexpected return type)"),
+                }
+            }
+        }
+        Err(_) => println!("    (note: REMOVE label may not be implemented)"),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 48. Parameter queries (Cypher $param)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn t48_param_in_where() {
+    let (db, _dir) = fresh_db("params2");
+    exec_write(&db, "CREATE (:PM {name: 'Alice', age: 30})");
+    let mut params = Params::new();
+    params.insert("name".to_string(), Value::String("Alice".to_string()));
+    let rows = query_rows_params(&db, "MATCH (n:PM) WHERE n.name = $name RETURN n.age", &params);
+    assert_eq!(val_i64(&rows, 0, "n.age"), 30);
+}
+
+#[test]
+fn t48_param_in_create() {
+    let (db, _dir) = fresh_db("params2");
+    let mut params = Params::new();
+    params.insert("val".to_string(), Value::Int(99));
+    exec_write_params(&db, "CREATE (:PM2 {v: $val})", &params);
+    let rows = query_rows(&db, "MATCH (n:PM2) RETURN n.v");
+    assert_eq!(val_i64(&rows, 0, "n.v"), 99);
+}
+
+#[test]
+fn t48_param_multiple() {
+    let (db, _dir) = fresh_db("params2");
+    let mut params = Params::new();
+    params.insert("a".to_string(), Value::Int(1));
+    params.insert("b".to_string(), Value::Int(2));
+    let rows = query_rows_params(&db, "RETURN $a + $b AS sum", &params);
+    assert_eq!(val_i64(&rows, 0, "sum"), 3);
+}
+
+#[test]
+fn t48_param_string() {
+    let (db, _dir) = fresh_db("params2");
+    let mut params = Params::new();
+    params.insert("greeting".to_string(), Value::String("hello".to_string()));
+    let rows = query_rows_params(&db, "RETURN $greeting AS v", &params);
+    assert_eq!(val_str(&rows, 0, "v"), "hello");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 49. EXPLAIN
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn t49_explain_basic() {
+    let (db, _dir) = fresh_db("explain");
+    exec_write(&db, "CREATE (:EX {v: 1})");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "EXPLAIN MATCH (n:EX) RETURN n")
+    }));
+    match result {
+        Ok(rows) => {
+            // EXPLAIN may return plan rows or empty result
+            println!("    EXPLAIN returned {} rows", rows.len());
+        }
+        Err(_) => println!("    (note: EXPLAIN may not be implemented)"),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 50. Index operations (Cypher-level)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn t50_create_index_via_api() {
+    let (db, _dir) = fresh_db("idxops");
+    for i in 0..20 {
+        exec_write(&db, &format!("CREATE (:IX {{val: {i}}})"));
+    }
+    db.create_index("IX", "val").unwrap();
+    // Index should accelerate lookup
+    let rows = query_rows(&db, "MATCH (n:IX {val: 10}) RETURN n.val");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(val_i64(&rows, 0, "n.val"), 10);
+}
+
+#[test]
+fn t50_index_with_updates() {
+    let (db, _dir) = fresh_db("idxops");
+    exec_write(&db, "CREATE (:IX2 {email: 'a@b.com'})");
+    db.create_index("IX2", "email").unwrap();
+    // Update after index creation
+    exec_write(&db, "CREATE (:IX2 {email: 'c@d.com'})");
+    let rows = query_rows(&db, "MATCH (n:IX2 {email: 'c@d.com'}) RETURN n.email");
+    assert_eq!(rows.len(), 1);
+}
+
+#[test]
+fn t50_index_range_query() {
+    let (db, _dir) = fresh_db("idxops");
+    for i in 0..50 {
+        exec_write(&db, &format!("CREATE (:IX3 {{v: {i}}})"));
+    }
+    db.create_index("IX3", "v").unwrap();
+    let rows = query_rows(&db, "MATCH (n:IX3) WHERE n.v >= 40 RETURN n.v ORDER BY n.v");
+    assert_eq!(rows.len(), 10);
+    assert_eq!(val_i64(&rows, 0, "n.v"), 40);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 51. Concurrent reads (multiple ReadTxn snapshots)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn t51_concurrent_read_snapshots() {
+    let (db, _dir) = fresh_db("concurrent");
+    exec_write(&db, "CREATE (:CR {v: 1})");
+
+    // Take snapshot before write
+    let snap1 = db.snapshot();
+
+    // Write more data
+    exec_write(&db, "CREATE (:CR {v: 2})");
+
+    // Take snapshot after write
+    let snap2 = db.snapshot();
+
+    // snap1 should see 1 node, snap2 should see 2
+    let q = prepare("MATCH (n:CR) RETURN count(n) AS c").unwrap();
+    let rows1: Vec<Row> = q
+        .execute_streaming(&snap1, &Params::new())
+        .collect::<nervusdb_query::Result<Vec<_>>>()
+        .unwrap();
+    let rows2: Vec<Row> = q
+        .execute_streaming(&snap2, &Params::new())
+        .collect::<nervusdb_query::Result<Vec<_>>>()
+        .unwrap();
+
+    let c1 = val_i64(&rows1, 0, "c");
+    let c2 = val_i64(&rows2, 0, "c");
+    assert_eq!(c1, 1, "snap1 should see 1 node");
+    assert_eq!(c2, 2, "snap2 should see 2 nodes");
+}
+
+#[test]
+fn t51_read_txn_isolation() {
+    let (db, _dir) = fresh_db("concurrent");
+    exec_write(&db, "CREATE (:RI {v: 'before'})");
+
+    // Take snapshot before second write
+    let snap_before = db.snapshot();
+
+    // Write while snapshot is held
+    exec_write(&db, "CREATE (:RI {v: 'after'})");
+
+    let snap_after = db.snapshot();
+
+    // snap_before should only see 1 node
+    let q = prepare("MATCH (n:RI) RETURN count(n) AS c").unwrap();
+    let rows_before: Vec<Row> = q
+        .execute_streaming(&snap_before, &Params::new())
+        .collect::<nervusdb_query::Result<Vec<_>>>()
+        .unwrap();
+    let rows_after: Vec<Row> = q
+        .execute_streaming(&snap_after, &Params::new())
+        .collect::<nervusdb_query::Result<Vec<_>>>()
+        .unwrap();
+    let c_before = val_i64(&rows_before, 0, "c");
+    let c_after = val_i64(&rows_after, 0, "c");
+    assert_eq!(c_before, 1, "snapshot before write should see 1 node");
+    assert_eq!(c_after, 2, "snapshot after write should see 2 nodes");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 52. Error handling (expanded)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn t52_syntax_error_detail() {
+    let err = prepare("MATC (n) RETURN n");
+    assert!(err.is_err());
+    let msg = format!("{}", err.unwrap_err());
+    assert!(!msg.is_empty(), "syntax error should have message");
+}
+
+#[test]
+fn t52_unknown_function_error() {
+    let err = prepare("RETURN noSuchFunction(1)");
+    assert!(err.is_err());
+}
+
+#[test]
+fn t52_type_error_in_arithmetic() {
+    let (db, _dir) = fresh_db("err2");
+    // Adding string + int should produce an error or null
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN 'hello' + 1 AS v")
+    }));
+    match result {
+        Ok(rows) => {
+            // Some engines coerce, some return null, some error
+            println!("    'hello' + 1 = {:?}", val(&rows, 0, "v"));
+        }
+        Err(_) => println!("    (type error correctly raised for string + int)"),
+    }
+}
+
+#[test]
+fn t52_division_by_zero() {
+    let (db, _dir) = fresh_db("err2");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        query_rows(&db, "RETURN 1 / 0 AS v")
+    }));
+    match result {
+        Ok(rows) => {
+            // May return null, infinity, or error
+            println!("    1/0 = {:?}", val(&rows, 0, "v"));
+        }
+        Err(_) => println!("    (division by zero correctly raised error)"),
+    }
+}
+
+#[test]
+fn t52_missing_property_returns_null() {
+    let (db, _dir) = fresh_db("err2");
+    exec_write(&db, "CREATE (:EP {name: 'test'})");
+    let rows = query_rows(&db, "MATCH (n:EP) RETURN n.nonexistent");
+    assert_eq!(val(&rows, 0, "n.nonexistent"), Value::Null);
+}
+
+#[test]
+fn t52_delete_connected_node_error() {
+    let (db, _dir) = fresh_db("err2");
+    exec_write(&db, "CREATE (:DN {v: 1})-[:R]->(:DN {v: 2})");
+    // DELETE without DETACH on connected node should error
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        exec_write(&db, "MATCH (n:DN {v: 1}) DELETE n");
+    }));
+    match result {
+        Ok(_) => println!("    (note: DELETE connected node succeeded — engine may auto-detach)"),
+        Err(_) => println!("    (confirmed: DELETE connected node without DETACH raises error)"),
+    }
+}

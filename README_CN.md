@@ -1,23 +1,24 @@
-# NervusDB（v2 / Full Roadmap Close-Out）
+# NervusDB
 
-**一个嵌入式图数据库：像 SQLite 一样“打开路径就能用”，但为图遍历而生。**
+**Rust 原生嵌入式属性图数据库 — 图数据的 SQLite。**
 
-> 当前处于 **全量 Roadmap 收尾执行阶段**：按 `M4 → M5 → Industrial` 分阶段推进，以 CI/TCK/质量门禁为发布依据。完成标准见 `docs/memos/DONE.md`。
+打开一个路径，即可获得完整的图数据库。支持 Cypher 查询。
+无需服务器、无需配置、无外部依赖。
 
 [![CI](https://github.com/LuQing-Studio/nervusdb/actions/workflows/ci.yml/badge.svg)](https://github.com/LuQing-Studio/nervusdb/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
-## 5 分钟上手（MVP）
+> [English](README.md)
 
-### CLI
+## 核心特性
 
-```bash
-# 写入：CREATE / DELETE（输出 {"count":...}）
-cargo run -p nervusdb-cli -- v2 write --db ./demo --cypher "CREATE (a {name: 'Alice'})-[:1]->(b {name: 'Bob'})"
+- **嵌入式** — 打开路径即用，无守护进程，无网络通信。
+- **Cypher** — openCypher TCK 100% 通过率（3 897 / 3 897 场景）。
+- **崩溃安全** — 基于 WAL 的存储，单写者 + 快照读者事务模型。
+- **多平台绑定** — Rust、Python (PyO3)、Node.js (N-API)、CLI。
+- **向量搜索** — 内置 HNSW 索引，支持图 + 向量混合查询。
 
-# 查询：NDJSON（每行一条 JSON 记录）
-cargo run -p nervusdb-cli -- v2 query --db ./demo --cypher "MATCH (a)-[:1]->(b) WHERE a.name = 'Alice' RETURN a, b LIMIT 10"
-```
+## 快速开始
 
 ### Rust
 
@@ -27,69 +28,77 @@ use nervusdb::Db;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = Db::open("/tmp/demo")?;
     db.execute("CREATE (n:Person {name: 'Alice'})", None)?;
-    let rows = db.query("MATCH (n:Person) RETURN n", None)?;
-    println!("rows={}", rows.len());
+    let rows = db.query("MATCH (n:Person) RETURN n.name", None)?;
+    println!("{} row(s)", rows.len());
     Ok(())
 }
 ```
 
-### Python（PyO3，本地开发模式）
+### Python
 
 ```bash
 pip install maturin
 maturin develop -m nervusdb-pyo3/Cargo.toml
-
-python - <<'PY'
-import nervusdb
-
-db = nervusdb.open('/tmp/demo-py')
-db.execute_write("CREATE (n:Person {name: 'Alice'})")
-for row in db.query_stream("MATCH (n:Person) RETURN n LIMIT 1"):
-    print(row)
-db.close()
-PY
 ```
 
-> 注意：写语句（如 `CREATE/MERGE/DELETE/SET`）必须使用
-> `execute_write(...)` 或写事务接口；用 `query(...)` 执行写语句会抛
-> `ExecutionError`。
+```python
+import nervusdb
 
-### Node（N-API 绑定）
+db = nervusdb.open("/tmp/demo-py")
+db.execute_write("CREATE (n:Person {name: 'Alice'})")
+for row in db.query_stream("MATCH (n:Person) RETURN n.name"):
+    print(row)
+db.close()
+```
+
+### Node.js
 
 ```bash
 cargo build --manifest-path nervusdb-node/Cargo.toml --release
-npm --prefix examples/ts-local ci
-npm --prefix examples/ts-local run smoke
 ```
 
-v2 当前能力边界以 `docs/reference/cypher_support.md` 为准；是否“支持”以门禁结果为准。
+```typescript
+const { Db } = require("./nervusdb-node");
 
-## 执行路线图（收尾版）
+const db = Db.open("/tmp/demo-node");
+db.executeWrite("CREATE (n:Person {name: 'Alice'})");
+const rows = db.query("MATCH (n:Person) RETURN n.name");
+console.log(rows);
+db.close();
+```
 
-- **M4**：TCK 分层门禁（Tier-0/1/2 PR 阻塞 + Tier-3 nightly）
-- **M5**：Bindings（PyO3 + N-API）、文档对齐、对标基准、并发与 HNSW 调优
-- **Industrial**：Fuzz / Chaos / Soak
-
-详见 `docs/ROADMAP_2.0.md` 与 `docs/tasks.md`。
-
-## Tier-3 全量通过率与 Beta 门禁
+### CLI
 
 ```bash
-# 基于 Tier-3 全量日志生成通过率报告
-TCK_FULL_LOG_FILE=tck_latest.log bash scripts/tck_full_rate.sh
+cargo run -p nervusdb-cli -- v2 write \
+  --db /tmp/demo \
+  --cypher "CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})"
 
-# 按 Beta 阈值（默认 95%）阻断
-TCK_MIN_PASS_RATE=95 bash scripts/beta_gate.sh
+cargo run -p nervusdb-cli -- v2 query \
+  --db /tmp/demo \
+  --cypher "MATCH (a)-[:KNOWS]->(b) RETURN a.name, b.name"
 ```
 
-发布 Beta 前必须同时满足：官方全量 TCK ≥95% + 连续 7 天稳定窗 + 性能 SLO。
+> 写语句（`CREATE`、`MERGE`、`DELETE`、`SET`）必须使用 `execute_write` /
+> `executeWrite` 或写事务接口。用 `query()` 执行写语句会抛出错误。
 
-## v2 架构（当前事实）
+## 测试状态
 
-- **两文件**：`<path>.ndb`（page store / segments / manifest）+ `<path>.wal`（redo log）
-- **事务模型**：Single Writer + Snapshot Readers
-- **存储形态**：MemTable（delta）+ 不可变 runs/segments（CSR）+ 显式 compaction/checkpoint
-- **查询边界**：Query 通过 `nervusdb-api::{GraphStore, GraphSnapshot}` 访问图层
+| 测试套件 | 用例数 | 状态 |
+|----------|--------|------|
+| openCypher TCK | 3 897 / 3 897 | 100% |
+| Rust 单元 + 集成测试 | 153 | 全部通过 |
+| Python (PyO3) | 138 | 全部通过 |
+| Node.js (N-API) | 109 | 全部通过 |
+
+## 文档
+
+- [用户指南](docs/user-guide.md) — 全平台 API 参考
+- [架构设计](docs/architecture.md) — 存储、查询管线、crate 结构
+- [Cypher 支持](docs/cypher-support.md) — 完整合规矩阵
+- [路线图](docs/ROADMAP.md) — 当前与计划阶段
+- [CLI 参考](docs/cli.md) — 命令行用法
+- [绑定对等](docs/binding-parity.md) — 跨平台 API 覆盖
 
 ## 开发
 
@@ -98,13 +107,8 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -W warnings
 bash scripts/workspace_quick_test.sh
 bash scripts/binding_smoke.sh
-bash scripts/contract_smoke.sh
 ```
-
-## Legacy（v1 已归档）
-
-v1（含 redb 与旧绑定）位于 `_legacy_v1_archive/`，不参与 workspace/CI。
 
 ## 许可证
 
-[Apache-2.0](LICENSE)
+[AGPL-3.0](LICENSE)

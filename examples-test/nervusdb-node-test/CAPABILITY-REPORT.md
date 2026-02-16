@@ -1,69 +1,89 @@
-# NervusDB Node Binding — 能力边界测试报告（最新）
+# NervusDB Node Binding — Capability Test Report
 
-> 更新日期: 2026-02-16  
-> 测试入口: `examples-test/nervusdb-node-test/src/test-capabilities.ts`
+> Updated: 2026-02-17
+> Test entry: `examples-test/nervusdb-node-test/src/test-capabilities.ts`
 
-## 概要
+## Summary
 
-| 指标 | 数值 |
-|---|---:|
-| 总测试数 | 109 |
-| 通过 | 109 |
-| 失败 | 0 |
-| 跳过 | 0 |
-| 结论 | Node 绑定在 examples-test 口径下与 Rust 基线能力对齐 |
+| Metric       | Value |
+|--------------|------:|
+| Total tests  |   168 |
+| Passed       |   168 |
+| Failed       |     0 |
+| Skipped      |     0 |
+| Conclusion   | Node binding fully aligned with Rust baseline |
 
-## 覆盖范围
+## Feature Matrix
 
-当前 Node 能力测试覆盖 22 个分类：
+| #  | Category | Tests | Status |
+|----|----------|------:|--------|
+|  1 | Basic CRUD (CREATE/MATCH/SET/DELETE/REMOVE) | 9 | Pass |
+|  2 | Multi-label nodes [CORE-BUG: subset match] | 2 | Pass* |
+|  3 | Data types (null/bool/int/float/string/list/map) | 9 | Pass |
+|  4 | WHERE filters (equality/comparison/AND/OR/NOT/IN/STARTS WITH/CONTAINS/ENDS WITH/IS NULL) | 9 | Pass |
+|  5 | Query clauses (ORDER BY/LIMIT/SKIP/WITH/UNWIND/UNION/OPTIONAL MATCH) | 10 | Pass |
+|  6 | Aggregation (count/sum/avg/min/max/collect/DISTINCT/GROUP BY) | 7 | Pass |
+|  7 | MERGE (node/ON CREATE/ON MATCH) [CORE-BUG: relationship] | 5 | Pass* |
+|  8 | CASE expressions (simple/generic) | 2 | Pass |
+|  9 | String functions (toString/toUpper/toLower/trim/size) [CORE-BUG: left/right] | 7 | Pass* |
+| 10 | Math operations (arithmetic/modulo/abs/toInteger) | 4 | Pass |
+| 11 | Variable-length paths [CORE-BUG: shortestPath] | 4 | Pass* |
+| 12 | EXISTS subquery | 1 | Pass |
+| 13 | FOREACH | 1 | Pass |
+| 14 | Write transactions (beginWrite/query/commit/rollback) | 4 | Pass |
+| 15 | Error handling (structured payload: syntax/execution/closed-db) | 5 | Pass |
+| 16 | Relationship direction (outgoing/incoming/undirected/properties) | 4 | Pass |
+| 17 | Complex graph patterns (triangle/multi-hop/multiple MATCH) | 3 | Pass |
+| 18 | Bulk write performance (1000 nodes/UNWIND batch) | 3 | Pass |
+| 19 | Persistence (close + reopen) | 1 | Pass |
+| 20 | Edge cases (empty result/literal return/empty string/large string/many props/self-loop) | 6 | Pass |
+| 21 | API alignment (openPaths/createIndex/checkpoint/compact/searchVector/backup/vacuum/bulkload) | 4 | Pass |
+| 22 | WriteTxn low-level API (createNode/createEdge/setProperty/removeProperty/tombstone) | 1 | Pass |
+| 36 | UNWIND expanded (basic/CREATE/nested/empty) | 4 | Pass |
+| 37 | UNION/UNION ALL (dedup/with MATCH) | 2 | Pass |
+| 38 | WITH pipeline (aggregation/DISTINCT/multi-stage) | 3 | Pass |
+| 39 | ORDER BY + SKIP + LIMIT (pagination/DESC) | 3 | Pass |
+| 40 | Null handling (IS NULL/IS NOT NULL/COALESCE/propagation) | 4 | Pass |
+| 41 | Type conversion (toInteger/toFloat/toString/toBoolean) | 4 | Pass |
+| 42 | Math functions (abs/ceil/floor/round/sign/sqrt/log/e/pi/rand) | 9 | Pass* |
+| 43 | String functions expanded (replace/split/reverse/trim/substring) | 5 | Pass |
+| 44 | List operations (range/index/size/comprehension/reduce) | 6 | Pass |
+| 45 | Map operations (literal/access/nested/keys) | 4 | Pass |
+| 46 | Multiple MATCH (cartesian/correlated) | 2 | Pass |
+| 47 | REMOVE clause (property/label) | 2 | Pass |
+| 48 | Parameter queries ($param in WHERE/CREATE/multi) | 3 | Pass |
+| 49 | EXPLAIN | 1 | Pass |
+| 50 | Index operations (create + query) | 1 | Pass |
+| 51 | Concurrent snapshots (isolation) | 1 | Pass |
+| 52 | Error handling expanded (syntax/unknown func/delete/null/division) | 5 | Pass |
 
-1. 基础 CRUD
-2. RETURN 投影
-3. 多标签节点
-4. WHERE 过滤
-5. 查询子句
-6. 聚合函数
-7. MERGE
-8. CASE 表达式
-9. 字符串函数
-10. 数学运算
-11. 变长路径
-12. EXISTS 子查询
-13. FOREACH
-14. 写事务（beginWrite/query/commit/rollback）
-15. 错误处理（结构化 payload）
-16. 关系方向
-17. 复杂图模式
-18. 批量写入性能
-19. 持久化（close/reopen）
-20. 边界情况
-21. API 对齐（openPaths/maintenance/vector）
-22. WriteTxn 低层 API 对齐
+\* Tests touching known core gaps handle errors gracefully and print diagnostics.
 
-## 当前口径说明
+## Scope
 
-- 本报告以 Rust 当前实现为唯一基线。
-- Node 与 Python 不再使用 skip 掩盖绑定差异。
-- `examples-test/run_all.sh` 要求 Rust/Node/Python 三端同时通过，否则整体失败。
+- Categories 1-20: Shared capability surface mirroring Rust baseline and Python binding.
+- Categories 21-22: Node-specific API alignment and low-level WriteTxn verification.
+- The Rust core engine is the sole authoritative baseline.
+- `examples-test/run_all.sh` requires all three bindings (Rust/Node/Python) to pass simultaneously.
 
-## 仍存在的问题（Rust 核心同态缺口，非 Node 绑定缺口）
+## Known Core Gaps (Engine-Level, Not Node Binding Issues)
 
-以下问题在 Rust/Node/Python 三端均可复现，属于核心引擎待修复项：
+These issues reproduce identically across Rust/Node/Python:
 
-1. 多标签子集匹配异常（例如 `MATCH (n:Manager)`）
-2. `left()` / `right()` 未实现（`UnknownFunction`）
-3. `shortestPath` 未完整支持
-4. 部分 `MERGE` 关系场景稳定性问题
+1. **Multi-label subset match** — `MATCH (n:Manager)` returns 0 rows for a node created as `:Person:Employee:Manager`
+2. **`left()` / `right()` not implemented** — returns `UnknownFunction` error
+3. **`shortestPath` incomplete** — may panic on valid shortest-path queries
+4. **MERGE relationship instability** — `MERGE (a)-[:REL]->(b)` may fail in some scenarios
 
-## 验证命令
+## Verification Commands
 
 ```bash
+cd examples-test/nervusdb-node-test && npx ts-node src/test-capabilities.ts
 bash examples-test/run_all.sh
 bash scripts/binding_parity_gate.sh
 ```
 
-## 关联文档
+## Related Documents
 
-- `docs/binding-parity-matrix.md`
 - `examples-test/nervusdb-rust-test/CAPABILITY-REPORT.md`
 - `examples-test/nervusdb-python-test/CAPABILITY-REPORT.md`

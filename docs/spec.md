@@ -1,39 +1,50 @@
-# NervusDB v2 — 产品规格（Spec v2.2, SQLite-Beta 收敛版）
+# NervusDB v2 — Technical Specification (v2.3, SQLite-Beta Convergence)
 
-> 这份 spec 是 v2 的工程宪法：目标不是“看起来完成”，而是以可重复门禁达到 Beta 发布线。
+> This spec is the engineering constitution for NervusDB v2.
+> The goal is not "looks done" — it is reaching the Beta release line through
+> repeatable, evidence-based quality gates.
 
-## 1. 项目定位
+## 1. Project Positioning
 
-- **一句话使命**：做一个纯 Rust 的单机嵌入式 Property Graph 数据库，提供 SQLite 风格“打开路径即用”的体验。
-- **核心路径**：打开 DB → 写入 → 查询（含流式）→ 崩溃恢复 → 跨语言一致行为。
+- **Mission**: A pure-Rust embedded property graph database with SQLite-style
+  "open a path and go" ergonomics.
+- **Core path**: open DB -> write -> query (including streaming) -> crash recovery
+  -> consistent cross-language behavior.
 
-## 2. 范围与发布策略（锁定）
+## 2. Scope and Release Strategy (Locked)
 
-- 范围：仅单机嵌入（Rust + CLI + Python + Node）。
-- 不做：远程服务、分布式、迁移兼容承诺。
-- 允许：在 Beta 收敛期进行破坏性变更；但必须显式版本化存储格式 epoch。
+- Scope: single-machine embedded only (Rust + CLI + Python + Node.js).
+- Out of scope: remote server, distributed mode, migration compatibility promises.
+- Allowed: breaking changes during Beta convergence, but storage format epoch must
+  be explicitly versioned.
 
-## 3. Beta 硬门槛（必须同时满足）
+## 3. Beta Hard Gates (All Must Be Met Simultaneously)
 
-1. 官方全量 openCypher TCK 通过率 **≥95%**（Tier-3 全量口径）。
-2. warnings 视为阻断（fmt/clippy/tests/bindings 链路）。
-3. 冻结阶段连续 **7 天** 主 CI + nightly 稳定。
+1. Official openCypher TCK full pass rate **>=95%** (Tier-3 full scope).
+   Current status: **100% (3 897 / 3 897)** — achieved.
+2. Warnings treated as blocking (`fmt` / `clippy` / `tests` / `bindings` chain).
+3. Freeze phase: **7 consecutive days** of stable main CI + nightly.
+   Current status: stability window in progress (Day 1 = 2025-02-15).
 
-> 未满足任一项，即视为“尚未达到图数据库界 SQLite（Beta）”。
+> If any gate is not met, the project is considered "not yet at SQLite-for-graphs
+> (Beta) level".
 
-## 4. 存储兼容与错误模型
+## 4. Storage Compatibility and Error Model
 
-- 引入并强制校验 `storage_format_epoch`。
-- epoch 不匹配时，统一返回 `StorageFormatMismatch`（Compatibility 语义）。
-- 错误分类统一为：`Syntax / Execution / Storage / Compatibility`。
+- `storage_format_epoch` is introduced and enforced.
+- Epoch mismatch returns `StorageFormatMismatch` (Compatibility semantics).
+- Unified error categories: `Syntax / Execution / Storage / Compatibility`.
 
-跨语言映射约束：
-- Python：`NervusError/SyntaxError/ExecutionError/StorageError/CompatibilityError`
-- Node：结构化错误 payload（`code/category/message`）
+Cross-language error mapping:
 
-## 5. 质量与门禁矩阵
+| Platform | Error Types |
+|----------|-------------|
+| Python | `NervusError`, `SyntaxError`, `ExecutionError`, `StorageError`, `CompatibilityError` |
+| Node.js | Structured error payload: `{ code, category, message }` |
 
-### 5.1 PR 阻塞门禁
+## 5. Quality Gate Matrix
+
+### 5.1 PR-Blocking Gates
 
 1. `cargo fmt --all -- --check`
 2. `cargo clippy --workspace --exclude nervusdb-pyo3 --all-targets -- -W warnings`
@@ -41,23 +52,37 @@
 4. `bash scripts/tck_tier_gate.sh tier0|tier1|tier2`
 5. `bash scripts/binding_smoke.sh && bash scripts/contract_smoke.sh`
 
-### 5.2 Nightly / Manual 门禁
+### 5.2 Nightly / Manual Gates
 
-1. Tier-3 全量 + 失败聚类 + 通过率报告（`scripts/tck_full_rate.sh`）
-2. Beta 阈值 gate（`scripts/beta_gate.sh`，默认 95%）
-3. benchmark / chaos / soak / fuzz
+1. Tier-3 full run + failure clustering + pass-rate report (`scripts/tck_full_rate.sh`)
+2. Beta threshold gate (`scripts/beta_gate.sh`, default 95%)
+3. Benchmark / chaos / soak / fuzz
 
-## 6. 执行节奏
+## 6. Test Coverage Requirements
 
-- Phase A：TCK 功能线（先冲到 95%）
-- Phase B：稳定冻结线（7 天稳定窗）
-- Phase C：性能封板线（大规模 SLO）
+| Suite | Tests | Target | Current |
+|-------|-------|--------|---------|
+| openCypher TCK | 3 897 | >=95% | 100% |
+| Rust unit + integration | 153 | all green | all green |
+| Python (PyO3) | 138 | all green | all green |
+| Node.js (N-API) | 109 | all green | all green |
 
-## 7. 文档单一事实源
+## 7. Execution Cadence
 
-- 规范：`docs/spec.md`
-- 任务：`docs/tasks.md`
-- 路线图：`docs/ROADMAP_2.0.md`
-- 完成定义：`docs/memos/DONE.md`
+- **Phase A**: TCK feature line (reach 95%) — **COMPLETE** (100% achieved).
+- **Phase B**: Stability freeze (7-day stability window) — **IN PROGRESS**.
+- **Phase C**: Performance seal (large-scale SLO) — PLANNED.
 
-若四者冲突，以“**代码 + CI/Nightly 门禁结果 + tasks 当前状态**”为准，并立即修正文档。
+## 8. Single Source of Truth
+
+| Document | Path | Purpose |
+|----------|------|---------|
+| Specification | `docs/spec.md` | Engineering constitution (this file) |
+| Tasks | `docs/tasks.md` | Progress tracking |
+| Roadmap | `docs/ROADMAP.md` | Phase planning |
+| Architecture | `docs/architecture.md` | System design |
+| Cypher Support | `docs/cypher-support.md` | Compliance matrix |
+| User Guide | `docs/user-guide.md` | API reference |
+
+If documents conflict, **code + CI/nightly gate results + current task status**
+take precedence. Fix the document immediately.

@@ -3,342 +3,368 @@
 ## Table of Contents
 
 1. [Installation](#installation)
-2. [Quick Start](#quick-start)
-3. [Database Operations](#database-operations)
-4. [Cypher Query Guide](#cypher-query-guide)
-5. [Backup and Restore](#backup-and-restore)
-6. [Configuration](#configuration)
-7. [Performance Tips](#performance-tips)
+2. [Database Lifecycle](#database-lifecycle)
+3. [Querying with Cypher](#querying-with-cypher)
+4. [Write Operations](#write-operations)
+5. [Transactions](#transactions)
+6. [Streaming Queries](#streaming-queries)
+7. [Indexes](#indexes)
+8. [Vector Search](#vector-search)
+9. [Backup and Maintenance](#backup-and-maintenance)
+10. [Error Handling](#error-handling)
 
 ---
 
 ## Installation
 
-### Prerequisites
+### Rust
 
-- Rust 1.70 or later
-- Cargo (comes with Rust)
+Add to `Cargo.toml`:
 
-### Install from Source
-
-```bash
-cargo install nervusdb-cli
+```toml
+[dependencies]
+nervusdb = "0.0.1"
+nervusdb-query = "0.0.1"
 ```
 
-### Install from Crates.io
+### Python
 
 ```bash
-cargo add nervusdb
+pip install maturin
+maturin develop -m nervusdb-pyo3/Cargo.toml
 ```
 
-### Download Binary
+### Node.js
 
-Download prebuilt binaries from [GitHub Releases](https://github.com/LuQing-Studio/nervusdb/releases).
+```bash
+cargo build --manifest-path nervusdb-node/Cargo.toml --release
+```
+
+### CLI
+
+```bash
+cargo install --path nervusdb-cli
+```
 
 ---
 
-## Quick Start
+## Database Lifecycle
 
 ### Opening a Database
 
+All platforms use a single path. NervusDB creates two files:
+`<path>.ndb` (page store) and `<path>.wal` (write-ahead log).
+
+**Rust:**
+
 ```rust
 use nervusdb::Db;
 
-// Open or create a database at the specified path
-let db = Db::open_paths(["/path/to/mygraph.ndb"]).unwrap();
+let db = Db::open("/tmp/mydb")?;
+// Or with explicit paths:
+let db = Db::open_paths("/tmp/mydb.ndb", "/tmp/mydb.wal")?;
 ```
 
-### Creating Nodes and Relationships
+**Python:**
 
-```cypher
-// Create a single node
-CREATE (person {name: 'Alice', age: 30})
+```python
+import nervusdb
 
-// Create nodes and a relationship
-CREATE (a {name: 'Alice'})-[:FRIEND {since: 2020}]->(b {name: 'Bob'})
+db = nervusdb.open("/tmp/mydb")
+# Or with explicit paths:
+db = nervusdb.open_paths("/tmp/mydb.ndb", "/tmp/mydb.wal")
 ```
 
-### Querying Data
+**Node.js:**
 
-```cypher
-// Find all friends of Alice
-MATCH (a {name: 'Alice'})-[:FRIEND]->(b) RETURN b.name, b.age
+```typescript
+const { Db } = require("./nervusdb-node");
 
-// Find paths up to 5 hops
-MATCH (a)-[*1..5]->(b) WHERE a.name = 'Alice' RETURN a, b
+const db = Db.open("/tmp/mydb");
+// Or with explicit paths:
+const db = Db.openPaths("/tmp/mydb.ndb", "/tmp/mydb.wal");
+```
+
+### Closing a Database
+
+Always close the database when done to flush pending writes.
+
+```rust
+db.close()?;           // Rust
+```
+```python
+db.close()             # Python
+```
+```typescript
+db.close();            // Node.js
 ```
 
 ---
 
-## Database Operations
+## Querying with Cypher
 
-### Rust API
+Read queries use `query` (returns all rows) or `query_stream` (Python, returns iterator).
+
+**Rust** — uses `nervusdb_query::query_collect` or the `QueryExt` trait:
 
 ```rust
-use nervusdb::Db;
+use nervusdb::{Db, GraphSnapshot};
+use nervusdb_query::{query_collect, Params};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Open database
-    let db = Db::open_paths(["/tmp/graph.ndb"])?;
-
-    // Execute write operations
-    db.execute("CREATE (n {id: 1, name: 'Test'})", None)?;
-
-    // Execute read queries
-    let results = db.query("MATCH (n) RETURN n", None)?;
-
-    for record in results {
-        println!("{:?}", record);
-    }
-
-    Ok(())
+let db = Db::open("/tmp/mydb")?;
+let snapshot = db.snapshot();
+let rows = query_collect(&snapshot, "MATCH (n:Person) RETURN n.name", &Params::new())?;
+for row in &rows {
+    println!("{:?}", row);
 }
 ```
 
-### Using Snapshots
+**Python:**
 
-For consistent reads across multiple queries, use snapshots:
+```python
+rows = db.query("MATCH (n:Person) RETURN n.name")
+for row in rows:
+    print(row)
+```
 
-```rust
-let snapshot = db.snapshot()?;
-let results = snapshot.query("MATCH (n) RETURN n")?;
+**Node.js:**
+
+```typescript
+const rows = db.query("MATCH (n:Person) RETURN n.name");
+console.log(rows);
+```
+
+### Parameterized Queries
+
+Pass parameters to avoid Cypher injection and improve readability.
+
+**Python:**
+
+```python
+rows = db.query("MATCH (n:Person) WHERE n.name = $name RETURN n", {"name": "Alice"})
+```
+
+**Node.js:**
+
+```typescript
+const rows = db.query("MATCH (n:Person) WHERE n.name = $name RETURN n", { name: "Alice" });
 ```
 
 ---
 
-## Cypher Query Guide
+## Write Operations
 
-### Reading Data
+Write statements (`CREATE`, `MERGE`, `DELETE`, `SET`, `REMOVE`) must use the
+write API. Calling `query()` with a write statement raises an error.
 
-#### Basic Match
-
-```cypher
--- Match all nodes
-MATCH (n) RETURN n
-
--- Match with label
-MATCH (p:Person) RETURN p.name, p.age
-
--- Match with relationship
-MATCH (a)-[:FRIEND]->(b) RETURN a.name, b.name
-```
-
-#### Filtering with WHERE
-
-```cypher
--- Property comparison
-MATCH (n) WHERE n.age > 25 RETURN n
-
--- Boolean operators
-MATCH (n) WHERE n.name = 'Alice' AND n.age >= 30 RETURN n
-
--- IN clause
-MATCH (n) WHERE n.name IN ['Alice', 'Bob'] RETURN n
-```
-
-#### Ordering and Pagination
-
-```cypher
--- Order by
-MATCH (n) RETURN n ORDER BY n.age DESC
-
--- Skip and limit
-MATCH (n) RETURN n ORDER BY n.age SKIP 10 LIMIT 5
-```
-
-#### Aggregation
-
-```cypher
--- Count
-MATCH (n) RETURN COUNT(n)
-
--- Collect
-MATCH (a)-[:FRIEND]->(b) RETURN a.name, COLLECT(b.name) AS friends
-
--- Min/Max/Sum
-MATCH (n) RETURN MIN(n.age), MAX(n.age), AVG(n.age)
-```
-
-### Writing Data
-
-#### CREATE
-
-```cypher
--- Create node
-CREATE (n {name: 'Alice', age: 30})
-
--- Create with label
-CREATE (p:Person {name: 'Bob'})
-
--- Create relationship
-CREATE (a {name: 'Alice'})-[:KNOWS {since: 2021}]->(b {name: 'Carol'})
-```
-
-#### MERGE (Idempotent Create)
-
-```cypher
--- Merge node (create if not exists)
-MERGE (p:Person {name: 'Alice'})
-ON CREATE SET p.created_at = timestamp()
-
--- Merge relationship
-MATCH (a {name: 'Alice'}), (b {name: 'Bob'})
-MERGE (a)-[r:FRIEND]->(b)
-ON CREATE SET r.since = 2023
-```
-
-#### DELETE
-
-```cypher
--- Delete node
-MATCH (n {name: 'Bob'}) DELETE n
-
--- Detach delete (remove relationships first)
-MATCH (n {name: 'Bob'}) DETACH DELETE n
-```
-
-#### SET
-
-```cypher
--- Set property
-MATCH (n {name: 'Alice'}) SET n.age = 31
-
--- Add label
-MATCH (n) SET n:Premium
-```
-
----
-
-## Backup and Restore
-
-### Creating a Backup
+**Rust** — use `prepare` + `execute_write` with a write transaction:
 
 ```rust
 use nervusdb::Db;
+use nervusdb_query::{prepare, Params};
 
-let db = Db::open_paths(["/tmp/graph.ndb"])?;
-
-// Start a backup
-let handle = db.begin_backup()?;
-
-// Execute backup (can be done in background thread)
-db.execute_backup(&handle)?;
-
-// Mark backup as complete
-db.complete_backup(&handle)?;
+let db = Db::open("/tmp/mydb")?;
+let snapshot = db.snapshot();
+let stmt = prepare("CREATE (n:Person {name: 'Alice'})")?;
+let mut txn = db.begin_write();
+let count = stmt.execute_write(&snapshot, &mut txn, &Params::new())?;
+txn.commit()?;
+println!("Created {} node(s)", count);
 ```
 
-### Restoring from Backup
+**Python:**
 
-```rust
-use nervusdb::Db;
-
-// Restore to a new location
-Db::restore_from_backup("/tmp/backup", "/tmp/restored.ndb")?;
+```python
+count = db.execute_write("CREATE (n:Person {name: 'Alice'})")
 ```
 
----
+**Node.js:**
 
-## Configuration
-
-### Database Options
-
-```rust
-use nervusdb::DbOptions;
-
-let options = DbOptions::default()
-    .with_cache_size(1024 * 1024 * 100); // 100MB cache
-
-let db = Db::open_paths_with_opts(["/tmp/graph.ndb"], options)?;
-```
-
-### CLI Options
-
-```bash
-# Specify database path
-nervusdb-cli v2 write --db /path/to/db --cypher "CREATE (n)"
-
-# Query with output limit
-nervusdb-cli v2 query --db /path/to/db --cypher "MATCH (n) RETURN n" --limit 100
+```typescript
+const count = db.executeWrite("CREATE (n:Person {name: 'Alice'})");
 ```
 
 ---
 
-## Performance Tips
+## Transactions
 
-### 1. Use Indexes for Frequent Lookups
+### Write Transactions
 
-```cypher
--- Create index on property
-CREATE INDEX ON :Person(name)
+Group multiple writes into a single atomic transaction.
+
+**Python:**
+
+```python
+txn = db.begin_write()
+txn.query("CREATE (a:Person {name: 'Alice'})")
+txn.query("CREATE (b:Person {name: 'Bob'})")
+txn.query("CREATE (a)-[:KNOWS]->(b)")
+txn.commit()
 ```
 
-### 2. Batch Writes for Large Data
+**Node.js:**
+
+```typescript
+const txn = db.beginWrite();
+txn.query("CREATE (a:Person {name: 'Alice'})");
+txn.query("CREATE (b:Person {name: 'Bob'})");
+txn.commit();
+```
+
+**Rust:**
 
 ```rust
-// Use transaction for batch operations
-let tx = db.begin_transaction()?;
-for i in 0..10000 {
-    tx.execute(&format!("CREATE (n {{id: {}}})", i), None)?;
+let snapshot = db.snapshot();
+let mut txn = db.begin_write();
+let stmt1 = prepare("CREATE (n:Person {name: 'Alice'})")?;
+let stmt2 = prepare("CREATE (n:Person {name: 'Bob'})")?;
+stmt1.execute_write(&snapshot, &mut txn, &Params::new())?;
+stmt2.execute_write(&snapshot, &mut txn, &Params::new())?;
+txn.commit()?;
+```
+
+### Read Snapshots
+
+Snapshots provide a consistent point-in-time view for reads.
+
+```rust
+let snapshot = db.snapshot();
+// All queries on this snapshot see the same data,
+// even if writes happen concurrently.
+let rows = query_collect(&snapshot, "MATCH (n) RETURN n", &Params::new())?;
+```
+
+---
+
+## Streaming Queries
+
+Python supports streaming results for memory-efficient processing:
+
+```python
+for row in db.query_stream("MATCH (n:Person) RETURN n.name"):
+    print(row)
+```
+
+---
+
+## Indexes
+
+Create property indexes to speed up lookups.
+
+```rust
+db.create_index("Person", "name")?;   // Rust
+```
+```python
+db.create_index("Person", "name")     # Python
+```
+```typescript
+db.createIndex("Person", "name");     // Node.js
+```
+
+---
+
+## Vector Search
+
+NervusDB includes a built-in HNSW vector index for similarity search.
+
+```rust
+let hits = db.search_vector(&[0.1, 0.2, 0.3], 10)?;  // Rust
+```
+```python
+hits = db.search_vector([0.1, 0.2, 0.3], 10)          # Python
+```
+```typescript
+const hits = db.searchVector([0.1, 0.2, 0.3], 10);    // Node.js
+```
+
+Each hit returns `(node_id, distance)`.
+
+---
+
+## Backup and Maintenance
+
+### Backup
+
+```python
+nervusdb.backup("/tmp/mydb", "/tmp/backup-dir")   # Python
+```
+```typescript
+const { backup } = require("./nervusdb-node");
+backup("/tmp/mydb", "/tmp/backup-dir");            // Node.js
+```
+
+### Vacuum (Reclaim Space)
+
+```python
+nervusdb.vacuum("/tmp/mydb")                       # Python
+```
+```typescript
+const { vacuum } = require("./nervusdb-node");
+vacuum("/tmp/mydb");                               // Node.js
+```
+
+### Compaction and Checkpoint
+
+```python
+db.compact()      # Merge segments
+db.checkpoint()   # Flush WAL to page store
+```
+
+---
+
+## Error Handling
+
+NervusDB uses four error categories across all platforms:
+
+| Category | Meaning |
+|----------|---------|
+| `Syntax` | Invalid Cypher query |
+| `Execution` | Runtime error (e.g., write in read context) |
+| `Storage` | I/O or corruption error |
+| `Compatibility` | Storage format epoch mismatch |
+
+**Python** — typed exceptions:
+
+```python
+from nervusdb import SyntaxError, ExecutionError, StorageError, CompatibilityError
+
+try:
+    db.query("INVALID CYPHER")
+except SyntaxError as e:
+    print(f"Bad query: {e}")
+```
+
+**Node.js** — structured error payload:
+
+```typescript
+try {
+    db.query("INVALID CYPHER");
+} catch (e) {
+    // e has: { code, category, message }
+    console.error(e.category, e.message);
 }
-tx.commit()?;
-```
-
-### 3. Use Appropriate Query Patterns
-
-```cypher
--- Good: Filter early
-MATCH (a)-[:FRIEND]->(b)
-WHERE a.name = 'Alice'
-RETURN b
-
--- Avoid: Filter late (more data in memory)
-MATCH (a)-[:FRIEND]->(b)
-RETURN b
-WHERE a.name = 'Alice'
-```
-
-### 4. Limit Result Sets
-
-```cypher
--- Always use LIMIT for exploratory queries
-MATCH (n) RETURN n LIMIT 100
-```
-
-### 5. Use Variable Length Paths Carefully
-
-```cypher
--- Set reasonable max depth
-MATCH (a)-[:FRIEND*1..5]->(b) RETURN b
-
--- Avoid unbounded paths
--- DON'T: MATCH (a)-[:FRIEND*]->(b) RETURN b
 ```
 
 ---
 
-## Troubleshooting
-
-### Common Errors
-
-| Error | Cause | Solution |
-|-------|-------|----------|
-| `not implemented: <feature>` | Feature not in Cypher subset | Check [cypher_support.md](reference/cypher_support.md) |
-| `Backup in progress` | Another backup is running | Wait or cancel previous backup |
-| `Database locked` | Another process is using the database | Close other processes |
-
-### Debug Mode
-
-Set environment variable for verbose logging:
+## CLI Quick Reference
 
 ```bash
-RUST_LOG=debug nervusdb-cli v2 query --db /tmp/graph --cypher "MATCH (n) RETURN n"
+# Write
+cargo run -p nervusdb-cli -- v2 write --db /tmp/demo \
+  --cypher "CREATE (n:Person {name: 'Alice'})"
+
+# Query (NDJSON output)
+cargo run -p nervusdb-cli -- v2 query --db /tmp/demo \
+  --cypher "MATCH (n:Person) RETURN n.name"
 ```
+
+See [CLI Reference](cli.md) for full details.
 
 ---
 
 ## Next Steps
 
-- [CLI Reference](cli.md)
-- [Cypher Support Details](reference/cypher_support.md)
-- [API Documentation](https://docs.rs/nervusdb)
+- [Cypher Support Matrix](cypher-support.md) — full list of supported clauses
+- [Architecture](architecture.md) — storage and query internals
+- [Binding Parity](binding-parity.md) — cross-platform API coverage

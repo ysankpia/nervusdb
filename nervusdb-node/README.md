@@ -1,35 +1,57 @@
 # nervusdb-node
 
-N-API binding for NervusDB local embedding.
+Node.js (N-API) bindings for [NervusDB](../README.md), a Rust-native embedded property graph database.
 
-## Current exported APIs
+Provides typed return values (`NodeValue`, `RelationshipValue`, `PathValue`) and
+structured error payloads (`{ code, category, message }`).
 
-- `Db.open(path)`
-- `db.query(cypher)`
-- `db.executeWrite(cypher)`
-- `db.beginWrite()`
-- `db.close()`
-- `WriteTxn.query(cypher)`
-- `WriteTxn.commit()`
-- `WriteTxn.rollback()`
+## Build
 
-## Minimal local usage
-
-```js
-const addon = require('./native/nervusdb_node.node')
-const db = addon.Db.open('/tmp/nervusdb-node-demo.ndb')
-
-db.executeWrite("CREATE (n:Person {name:'Node'})")
-const rows = db.query("MATCH (n:Person) RETURN n LIMIT 1")
-console.log(rows)
-
-const txn = db.beginWrite()
-txn.query("CREATE (:Person {name:'TxnNode'})")
-txn.commit()
-
-db.close()
+```bash
+cargo build --manifest-path nervusdb-node/Cargo.toml --release
 ```
 
-For a runnable TypeScript project template, see:
+## Usage
 
-- `examples/ts-local/`
+```typescript
+const { Db } = require("./nervusdb-node");
+
+const db = Db.open("/tmp/mydb");
+
+// Write (must use executeWrite or a write transaction)
+db.executeWrite("CREATE (n:Person {name: 'Alice', age: 30})");
+
+// Read
+const rows = db.query("MATCH (n:Person) RETURN n.name, n.age");
+console.log(rows);
+
+// Parameterized queries
+const result = db.query(
+  "MATCH (n:Person) WHERE n.name = $name RETURN n",
+  { name: "Alice" }
+);
+
+// Transactions
+const txn = db.beginWrite();
+txn.query("CREATE (a:Person {name: 'Bob'})");
+txn.commit();
+
+// Maintenance
+db.createIndex("Person", "name");
+db.compact();
+db.checkpoint();
+
+db.close();
+```
+
+## API Parity
+
+All APIs are aligned with the Rust baseline. See [Binding Parity](../docs/binding-parity.md).
+
+| Tests | Status |
+|-------|--------|
+| Capability tests | 109 all green |
+
+## License
+
+[AGPL-3.0](../LICENSE)
