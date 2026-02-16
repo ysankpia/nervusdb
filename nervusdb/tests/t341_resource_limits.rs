@@ -1,5 +1,5 @@
 use nervusdb::Db;
-use nervusdb::query::{ExecuteOptions, Params, prepare};
+use nervusdb::query::{ExecuteOptions, Params, Value, prepare};
 use std::thread;
 use std::time::Duration;
 use tempfile::tempdir;
@@ -35,6 +35,23 @@ fn test_range_exceed_collection_limit_raises_resource_limit() -> nervusdb::Resul
 
     assert!(err.contains("ResourceLimitExceeded"), "err={err}");
     assert!(err.contains("CollectionItems"), "err={err}");
+    Ok(())
+}
+
+#[test]
+fn test_default_limits_keep_tck_sum_range_case_working() -> nervusdb::Result<()> {
+    let dir = tempdir()?;
+    let db = Db::open(dir.path().join("t341_range_tck_compat.ndb"))?;
+    let snapshot = db.snapshot();
+
+    let params = Params::new();
+    let prepared = prepare("UNWIND range(0, 1000000) AS i RETURN sum(i) AS s")?;
+    let rows = prepared
+        .execute_streaming(&snapshot, &params)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("s"), Some(&Value::Int(500000500000)));
     Ok(())
 }
 
