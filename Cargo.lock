@@ -775,7 +775,7 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "nervusdb"
-version = "2.0.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -793,14 +793,14 @@ dependencies = [
 
 [[package]]
 name = "nervusdb-api"
-version = "2.0.0"
+version = "0.0.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "nervusdb-cli"
-version = "2.0.0"
+version = "0.0.1"
 dependencies = [
  "clap",
  "nervusdb",
@@ -821,7 +821,7 @@ dependencies = [
 
 [[package]]
 name = "nervusdb-query"
-version = "2.0.0"
+version = "0.0.1"
 dependencies = [
  "chrono",
  "nervusdb-api",
@@ -832,7 +832,7 @@ dependencies = [
 
 [[package]]
 name = "nervusdb-storage"
-version = "2.0.0"
+version = "0.0.1"
 dependencies = [
  "chrono",
  "crc32fast",

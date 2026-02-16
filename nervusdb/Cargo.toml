@@ -1,6 +1,6 @@
 [package]
 name = "nervusdb"
-version = "2.0.0"
+version = "0.0.1"
 license = "AGPL-3.0-only"
 description = "NervusDB v2: Rust-embedded, crash-safe property graph database with Cypher subset – like SQLite for graphs."
 readme = "../README.md"
@@ -11,9 +11,9 @@ documentation = "https://docs.rs/nervusdb"
 edition = "2024"
 
 [dependencies]
-nervusdb-api = "=2.0.0"
-nervusdb-storage = "=2.0.0"
-nervusdb-query = "=2.0.0"
+nervusdb-api = "=0.0.1"
+nervusdb-storage = "=0.0.1"
+nervusdb-query = "=0.0.1"
 clap = { version = "4.5.53", features = ["derive"] }
 csv = "1.4.0"
 serde = "1.0.228"

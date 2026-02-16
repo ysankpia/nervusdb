@@ -1,6 +1,6 @@
 [package]
 name = "nervusdb-api"
-version = "2.0.0"
+version = "0.0.1"
 license = "AGPL-3.0-only"
 description = "NervusDB v2 public API – GraphStore trait and data types"
 repository = "https://github.com/LuQing-Studio/nervusdb"
