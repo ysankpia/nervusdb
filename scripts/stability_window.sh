@@ -120,6 +120,43 @@ api_get_json() {
   fi
 }
 
+api_status_code() {
+  local url="$1"
+
+  if [ -n "$GITHUB_TOKEN_VALUE" ]; then
+    curl -sS -o /dev/null -w "%{http_code}" \
+      -H "Accept: application/vnd.github+json" \
+      -H "Authorization: Bearer ${GITHUB_TOKEN_VALUE}" \
+      "$url" || echo "000"
+  else
+    curl -sS -o /dev/null -w "%{http_code}" \
+      -H "Accept: application/vnd.github+json" \
+      "$url" || echo "000"
+  fi
+}
+
+tier3_backfill_reason_file() {
+  local day="$1"
+  echo "${tmp_dir}/tier3-backfill-${day}.reason"
+}
+
+set_tier3_backfill_reason() {
+  local day="$1"
+  local reason="$2"
+  local reason_file
+  reason_file="$(tier3_backfill_reason_file "$day")"
+  printf '%s\n' "$reason" >"$reason_file"
+}
+
+get_tier3_backfill_reason() {
+  local day="$1"
+  local reason_file
+  reason_file="$(tier3_backfill_reason_file "$day")"
+  if [ -f "$reason_file" ]; then
+    cat "$reason_file"
+  fi
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --mode)
@@ -324,65 +361,119 @@ fetch_tier3_rate_from_artifact() {
   local extract_dir
   local source_file
   local url
+  local day_end_epoch
+  local status_code
 
   if [ -f "$target_file" ]; then
+    set_tier3_backfill_reason "$day" "success"
     return 0
   fi
   if [ "$HAS_GITHUB_DATA" -ne 1 ]; then
+    set_tier3_backfill_reason "$day" "tier3_backfill_failed"
     return 1
   fi
 
   runs_file="${tmp_dir}/tck-nightly.yml.runs.json"
   if [ ! -f "$runs_file" ]; then
+    set_tier3_backfill_reason "$day" "tier3_backfill_failed"
     return 1
   fi
 
-  run_id="$(jq -r --arg day "$day" '
-    [ .workflow_runs[]? | select(.created_at | startswith($day)) ]
+  day_end_epoch="$(date_to_epoch_utc "$day" "23:59:59")"
+
+  run_id="$(jq -r --argjson cutoff "$day_end_epoch" '
+    [ .workflow_runs[]?
+      | select(((.created_at // "") | length) > 0)
+      | select((.created_at | fromdateiso8601) <= $cutoff)
+      | select(.conclusion == "success")
+    ]
     | sort_by(.created_at)
     | last.id // empty
   ' "$runs_file")"
 
   if [ -z "$run_id" ]; then
+    set_tier3_backfill_reason "$day" "tier3_backfill_failed"
     return 1
   fi
 
   artifacts_file="${tmp_dir}/run-${run_id}-artifacts.json"
   url="https://api.github.com/repos/${GITHUB_REPO}/actions/runs/${run_id}/artifacts?per_page=100"
   if ! api_get_json "$url" "$artifacts_file"; then
+    status_code="$(api_status_code "$url")"
+    if [ "$status_code" = "401" ] || [ "$status_code" = "403" ]; then
+      set_tier3_backfill_reason "$day" "artifact_fetch_auth_failed"
+    elif [ "$status_code" = "404" ]; then
+      set_tier3_backfill_reason "$day" "artifact_not_found"
+    else
+      set_tier3_backfill_reason "$day" "tier3_backfill_failed"
+    fi
     return 1
   fi
 
   artifact_id="$(jq -r '
-    [ .artifacts[]? |
-      select((.name == "tck-nightly-artifacts" or .name == "beta-gate-artifacts") and (.expired == false))
+    [ .artifacts[]?
+      | select((.name == "tck-nightly-artifacts") and (.expired == false))
     ]
     | sort_by(.created_at)
     | last.id // empty
   ' "$artifacts_file")"
 
   if [ -z "$artifact_id" ]; then
+    artifact_id="$(jq -r '
+      [ .artifacts[]?
+        | select((.name == "beta-gate-artifacts") and (.expired == false))
+      ]
+      | sort_by(.created_at)
+      | last.id // empty
+    ' "$artifacts_file")"
+  fi
+
+  if [ -z "$artifact_id" ]; then
+    set_tier3_backfill_reason "$day" "artifact_not_found"
     return 1
   fi
 
   zip_file="${tmp_dir}/artifact-${artifact_id}.zip"
   url="https://api.github.com/repos/${GITHUB_REPO}/actions/artifacts/${artifact_id}/zip"
   if [ -n "$GITHUB_TOKEN_VALUE" ]; then
-    curl -fsSL \
+    if ! curl -fsSL \
       -H "Accept: application/vnd.github+json" \
       -H "Authorization: Bearer ${GITHUB_TOKEN_VALUE}" \
       "$url" \
-      -o "$zip_file"
+      -o "$zip_file"; then
+      status_code="$(api_status_code "$url")"
+      if [ "$status_code" = "401" ] || [ "$status_code" = "403" ]; then
+        set_tier3_backfill_reason "$day" "artifact_fetch_auth_failed"
+      elif [ "$status_code" = "404" ]; then
+        set_tier3_backfill_reason "$day" "artifact_not_found"
+      else
+        set_tier3_backfill_reason "$day" "tier3_backfill_failed"
+      fi
+      return 1
+    fi
   else
-    curl -fsSL \
+    if ! curl -fsSL \
       -H "Accept: application/vnd.github+json" \
       "$url" \
-      -o "$zip_file"
+      -o "$zip_file"; then
+      status_code="$(api_status_code "$url")"
+      if [ "$status_code" = "401" ] || [ "$status_code" = "403" ]; then
+        set_tier3_backfill_reason "$day" "artifact_fetch_auth_failed"
+      elif [ "$status_code" = "404" ]; then
+        set_tier3_backfill_reason "$day" "artifact_not_found"
+      else
+        set_tier3_backfill_reason "$day" "tier3_backfill_failed"
+      fi
+      return 1
+    fi
   fi
 
   extract_dir="${tmp_dir}/artifact-${artifact_id}"
   mkdir -p "$extract_dir"
-  unzip -oq "$zip_file" -d "$extract_dir"
+  if ! unzip -oq "$zip_file" -d "$extract_dir"; then
+    set_tier3_backfill_reason "$day" "tier3_backfill_failed"
+    return 1
+  fi
 
   source_file="$(find "$extract_dir" -type f -name "tier3-rate-${day}.json" | head -n1 || true)"
   if [ -z "$source_file" ]; then
@@ -392,10 +483,16 @@ fetch_tier3_rate_from_artifact() {
     source_file="$(find "$extract_dir" -type f -name "tier3-rate-*.json" | sort | tail -n1 || true)"
   fi
   if [ -z "$source_file" ]; then
+    set_tier3_backfill_reason "$day" "artifact_not_found"
     return 1
   fi
 
-  cp "$source_file" "$target_file"
+  if ! cp "$source_file" "$target_file"; then
+    set_tier3_backfill_reason "$day" "tier3_backfill_failed"
+    return 1
+  fi
+
+  set_tier3_backfill_reason "$day" "success"
   return 0
 }
 
@@ -409,7 +506,11 @@ for day in "${dates[@]}"; do
   ci_file="${REPORT_DIR}/ci-daily-${day}.json"
 
   if [ "$MODE" = "strict" ] && [ ! -f "$tier3_file" ]; then
-    fetch_tier3_rate_from_artifact "$day" "$tier3_file" || true
+    if ! fetch_tier3_rate_from_artifact "$day" "$tier3_file"; then
+      if [ -z "$(get_tier3_backfill_reason "$day")" ]; then
+        set_tier3_backfill_reason "$day" "tier3_backfill_failed"
+      fi
+    fi
   fi
 
   if [ "$MODE" = "strict" ] && [ ! -f "$ci_file" ]; then
@@ -445,7 +546,10 @@ for day in "${dates[@]}"; do
       tier3_reason="parse_error"
     fi
   else
-    tier3_reason="missing_tier3_rate"
+    tier3_reason="$(get_tier3_backfill_reason "$day")"
+    if [ -z "$tier3_reason" ]; then
+      tier3_reason="missing_tier3_rate"
+    fi
   fi
 
   ci_file="${REPORT_DIR}/ci-daily-${day}.json"
