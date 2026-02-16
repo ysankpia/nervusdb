@@ -37,8 +37,8 @@ export type QueryRow = Record<string, QueryValue>
 export class Db {
   static open(path: string): Db
   query(cypher: string): QueryRow[]
-  execute_write(cypher: string): number
-  begin_write(): WriteTxn
+  executeWrite(cypher: string): number
+  beginWrite(): WriteTxn
   close(): void
 }
 
