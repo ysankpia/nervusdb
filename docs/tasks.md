@@ -106,7 +106,7 @@
 | BETA-03R7     | [TCK] 主干攻坚（Temporal/Aggregation/Set/Remove/Create/Subquery） | High   | Done   | codex/feat/phase1b1c-bigbang | 2026-02-13 已清零 `Temporal4`、`Aggregation6`、`Remove1/3`、`Set2/4/5`、`Create3`，修复 correlated subquery 作用域回归，Tier-3 提升至 94.48%（3682/3897）。 |
 | BETA-03R13    | [Hardening] `TypeError` 断言收紧（compile-time + any-time + runtime） | High   | Done   | codex/feat/beta-04-r13w2-anytime-hardening | R13-W1/W2/W3 已全部完成：compile-time、any-time、runtime 三类 `TypeError` 断言均切换为严格模式；补齐递归运行期表达式类型守卫（含 list comprehension 作用域）与属性写入非法 list 元素拦截，定向簇与基线门禁全绿。 |
 | BETA-03R14    | [Hardening] runtime 语义一致性收口（WHERE guard + type(rel)） | High   | Done   | codex/feat/beta-04-r14w2-unwind-guard | R14-W1~W13 已完成：`WHERE/UNWIND/SET/MERGE/FOREACH/DELETE/CREATE/CALL/Aggregate/IndexSeek` 入口 runtime guard 全覆盖，`runtime_guard_audit` 热点清零并接入 CI；W13-A 全量证据：core gates 全绿、Tier-3 全量 `3897/3897` 全通过。 |
-| BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | WIP    | feat/TB1-stability-window   | strict 稳定窗基建已落地（`ci-daily-snapshot` + `stability_window.sh --mode strict` + `beta_release_gate.sh` + release 接线）；Day1（2026-02-15）快照已写入，当前 `consecutive_days=0/7`（nightly GitHub 数据待主分支 workflow 运行后累计）。 |
+| BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | WIP    | feat/TB1-stability-window   | strict 稳定窗基建已落地（`ci-daily-snapshot` + `stability_window.sh --mode strict` + `beta_release_gate.sh` + release 接线）；Day1/Day2（2026-02-15~2026-02-16）快照与回填修复已完成，当前 `consecutive_days=2/7`（发布门禁仍阻断，继续累计）。 |
 | BETA-05       | [Perf] 大规模 SLO 封板（读120/写180/向量220 ms P99）       | High   | WIP    | codex/feat/w13-perf-guard-stream | W13-PERF 已落地资源护栏+高内存算子收敛；待主分支 Nightly 8h 复测并累计稳定窗证据。 |
 
 ### BETA-03R4 子进展（2026-02-13）
@@ -445,6 +445,24 @@
   - 证据日志：
     - `artifacts/tck/beta-04-r14w13-stability-window-day1-2026-02-15.log`
     - `artifacts/tck/beta-04-r14w13-stability-window-day1-2026-02-15.rc`
+
+### BETA-04 子进展（2026-02-16，strict 稳定窗 Day2 回填修复）
+- W13-Day2（回填鲁棒性）：
+  - `scripts/stability_window.sh` 修复 tier3 回填选择逻辑：按 `created_at <= day_end(UTC)` 选最新成功 run，不再依赖 `created_at startswith(day)`。
+  - artifact 选择优先级固定为 `tck-nightly-artifacts` > `beta-gate-artifacts`。
+  - 回填失败原因细化并可审计：`artifact_fetch_auth_failed`、`artifact_not_found`、`tier3_backfill_failed`（替代泛化 `missing_tier3_rate`）。
+- W13-Day2（fixture 回归）：
+  - 新增 `scripts/tests/stability_window_fixture.sh`，覆盖：
+    - 7 天全通过 -> PASS；
+    - 中间 tier3 失败 -> 连续计数重置；
+    - 缺失 `ci-daily` -> 当天失败；
+    - 有 token/无 token 路径 reason 区分。
+- W13-Day2（实况复算）：
+  - 命令：`bash scripts/stability_window.sh --mode strict --date 2026-02-16 --github-repo LuQing-Studio/nervusdb --github-token-env GITHUB_TOKEN`
+  - 结果：`2026-02-16` 当日 `pass=true`，不再出现 `missing_tier3_rate` 阻断；窗口 `consecutive_days=2/7`，继续累计中。
+- 证据日志：
+  - `artifacts/tck/beta-04-day2-backfill-2026-02-16.log`
+  - `artifacts/tck/beta-04-day2-backfill-2026-02-16.rc`
 
 ### BETA-05 子进展（2026-02-15，W13-PERF 一次到位）
 - W13-A（资源护栏）：

@@ -1303,3 +1303,35 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
   - 本地回放从此前约 `9.3s` 降至 `~71ms`，显著低于 workflow 的 `-timeout=10` 阈值。
 - 证据：
   - `artifacts/tck/w13-perf-query-parse-timeout-fix-2026-02-15.log`
+
+---
+
+## 33. 续更快照（2026-02-16，BETA-04 strict 稳定窗 Day2 回填修复）
+
+### 33.1 本轮完成项（W13-Day2）
+
+- `scripts/stability_window.sh` 回填逻辑加固：
+  - tier3 回填选择从“当天 startswith”收敛为“`created_at <= day_end(UTC)` 的最新成功 run”；
+  - artifact 选择优先级固定：`tck-nightly-artifacts` > `beta-gate-artifacts`；
+  - 回填失败原因细化并可审计：`artifact_fetch_auth_failed`、`artifact_not_found`、`tier3_backfill_failed`。
+- 清理脚本重复定义，确保 `backfill_ci_daily_file` 与 tier3 回填逻辑只有单一生效实现。
+- 新增 fixture 回归：
+  - `scripts/tests/stability_window_fixture.sh`；
+  - 覆盖 4 个场景：7 天全通过、tier3 中途失败、缺失 ci-daily、token/无 token reason 区分。
+
+### 33.2 验证结果
+
+- 语法/结构检查：
+  - `bash -n scripts/stability_window.sh`
+  - `bash -n scripts/tests/stability_window_fixture.sh`
+- fixture 回归：
+  - `bash scripts/tests/stability_window_fixture.sh` 全通过。
+- 实况复算（带 GitHub token）：
+  - `bash scripts/stability_window.sh --mode strict --date 2026-02-16 --github-repo LuQing-Studio/nervusdb --github-token-env GITHUB_TOKEN`
+  - `2026-02-16` 当日判定 `pass=true`，不再出现 `missing_tier3_rate` 阻断；
+  - 窗口累计更新为 `consecutive_days=2/7`（仍未达发布放行门槛）。
+
+### 33.3 证据文件
+
+- `artifacts/tck/beta-04-day2-backfill-2026-02-16.log`
+- `artifacts/tck/beta-04-day2-backfill-2026-02-16.rc`
