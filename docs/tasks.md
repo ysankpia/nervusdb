@@ -106,7 +106,7 @@
 | BETA-03R7     | [TCK] 主干攻坚（Temporal/Aggregation/Set/Remove/Create/Subquery） | High   | Done   | codex/feat/phase1b1c-bigbang | 2026-02-13 已清零 `Temporal4`、`Aggregation6`、`Remove1/3`、`Set2/4/5`、`Create3`，修复 correlated subquery 作用域回归，Tier-3 提升至 94.48%（3682/3897）。 |
 | BETA-03R13    | [Hardening] `TypeError` 断言收紧（compile-time + any-time + runtime） | High   | Done   | codex/feat/beta-04-r13w2-anytime-hardening | R13-W1/W2/W3 已全部完成：compile-time、any-time、runtime 三类 `TypeError` 断言均切换为严格模式；补齐递归运行期表达式类型守卫（含 list comprehension 作用域）与属性写入非法 list 元素拦截，定向簇与基线门禁全绿。 |
 | BETA-03R14    | [Hardening] runtime 语义一致性收口（WHERE guard + type(rel)） | High   | Done   | codex/feat/beta-04-r14w2-unwind-guard | R14-W1~W13 已完成：`WHERE/UNWIND/SET/MERGE/FOREACH/DELETE/CREATE/CALL/Aggregate/IndexSeek` 入口 runtime guard 全覆盖，`runtime_guard_audit` 热点清零并接入 CI；W13-A 全量证据：core gates 全绿、Tier-3 全量 `3897/3897` 全通过。 |
-| BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | WIP    | feat/TB1-stability-window   | strict 稳定窗基建已落地（`ci-daily-snapshot` + `stability_window.sh --mode strict` + `beta_release_gate.sh` + release 接线）；截至 2026-02-18 `consecutive_days=3/7`，发布门禁仍阻断，继续累计。 |
+| BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | WIP    | feat/TB1-stability-window   | strict 稳定窗基建已落地（`ci-daily-snapshot` + `stability_window.sh --mode strict` + `beta_release_gate.sh` + release 接线）；2026-02-18 已修复 Tier-3 回填权限并复算，`consecutive_days=4/7`，发布门禁仍阻断，继续累计。 |
 | BETA-05       | [Perf] 大规模 SLO 封板（读120/写180/向量220 ms P99）       | High   | WIP    | codex/feat/w13-perf-guard-stream | W13-PERF 已落地资源护栏+高内存算子收敛；待主分支 Nightly 8h 复测并累计稳定窗证据。 |
 
 ### BETA-03R4 子进展（2026-02-13）
@@ -537,6 +537,24 @@
   - `cargo test -p nervusdb --test t313_functions test_left_and_right_string_functions` 通过；
   - `cargo test -p nervusdb --test t318_paths test_shortest_path_in_match_assignment` 通过；
   - `cargo fmt --all -- --check` 与 `cargo clippy --workspace --exclude nervusdb-pyo3 --all-targets -- -W warnings` 通过。
+
+### BETA-04 子进展（2026-02-18，strict 稳定窗 Day4 累计恢复）
+- 现场诊断：
+  - `stability-window` 在 `2026-02-17/2026-02-18` 的 Tier-3 回填出现 `artifact_fetch_auth_failed`，导致窗口被误归零。
+- 工程修复：
+  - 为调用 `stability_window.sh` 的 workflow 增补 `actions: read` 权限：
+    - `.github/workflows/stability-window-daily.yml`
+    - `.github/workflows/tck-nightly.yml`
+    - `.github/workflows/release.yml`
+- 实况复算（UTC）：
+  - `bash scripts/stability_window.sh --mode strict --date 2026-02-18 --github-repo LuQing-Studio/nervusdb --github-token-env GITHUB_TOKEN`
+- 结果：
+  - `2026-02-17`、`2026-02-18` 均恢复为 `PASS`；
+  - `consecutive_days` 更新为 `4/7`，发布门禁仍阻断，继续累计至 `7/7`。
+- 证据：
+  - `artifacts/tck/beta-04-stability-window-day4-2026-02-18.log`
+  - `artifacts/tck/beta-04-stability-window-day4-2026-02-18.rc`
+  - `artifacts/tck/stability-window.md`（本地证据目录受 `.gitignore` 管控）
 
 ## Archived (v1/Alpha)
 

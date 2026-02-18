@@ -1426,3 +1426,35 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 - 核心缺口 `left/right`、`shortestPath` 已清零；
 - `examples-test` 不再保留这两项已知缺口；
 - `BETA-04` 稳定窗继续累计（截至 2026-02-18：`consecutive_days=3/7`）。
+
+## 36. 续更快照（2026-02-18，BETA-04 strict 稳定窗 Day4 恢复）
+
+### 36.1 现象与根因
+
+- 当日检查发现 `stability-window` 的 `2026-02-17` / `2026-02-18` 条目被标记为 `BLOCKED`。
+- 直接原因不是 TCK/CI/nightly 失败，而是 Tier-3 回填失败原因为 `artifact_fetch_auth_failed`。
+- 根因：执行 `stability_window.sh` 的 workflow 仅配置了 `contents: read`，缺少 GitHub Actions artifacts/runs 读取所需的 `actions: read` 权限。
+
+### 36.2 修复动作
+
+- 为所有调用 `stability_window.sh` 的 workflow 增补权限：
+  - `.github/workflows/stability-window-daily.yml`
+  - `.github/workflows/tck-nightly.yml`
+  - `.github/workflows/release.yml`
+- 权限变更：在 `permissions` 中新增 `actions: read`（保持原有 `contents` 权限不变）。
+
+### 36.3 复算与结果
+
+- 复算命令（UTC）：
+  - `bash scripts/stability_window.sh --mode strict --date 2026-02-18 --github-repo LuQing-Studio/nervusdb --github-token-env GITHUB_TOKEN`
+- 复算结果：
+  - `2026-02-17`：`PASS`
+  - `2026-02-18`：`PASS`
+  - 窗口累计从 `3/7` 恢复到 `4/7`
+  - `window_passed=false`（发布门禁继续阻断，等待累计到 `7/7`）
+
+### 36.4 证据
+
+- `artifacts/tck/beta-04-stability-window-day4-2026-02-18.log`
+- `artifacts/tck/beta-04-stability-window-day4-2026-02-18.rc`
+- `artifacts/tck/stability-window.md`
