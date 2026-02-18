@@ -247,11 +247,7 @@ console.log("\n── 2. 多标签节点 ──");
 
   test("MATCH by single label subset", () => {
     const rows = db.query("MATCH (n:Manager) RETURN n.name");
-    if (rows.length === 0) {
-      console.log("    [CORE-BUG CONFIRMED] MATCH (n:Manager) returns 0 rows");
-    } else {
-      assert(rows.length >= 1, "should match by Manager label");
-    }
+    assert(rows.length >= 1, "should match by Manager label");
   });
 
   db.close();
@@ -558,16 +554,12 @@ console.log("\n── 7. MERGE ──");
   });
 
   test("MERGE relationship", () => {
-    try {
-      db.executeWrite("CREATE (:MA {id: 1})");
-      db.executeWrite("CREATE (:MB {id: 2})");
-      db.executeWrite("MATCH (a:MA), (b:MB) MERGE (a)-[:LINK]->(b)");
-      db.executeWrite("MATCH (a:MA), (b:MB) MERGE (a)-[:LINK]->(b)");
-      const rows = db.query("MATCH (:MA)-[r:LINK]->(:MB) RETURN count(r) AS c");
-      assert((rows[0].c as number) >= 1, "MERGE rel should create edge");
-    } catch (e: any) {
-      console.log(`    [CORE-BUG] MERGE relationship failed: ${String(e?.message || e).slice(0, 80)}`);
-    }
+    db.executeWrite("CREATE (:MA {id: 1})");
+    db.executeWrite("CREATE (:MB {id: 2})");
+    db.executeWrite("MATCH (a:MA), (b:MB) MERGE (a)-[:LINK]->(b)");
+    db.executeWrite("MATCH (a:MA), (b:MB) MERGE (a)-[:LINK]->(b)");
+    const rows = db.query("MATCH (:MA)-[r:LINK]->(:MB) RETURN count(r) AS c");
+    assertEq(rows[0].c, 1, "MERGE rel should be idempotent");
   });
 
   db.close();

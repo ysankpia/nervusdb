@@ -94,12 +94,8 @@ Integer, Float, String, Boolean, Null, List `[]`, Map `{}`.
 
 These are known core engine gaps, not binding-level issues:
 
-1. **Multi-label subset matching** — `MATCH (n:Manager)` may return 0 in
-   certain scenarios where the node has additional labels.
-2. **`left()` / `right()`** — not yet implemented (`UnknownFunction` error).
-3. **`shortestPath`** — not fully supported.
-4. **MERGE relationship stability** — some relationship MERGE scenarios have
-   known edge cases.
+1. **`left()` / `right()`** — not yet implemented (`UnknownFunction` error).
+2. **`shortestPath`** — not fully supported.
 
 These gaps are tracked and will be addressed in future releases.
 

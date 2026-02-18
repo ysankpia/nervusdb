@@ -78,10 +78,12 @@ Rule: same input must produce the same error category on all three platforms.
 
 These are Rust core behavior gaps. All three platforms assert the same behavior:
 
-1. Multi-label subset matching (`MATCH (n:Manager)`) returns 0 in known scenarios.
-2. `left()` / `right()` not yet implemented (`UnknownFunction`).
-3. `shortestPath` not fully supported.
-4. `MERGE` relationship scenarios have known core instability (marked in capability tests).
+1. `left()` / `right()` not yet implemented (`UnknownFunction`).
+2. `shortestPath` not fully supported.
+
+Resolved in this cycle:
+- Multi-label subset matching now works for multi-label nodes (`MATCH (n:Manager)`).
+- Relationship `MERGE` now enforces idempotent creation semantics.
 
 ## Alignment Status
 

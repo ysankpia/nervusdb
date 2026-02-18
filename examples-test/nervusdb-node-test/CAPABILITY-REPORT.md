@@ -18,12 +18,12 @@
 | #  | Category | Tests | Status |
 |----|----------|------:|--------|
 |  1 | Basic CRUD (CREATE/MATCH/SET/DELETE/REMOVE) | 9 | Pass |
-|  2 | Multi-label nodes [CORE-BUG: subset match] | 2 | Pass* |
+|  2 | Multi-label nodes | 2 | Pass |
 |  3 | Data types (null/bool/int/float/string/list/map) | 9 | Pass |
 |  4 | WHERE filters (equality/comparison/AND/OR/NOT/IN/STARTS WITH/CONTAINS/ENDS WITH/IS NULL) | 9 | Pass |
 |  5 | Query clauses (ORDER BY/LIMIT/SKIP/WITH/UNWIND/UNION/OPTIONAL MATCH) | 10 | Pass |
 |  6 | Aggregation (count/sum/avg/min/max/collect/DISTINCT/GROUP BY) | 7 | Pass |
-|  7 | MERGE (node/ON CREATE/ON MATCH) [CORE-BUG: relationship] | 5 | Pass* |
+|  7 | MERGE (node/ON CREATE/ON MATCH) | 5 | Pass |
 |  8 | CASE expressions (simple/generic) | 2 | Pass |
 |  9 | String functions (toString/toUpper/toLower/trim/size) [CORE-BUG: left/right] | 7 | Pass* |
 | 10 | Math operations (arithmetic/modulo/abs/toInteger) | 4 | Pass |
@@ -70,10 +70,12 @@
 
 These issues reproduce identically across Rust/Node/Python:
 
-1. **Multi-label subset match** — `MATCH (n:Manager)` returns 0 rows for a node created as `:Person:Employee:Manager`
-2. **`left()` / `right()` not implemented** — returns `UnknownFunction` error
-3. **`shortestPath` incomplete** — may panic on valid shortest-path queries
-4. **MERGE relationship instability** — `MERGE (a)-[:REL]->(b)` may fail in some scenarios
+1. **`left()` / `right()` not implemented** — returns `UnknownFunction` error
+2. **`shortestPath` incomplete** — may panic on valid shortest-path queries
+
+Resolved in this cycle:
+- Multi-label subset matching (`MATCH (n:Manager)` on multi-label nodes)
+- Relationship `MERGE` idempotence (`MERGE (a)-[:REL]->(b)` duplicate prevention)
 
 ## Verification Commands
 

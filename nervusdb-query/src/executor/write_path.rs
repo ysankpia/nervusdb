@@ -2,35 +2,10 @@ use super::{
     NodeValue, Plan, PropertyValue, RelationshipValue, Result, Row, Value, WriteableGraph,
     api_property_map_to_storage, convert_api_property_to_value, execute_plan,
 };
-use crate::ast::{Expression, Literal};
+use crate::ast::Expression;
 use crate::error::Error;
 use crate::evaluator::evaluate_expression_value;
 use nervusdb_api::GraphSnapshot;
-
-pub(super) fn evaluate_property_value(
-    expr: &Expression,
-    params: &crate::query_api::Params,
-) -> Result<PropertyValue> {
-    match expr {
-        Expression::Literal(lit) => match lit {
-            Literal::Null => Ok(PropertyValue::Null),
-            Literal::Boolean(b) => Ok(PropertyValue::Bool(*b)),
-            Literal::Integer(n) => Ok(PropertyValue::Int(*n)),
-            Literal::Float(n) => Ok(PropertyValue::Float(*n)),
-            Literal::String(s) => Ok(PropertyValue::String(s.clone())),
-        },
-        Expression::Parameter(name) => {
-            if let Some(value) = params.get(name) {
-                convert_executor_value_to_property(value)
-            } else {
-                Ok(PropertyValue::Null)
-            }
-        }
-        _ => Err(Error::NotImplemented(
-            "complex expressions in property values not supported in v2 M3",
-        )),
-    }
-}
 
 pub(super) fn execute_set<S: GraphSnapshot>(
     snapshot: &S,

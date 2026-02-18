@@ -87,13 +87,6 @@ pub(super) fn execute_delete<S: GraphSnapshot>(
     create_delete_ops::execute_delete(snapshot, input, txn, detach, expressions, params)
 }
 
-pub(super) fn evaluate_property_value(
-    expr: &Expression,
-    params: &crate::query_api::Params,
-) -> Result<PropertyValue> {
-    write_path::evaluate_property_value(expr, params)
-}
-
 pub(super) fn convert_executor_value_to_property(value: &Value) -> Result<PropertyValue> {
     write_path::convert_executor_value_to_property(value)
 }

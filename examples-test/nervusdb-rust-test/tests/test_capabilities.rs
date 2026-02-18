@@ -229,7 +229,7 @@ fn t01b_return_star() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// 2. 多标签节点 [CORE-BUG]
+// 2. 多标签节点
 // ═══════════════════════════════════════════════════════════════
 
 #[test]
@@ -237,8 +237,7 @@ fn t02_multi_label_create() {
     let (db, _dir) = fresh_db("labels");
     exec_write(&db, "CREATE (n:Person:Employee:Manager {name: 'Carol'})");
     let rows = reify_rows(&db, "MATCH (n:Person:Employee {name: 'Carol'}) RETURN n");
-    // [CORE-BUG] 单标签匹配多标签 — 验证 bug 是否来自核心引擎
-    assert_eq!(rows.len(), 1, "[CORE-BUG] multi-label match failed");
+    assert_eq!(rows.len(), 1, "multi-label match failed");
     let node_val = &rows[0].iter().find(|(k, _)| k == "n").unwrap().1;
     match node_val {
         Value::Node(n) => {
@@ -255,12 +254,7 @@ fn t02_single_label_subset() {
     let (db, _dir) = fresh_db("labels");
     exec_write(&db, "CREATE (n:Person:Employee:Manager {name: 'Carol'})");
     let rows = query_rows(&db, "MATCH (n:Manager) RETURN n.name");
-    // [CORE-BUG] 单标签匹配多标签节点 — 在 Rust 核心引擎层面确认 bug
-    if rows.is_empty() {
-        println!("    [CORE-BUG CONFIRMED] MATCH (n:Manager) returns 0 rows for multi-label node — bug is in Rust core engine");
-    } else {
-        assert!(rows.len() >= 1, "should match by Manager label");
-    }
+    assert!(rows.len() >= 1, "should match by Manager label");
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -671,7 +665,7 @@ fn t06_group_by() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// 7. MERGE [CORE-BUG]
+// 7. MERGE
 // ═══════════════════════════════════════════════════════════════
 
 #[test]
@@ -710,22 +704,19 @@ fn t07_merge_on_match_set() {
 
 #[test]
 fn t07_merge_relationship() {
-    // [CORE-BUG] MERGE 关系不工作
     let (db, _dir) = fresh_db("merge");
     exec_write(&db, "CREATE (:MR {name: 'a'})");
     exec_write(&db, "CREATE (:MR {name: 'b'})");
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        exec_write(
-            &db,
-            "MATCH (a:MR {name: 'a'}), (b:MR {name: 'b'}) MERGE (a)-[:KNOWS]->(b)",
-        );
-    }));
-    if result.is_err() {
-        println!("    [CORE-BUG] MERGE relationship failed at Rust core level");
-    } else {
-        let rows = query_rows(&db, "MATCH (:MR)-[r:KNOWS]->(:MR) RETURN count(r) AS c");
-        assert!(val_i64(&rows, 0, "c") >= 1, "MERGE rel should create edge");
-    }
+    exec_write(
+        &db,
+        "MATCH (a:MR {name: 'a'}), (b:MR {name: 'b'}) MERGE (a)-[:KNOWS]->(b)",
+    );
+    exec_write(
+        &db,
+        "MATCH (a:MR {name: 'a'}), (b:MR {name: 'b'}) MERGE (a)-[:KNOWS]->(b)",
+    );
+    let rows = query_rows(&db, "MATCH (:MR)-[r:KNOWS]->(:MR) RETURN count(r) AS c");
+    assert_eq!(val_i64(&rows, 0, "c"), 1, "MERGE rel should be idempotent");
 }
 
 // ═══════════════════════════════════════════════════════════════

@@ -212,15 +212,12 @@ def test_multi_label_create():
     assert_true("Person" in node.labels, "missing Person")
     assert_true("Employee" in node.labels, "missing Employee")
     assert_true("Manager" in node.labels, "missing Manager")
-test("CREATE node with multiple labels [NODE-BUG?]", test_multi_label_create)
+test("CREATE node with multiple labels", test_multi_label_create)
 
 def test_single_label_subset():
     rows = db.query("MATCH (n:Manager) RETURN n.name")
-    if len(rows) == 0:
-        print("    [CORE-BUG CONFIRMED] MATCH (n:Manager) returns 0 rows")
-    else:
-        assert_true(len(rows) >= 1, "should match by Manager label")
-test("MATCH by single label subset [NODE-BUG?]", test_single_label_subset)
+    assert_true(len(rows) >= 1, "should match by Manager label")
+test("MATCH by single label subset", test_single_label_subset)
 
 db.close()
 
@@ -513,16 +510,13 @@ def test_merge_on_match():
 test("MERGE ON MATCH SET", test_merge_on_match)
 
 def test_merge_rel():
-    try:
-        db.execute_write("CREATE (:MA {id: 1})")
-        db.execute_write("CREATE (:MB {id: 2})")
-        db.execute_write("MATCH (a:MA), (b:MB) MERGE (a)-[:LINK]->(b)")
-        db.execute_write("MATCH (a:MA), (b:MB) MERGE (a)-[:LINK]->(b)")
-        rows = db.query("MATCH (:MA)-[r:LINK]->(:MB) RETURN count(r) AS c")
-        assert_true(rows[0]["c"] >= 1, "MERGE rel should create edge")
-    except Exception as e:
-        print(f"    [CORE-BUG] MERGE relationship failed: {str(e)[:80]}")
-test("MERGE relationship [NODE-BUG?]", test_merge_rel)
+    db.execute_write("CREATE (:MA {id: 1})")
+    db.execute_write("CREATE (:MB {id: 2})")
+    db.execute_write("MATCH (a:MA), (b:MB) MERGE (a)-[:LINK]->(b)")
+    db.execute_write("MATCH (a:MA), (b:MB) MERGE (a)-[:LINK]->(b)")
+    rows = db.query("MATCH (:MA)-[r:LINK]->(:MB) RETURN count(r) AS c")
+    assert_eq(rows[0]["c"], 1, "MERGE rel should be idempotent")
+test("MERGE relationship", test_merge_rel)
 
 db.close()
 

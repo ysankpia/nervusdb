@@ -13,6 +13,7 @@ rc_rust=$?
 set -e
 
 echo "[examples-test] 2/3 Node capability tests"
+cargo build --manifest-path "$REPO_ROOT/nervusdb-node/Cargo.toml" --release
 npm --prefix "$SCRIPT_DIR/nervusdb-node-test" ci
 set +e
 npm --prefix "$SCRIPT_DIR/nervusdb-node-test" test

@@ -18,10 +18,15 @@ impl<'a, S: GraphSnapshot> Iterator for NodeScanIter<'a, S> {
             if self.snapshot.is_tombstoned_node(iid) {
                 continue;
             }
-            if let Some(lid) = self.label_id
-                && self.snapshot.node_label(iid) != Some(lid)
-            {
-                continue;
+            if let Some(lid) = self.label_id {
+                let matches_label = self
+                    .snapshot
+                    .resolve_node_labels(iid)
+                    .map(|labels| labels.contains(&lid))
+                    .unwrap_or_else(|| self.snapshot.node_label(iid) == Some(lid));
+                if !matches_label {
+                    continue;
+                }
             }
             return Some(Ok(
                 Row::default().with(self.alias.clone(), Value::NodeId(iid))

@@ -1335,3 +1335,47 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 
 - `artifacts/tck/beta-04-day2-backfill-2026-02-16.log`
 - `artifacts/tck/beta-04-day2-backfill-2026-02-16.rc`
+
+## 34. 续更快照（2026-02-17，BETA-04 主线 B：内核缺口首批清零）
+
+### 34.1 本轮目标与范围
+
+- 目标 1：清零多标签子集匹配缺口（`MATCH (n:Manager)`）。
+- 目标 2：清零关系 `MERGE` 幂等缺口（重复 `MERGE (a)-[:LINK]->(b)` 不重复建边）。
+- 范围：仅修执行语义与回归测试，不改绑定 API 签名。
+
+### 34.2 核心修复
+
+- 多标签匹配语义修复：
+  - `NodeScanIter` 标签过滤由“主标签相等”改为“节点标签集合包含”；
+  - 当 `resolve_node_labels` 不可用时，仍回退到旧路径保证兼容。
+  - 文件：`nervusdb-query/src/executor/plan_iterators.rs`
+- 关系 `MERGE` 语义修复：
+  - `execute_write` 的 `MERGE` 路径统一委托 `write_orchestration::execute_merge_with_rows`；
+  - 修复前置 `MATCH` 绑定行在关系 `MERGE` 中丢失导致的错误建边/自环问题；
+  - 重复执行同一 `MERGE` 时保持幂等。
+  - 文件：`nervusdb-query/src/executor/merge_execution.rs`、`nervusdb-query/src/executor.rs`
+- 新增核心回归：
+  - `nervusdb/tests/t342_label_merge_regressions.rs`
+
+### 34.3 三端能力测试口径收紧（soft-pass -> hard assert）
+
+- Rust：`examples-test/nervusdb-rust-test/tests/test_capabilities.rs`
+- Node：`examples-test/nervusdb-node-test/src/test-capabilities.ts`
+- Python：`examples-test/nervusdb-python-test/test_capabilities.py`
+
+上述场景不再打印 `[CORE-BUG]` 继续通过，而是改为硬断言失败即红灯。
+
+### 34.4 验证结果
+
+- `cargo test -p nervusdb --test t342_label_merge_regressions`：2/2 通过。
+- `bash examples-test/run_all.sh`：Rust/Node/Python 全绿（0 fail）。
+- `cargo test -p nervusdb --test tck_harness -- --input clauses/match/Match1.feature`：通过。
+- `cargo test -p nervusdb --test tck_harness -- --input clauses/merge/Merge1.feature`：通过。
+- `cargo test -p nervusdb --test tck_harness -- --input clauses/merge/Merge2.feature`：通过。
+
+### 34.5 文档状态
+
+- `examples-test` 三端 `CAPABILITY-REPORT.md` 已同步：
+  - 移除“多标签子集匹配”和“MERGE 关系不稳定”的已知缺口标记；
+  - 保留尚未清零缺口：`left/right`、`shortestPath`。

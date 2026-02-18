@@ -15,6 +15,7 @@ No server, no setup, no dependencies.
 - **Crash-safe** — WAL-based storage with single-writer + snapshot-reader transactions.
 - **Multi-platform bindings** — Rust, Python (PyO3), Node.js (N-API), CLI.
 - **Vector search** — built-in HNSW index for hybrid graph + vector queries.
+- **Cross-binding parity gate** — `examples-test` hard-asserts Rust/Node/Python isomorphic behavior.
 
 ## Quick Start
 
@@ -104,6 +105,7 @@ Transaction model: single writer + concurrent snapshot readers.
 | Rust unit + integration | 153 | all green |
 | Python (PyO3) | 138 | all green |
 | Node.js (N-API) | 109 | all green |
+| examples-test parity (Rust + Node + Python) | 601 / 601 | all green |
 
 ## Documentation
 
