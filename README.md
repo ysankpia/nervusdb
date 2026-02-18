@@ -121,6 +121,10 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -W warnings
 bash scripts/workspace_quick_test.sh
 bash scripts/binding_smoke.sh
+bash scripts/tests/stability_window_fixture.sh
+GITHUB_TOKEN="$(gh auth token)" \
+  bash scripts/stability_window.sh --mode strict --date 2026-02-16 \
+  --github-repo LuQing-Studio/nervusdb --github-token-env GITHUB_TOKEN
 ```
 
 ## License
