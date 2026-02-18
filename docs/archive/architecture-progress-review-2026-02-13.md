@@ -1458,3 +1458,12 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 - `artifacts/tck/beta-04-stability-window-day4-2026-02-18.log`
 - `artifacts/tck/beta-04-stability-window-day4-2026-02-18.rc`
 - `artifacts/tck/stability-window.md`
+
+### 36.5 诊断增强（同日补充）
+
+- 问题：`2026-02-15` 的 Tier-3 快照实际为 `mode=partial` 且 `scenarios.total=0`，此前被归类为 `threshold_or_failed`，可读性不足。
+- 修复：`scripts/stability_window.sh` 增加空快照原因分类 `empty_tier3_snapshot`。
+- 测试：新增 fixture 场景 `scenario_empty_tier3_snapshot_reason`，并通过 `scripts/tests/stability_window_fixture.sh` 全量回归。
+- 复算结果（`2026-02-18`）：
+  - `2026-02-15` 原因更新为 `empty_tier3_snapshot`；
+  - `consecutive_days` 仍为 `3/7`（语义不变，仅诊断精度提升）。

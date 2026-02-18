@@ -292,11 +292,54 @@ scenario_reason_paths_token_vs_no_token() {
   rm -rf "$tmp_dir"
 }
 
+scenario_empty_tier3_snapshot_reason() {
+  local tmp_dir
+  local report_dir
+  local nightly_file
+
+  tmp_dir="$(mktemp -d)"
+  report_dir="${tmp_dir}/report"
+  nightly_file="${tmp_dir}/nightly.json"
+  mkdir -p "$report_dir"
+
+  # 让最近一天是空快照，验证 reason 不再误标为 threshold_or_failed。
+  for day in "${DAYS[@]}"; do
+    write_ci_file "$report_dir" "$day" "true"
+    if [ "$day" = "2026-02-21" ]; then
+      cat >"${report_dir}/tier3-rate-${day}.json" <<JSON
+{
+  "date": "${day}",
+  "mode": "partial",
+  "pass_rate": 0.00,
+  "scenarios": {
+    "total": 0,
+    "passed": 0,
+    "skipped": 0,
+    "failed": 0
+  }
+}
+JSON
+    else
+      write_tier3_file "$report_dir" "$day" "100" "0"
+    fi
+  done
+  write_mock_nightly_status "$nightly_file"
+
+  run_with_expected_rc 1 env \
+    STABILITY_DAYS=7 \
+    TCK_REPORT_DIR="$report_dir" \
+    bash "$SCRIPT" --mode strict --date 2026-02-21 --nightly-status-file "$nightly_file"
+
+  assert_eq "empty_tier3_snapshot" "$(jq -r '.daily[] | select(.date=="2026-02-21") | .tier3.reason' "${report_dir}/stability-window.json")" "empty tier3 snapshot reason"
+  rm -rf "$tmp_dir"
+}
+
 main() {
   scenario_all_pass_7_days
   scenario_tier3_failure_resets_chain
   scenario_missing_ci_daily_blocks_day
   scenario_reason_paths_token_vs_no_token
+  scenario_empty_tier3_snapshot_reason
   echo "[fixture] stability_window fixtures passed"
 }
 

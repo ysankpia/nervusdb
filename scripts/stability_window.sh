@@ -530,17 +530,25 @@ for day in "${dates[@]}"; do
   tier3_reason=""
   tier3_rate=""
   tier3_failed=""
+  tier3_total=""
 
   if [ -f "$tier3_file" ]; then
     tier3_rate="$(jq -r '.pass_rate // empty' "$tier3_file" 2>/dev/null || true)"
     tier3_failed="$(jq -r '.scenarios.failed // .failed // empty' "$tier3_file" 2>/dev/null || true)"
+    tier3_total="$(jq -r '.scenarios.total // .total // empty' "$tier3_file" 2>/dev/null || true)"
 
     if [[ "$tier3_rate" =~ ^[0-9]+([.][0-9]+)?$ ]] && [[ "$tier3_failed" =~ ^[0-9]+$ ]]; then
-      rate_ok="$(awk -v r="$tier3_rate" -v t="$THRESHOLD" 'BEGIN { if (r + 0 >= t + 0) print 1; else print 0 }')"
-      if [ "$rate_ok" = "1" ] && [ "$tier3_failed" = "0" ]; then
-        tier3_pass=1
+      # 历史 nightly 曾产出 partial/empty 快照（total=0, pass_rate=0.00），
+      # 需要单独标注，避免与真实阈值失败混淆。
+      if [[ "$tier3_total" =~ ^[0-9]+$ ]] && [ "$tier3_total" = "0" ]; then
+        tier3_reason="empty_tier3_snapshot"
       else
-        tier3_reason="threshold_or_failed"
+        rate_ok="$(awk -v r="$tier3_rate" -v t="$THRESHOLD" 'BEGIN { if (r + 0 >= t + 0) print 1; else print 0 }')"
+        if [ "$rate_ok" = "1" ] && [ "$tier3_failed" = "0" ]; then
+          tier3_pass=1
+        else
+          tier3_reason="threshold_or_failed"
+        fi
       fi
     else
       tier3_reason="parse_error"

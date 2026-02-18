@@ -552,6 +552,10 @@
   - `2026-02-17`、`2026-02-18` 均恢复为 `PASS`；
   - 复算后窗口累计为 `3/7`（`2026-02-15` 仍为 `threshold_or_failed`，未进入连续窗口）；
   - 发布门禁仍阻断，继续累计至 `7/7`。
+- 诊断增强（同日续更）：
+  - `scripts/stability_window.sh` 增加空快照识别：当 `tier3-rate` 出现 `scenarios.total=0` 时，原因标记为 `empty_tier3_snapshot`（不再混同于 `threshold_or_failed`）。
+  - 新增 fixture：`scripts/tests/stability_window_fixture.sh::scenario_empty_tier3_snapshot_reason`。
+  - 复算口径：`2026-02-15` 原因更新为 `empty_tier3_snapshot`，`consecutive_days` 维持 `3/7`。
 - 证据：
   - `artifacts/tck/beta-04-stability-window-day4-2026-02-18.log`
   - `artifacts/tck/beta-04-stability-window-day4-2026-02-18.rc`
