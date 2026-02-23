@@ -107,8 +107,8 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 | 门槛 | 目标 | 当前 | 状态 |
 |------|------|------|------|
 | TCK Tier-3 全量通过率 | ≥95% | 100.00%（3897/3897） | 已达成（0 failed） |
-| 连续 7 天稳定窗 | 7 天全绿 | 进行中（BETA-04 WIP，strict 已累计到 Day6） | 已解锁（当前 5/7，若不重置最早 2026-02-22） |
-| 性能 SLO 封板 | P99 读≤120ms/写≤180ms/向量≤220ms | 未启动（BETA-05 Plan） | 阻塞于稳定窗 |
+| 连续 7 天稳定窗 | 7 天全绿 | 已达成（BETA-04 Done，strict Day7） | 已完成（当前 7/7，`window_passed=true`） |
+| 性能 SLO 封板 | P99 读≤120ms/写≤180ms/向量≤220ms | 进行中（BETA-05 WIP） | 已解锁（稳定窗达标后进入封板） |
 
 ### 3.2 TCK 收敛进展
 
@@ -1490,3 +1490,26 @@ TCK ≥95% → 7天稳定窗 → 性能 SLO 封板 → Beta 发布
 - 历史日 `2026-02-15` 仍标记为 `empty_tier3_snapshot`（非连续通过日）。
 - strict 规则下发布门禁继续阻断，需继续累计到 `7/7`。
 - 若后续不发生重置，最早可在 `2026-02-22` 达到稳定窗放行。
+
+## 38. 续更快照（2026-02-22，BETA-04 strict 稳定窗 Day7 达标）
+
+### 38.1 当日执行
+
+- 自动调度 workflow 全通过：
+  - `CI Daily Snapshot`：run `22270085698`
+  - `TCK Nightly Tier-3`：run `22270375979`
+  - `Stability Window Daily`：run `22271259934`
+
+### 38.2 稳定窗结果（strict）
+
+- 产物来源：`stability-window-artifacts`（run `22271259934`）。
+- `as_of_date=2026-02-22`
+- `consecutive_days=7`
+- `all_checks_pass=true`
+- `window_passed=true`
+- 连续窗口区间 `2026-02-16` ~ `2026-02-22` 全部 `PASS`。
+
+### 38.3 发布门禁状态
+
+- `scripts/beta_release_gate.sh`：`PASSED`（放行）。
+- 结论：`BETA-04` 由 `WIP` 切换为 `Done`，后续主线转入 `BETA-05` 性能 SLO 封板。

@@ -106,8 +106,8 @@
 | BETA-03R7     | [TCK] 主干攻坚（Temporal/Aggregation/Set/Remove/Create/Subquery） | High   | Done   | codex/feat/phase1b1c-bigbang | 2026-02-13 已清零 `Temporal4`、`Aggregation6`、`Remove1/3`、`Set2/4/5`、`Create3`，修复 correlated subquery 作用域回归，Tier-3 提升至 94.48%（3682/3897）。 |
 | BETA-03R13    | [Hardening] `TypeError` 断言收紧（compile-time + any-time + runtime） | High   | Done   | codex/feat/beta-04-r13w2-anytime-hardening | R13-W1/W2/W3 已全部完成：compile-time、any-time、runtime 三类 `TypeError` 断言均切换为严格模式；补齐递归运行期表达式类型守卫（含 list comprehension 作用域）与属性写入非法 list 元素拦截，定向簇与基线门禁全绿。 |
 | BETA-03R14    | [Hardening] runtime 语义一致性收口（WHERE guard + type(rel)） | High   | Done   | codex/feat/beta-04-r14w2-unwind-guard | R14-W1~W13 已完成：`WHERE/UNWIND/SET/MERGE/FOREACH/DELETE/CREATE/CALL/Aggregate/IndexSeek` 入口 runtime guard 全覆盖，`runtime_guard_audit` 热点清零并接入 CI；W13-A 全量证据：core gates 全绿、Tier-3 全量 `3897/3897` 全通过。 |
-| BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | WIP    | feat/TB1-stability-window   | strict 稳定窗基建已落地（`ci-daily-snapshot` + `stability_window.sh --mode strict` + `beta_release_gate.sh` + release 接线）；截至 2026-02-20（UTC）累计 `consecutive_days=5/7`（`2026-02-15` 为空快照 `empty_tier3_snapshot`），发布门禁仍阻断，若不重置最早 2026-02-22 达标。 |
-| BETA-05       | [Perf] 大规模 SLO 封板（读120/写180/向量220 ms P99）       | High   | WIP    | codex/feat/w13-perf-guard-stream | W13-PERF 已落地资源护栏+高内存算子收敛；待主分支 Nightly 8h 复测并累计稳定窗证据。 |
+| BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | Done   | feat/TB1-stability-window   | strict 稳定窗基建已落地（`ci-daily-snapshot` + `stability_window.sh --mode strict` + `beta_release_gate.sh` + release 接线）；截至 2026-02-22（UTC）累计 `consecutive_days=7/7`，`window_passed=true`，发布门禁放行。 |
+| BETA-05       | [Perf] 大规模 SLO 封板（读120/写180/向量220 ms P99）       | High   | WIP    | codex/feat/w13-perf-guard-stream | W13-PERF 已落地资源护栏+高内存算子收敛；稳定窗已达标，进入主分支 Nightly 8h 复测与 SLO 封板阶段。 |
 
 ### BETA-03R4 子进展（2026-02-13）
 - W1：引入 `BindingKind::RelationshipList`，varlen 关系变量输出统一为 `List<Relationship>`，0-hop 命中输出 `[]`，OPTIONAL miss 保持 `null`。
@@ -577,6 +577,23 @@
   - 因 strict 连续计数规则，发布门禁继续阻断，需继续累计至 `7/7`。
 - 下一里程碑：
   - 若 `2026-02-21` 与 `2026-02-22` 连续通过，则稳定窗可达 `7/7` 并解除发布阻断。
+
+### BETA-04 子进展（2026-02-22，strict 稳定窗 Day7 达标）
+- 当日执行（UTC）：
+  - 自动调度并通过：
+    - `CI Daily Snapshot`（run `22270085698`）
+    - `TCK Nightly Tier-3`（run `22270375979`）
+    - `Stability Window Daily`（run `22271259934`）
+- 稳定窗产物（`stability-window-artifacts`）：
+  - `as_of_date=2026-02-22`
+  - `consecutive_days=7`
+  - `window_passed=true`
+  - 连续窗口区间：`2026-02-16` ~ `2026-02-22` 全部 `PASS`
+- 发布门禁状态：
+  - `bash scripts/beta_release_gate.sh` 返回 `PASSED`（放行）。
+- 阶段结论：
+  - `BETA-04` 达成完成标准，状态由 `WIP` 更新为 `Done`；
+  - 下一主线切换为 `BETA-05`（性能 SLO 封板）。
 
 ## Archived (v1/Alpha)
 
