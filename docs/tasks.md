@@ -88,6 +88,7 @@
 | M5-03         | [Benchmark] NervusDB vs Neo4j/Memgraph 对标               | Medium | WIP    | feat/M5-03-benchmark        | 已有流程；待绑定 Beta 发布 SLO 阻断 |
 | M5-04         | [Performance] 并发读热点优化                               | Medium | WIP    | feat/M5-04-concurrency      | 已有基线；待收敛到 Beta P99 门槛 |
 | M5-05         | [AI] HNSW 参数调优与默认策略                              | Low    | WIP    | feat/M5-05-hnsw             | 已有参数面与报告；待收敛到 recall/latency 发布门槛 |
+| M5-06         | [Binding] Rust/Python/Node 三端硬对齐（0 soft gate）      | High   | Done   | codex/feat/p0-align-01-hard-parity | 能力契约落地 + soft-pass 审计阻断 + 三端能力测试硬断言；`binding_parity_gate` 已作为 PR 阻断。 |
 | **Industrial**| **Industrial Quality (Nightly Gates)**                    |        |        |                             |                                                          |
 | I5-01         | [Quality] `cargo-fuzz` 分层接入                            | High   | WIP    | feat/I5-01-fuzz             | 已 nightly；待接入“7天稳定窗”统一统计 |
 | I5-02         | [Quality] Chaos IO 故障注入门禁                            | High   | WIP    | feat/I5-02-chaos            | 已 nightly；待接入“7天稳定窗”统一统计 |
@@ -594,6 +595,24 @@
 - 阶段结论：
   - `BETA-04` 达成完成标准，状态由 `WIP` 更新为 `Done`；
   - 下一主线切换为 `BETA-05`（性能 SLO 封板）。
+
+### M5-06 子进展（2026-02-23，P0-ALIGN-01 硬对齐收口）
+- 能力契约与门禁：
+  - 新增能力契约单一真相：`examples-test/capability-contract.yaml`。
+  - 新增软放行审计：`scripts/parity_softgate_audit.sh`。
+  - `scripts/binding_parity_gate.sh` 接入 `parity-softgate-audit` 检查项，形成阻断闭环。
+- 内核与语义补齐（Rust 基线）：
+  - 标量函数补齐：`floor`、`round`、`log`、`e`、`pi`。
+  - 新增 `reduce(...)` 语法/类型校验/求值链路。
+  - 删除语义收紧：连边节点仅允许 `DETACH DELETE`，普通 `DELETE` 统一失败。
+- 三端能力测试硬化：
+  - Rust/Node/Python capability 套件移除 soft-pass（`catch/note/unsupported`），统一硬断言。
+  - 新增回归：`nervusdb/tests/t343_parity_semantics.rs`，并更新 `t311_expressions`、`t313_functions`、`create_test`。
+- 本轮验收（本地）：
+  - `bash scripts/parity_softgate_audit.sh` 通过（0 命中）。
+  - `bash examples-test/run_all.sh` 通过（Rust/Node/Python 全绿）。
+  - `bash scripts/binding_parity_gate.sh` 通过。
+  - `cargo test -p nervusdb --test t311_expressions --test t313_functions --test t343_parity_semantics` 通过。
 
 ## Archived (v1/Alpha)
 
