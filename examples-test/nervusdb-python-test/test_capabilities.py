@@ -157,12 +157,9 @@ def test_delete_rel_only():
 test("DELETE relationship only", test_delete_rel_only)
 
 def test_multi_create():
-    try:
-        db.execute_write("CREATE (:Multi1 {v: 1}), (:Multi2 {v: 2})")
-        rows = db.query("MATCH (n:Multi1) RETURN count(n) AS c")
-        assert_true(rows[0]["c"] >= 1, "multi-create should work")
-    except Exception as e:
-        print(f"    (limitation observed: {str(e)[:80]})")
+    db.execute_write("CREATE (:Multi1 {v: 1}), (:Multi2 {v: 2})")
+    rows = db.query("MATCH (n:Multi1) RETURN count(n) AS c")
+    assert_true(rows[0]["c"] >= 1, "multi-create should work")
 test("multi-node CREATE in single statement", test_multi_create)
 
 db.close()
@@ -673,12 +670,9 @@ db.execute_write("CREATE (a:E {name: 'has-rel'})-[:R]->(b:E {name: 'target'})")
 db.execute_write("CREATE (:E {name: 'no-rel'})")
 
 def test_exists():
-    try:
-        rows = db.query("MATCH (n:E) WHERE EXISTS { (n)-[:R]->() } RETURN n.name")
-        assert_eq(len(rows), 1)
-        assert_eq(rows[0]["n.name"], "has-rel")
-    except Exception as e:
-        print(f"    (EXISTS unsupported: {str(e)[:60]})")
+    rows = db.query("MATCH (n:E) WHERE EXISTS { (n)-[:R]->() } RETURN n.name")
+    assert_eq(len(rows), 1)
+    assert_eq(rows[0]["n.name"], "has-rel")
 test("WHERE EXISTS pattern", test_exists)
 
 db.close()
@@ -689,12 +683,9 @@ print("\n── 13. FOREACH ──")
 db, _ = fresh_db("foreach")
 
 def test_foreach():
-    try:
-        db.execute_write("FOREACH (i IN [1, 2, 3] | CREATE (:FE {idx: i}))")
-        rows = db.query("MATCH (n:FE) RETURN n.idx ORDER BY n.idx")
-        assert_eq(len(rows), 3)
-    except Exception as e:
-        print(f"    (FOREACH unsupported: {str(e)[:60]})")
+    db.execute_write("FOREACH (i IN [1, 2, 3] | CREATE (:FE {idx: i}))")
+    rows = db.query("MATCH (n:FE) RETURN n.idx ORDER BY n.idx")
+    assert_eq(len(rows), 3)
 test("FOREACH create nodes", test_foreach)
 
 db.close()
@@ -756,12 +747,12 @@ def test_syntax_error_write():
 test("syntax error in execute_write() -> SyntaxError", test_syntax_error_write)
 
 def test_write_via_query():
-    try:
-        db.query("CREATE (:ShouldFail)")
-        print("    (note: query() accepted write — no read/write separation)")
-    except Exception:
-        print("    (note: query() correctly rejected write)")
-test("write-via-query behavior documented", test_write_via_query)
+    msg = assert_throws(
+        lambda: db.query("CREATE (:ShouldFail)"),
+        nervusdb.ExecutionError,
+    )
+    assert_true("execute_write" in msg or "read" in msg, f"unexpected error: {msg}")
+test("write via query() is rejected", test_write_via_query)
 
 def test_error_is_typed():
     try:
@@ -1258,28 +1249,18 @@ def test_emoji():
 test("emoji string", test_emoji)
 
 def test_bad_param_type():
-    try:
-        # Pass an unsupported type as param
-        db.query("RETURN $val AS v", params={"val": object()})
-        print("    (note: bad param type did not error)")
-    except (TypeError, Exception):
-        pass  # Expected
+    assert_throws(lambda: db.query("RETURN $val AS v", params={"val": object()}))
 test("invalid param type raises error", test_bad_param_type)
 
 def test_close_with_active_txn():
     db2, _ = fresh_db("activetxn")
     txn = db2.begin_write()
     txn.query("CREATE (:AT {v: 1})")
-    # close() with active txn should throw StorageError
-    try:
-        db2.close()
-        # If it didn't throw, that's also informative
-        print("    (note: close() succeeded with active txn)")
-    except nervusdb.StorageError:
-        print("    (confirmed: close() throws StorageError with active txn)")
-    except Exception as e:
-        print(f"    (close() threw {type(e).__name__}: {e})")
-    # Clean up
+    assert_throws(
+        lambda: db2.close(),
+        nervusdb.StorageError,
+        "write transaction in progress",
+    )
     try:
         txn.rollback()
     except Exception:
@@ -1592,11 +1573,8 @@ def test_tostring_from_bool():
 test("toString(true)", test_tostring_from_bool)
 
 def test_toboolean():
-    try:
-        rows = db.query("RETURN toBoolean('true') AS v")
-        assert_eq(rows[0]["v"], True)
-    except Exception:
-        print("    (note: toBoolean() may not be implemented)")
+    rows = db.query("RETURN toBoolean('true') AS v")
+    assert_eq(rows[0]["v"], True)
 test("toBoolean('true')", test_toboolean)
 
 db.close()
@@ -1607,70 +1585,46 @@ print("\n── 36. Math functions (full) ──")
 db, _ = fresh_db("mathfull")
 
 def test_ceil():
-    try:
-        rows = db.query("RETURN ceil(2.3) AS v")
-        assert_near(rows[0]["v"], 3.0)
-    except Exception:
-        print("    (note: ceil() may not be implemented)")
+    rows = db.query("RETURN ceil(2.3) AS v")
+    assert_near(rows[0]["v"], 3.0)
 test("ceil(2.3)", test_ceil)
 
 def test_floor():
-    try:
-        rows = db.query("RETURN floor(2.7) AS v")
-        assert_near(rows[0]["v"], 2.0)
-    except Exception:
-        print("    (note: floor() may not be implemented)")
+    rows = db.query("RETURN floor(2.7) AS v")
+    assert_near(rows[0]["v"], 2.0)
 test("floor(2.7)", test_floor)
 
 def test_round():
-    try:
-        rows = db.query("RETURN round(2.5) AS v")
-        v = rows[0]["v"]
-        assert_true(v >= 2.0 and v <= 3.0, f"round(2.5) should be 2 or 3, got {v}")
-    except Exception:
-        print("    (note: round() may not be implemented)")
+    rows = db.query("RETURN round(2.5) AS v")
+    v = rows[0]["v"]
+    assert_near(v, 3.0)
 test("round(2.5)", test_round)
 
 def test_sign():
-    try:
-        rows = db.query("RETURN sign(-5) AS neg, sign(0) AS zero, sign(5) AS pos")
-        assert_eq(rows[0]["neg"], -1)
-        assert_eq(rows[0]["zero"], 0)
-        assert_eq(rows[0]["pos"], 1)
-    except Exception:
-        print("    (note: sign() may not be implemented)")
+    rows = db.query("RETURN sign(-5) AS neg, sign(0) AS zero, sign(5) AS pos")
+    assert_eq(rows[0]["neg"], -1)
+    assert_eq(rows[0]["zero"], 0)
+    assert_eq(rows[0]["pos"], 1)
 test("sign()", test_sign)
 
 def test_sqrt():
-    try:
-        rows = db.query("RETURN sqrt(16) AS v")
-        assert_near(rows[0]["v"], 4.0)
-    except Exception:
-        print("    (note: sqrt() may not be implemented)")
+    rows = db.query("RETURN sqrt(16) AS v")
+    assert_near(rows[0]["v"], 4.0)
 test("sqrt(16)", test_sqrt)
 
 def test_log():
-    try:
-        rows = db.query("RETURN log(1) AS v")
-        assert_near(rows[0]["v"], 0.0)
-    except Exception:
-        print("    (note: log() may not be implemented)")
+    rows = db.query("RETURN log(1) AS v")
+    assert_near(rows[0]["v"], 0.0)
 test("log(1)", test_log)
 
 def test_e():
-    try:
-        rows = db.query("RETURN e() AS v")
-        assert_near(rows[0]["v"], math.e, eps=0.01)
-    except Exception:
-        print("    (note: e() may not be implemented)")
+    rows = db.query("RETURN e() AS v")
+    assert_near(rows[0]["v"], math.e, eps=0.01)
 test("e()", test_e)
 
 def test_pi():
-    try:
-        rows = db.query("RETURN pi() AS v")
-        assert_near(rows[0]["v"], math.pi, eps=0.01)
-    except Exception:
-        print("    (note: pi() may not be implemented)")
+    rows = db.query("RETURN pi() AS v")
+    assert_near(rows[0]["v"], math.pi, eps=0.01)
 test("pi()", test_pi)
 
 db.close()
@@ -1681,52 +1635,34 @@ print("\n── 37. String functions (expanded) ──")
 db, _ = fresh_db("strexp")
 
 def test_replace():
-    try:
-        rows = db.query("RETURN replace('hello world', 'world', 'python') AS v")
-        assert_eq(rows[0]["v"], "hello python")
-    except Exception:
-        print("    (note: replace() may not be implemented)")
+    rows = db.query("RETURN replace('hello world', 'world', 'python') AS v")
+    assert_eq(rows[0]["v"], "hello python")
 test("replace()", test_replace)
 
 def test_ltrim():
-    try:
-        rows = db.query("RETURN lTrim('  hi') AS v")
-        assert_eq(rows[0]["v"], "hi")
-    except Exception:
-        print("    (note: lTrim() may not be implemented)")
+    rows = db.query("RETURN lTrim('  hi') AS v")
+    assert_eq(rows[0]["v"], "hi")
 test("lTrim()", test_ltrim)
 
 def test_rtrim():
-    try:
-        rows = db.query("RETURN rTrim('hi  ') AS v")
-        assert_eq(rows[0]["v"], "hi")
-    except Exception:
-        print("    (note: rTrim() may not be implemented)")
+    rows = db.query("RETURN rTrim('hi  ') AS v")
+    assert_eq(rows[0]["v"], "hi")
 test("rTrim()", test_rtrim)
 
 def test_split():
-    try:
-        rows = db.query("RETURN split('a,b,c', ',') AS v")
-        assert_eq(len(rows[0]["v"]), 3)
-        assert_eq(rows[0]["v"][0], "a")
-    except Exception:
-        print("    (note: split() may not be implemented)")
+    rows = db.query("RETURN split('a,b,c', ',') AS v")
+    assert_eq(len(rows[0]["v"]), 3)
+    assert_eq(rows[0]["v"][0], "a")
 test("split()", test_split)
 
 def test_reverse():
-    try:
-        rows = db.query("RETURN reverse('abc') AS v")
-        assert_eq(rows[0]["v"], "cba")
-    except Exception:
-        print("    (note: reverse() may not be implemented)")
+    rows = db.query("RETURN reverse('abc') AS v")
+    assert_eq(rows[0]["v"], "cba")
 test("reverse()", test_reverse)
 
 def test_substring():
-    try:
-        rows = db.query("RETURN substring('hello', 1, 3) AS v")
-        assert_eq(rows[0]["v"], "ell")
-    except Exception:
-        print("    (note: substring() may not be implemented)")
+    rows = db.query("RETURN substring('hello', 1, 3) AS v")
+    assert_eq(rows[0]["v"], "ell")
 test("substring()", test_substring)
 
 db.close()
@@ -1761,20 +1697,14 @@ def test_list_size():
 test("size() on list", test_list_size)
 
 def test_list_comprehension():
-    try:
-        rows = db.query("RETURN [x IN range(1, 5) WHERE x > 3] AS v")
-        assert_eq(len(rows[0]["v"]), 2)
-        assert_eq(rows[0]["v"][0], 4)
-    except Exception:
-        print("    (note: list comprehension may not be implemented)")
+    rows = db.query("RETURN [x IN range(1, 5) WHERE x > 3] AS v")
+    assert_eq(len(rows[0]["v"]), 2)
+    assert_eq(rows[0]["v"][0], 4)
 test("list comprehension", test_list_comprehension)
 
 def test_reduce():
-    try:
-        rows = db.query("RETURN reduce(acc = 0, x IN [1, 2, 3] | acc + x) AS v")
-        assert_eq(rows[0]["v"], 6)
-    except Exception:
-        print("    (note: reduce() may not be implemented)")
+    rows = db.query("RETURN reduce(acc = 0, x IN [1, 2, 3] | acc + x) AS v")
+    assert_eq(rows[0]["v"], 6)
 test("reduce()", test_reduce)
 
 db.close()
@@ -1802,11 +1732,8 @@ def test_nested_map():
 test("nested map", test_nested_map)
 
 def test_keys_function():
-    try:
-        rows = db.query("RETURN keys({a: 1, b: 2}) AS v")
-        assert_eq(len(rows[0]["v"]), 2)
-    except Exception:
-        print("    (note: keys() on map may not be implemented)")
+    rows = db.query("RETURN keys({a: 1, b: 2}) AS v")
+    assert_eq(len(rows[0]["v"]), 2)
 test("keys() on map", test_keys_function)
 
 db.close()
@@ -1897,11 +1824,8 @@ db, _ = fresh_db("explain")
 db.execute_write("CREATE (:EX {v: 1})")
 
 def test_explain():
-    try:
-        rows = db.query("EXPLAIN MATCH (n:EX) RETURN n")
-        print(f"    EXPLAIN returned {len(rows)} rows")
-    except Exception:
-        print("    (note: EXPLAIN may not be implemented)")
+    rows = db.query("EXPLAIN MATCH (n:EX) RETURN n")
+    assert_true(len(rows) >= 1, "EXPLAIN should return at least one row")
 test("EXPLAIN basic", test_explain)
 
 db.close()
@@ -1936,19 +1860,13 @@ print("\n── 45. Error handling (expanded) ──")
 db, _ = fresh_db("err2")
 
 def test_type_error_arithmetic():
-    try:
-        rows = db.query("RETURN 'hello' + 1 AS v")
-        print(f"    'hello' + 1 = {rows[0]['v']!r}")
-    except Exception:
-        print("    (type error correctly raised for string + int)")
+    rows = db.query("RETURN 'hello' + 1 AS v")
+    assert_eq(rows[0]["v"], None)
 test("type error in arithmetic", test_type_error_arithmetic)
 
 def test_division_by_zero():
-    try:
-        rows = db.query("RETURN 1 / 0 AS v")
-        print(f"    1/0 = {rows[0]['v']!r}")
-    except Exception:
-        print("    (division by zero correctly raised error)")
+    rows = db.query("RETURN 1 / 0 AS v")
+    assert_eq(rows[0]["v"], None)
 test("division by zero", test_division_by_zero)
 
 def test_missing_property_null():
