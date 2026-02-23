@@ -76,6 +76,10 @@ jobs:
         if: runner.os == 'Linux'
         run: bash scripts/parity_softgate_audit.sh
 
+      - name: Parity coverage audit
+        if: runner.os == 'Linux'
+        run: bash scripts/parity_coverage_audit.sh
+
       - name: Binding parity gate (Rust/Node/Python)
         if: runner.os == 'Linux'
         run: bash scripts/binding_parity_gate.sh

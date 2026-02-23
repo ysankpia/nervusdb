@@ -1,92 +1,1802 @@
-version: 1
+version: 2
 baseline: rust-current
 policy:
   hard_alignment: true
+  shared_coverage_1_to_1: true
   open_cypher_strict: true
   block_on_mismatch: true
 capabilities:
-  - id: query_read_only_rejects_write
+  - id: CID-SHARED-001
     scope: shared
     blocking: true
+    category: c01
+    expected:
+      mode: success
+    bindings:
+      rust: 't01_create_single_node'
+      node: 'CREATE single node'
+      python: 'CREATE single node'
+  - id: CID-SHARED-002
+    scope: shared
+    blocking: true
+    category: c01
+    expected:
+      mode: success
+    bindings:
+      rust: 't01_match_return_node'
+      node: 'MATCH + RETURN node'
+      python: 'MATCH + RETURN node'
+  - id: CID-SHARED-003
+    scope: shared
+    blocking: true
+    category: c01
+    expected:
+      mode: success
+    bindings:
+      rust: 't01_create_relationship'
+      node: 'CREATE relationship'
+      python: 'CREATE relationship'
+  - id: CID-SHARED-004
+    scope: shared
+    blocking: true
+    category: c01
+    expected:
+      mode: success
+    bindings:
+      rust: 't01_set_property'
+      node: 'SET property on node'
+      python: 'SET property on node'
+  - id: CID-SHARED-005
+    scope: shared
+    blocking: true
+    category: c01
+    expected:
+      mode: success
+    bindings:
+      rust: 't01_set_overwrite'
+      node: 'SET overwrite property'
+      python: 'SET overwrite property'
+  - id: CID-SHARED-006
+    scope: shared
+    blocking: true
+    category: c01
+    expected:
+      mode: success
+    bindings:
+      rust: 't01_remove_property'
+      node: 'REMOVE property'
+      python: 'REMOVE property'
+  - id: CID-SHARED-007
+    scope: shared
+    blocking: true
+    category: c01
+    expected:
+      mode: success
+    bindings:
+      rust: 't01_delete_node_detach'
+      node: 'DELETE node (detach)'
+      python: 'DELETE node (detach)'
+  - id: CID-SHARED-008
+    scope: shared
+    blocking: true
+    category: c01
+    expected:
+      mode: success
+    bindings:
+      rust: 't01_delete_rel_only'
+      node: 'DELETE relationship only'
+      python: 'DELETE relationship only'
+  - id: CID-SHARED-009
+    scope: shared
+    blocking: true
+    category: c01
+    expected:
+      mode: success
+    bindings:
+      rust: 't01_multi_create'
+      node: 'multi-node CREATE in single statement'
+      python: 'multi-node CREATE in single statement'
+  - id: CID-SHARED-010
+    scope: shared
+    blocking: true
+    category: c01b
+    expected:
+      mode: success
+    bindings:
+      rust: 't01b_return_scalar'
+      node: 'RETURN scalar expression'
+      python: 'RETURN scalar expression'
+  - id: CID-SHARED-011
+    scope: shared
+    blocking: true
+    category: c01b
+    expected:
+      mode: success
+    bindings:
+      rust: 't01b_return_alias'
+      node: 'RETURN property alias'
+      python: 'RETURN property alias'
+  - id: CID-SHARED-012
+    scope: shared
+    blocking: true
+    category: c01b
+    expected:
+      mode: success
+    bindings:
+      rust: 't01b_return_distinct'
+      node: 'RETURN DISTINCT'
+      python: 'RETURN DISTINCT'
+  - id: CID-SHARED-013
+    scope: shared
+    blocking: true
+    category: c01b
+    expected:
+      mode: success
+    bindings:
+      rust: 't01b_return_star'
+      node: 'RETURN *'
+      python: 'RETURN *'
+  - id: CID-SHARED-014
+    scope: shared
+    blocking: true
+    category: c02
+    expected:
+      mode: success
+    bindings:
+      rust: 't02_multi_label_create'
+      node: 'CREATE node with multiple labels'
+      python: 'CREATE node with multiple labels'
+  - id: CID-SHARED-015
+    scope: shared
+    blocking: true
+    category: c02
+    expected:
+      mode: success
+    bindings:
+      rust: 't02_single_label_subset'
+      node: 'MATCH by single label subset'
+      python: 'MATCH by single label subset'
+  - id: CID-SHARED-016
+    scope: shared
+    blocking: true
+    category: c03
+    expected:
+      mode: success
+    bindings:
+      rust: 't03_null_property'
+      node: 'null property'
+      python: 'null property'
+  - id: CID-SHARED-017
+    scope: shared
+    blocking: true
+    category: c03
+    expected:
+      mode: success
+    bindings:
+      rust: 't03_bool_properties'
+      node: 'boolean properties'
+      python: 'boolean properties'
+  - id: CID-SHARED-018
+    scope: shared
+    blocking: true
+    category: c03
+    expected:
+      mode: success
+    bindings:
+      rust: 't03_integer_property'
+      node: 'integer property'
+      python: 'integer property'
+  - id: CID-SHARED-019
+    scope: shared
+    blocking: true
+    category: c03
+    expected:
+      mode: success
+    bindings:
+      rust: 't03_negative_integer'
+      node: 'negative integer'
+      python: 'negative integer'
+  - id: CID-SHARED-020
+    scope: shared
+    blocking: true
+    category: c03
+    expected:
+      mode: success
+    bindings:
+      rust: 't03_float_property'
+      node: 'float property'
+      python: 'float property'
+  - id: CID-SHARED-021
+    scope: shared
+    blocking: true
+    category: c03
+    expected:
+      mode: success
+    bindings:
+      rust: 't03_string_special_chars'
+      node: 'string property with special chars'
+      python: 'string property with special chars'
+  - id: CID-SHARED-022
+    scope: shared
+    blocking: true
+    category: c03
+    expected:
+      mode: success
+    bindings:
+      rust: 't03_list_literal'
+      node: 'list literal in RETURN'
+      python: 'list literal in RETURN'
+  - id: CID-SHARED-023
+    scope: shared
+    blocking: true
+    category: c03
+    expected:
+      mode: success
+    bindings:
+      rust: 't03_map_literal'
+      node: 'map literal in RETURN'
+      python: 'map literal in RETURN'
+  - id: CID-SHARED-024
+    scope: shared
+    blocking: true
+    category: c03
+    expected:
+      mode: success
+    bindings:
+      rust: 't03_list_property'
+      node: 'list property on node'
+      python: 'list property on node'
+  - id: CID-SHARED-025
+    scope: shared
+    blocking: true
+    category: c04
+    expected:
+      mode: success
+    bindings:
+      rust: 't04_where_equality'
+      node: 'WHERE equality'
+      python: 'WHERE equality'
+  - id: CID-SHARED-026
+    scope: shared
+    blocking: true
+    category: c04
+    expected:
+      mode: success
+    bindings:
+      rust: 't04_where_gt'
+      node: 'WHERE comparison >'
+      python: 'WHERE comparison >'
+  - id: CID-SHARED-027
+    scope: shared
+    blocking: true
+    category: c04
+    expected:
+      mode: success
+    bindings:
+      rust: 't04_where_and'
+      node: 'WHERE AND'
+      python: 'WHERE AND'
+  - id: CID-SHARED-028
+    scope: shared
+    blocking: true
+    category: c04
+    expected:
+      mode: success
+    bindings:
+      rust: 't04_where_or'
+      node: 'WHERE OR'
+      python: 'WHERE OR'
+  - id: CID-SHARED-029
+    scope: shared
+    blocking: true
+    category: c04
+    expected:
+      mode: success
+    bindings:
+      rust: 't04_where_not'
+      node: 'WHERE NOT'
+      python: 'WHERE NOT'
+  - id: CID-SHARED-030
+    scope: shared
+    blocking: true
+    category: c04
+    expected:
+      mode: success
+    bindings:
+      rust: 't04_where_in'
+      node: 'WHERE IN list'
+      python: 'WHERE IN list'
+  - id: CID-SHARED-031
+    scope: shared
+    blocking: true
+    category: c04
+    expected:
+      mode: success
+    bindings:
+      rust: 't04_where_starts_with'
+      node: 'WHERE STARTS WITH'
+      python: 'WHERE STARTS WITH'
+  - id: CID-SHARED-032
+    scope: shared
+    blocking: true
+    category: c04
+    expected:
+      mode: success
+    bindings:
+      rust: 't04_where_contains'
+      node: 'WHERE CONTAINS'
+      python: 'WHERE CONTAINS'
+  - id: CID-SHARED-033
+    scope: shared
+    blocking: true
+    category: c04
+    expected:
+      mode: success
+    bindings:
+      rust: 't04_where_ends_with'
+      node: 'WHERE ENDS WITH'
+      python: 'WHERE ENDS WITH'
+  - id: CID-SHARED-034
+    scope: shared
+    blocking: true
+    category: c04
+    expected:
+      mode: success
+    bindings:
+      rust: 't04_where_is_null'
+      node: 'WHERE IS NULL'
+      python: 'WHERE IS NULL'
+  - id: CID-SHARED-035
+    scope: shared
+    blocking: true
+    category: c04
+    expected:
+      mode: success
+    bindings:
+      rust: 't04_where_is_not_null'
+      node: 'WHERE IS NOT NULL'
+      python: 'WHERE IS NOT NULL'
+  - id: CID-SHARED-036
+    scope: shared
+    blocking: true
+    category: c05
+    expected:
+      mode: success
+    bindings:
+      rust: 't05_order_by_asc'
+      node: 'ORDER BY ASC'
+      python: 'ORDER BY ASC'
+  - id: CID-SHARED-037
+    scope: shared
+    blocking: true
+    category: c05
+    expected:
+      mode: success
+    bindings:
+      rust: 't05_order_by_desc'
+      node: 'ORDER BY DESC'
+      python: 'ORDER BY DESC'
+  - id: CID-SHARED-038
+    scope: shared
+    blocking: true
+    category: c05
+    expected:
+      mode: success
+    bindings:
+      rust: 't05_limit'
+      node: 'LIMIT'
+      python: 'LIMIT'
+  - id: CID-SHARED-039
+    scope: shared
+    blocking: true
+    category: c05
+    expected:
+      mode: success
+    bindings:
+      rust: 't05_skip'
+      node: 'SKIP'
+      python: 'SKIP'
+  - id: CID-SHARED-040
+    scope: shared
+    blocking: true
+    category: c05
+    expected:
+      mode: success
+    bindings:
+      rust: 't05_with_pipe'
+      node: 'WITH pipe'
+      python: 'WITH pipe'
+  - id: CID-SHARED-041
+    scope: shared
+    blocking: true
+    category: c05
+    expected:
+      mode: success
+    bindings:
+      rust: 't05_unwind'
+      node: 'UNWIND'
+      python: 'UNWIND'
+  - id: CID-SHARED-042
+    scope: shared
+    blocking: true
+    category: c05
+    expected:
+      mode: success
+    bindings:
+      rust: 't05_unwind_create'
+      node: 'UNWIND + CREATE'
+      python: 'UNWIND + CREATE'
+  - id: CID-SHARED-043
+    scope: shared
+    blocking: true
+    category: c05
+    expected:
+      mode: success
+    bindings:
+      rust: 't05_union'
+      node: 'UNION'
+      python: 'UNION'
+  - id: CID-SHARED-044
+    scope: shared
+    blocking: true
+    category: c05
+    expected:
+      mode: success
+    bindings:
+      rust: 't05_union_all'
+      node: 'UNION ALL'
+      python: 'UNION ALL'
+  - id: CID-SHARED-045
+    scope: shared
+    blocking: true
+    category: c05
+    expected:
+      mode: success
+    bindings:
+      rust: 't05_optional_match'
+      node: 'OPTIONAL MATCH'
+      python: 'OPTIONAL MATCH'
+  - id: CID-SHARED-046
+    scope: shared
+    blocking: true
+    category: c06
+    expected:
+      mode: success
+    bindings:
+      rust: 't06_count'
+      node: 'count()'
+      python: 'count()'
+  - id: CID-SHARED-047
+    scope: shared
+    blocking: true
+    category: c06
+    expected:
+      mode: success
+    bindings:
+      rust: 't06_sum'
+      node: 'sum()'
+      python: 'sum()'
+  - id: CID-SHARED-048
+    scope: shared
+    blocking: true
+    category: c06
+    expected:
+      mode: success
+    bindings:
+      rust: 't06_avg'
+      node: 'avg()'
+      python: 'avg()'
+  - id: CID-SHARED-049
+    scope: shared
+    blocking: true
+    category: c06
+    expected:
+      mode: success
+    bindings:
+      rust: 't06_min_max'
+      node: 'min() / max()'
+      python: 'min() / max()'
+  - id: CID-SHARED-050
+    scope: shared
+    blocking: true
+    category: c06
+    expected:
+      mode: success
+    bindings:
+      rust: 't06_collect'
+      node: 'collect()'
+      python: 'collect()'
+  - id: CID-SHARED-051
+    scope: shared
+    blocking: true
+    category: c06
+    expected:
+      mode: success
+    bindings:
+      rust: 't06_count_distinct'
+      node: 'count(DISTINCT)'
+      python: 'count(DISTINCT)'
+  - id: CID-SHARED-052
+    scope: shared
+    blocking: true
+    category: c06
+    expected:
+      mode: success
+    bindings:
+      rust: 't06_group_by'
+      node: 'GROUP BY (implicit)'
+      python: 'GROUP BY (implicit)'
+  - id: CID-SHARED-053
+    scope: shared
+    blocking: true
+    category: c07
+    expected:
+      mode: success
+    bindings:
+      rust: 't07_merge_create'
+      node: 'MERGE creates when not exists'
+      python: 'MERGE creates when not exists'
+  - id: CID-SHARED-054
+    scope: shared
+    blocking: true
+    category: c07
+    expected:
+      mode: success
+    bindings:
+      rust: 't07_merge_match_existing'
+      node: 'MERGE matches when exists'
+      python: 'MERGE matches when exists'
+  - id: CID-SHARED-055
+    scope: shared
+    blocking: true
+    category: c07
+    expected:
+      mode: success
+    bindings:
+      rust: 't07_merge_on_create_set'
+      node: 'MERGE ON CREATE SET'
+      python: 'MERGE ON CREATE SET'
+  - id: CID-SHARED-056
+    scope: shared
+    blocking: true
+    category: c07
+    expected:
+      mode: success
+    bindings:
+      rust: 't07_merge_on_match_set'
+      node: 'MERGE ON MATCH SET'
+      python: 'MERGE ON MATCH SET'
+  - id: CID-SHARED-057
+    scope: shared
+    blocking: true
+    category: c07
+    expected:
+      mode: success
+    bindings:
+      rust: 't07_merge_relationship'
+      node: 'MERGE relationship'
+      python: 'MERGE relationship'
+  - id: CID-SHARED-058
+    scope: shared
+    blocking: true
+    category: c08
+    expected:
+      mode: success
+    bindings:
+      rust: 't08_case_simple'
+      node: 'simple CASE'
+      python: 'simple CASE'
+  - id: CID-SHARED-059
+    scope: shared
+    blocking: true
+    category: c08
+    expected:
+      mode: success
+    bindings:
+      rust: 't08_case_generic'
+      node: 'generic CASE'
+      python: 'generic CASE'
+  - id: CID-SHARED-060
+    scope: shared
+    blocking: true
+    category: c09
+    expected:
+      mode: success
+    bindings:
+      rust: 't09_tostring'
+      node: 'toString()'
+      python: 'toString()'
+  - id: CID-SHARED-061
+    scope: shared
+    blocking: true
+    category: c09
+    expected:
+      mode: success
+    bindings:
+      rust: 't09_toupper'
+      node: 'toUpper / toLower'
+      python: 'toUpper / toLower'
+  - id: CID-SHARED-062
+    scope: shared
+    blocking: true
+    category: c09
+    expected:
+      mode: success
+    bindings:
+      rust: 't09_tolower'
+      node: 'trim / lTrim / rTrim'
+      python: 'trim / lTrim / rTrim'
+  - id: CID-SHARED-063
+    scope: shared
+    blocking: true
+    category: c09
+    expected:
+      mode: success
+    bindings:
+      rust: 't09_trim'
+      node: 'substring'
+      python: 'substring'
+  - id: CID-SHARED-064
+    scope: shared
+    blocking: true
+    category: c09
+    expected:
+      mode: success
+    bindings:
+      rust: 't09_size'
+      node: 'size() on string'
+      python: 'size() on string'
+  - id: CID-SHARED-065
+    scope: shared
+    blocking: true
+    category: c09
+    expected:
+      mode: success
+    bindings:
+      rust: 't09_left'
+      node: 'replace()'
+      python: 'replace()'
+  - id: CID-SHARED-066
+    scope: shared
+    blocking: true
+    category: c09
+    expected:
+      mode: success
+    bindings:
+      rust: 't09_right'
+      node: 'left / right'
+      python: 'left / right'
+  - id: CID-SHARED-067
+    scope: shared
+    blocking: true
+    category: c10
+    expected:
+      mode: success
+    bindings:
+      rust: 't10_arithmetic'
+      node: 'arithmetic: + - * / %'
+      python: 'arithmetic: + - * / %'
+  - id: CID-SHARED-068
+    scope: shared
+    blocking: true
+    category: c10
+    expected:
+      mode: success
+    bindings:
+      rust: 't10_modulo'
+      node: 'abs()'
+      python: 'abs()'
+  - id: CID-SHARED-069
+    scope: shared
+    blocking: true
+    category: c10
+    expected:
+      mode: success
+    bindings:
+      rust: 't10_abs'
+      node: 'toInteger / toFloat'
+      python: 'toInteger / toFloat'
+  - id: CID-SHARED-070
+    scope: shared
+    blocking: true
+    category: c10
+    expected:
+      mode: success
+    bindings:
+      rust: 't10_tointeger'
+      node: 'sign()'
+      python: 'sign()'
+  - id: CID-SHARED-071
+    scope: shared
+    blocking: true
+    category: c11
+    expected:
+      mode: success
+    bindings:
+      rust: 't11_variable_length_path'
+      node: 'fixed length path *2'
+      python: 'fixed length path *2'
+  - id: CID-SHARED-072
+    scope: shared
+    blocking: true
+    category: c11
+    expected:
+      mode: success
+    bindings:
+      rust: 't11_variable_length_exact'
+      node: 'variable length path *1..3'
+      python: 'variable length path *1..3'
+  - id: CID-SHARED-073
+    scope: shared
+    blocking: true
+    category: c11
+    expected:
+      mode: success
+    bindings:
+      rust: 't11_path_return'
+      node: 'variable length path *..2 (upper bound only)'
+      python: 'variable length path *..2'
+  - id: CID-SHARED-074
+    scope: shared
+    blocking: true
+    category: c11
+    expected:
+      mode: success
+    bindings:
+      rust: 't11_shortest_path'
+      node: 'shortest path'
+      python: 'shortest path'
+  - id: CID-SHARED-075
+    scope: shared
+    blocking: true
+    category: c12
+    expected:
+      mode: success
+    bindings:
+      rust: 't12_exists_subquery'
+      node: 'WHERE EXISTS pattern'
+      python: 'WHERE EXISTS pattern'
+  - id: CID-SHARED-076
+    scope: shared
+    blocking: true
+    category: c13
+    expected:
+      mode: success
+    bindings:
+      rust: 't13_foreach'
+      node: 'FOREACH create nodes'
+      python: 'FOREACH create nodes'
+  - id: CID-SHARED-077
+    scope: shared
+    blocking: true
+    category: c14
+    expected:
+      mode: success
+    bindings:
+      rust: 't14_write_txn_commit'
+      node: 'beginWrite + query + commit'
+      python: 'beginWrite + query + commit'
+  - id: CID-SHARED-078
+    scope: shared
+    blocking: true
+    category: c14
+    expected:
+      mode: success
+    bindings:
+      rust: 't14_write_txn_rollback_via_drop'
+      node: 'rollback discards staged queries'
+      python: 'rollback discards staged queries'
+  - id: CID-SHARED-079
+    scope: shared
+    blocking: true
+    category: c14
     expected:
       mode: error
-      category: execution
-      code: READ_QUERY_WRITE_REJECTED
-  - id: delete_requires_detach_for_connected_node
+    bindings:
+      rust: 't14_multiple_writes_in_txn'
+      node: 'txn syntax error at enqueue time'
+      python: 'txn syntax error at query time'
+  - id: CID-SHARED-080
     scope: shared
     blocking: true
+    category: c14
+    expected:
+      mode: success
+    bindings:
+      rust: 't14_commit_consumes_self'
+      node: 'multiple txn commits are independent'
+      python: 'multiple txn commits are independent'
+  - id: CID-SHARED-081
+    scope: shared
+    blocking: true
+    category: c15
     expected:
       mode: error
-      category: execution
-      code: DELETE_CONNECTED_NODE
-  - id: function_floor
+    bindings:
+      rust: 't15_syntax_error'
+      node: 'syntax error in query()'
+      python: 'syntax error in query() -> SyntaxError'
+  - id: CID-SHARED-082
     scope: shared
     blocking: true
+    category: c15
     expected:
-      mode: success
-      value: 2.0
-  - id: function_round
+      mode: error
+    bindings:
+      rust: 't15_unknown_function'
+      node: 'syntax error in executeWrite()'
+      python: 'syntax error in execute_write() -> SyntaxError'
+  - id: CID-SHARED-083
     scope: shared
     blocking: true
+    category: c15
     expected:
-      mode: success
-      value: 3.0
-  - id: function_log
+      mode: error
+    bindings:
+      rust: 't15_query_error_type'
+      node: 'write via query() is rejected'
+      python: 'write via query() is rejected'
+  - id: CID-SHARED-084
     scope: shared
     blocking: true
+    category: c15
     expected:
-      mode: success
-      value: 0.0
-  - id: function_e
+      mode: error
+    bindings:
+      rust: 't15_nervusdb_error_io'
+      node: 'error payload is structured JSON'
+      python: 'error is typed NervusError subclass'
+  - id: CID-SHARED-085
     scope: shared
     blocking: true
+    category: c15
     expected:
-      mode: success
-      value: 2.718281828
-  - id: function_pi
+      mode: error
+    bindings:
+      rust: 't15_nervusdb_error_storage'
+      node: 'operations after close() throw'
+      python: 'operations after close() throw StorageError'
+  - id: CID-SHARED-086
     scope: shared
     blocking: true
+    category: c15
     expected:
-      mode: success
-      value: 3.1415926535
-  - id: function_reduce
+      mode: error
+    bindings:
+      rust: 't15_nervusdb_error_query'
+      node: 'double close is safe'
+      python: 'double close is safe'
+  - id: CID-SHARED-087
     scope: shared
     blocking: true
+    category: c16
     expected:
       mode: success
-      value: 6
-  - id: write_txn_commit
-    scope: low_level
+    bindings:
+      rust: 't16_outgoing'
+      node: 'outgoing match ->'
+      python: 'outgoing match ->'
+  - id: CID-SHARED-088
+    scope: shared
     blocking: true
+    category: c16
     expected:
       mode: success
-  - id: write_txn_rollback
-    scope: low_level
+    bindings:
+      rust: 't16_incoming'
+      node: 'incoming match <-'
+      python: 'incoming match <-'
+  - id: CID-SHARED-089
+    scope: shared
     blocking: true
+    category: c16
     expected:
       mode: success
-  - id: low_level_create_node
-    scope: low_level
+    bindings:
+      rust: 't16_undirected'
+      node: 'undirected match -[]-'
+      python: 'undirected match -[]-'
+  - id: CID-SHARED-090
+    scope: shared
     blocking: true
+    category: c16
     expected:
       mode: success
-  - id: low_level_create_edge
-    scope: low_level
+    bindings:
+      rust: 't16_multi_rel_types'
+      node: 'relationship properties'
+      python: 'relationship properties'
+  - id: CID-SHARED-091
+    scope: shared
     blocking: true
+    category: c17
     expected:
       mode: success
-  - id: low_level_set_remove_node_property
-    scope: low_level
+    bindings:
+      rust: 't17_triangle'
+      node: 'triangle pattern'
+      python: 'triangle pattern'
+  - id: CID-SHARED-092
+    scope: shared
     blocking: true
+    category: c17
     expected:
       mode: success
-  - id: low_level_set_remove_edge_property
-    scope: low_level
+    bindings:
+      rust: 't17_multi_hop'
+      node: 'multi-hop with WHERE'
+      python: 'multi-hop with WHERE'
+  - id: CID-SHARED-093
+    scope: shared
     blocking: true
+    category: c17
     expected:
       mode: success
-  - id: low_level_tombstone_node_edge
-    scope: low_level
+    bindings:
+      rust: 't17_fan_out'
+      node: 'multiple MATCH clauses'
+      python: 'multiple MATCH clauses'
+  - id: CID-SHARED-094
+    scope: shared
     blocking: true
+    category: c18
     expected:
       mode: success
+    bindings:
+      rust: 't18_bulk_100'
+      node: 'batch create 1000 nodes'
+      python: 'batch create 1000 nodes'
+  - id: CID-SHARED-095
+    scope: shared
+    blocking: true
+    category: c18
+    expected:
+      mode: success
+    bindings:
+      rust: 't18_bulk_1000'
+      node: 'batch query 1000 nodes'
+      python: 'batch query 1000 nodes'
+  - id: CID-SHARED-096
+    scope: shared
+    blocking: true
+    category: c18
+    expected:
+      mode: success
+    bindings:
+      rust: 't18_bulk_unwind'
+      node: 'UNWIND batch create'
+      python: 'UNWIND batch create'
+  - id: CID-SHARED-097
+    scope: shared
+    blocking: true
+    category: c19
+    expected:
+      mode: success
+    bindings:
+      rust: 't19_persistence'
+      node: 'data survives close + reopen'
+      python: 'data survives close + reopen'
+  - id: CID-SHARED-098
+    scope: shared
+    blocking: true
+    category: c20
+    expected:
+      mode: success
+    bindings:
+      rust: 't20_empty_match'
+      node: 'empty result set'
+      python: 'empty result set'
+  - id: CID-SHARED-099
+    scope: shared
+    blocking: true
+    category: c20
+    expected:
+      mode: success
+    bindings:
+      rust: 't20_count_empty'
+      node: 'RETURN literal without MATCH'
+      python: 'RETURN literal without MATCH'
+  - id: CID-SHARED-100
+    scope: shared
+    blocking: true
+    category: c20
+    expected:
+      mode: success
+    bindings:
+      rust: 't20_return_null'
+      node: 'empty string property'
+      python: 'empty string property'
+  - id: CID-SHARED-101
+    scope: shared
+    blocking: true
+    category: c20
+    expected:
+      mode: success
+    bindings:
+      rust: 't20_large_string'
+      node: 'large string property'
+      python: 'large string property'
+  - id: CID-SHARED-102
+    scope: shared
+    blocking: true
+    category: c20
+    expected:
+      mode: success
+    bindings:
+      rust: 't20_self_loop'
+      node: 'node with many properties'
+      python: 'node with many properties'
+  - id: CID-SHARED-103
+    scope: shared
+    blocking: true
+    category: c20
+    expected:
+      mode: success
+    bindings:
+      rust: 't20_duplicate_property_overwrite'
+      node: 'self-loop relationship'
+      python: 'self-loop relationship'
+  - id: CID-SHARED-104
+    scope: shared
+    blocking: true
+    category: c36
+    expected:
+      mode: success
+    bindings:
+      rust: 't36_unwind_with_index'
+      node: 'UNWIND basic list'
+      python: 'UNWIND ordered'
+  - id: CID-SHARED-105
+    scope: shared
+    blocking: true
+    category: c36
+    expected:
+      mode: success
+    bindings:
+      rust: 't36_unwind_empty_list'
+      node: 'UNWIND with CREATE'
+      python: 'UNWIND empty list'
+  - id: CID-SHARED-106
+    scope: shared
+    blocking: true
+    category: c36
+    expected:
+      mode: success
+    bindings:
+      rust: 't36_unwind_with_aggregation'
+      node: 'UNWIND nested list'
+      python: 'UNWIND with aggregation'
+  - id: CID-SHARED-107
+    scope: shared
+    blocking: true
+    category: c36
+    expected:
+      mode: success
+    bindings:
+      rust: 't36_unwind_create_nodes'
+      node: 'UNWIND empty list'
+      python: 'UNWIND + CREATE'
+  - id: CID-SHARED-108
+    scope: shared
+    blocking: true
+    category: c36
+    expected:
+      mode: success
+    bindings:
+      rust: 't36_unwind_range'
+      node: 'UNWIND range()'
+      python: 'UNWIND range()'
+  - id: CID-SHARED-109
+    scope: shared
+    blocking: true
+    category: c37
+    expected:
+      mode: success
+    bindings:
+      rust: 't37_union_dedup'
+      node: 'UNION ALL returns all rows'
+      python: 'UNION dedup'
+  - id: CID-SHARED-110
+    scope: shared
+    blocking: true
+    category: c37
+    expected:
+      mode: success
+    bindings:
+      rust: 't37_union_all_keeps_dupes'
+      node: 'UNION deduplicates'
+      python: 'UNION ALL keeps dupes'
+  - id: CID-SHARED-111
+    scope: shared
+    blocking: true
+    category: c37
+    expected:
+      mode: success
+    bindings:
+      rust: 't37_union_multi'
+      node: 'UNION with three branches'
+      python: 'multi UNION'
+  - id: CID-SHARED-112
+    scope: shared
+    blocking: true
+    category: c37
+    expected:
+      mode: success
+    bindings:
+      rust: 't37_union_with_match'
+      node: 'UNION with MATCH branches'
+      python: 'UNION with MATCH'
+  - id: CID-SHARED-113
+    scope: shared
+    blocking: true
+    category: c38
+    expected:
+      mode: success
+    bindings:
+      rust: 't38_with_multi_stage'
+      node: 'WITH + aggregation pipeline'
+      python: 'WITH multi-stage pipeline'
+  - id: CID-SHARED-114
+    scope: shared
+    blocking: true
+    category: c38
+    expected:
+      mode: success
+    bindings:
+      rust: 't38_with_distinct'
+      node: 'WITH DISTINCT'
+      python: 'WITH DISTINCT'
+  - id: CID-SHARED-115
+    scope: shared
+    blocking: true
+    category: c38
+    expected:
+      mode: success
+    bindings:
+      rust: 't38_with_aggregation'
+      node: 'multi-stage WITH'
+      python: 'WITH + aggregation'
+  - id: CID-SHARED-116
+    scope: shared
+    blocking: true
+    category: c39
+    expected:
+      mode: success
+    bindings:
+      rust: 't39_pagination_page1'
+      node: 'ORDER BY + LIMIT'
+      python: 'pagination page 1'
+  - id: CID-SHARED-117
+    scope: shared
+    blocking: true
+    category: c39
+    expected:
+      mode: success
+    bindings:
+      rust: 't39_pagination_page2'
+      node: 'ORDER BY + SKIP + LIMIT'
+      python: 'pagination page 2'
+  - id: CID-SHARED-118
+    scope: shared
+    blocking: true
+    category: c39
+    expected:
+      mode: success
+    bindings:
+      rust: 't39_order_by_multi_column'
+      node: 'ORDER BY DESC + LIMIT'
+      python: 'SKIP beyond results'
+  - id: CID-SHARED-119
+    scope: shared
+    blocking: true
+    category: c39
+    expected:
+      mode: success
+    bindings:
+      rust: 't39_skip_beyond_results'
+      node: 'SKIP beyond results'
+      python: 'ORDER BY multi-column'
+  - id: CID-SHARED-120
+    scope: shared
+    blocking: true
+    category: c40
+    expected:
+      mode: success
+    bindings:
+      rust: 't40_coalesce'
+      node: 'IS NULL filter'
+      python: 'COALESCE'
+  - id: CID-SHARED-121
+    scope: shared
+    blocking: true
+    category: c40
+    expected:
+      mode: success
+    bindings:
+      rust: 't40_coalesce_first_non_null'
+      node: 'IS NOT NULL filter'
+      python: 'COALESCE first non-null'
+  - id: CID-SHARED-122
+    scope: shared
+    blocking: true
+    category: c40
+    expected:
+      mode: success
+    bindings:
+      rust: 't40_null_arithmetic_propagation'
+      node: 'COALESCE'
+      python: 'null + 1 propagation'
+  - id: CID-SHARED-123
+    scope: shared
+    blocking: true
+    category: c40
+    expected:
+      mode: success
+    bindings:
+      rust: 't40_null_comparison'
+      node: 'COALESCE first non-null'
+      python: 'null = null'
+  - id: CID-SHARED-124
+    scope: shared
+    blocking: true
+    category: c40
+    expected:
+      mode: success
+    bindings:
+      rust: 't40_is_null_filter'
+      node: 'null arithmetic propagation'
+      python: 'IS NULL filter'
+  - id: CID-SHARED-125
+    scope: shared
+    blocking: true
+    category: c40
+    expected:
+      mode: success
+    bindings:
+      rust: 't40_is_not_null_filter'
+      node: 'null comparison'
+      python: 'IS NOT NULL filter'
+  - id: CID-SHARED-126
+    scope: shared
+    blocking: true
+    category: c41
+    expected:
+      mode: success
+    bindings:
+      rust: 't41_tointeger_from_float'
+      node: 'toInteger'
+      python: 'toInteger(3.9)'
+  - id: CID-SHARED-127
+    scope: shared
+    blocking: true
+    category: c41
+    expected:
+      mode: success
+    bindings:
+      rust: 't41_tointeger_from_string'
+      node: 'toInteger from float'
+      python: 'toInteger(''42'')'
+  - id: CID-SHARED-128
+    scope: shared
+    blocking: true
+    category: c41
+    expected:
+      mode: success
+    bindings:
+      rust: 't41_tofloat_from_int'
+      node: 'toFloat'
+      python: 'toFloat(42)'
+  - id: CID-SHARED-129
+    scope: shared
+    blocking: true
+    category: c41
+    expected:
+      mode: success
+    bindings:
+      rust: 't41_tofloat_from_string'
+      node: 'toFloat from int'
+      python: 'toFloat(''3.14'')'
+  - id: CID-SHARED-130
+    scope: shared
+    blocking: true
+    category: c41
+    expected:
+      mode: success
+    bindings:
+      rust: 't41_tostring_from_int'
+      node: 'toString'
+      python: 'toString(42)'
+  - id: CID-SHARED-131
+    scope: shared
+    blocking: true
+    category: c41
+    expected:
+      mode: success
+    bindings:
+      rust: 't41_tostring_from_bool'
+      node: 'toString from bool'
+      python: 'toString(true)'
+  - id: CID-SHARED-132
+    scope: shared
+    blocking: true
+    category: c41
+    expected:
+      mode: success
+    bindings:
+      rust: 't41_toboolean_from_string'
+      node: 'toBoolean'
+      python: 'toBoolean(''true'')'
+  - id: CID-SHARED-133
+    scope: shared
+    blocking: true
+    category: c42
+    expected:
+      mode: success
+    bindings:
+      rust: 't42_abs_negative'
+      node: 'abs'
+      python: 'abs(-7)'
+  - id: CID-SHARED-134
+    scope: shared
+    blocking: true
+    category: c42
+    expected:
+      mode: success
+    bindings:
+      rust: 't42_ceil'
+      node: 'ceil'
+      python: 'ceil(2.3)'
+  - id: CID-SHARED-135
+    scope: shared
+    blocking: true
+    category: c42
+    expected:
+      mode: success
+    bindings:
+      rust: 't42_floor'
+      node: 'floor'
+      python: 'floor(2.7)'
+  - id: CID-SHARED-136
+    scope: shared
+    blocking: true
+    category: c42
+    expected:
+      mode: success
+    bindings:
+      rust: 't42_round'
+      node: 'round'
+      python: 'round(2.5)'
+  - id: CID-SHARED-137
+    scope: shared
+    blocking: true
+    category: c42
+    expected:
+      mode: success
+    bindings:
+      rust: 't42_sign'
+      node: 'sign'
+      python: 'sign()'
+  - id: CID-SHARED-138
+    scope: shared
+    blocking: true
+    category: c42
+    expected:
+      mode: success
+    bindings:
+      rust: 't42_sqrt'
+      node: 'sqrt'
+      python: 'sqrt(16)'
+  - id: CID-SHARED-139
+    scope: shared
+    blocking: true
+    category: c42
+    expected:
+      mode: success
+    bindings:
+      rust: 't42_log'
+      node: 'log'
+      python: 'log(1)'
+  - id: CID-SHARED-140
+    scope: shared
+    blocking: true
+    category: c42
+    expected:
+      mode: success
+    bindings:
+      rust: 't42_e_constant'
+      node: 'e()'
+      python: 'e()'
+  - id: CID-SHARED-141
+    scope: shared
+    blocking: true
+    category: c42
+    expected:
+      mode: success
+    bindings:
+      rust: 't42_pi_constant'
+      node: 'pi()'
+      python: 'pi()'
+  - id: CID-SHARED-142
+    scope: shared
+    blocking: true
+    category: c43
+    expected:
+      mode: success
+    bindings:
+      rust: 't43_replace'
+      node: 'replace'
+      python: 'replace()'
+  - id: CID-SHARED-143
+    scope: shared
+    blocking: true
+    category: c43
+    expected:
+      mode: success
+    bindings:
+      rust: 't43_ltrim'
+      node: 'split'
+      python: 'lTrim()'
+  - id: CID-SHARED-144
+    scope: shared
+    blocking: true
+    category: c43
+    expected:
+      mode: success
+    bindings:
+      rust: 't43_rtrim'
+      node: 'reverse'
+      python: 'rTrim()'
+  - id: CID-SHARED-145
+    scope: shared
+    blocking: true
+    category: c43
+    expected:
+      mode: success
+    bindings:
+      rust: 't43_split'
+      node: 'trim / ltrim / rtrim'
+      python: 'split()'
+  - id: CID-SHARED-146
+    scope: shared
+    blocking: true
+    category: c43
+    expected:
+      mode: success
+    bindings:
+      rust: 't43_reverse'
+      node: 'lTrim and rTrim standalone'
+      python: 'reverse()'
+  - id: CID-SHARED-147
+    scope: shared
+    blocking: true
+    category: c43
+    expected:
+      mode: success
+    bindings:
+      rust: 't43_substring'
+      node: 'substring'
+      python: 'substring()'
+  - id: CID-SHARED-148
+    scope: shared
+    blocking: true
+    category: c44
+    expected:
+      mode: success
+    bindings:
+      rust: 't44_range_function'
+      node: 'range function'
+      python: 'range(1, 5)'
+  - id: CID-SHARED-149
+    scope: shared
+    blocking: true
+    category: c44
+    expected:
+      mode: success
+    bindings:
+      rust: 't44_range_with_step'
+      node: 'range with step'
+      python: 'range(0, 10, 2)'
+  - id: CID-SHARED-150
+    scope: shared
+    blocking: true
+    category: c44
+    expected:
+      mode: success
+    bindings:
+      rust: 't44_list_index_access'
+      node: 'list index access'
+      python: 'list index access'
+  - id: CID-SHARED-151
+    scope: shared
+    blocking: true
+    category: c44
+    expected:
+      mode: success
+    bindings:
+      rust: 't44_list_size'
+      node: 'size of list'
+      python: 'size() on list'
+  - id: CID-SHARED-152
+    scope: shared
+    blocking: true
+    category: c44
+    expected:
+      mode: success
+    bindings:
+      rust: 't44_list_comprehension'
+      node: 'list comprehension'
+      python: 'list comprehension'
+  - id: CID-SHARED-153
+    scope: shared
+    blocking: true
+    category: c44
+    expected:
+      mode: success
+    bindings:
+      rust: 't44_reduce'
+      node: 'reduce'
+      python: 'reduce()'
+  - id: CID-SHARED-154
+    scope: shared
+    blocking: true
+    category: c45
+    expected:
+      mode: success
+    bindings:
+      rust: 't45_map_literal'
+      node: 'map literal'
+      python: 'map literal'
+  - id: CID-SHARED-155
+    scope: shared
+    blocking: true
+    category: c45
+    expected:
+      mode: success
+    bindings:
+      rust: 't45_map_access'
+      node: 'map access'
+      python: 'map property access'
+  - id: CID-SHARED-156
+    scope: shared
+    blocking: true
+    category: c45
+    expected:
+      mode: success
+    bindings:
+      rust: 't45_nested_map'
+      node: 'nested map'
+      python: 'nested map'
+  - id: CID-SHARED-157
+    scope: shared
+    blocking: true
+    category: c45
+    expected:
+      mode: success
+    bindings:
+      rust: 't45_keys_function'
+      node: 'keys function'
+      python: 'keys() on map'
+  - id: CID-SHARED-158
+    scope: shared
+    blocking: true
+    category: c46
+    expected:
+      mode: success
+    bindings:
+      rust: 't46_multiple_match_cartesian'
+      node: 'cartesian product'
+      python: 'cartesian product'
+  - id: CID-SHARED-159
+    scope: shared
+    blocking: true
+    category: c46
+    expected:
+      mode: success
+    bindings:
+      rust: 't46_multiple_match_correlated'
+      node: 'correlated MATCH'
+      python: 'correlated MATCH'
+  - id: CID-SHARED-160
+    scope: shared
+    blocking: true
+    category: c46
+    expected:
+      mode: success
+    bindings:
+      rust: 't46_multiple_match_independent'
+      node: 'independent MATCH'
+      python: 'independent MATCH'
+  - id: CID-SHARED-161
+    scope: shared
+    blocking: true
+    category: c47
+    expected:
+      mode: success
+    bindings:
+      rust: 't47_remove_property'
+      node: 'REMOVE property'
+      python: 'REMOVE property'
+  - id: CID-SHARED-162
+    scope: shared
+    blocking: true
+    category: c47
+    expected:
+      mode: success
+    bindings:
+      rust: 't47_remove_multiple_properties'
+      node: 'REMOVE label'
+      python: 'REMOVE multiple properties'
+  - id: CID-SHARED-163
+    scope: shared
+    blocking: true
+    category: c47
+    expected:
+      mode: success
+    bindings:
+      rust: 't47_remove_label'
+      node: 'REMOVE multiple properties'
+      python: 'REMOVE label'
+  - id: CID-SHARED-164
+    scope: shared
+    blocking: true
+    category: c48
+    expected:
+      mode: success
+    bindings:
+      rust: 't48_param_in_where'
+      node: 'param in WHERE'
+      python: '$param in WHERE'
+  - id: CID-SHARED-165
+    scope: shared
+    blocking: true
+    category: c48
+    expected:
+      mode: success
+    bindings:
+      rust: 't48_param_in_create'
+      node: 'param in CREATE'
+      python: '$param in CREATE'
+  - id: CID-SHARED-166
+    scope: shared
+    blocking: true
+    category: c48
+    expected:
+      mode: success
+    bindings:
+      rust: 't48_param_multiple'
+      node: 'multiple params'
+      python: 'multiple $params'
+  - id: CID-SHARED-167
+    scope: shared
+    blocking: true
+    category: c48
+    expected:
+      mode: success
+    bindings:
+      rust: 't48_param_string'
+      node: 'string param return'
+      python: '$param string'
+  - id: CID-SHARED-168
+    scope: shared
+    blocking: true
+    category: c49
+    expected:
+      mode: success
+    bindings:
+      rust: 't49_explain_basic'
+      node: 'EXPLAIN returns plan'
+      python: 'EXPLAIN basic'
+  - id: CID-SHARED-169
+    scope: shared
+    blocking: true
+    category: c50
+    expected:
+      mode: success
+    bindings:
+      rust: 't50_create_index_via_api'
+      node: 'create index and query'
+      python: 'index-accelerated lookup'
+  - id: CID-SHARED-170
+    scope: shared
+    blocking: true
+    category: c50
+    expected:
+      mode: success
+    bindings:
+      rust: 't50_index_with_updates'
+      node: 'index with updates'
+      python: 'index with post-creation inserts'
+  - id: CID-SHARED-171
+    scope: shared
+    blocking: true
+    category: c50
+    expected:
+      mode: success
+    bindings:
+      rust: 't50_index_range_query'
+      node: 'index range query'
+      python: 'index range query'
+  - id: CID-SHARED-172
+    scope: shared
+    blocking: true
+    category: c51
+    expected:
+      mode: success
+    bindings:
+      rust: 't51_concurrent_read_snapshots'
+      node: 'snapshot isolation'
+      python: 'snapshot isolation across writes'
+  - id: CID-SHARED-173
+    scope: shared
+    blocking: true
+    category: c51
+    expected:
+      mode: success
+    bindings:
+      rust: 't51_read_txn_isolation'
+      node: 'reader isolation across handles'
+      python: 'snapshot isolation across handles'
+  - id: CID-SHARED-174
+    scope: shared
+    blocking: true
+    category: c52
+    expected:
+      mode: error
+    bindings:
+      rust: 't52_syntax_error_detail'
+      node: 'syntax error detail'
+      python: 'type error in arithmetic'
+  - id: CID-SHARED-175
+    scope: shared
+    blocking: true
+    category: c52
+    expected:
+      mode: error
+    bindings:
+      rust: 't52_unknown_function_error'
+      node: 'unknown function error'
+      python: 'division by zero'
+  - id: CID-SHARED-176
+    scope: shared
+    blocking: true
+    category: c52
+    expected:
+      mode: error
+    bindings:
+      rust: 't52_type_error_in_arithmetic'
+      node: 'delete connected node error'
+      python: 'missing property returns null'
+  - id: CID-SHARED-177
+    scope: shared
+    blocking: true
+    category: c52
+    expected:
+      mode: error
+    bindings:
+      rust: 't52_division_by_zero'
+      node: 'missing property returns null'
+      python: 'syntax error detail'
+  - id: CID-SHARED-178
+    scope: shared
+    blocking: true
+    category: c52
+    expected:
+      mode: error
+    bindings:
+      rust: 't52_missing_property_returns_null'
+      node: 'division by zero'
+      python: 'unknown function error'
+  - id: CID-SHARED-179
+    scope: shared
+    blocking: true
+    category: c52
+    expected:
+      mode: error
+    bindings:
+      rust: 't52_delete_connected_node_error'
+      node: 'type error in arithmetic'
+      python: 'delete connected node error'
+extensions:
+  rust: [read_txn, db_snapshot, execute_mixed, execute_options, reify, vector_api, paths_api]
+  node: [api_alignment, txn_low_level, rand_function]
+  python: [query_stream, typed_objects, exception_hierarchy, python_edge_cases]

@@ -25,6 +25,189 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
+
+// CID_REGISTRY_START
+// CID-SHARED-001 | mode=success | case=CREATE single node
+// CID-SHARED-002 | mode=success | case=MATCH + RETURN node
+// CID-SHARED-003 | mode=success | case=CREATE relationship
+// CID-SHARED-004 | mode=success | case=SET property on node
+// CID-SHARED-005 | mode=success | case=SET overwrite property
+// CID-SHARED-006 | mode=success | case=REMOVE property
+// CID-SHARED-007 | mode=success | case=DELETE node (detach)
+// CID-SHARED-008 | mode=success | case=DELETE relationship only
+// CID-SHARED-009 | mode=success | case=multi-node CREATE in single statement
+// CID-SHARED-010 | mode=success | case=RETURN scalar expression
+// CID-SHARED-011 | mode=success | case=RETURN property alias
+// CID-SHARED-012 | mode=success | case=RETURN DISTINCT
+// CID-SHARED-013 | mode=success | case=RETURN *
+// CID-SHARED-014 | mode=success | case=CREATE node with multiple labels
+// CID-SHARED-015 | mode=success | case=MATCH by single label subset
+// CID-SHARED-016 | mode=success | case=null property
+// CID-SHARED-017 | mode=success | case=boolean properties
+// CID-SHARED-018 | mode=success | case=integer property
+// CID-SHARED-019 | mode=success | case=negative integer
+// CID-SHARED-020 | mode=success | case=float property
+// CID-SHARED-021 | mode=success | case=string property with special chars
+// CID-SHARED-022 | mode=success | case=list literal in RETURN
+// CID-SHARED-023 | mode=success | case=map literal in RETURN
+// CID-SHARED-024 | mode=success | case=list property on node
+// CID-SHARED-025 | mode=success | case=WHERE equality
+// CID-SHARED-026 | mode=success | case=WHERE comparison >
+// CID-SHARED-027 | mode=success | case=WHERE AND
+// CID-SHARED-028 | mode=success | case=WHERE OR
+// CID-SHARED-029 | mode=success | case=WHERE NOT
+// CID-SHARED-030 | mode=success | case=WHERE IN list
+// CID-SHARED-031 | mode=success | case=WHERE STARTS WITH
+// CID-SHARED-032 | mode=success | case=WHERE CONTAINS
+// CID-SHARED-033 | mode=success | case=WHERE ENDS WITH
+// CID-SHARED-034 | mode=success | case=WHERE IS NULL
+// CID-SHARED-035 | mode=success | case=WHERE IS NOT NULL
+// CID-SHARED-036 | mode=success | case=ORDER BY ASC
+// CID-SHARED-037 | mode=success | case=ORDER BY DESC
+// CID-SHARED-038 | mode=success | case=LIMIT
+// CID-SHARED-039 | mode=success | case=SKIP
+// CID-SHARED-040 | mode=success | case=WITH pipe
+// CID-SHARED-041 | mode=success | case=UNWIND
+// CID-SHARED-042 | mode=success | case=UNWIND + CREATE
+// CID-SHARED-043 | mode=success | case=UNION
+// CID-SHARED-044 | mode=success | case=UNION ALL
+// CID-SHARED-045 | mode=success | case=OPTIONAL MATCH
+// CID-SHARED-046 | mode=success | case=count()
+// CID-SHARED-047 | mode=success | case=sum()
+// CID-SHARED-048 | mode=success | case=avg()
+// CID-SHARED-049 | mode=success | case=min() / max()
+// CID-SHARED-050 | mode=success | case=collect()
+// CID-SHARED-051 | mode=success | case=count(DISTINCT)
+// CID-SHARED-052 | mode=success | case=GROUP BY (implicit)
+// CID-SHARED-053 | mode=success | case=MERGE creates when not exists
+// CID-SHARED-054 | mode=success | case=MERGE matches when exists
+// CID-SHARED-055 | mode=success | case=MERGE ON CREATE SET
+// CID-SHARED-056 | mode=success | case=MERGE ON MATCH SET
+// CID-SHARED-057 | mode=success | case=MERGE relationship
+// CID-SHARED-058 | mode=success | case=simple CASE
+// CID-SHARED-059 | mode=success | case=generic CASE
+// CID-SHARED-060 | mode=success | case=toString()
+// CID-SHARED-061 | mode=success | case=toUpper / toLower
+// CID-SHARED-062 | mode=success | case=trim / lTrim / rTrim
+// CID-SHARED-063 | mode=success | case=substring
+// CID-SHARED-064 | mode=success | case=size() on string
+// CID-SHARED-065 | mode=success | case=replace()
+// CID-SHARED-066 | mode=success | case=left / right
+// CID-SHARED-067 | mode=success | case=arithmetic: + - * / %
+// CID-SHARED-068 | mode=success | case=abs()
+// CID-SHARED-069 | mode=success | case=toInteger / toFloat
+// CID-SHARED-070 | mode=success | case=sign()
+// CID-SHARED-071 | mode=success | case=fixed length path *2
+// CID-SHARED-072 | mode=success | case=variable length path *1..3
+// CID-SHARED-073 | mode=success | case=variable length path *..2 (upper bound only)
+// CID-SHARED-074 | mode=success | case=shortest path
+// CID-SHARED-075 | mode=success | case=WHERE EXISTS pattern
+// CID-SHARED-076 | mode=success | case=FOREACH create nodes
+// CID-SHARED-077 | mode=success | case=beginWrite + query + commit
+// CID-SHARED-078 | mode=success | case=rollback discards staged queries
+// CID-SHARED-079 | mode=error | case=txn syntax error at enqueue time
+// CID-SHARED-080 | mode=success | case=multiple txn commits are independent
+// CID-SHARED-081 | mode=error | case=syntax error in query()
+// CID-SHARED-082 | mode=error | case=syntax error in executeWrite()
+// CID-SHARED-083 | mode=error | case=write via query() is rejected
+// CID-SHARED-084 | mode=error | case=error payload is structured JSON
+// CID-SHARED-085 | mode=error | case=operations after close() throw
+// CID-SHARED-086 | mode=error | case=double close is safe
+// CID-SHARED-087 | mode=success | case=outgoing match ->
+// CID-SHARED-088 | mode=success | case=incoming match <-
+// CID-SHARED-089 | mode=success | case=undirected match -[]-
+// CID-SHARED-090 | mode=success | case=relationship properties
+// CID-SHARED-091 | mode=success | case=triangle pattern
+// CID-SHARED-092 | mode=success | case=multi-hop with WHERE
+// CID-SHARED-093 | mode=success | case=multiple MATCH clauses
+// CID-SHARED-094 | mode=success | case=batch create 1000 nodes
+// CID-SHARED-095 | mode=success | case=batch query 1000 nodes
+// CID-SHARED-096 | mode=success | case=UNWIND batch create
+// CID-SHARED-097 | mode=success | case=data survives close + reopen
+// CID-SHARED-098 | mode=success | case=empty result set
+// CID-SHARED-099 | mode=success | case=RETURN literal without MATCH
+// CID-SHARED-100 | mode=success | case=empty string property
+// CID-SHARED-101 | mode=success | case=large string property
+// CID-SHARED-102 | mode=success | case=node with many properties
+// CID-SHARED-103 | mode=success | case=self-loop relationship
+// CID-SHARED-104 | mode=success | case=UNWIND basic list
+// CID-SHARED-105 | mode=success | case=UNWIND with CREATE
+// CID-SHARED-106 | mode=success | case=UNWIND nested list
+// CID-SHARED-107 | mode=success | case=UNWIND empty list
+// CID-SHARED-108 | mode=success | case=UNWIND range()
+// CID-SHARED-109 | mode=success | case=UNION ALL returns all rows
+// CID-SHARED-110 | mode=success | case=UNION deduplicates
+// CID-SHARED-111 | mode=success | case=UNION with three branches
+// CID-SHARED-112 | mode=success | case=UNION with MATCH branches
+// CID-SHARED-113 | mode=success | case=WITH + aggregation pipeline
+// CID-SHARED-114 | mode=success | case=WITH DISTINCT
+// CID-SHARED-115 | mode=success | case=multi-stage WITH
+// CID-SHARED-116 | mode=success | case=ORDER BY + LIMIT
+// CID-SHARED-117 | mode=success | case=ORDER BY + SKIP + LIMIT
+// CID-SHARED-118 | mode=success | case=ORDER BY DESC + LIMIT
+// CID-SHARED-119 | mode=success | case=SKIP beyond results
+// CID-SHARED-120 | mode=success | case=IS NULL filter
+// CID-SHARED-121 | mode=success | case=IS NOT NULL filter
+// CID-SHARED-122 | mode=success | case=COALESCE
+// CID-SHARED-123 | mode=success | case=COALESCE first non-null
+// CID-SHARED-124 | mode=success | case=null arithmetic propagation
+// CID-SHARED-125 | mode=success | case=null comparison
+// CID-SHARED-126 | mode=success | case=toInteger
+// CID-SHARED-127 | mode=success | case=toInteger from float
+// CID-SHARED-128 | mode=success | case=toFloat
+// CID-SHARED-129 | mode=success | case=toFloat from int
+// CID-SHARED-130 | mode=success | case=toString
+// CID-SHARED-131 | mode=success | case=toString from bool
+// CID-SHARED-132 | mode=success | case=toBoolean
+// CID-SHARED-133 | mode=success | case=abs
+// CID-SHARED-134 | mode=success | case=ceil
+// CID-SHARED-135 | mode=success | case=floor
+// CID-SHARED-136 | mode=success | case=round
+// CID-SHARED-137 | mode=success | case=sign
+// CID-SHARED-138 | mode=success | case=sqrt
+// CID-SHARED-139 | mode=success | case=log
+// CID-SHARED-140 | mode=success | case=e()
+// CID-SHARED-141 | mode=success | case=pi()
+// CID-SHARED-142 | mode=success | case=replace
+// CID-SHARED-143 | mode=success | case=split
+// CID-SHARED-144 | mode=success | case=reverse
+// CID-SHARED-145 | mode=success | case=trim / ltrim / rtrim
+// CID-SHARED-146 | mode=success | case=lTrim and rTrim standalone
+// CID-SHARED-147 | mode=success | case=substring
+// CID-SHARED-148 | mode=success | case=range function
+// CID-SHARED-149 | mode=success | case=range with step
+// CID-SHARED-150 | mode=success | case=list index access
+// CID-SHARED-151 | mode=success | case=size of list
+// CID-SHARED-152 | mode=success | case=list comprehension
+// CID-SHARED-153 | mode=success | case=reduce
+// CID-SHARED-154 | mode=success | case=map literal
+// CID-SHARED-155 | mode=success | case=map access
+// CID-SHARED-156 | mode=success | case=nested map
+// CID-SHARED-157 | mode=success | case=keys function
+// CID-SHARED-158 | mode=success | case=cartesian product
+// CID-SHARED-159 | mode=success | case=correlated MATCH
+// CID-SHARED-160 | mode=success | case=independent MATCH
+// CID-SHARED-161 | mode=success | case=REMOVE property
+// CID-SHARED-162 | mode=success | case=REMOVE label
+// CID-SHARED-163 | mode=success | case=REMOVE multiple properties
+// CID-SHARED-164 | mode=success | case=param in WHERE
+// CID-SHARED-165 | mode=success | case=param in CREATE
+// CID-SHARED-166 | mode=success | case=multiple params
+// CID-SHARED-167 | mode=success | case=string param return
+// CID-SHARED-168 | mode=success | case=EXPLAIN returns plan
+// CID-SHARED-169 | mode=success | case=create index and query
+// CID-SHARED-170 | mode=success | case=index with updates
+// CID-SHARED-171 | mode=success | case=index range query
+// CID-SHARED-172 | mode=success | case=snapshot isolation
+// CID-SHARED-173 | mode=success | case=reader isolation across handles
+// CID-SHARED-174 | mode=error | case=syntax error detail
+// CID-SHARED-175 | mode=error | case=unknown function error
+// CID-SHARED-176 | mode=error | case=delete connected node error
+// CID-SHARED-177 | mode=error | case=missing property returns null
+// CID-SHARED-178 | mode=error | case=division by zero
+// CID-SHARED-179 | mode=error | case=type error in arithmetic
+// CID_REGISTRY_END
+
 type NervusAddon = {
   Db: { open(path: string): NervusDb; openPaths(ndbPath: string, walPath: string): NervusDb };
   vacuum(path: string): {
@@ -1160,6 +1343,13 @@ console.log("\n── 36. UNWIND (expanded) ──");
     assertEq(rows.length, 0);
   });
 
+  test("UNWIND range()", () => {
+    const rows = db.query("UNWIND range(1, 5) AS x RETURN x ORDER BY x");
+    assertEq(rows.length, 5);
+    assertEq(rows[0].x, 1);
+    assertEq(rows[4].x, 5);
+  });
+
   db.close();
 })();
 
@@ -1180,6 +1370,18 @@ console.log("\n── 37. UNION / UNION ALL ──");
     db.executeWrite("CREATE (:UD {name: 'Same'})");
     const rows = db.query("MATCH (n:UC) RETURN n.name AS name UNION MATCH (n:UD) RETURN n.name AS name");
     assertEq(rows.length, 1);
+  });
+
+  test("UNION with three branches", () => {
+    const rows = db.query("RETURN 1 AS x UNION RETURN 2 AS x UNION RETURN 3 AS x");
+    assertEq(rows.length, 3);
+  });
+
+  test("UNION with MATCH branches", () => {
+    db.executeWrite("CREATE (:UE {v: 'e'})");
+    db.executeWrite("CREATE (:UF {v: 'f'})");
+    const rows = db.query("MATCH (n:UE) RETURN n.v AS v UNION MATCH (n:UF) RETURN n.v AS v");
+    assertEq(rows.length, 2);
   });
 
   db.close();
@@ -1242,6 +1444,11 @@ console.log("\n── 39. ORDER BY + SKIP + LIMIT ──");
     assertEq(rows[0]["n.idx"], 10);
   });
 
+  test("SKIP beyond results", () => {
+    const rows = db.query("MATCH (n:Page) RETURN n.idx SKIP 100");
+    assertEq(rows.length, 0);
+  });
+
   db.close();
 })();
 
@@ -1271,8 +1478,18 @@ console.log("\n── 40. Null handling ──");
     assertEq(rows[1].v, 42);
   });
 
+  test("COALESCE first non-null", () => {
+    const rows = db.query("RETURN coalesce(null, null, 42) AS v");
+    assertEq(rows[0].v, 42);
+  });
+
   test("null arithmetic propagation", () => {
     const rows = db.query("RETURN null + 1 AS r");
+    assertEq(rows[0].r, null);
+  });
+
+  test("null comparison", () => {
+    const rows = db.query("RETURN null = null AS r");
     assertEq(rows[0].r, null);
   });
 
@@ -1290,14 +1507,29 @@ console.log("\n── 41. Type conversion ──");
     assertEq(rows[0].v, 42);
   });
 
+  test("toInteger from float", () => {
+    const rows = db.query("RETURN toInteger(3.9) AS v");
+    assertEq(rows[0].v, 3);
+  });
+
   test("toFloat", () => {
     const rows = db.query("RETURN toFloat('3.14') AS v");
     assert(Math.abs((rows[0].v as number) - 3.14) < 0.01, `expected ~3.14, got ${rows[0].v}`);
   });
 
+  test("toFloat from int", () => {
+    const rows = db.query("RETURN toFloat(42) AS v");
+    assert(Math.abs((rows[0].v as number) - 42.0) < 0.001, `expected 42.0, got ${rows[0].v}`);
+  });
+
   test("toString", () => {
     const rows = db.query("RETURN toString(42) AS v");
     assertEq(rows[0].v, "42");
+  });
+
+  test("toString from bool", () => {
+    const rows = db.query("RETURN toString(true) AS v");
+    assertEq(rows[0].v, "true");
   });
 
   test("toBoolean", () => {
@@ -1351,10 +1583,14 @@ console.log("\n── 42. Math functions ──");
     assertEq(rows[0].v, 0.0);
   });
 
-  test("e() and pi()", () => {
-    const rows = db.query("RETURN e() AS e, pi() AS pi");
-    assert(Math.abs((rows[0].e as number) - Math.E) < 0.001, `e() should be ~2.718`);
-    assert(Math.abs((rows[0].pi as number) - Math.PI) < 0.001, `pi() should be ~3.14159`);
+  test("e()", () => {
+    const rows = db.query("RETURN e() AS v");
+    assert(Math.abs((rows[0].v as number) - Math.E) < 0.001, `e() should be ~2.718`);
+  });
+
+  test("pi()", () => {
+    const rows = db.query("RETURN pi() AS v");
+    assert(Math.abs((rows[0].v as number) - Math.PI) < 0.001, `pi() should be ~3.14159`);
   });
 
   test("rand() returns 0..1", () => {
@@ -1390,6 +1626,12 @@ console.log("\n── 43. String functions (expanded) ──");
   test("trim / ltrim / rtrim", () => {
     const rows = db.query("RETURN trim('  hi  ') AS t, lTrim('  hi') AS l, rTrim('hi  ') AS r");
     assertEq(rows[0].t, "hi");
+    assertEq(rows[0].l, "hi");
+    assertEq(rows[0].r, "hi");
+  });
+
+  test("lTrim and rTrim standalone", () => {
+    const rows = db.query("RETURN lTrim('  hi') AS l, rTrim('hi  ') AS r");
     assertEq(rows[0].l, "hi");
     assertEq(rows[0].r, "hi");
   });
@@ -1495,6 +1737,15 @@ console.log("\n── 46. Multiple MATCH ──");
     assertEq(rows[0]["b.name"], "y");
   });
 
+  test("independent MATCH", () => {
+    db.executeWrite("CREATE (:ME {v: 'a'})");
+    db.executeWrite("CREATE (:MF {v: 'b'})");
+    const rows = db.query("MATCH (a:ME) MATCH (b:MF) RETURN a.v AS av, b.v AS bv");
+    assertEq(rows.length, 1);
+    assertEq(rows[0].av, "a");
+    assertEq(rows[0].bv, "b");
+  });
+
   db.close();
 })();
 
@@ -1516,6 +1767,15 @@ console.log("\n── 47. REMOVE clause ──");
     db.executeWrite("MATCH (n:RLabel:Extra) REMOVE n:Extra");
     const rows = db.query("MATCH (n:Extra) RETURN count(n) AS c");
     assertEq(rows[0].c, 0);
+  });
+
+  test("REMOVE multiple properties", () => {
+    db.executeWrite("CREATE (:RM2 {a: 1, b: 2, c: 3})");
+    db.executeWrite("MATCH (n:RM2) REMOVE n.a, n.b");
+    const rows = db.query("MATCH (n:RM2) RETURN n.a AS a, n.b AS b, n.c AS c");
+    assertEq(rows[0].a, null);
+    assertEq(rows[0].b, null);
+    assertEq(rows[0].c, 3);
   });
 
   db.close();
@@ -1543,6 +1803,11 @@ console.log("\n── 48. Parameter queries ──");
   test("multiple params", () => {
     const rows = db.query("MATCH (n:PM) WHERE n.age >= $min AND n.age <= $max RETURN n.name ORDER BY n.name", { min: 25, max: 30 });
     assertEq(rows.length, 2);
+  });
+
+  test("string param return", () => {
+    const rows = db.query("RETURN $greeting AS v", { greeting: "hello" });
+    assertEq(rows[0].v, "hello");
   });
 
   db.close();
@@ -1577,6 +1842,24 @@ console.log("\n── 50. Index operations ──");
     assertEq(rows[0]["n.email"], "a@test.com");
   });
 
+  test("index with updates", () => {
+    db.executeWrite("CREATE (:IX2 {email: 'a@b.com'})");
+    db.createIndex("IX2", "email");
+    db.executeWrite("CREATE (:IX2 {email: 'c@d.com'})");
+    const rows = db.query("MATCH (n:IX2 {email: 'c@d.com'}) RETURN n.email");
+    assertEq(rows.length, 1);
+  });
+
+  test("index range query", () => {
+    for (let i = 0; i < 50; i++) {
+      db.executeWrite(`CREATE (:IX3 {v: ${i}})`);
+    }
+    db.createIndex("IX3", "v");
+    const rows = db.query("MATCH (n:IX3) WHERE n.v >= 40 RETURN n.v ORDER BY n.v");
+    assertEq(rows.length, 10);
+    assertEq(rows[0]["n.v"], 40);
+  });
+
   db.close();
 })();
 
@@ -1584,7 +1867,7 @@ console.log("\n── 50. Index operations ──");
 console.log("\n── 51. Concurrent snapshots ──");
 
 (() => {
-  const { db } = freshDb("concurrent");
+  const { db, dbPath } = freshDb("concurrent");
 
   test("snapshot isolation", () => {
     db.executeWrite("CREATE (:SI {v: 'before'})");
@@ -1593,6 +1876,17 @@ console.log("\n── 51. Concurrent snapshots ──");
     const snap2 = db.query("MATCH (n:SI) RETURN count(n) AS c");
     assertEq(snap1[0].c, 1);
     assertEq(snap2[0].c, 2);
+  });
+
+  test("reader isolation across handles", () => {
+    db.executeWrite("CREATE (:SH {v: 1})");
+    const first = db.query("MATCH (n:SH) RETURN count(n) AS c");
+    db.executeWrite("CREATE (:SH {v: 2})");
+    const db2 = addon.Db.open(dbPath);
+    const second = db2.query("MATCH (n:SH) RETURN count(n) AS c");
+    assertEq(first[0].c, 1);
+    assertEq(second[0].c, 2);
+    db2.close();
   });
 
   db.close();
@@ -1626,6 +1920,11 @@ console.log("\n── 52. Error handling (expanded) ──");
 
   test("division by zero", () => {
     const rows = db.query("RETURN 1/0 AS v");
+    assertEq(rows[0].v, null);
+  });
+
+  test("type error in arithmetic", () => {
+    const rows = db.query("RETURN 'hello' + 1 AS v");
     assertEq(rows[0].v, null);
   });
 
