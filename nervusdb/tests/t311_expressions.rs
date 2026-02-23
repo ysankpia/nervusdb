@@ -1295,3 +1295,30 @@ fn test_pattern_predicate_rejects_self_node_pattern() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn test_reduce_expression_sums_list() {
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path().join("test.ndb")).unwrap();
+    let snapshot = db.snapshot();
+    let params = Params::new();
+
+    let pq = prepare("RETURN reduce(acc = 0, x IN [1, 2, 3] | acc + x) AS v").unwrap();
+    let rows: Vec<_> = pq
+        .execute_streaming(&snapshot, &params)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get("v"), Some(&Value::Int(6)));
+}
+
+#[test]
+fn test_reduce_expression_rejects_non_list_input_at_compile_time() {
+    let err = prepare("RETURN reduce(acc = 0, x IN 42 | acc + x) AS v")
+        .expect_err("reduce should reject non-list literal");
+    assert!(
+        err.to_string().contains("InvalidArgumentType"),
+        "unexpected error: {err}"
+    );
+}

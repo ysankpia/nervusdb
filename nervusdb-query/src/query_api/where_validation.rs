@@ -9,6 +9,10 @@ fn is_quantifier_call(call: &crate::ast::FunctionCall) -> bool {
     )
 }
 
+fn is_reduce_call(call: &crate::ast::FunctionCall) -> bool {
+    call.name.eq_ignore_ascii_case("__reduce")
+}
+
 pub(super) fn validate_where_expression_bindings(
     expr: &Expression,
     known_bindings: &BTreeMap<String, BindingKind>,
@@ -199,6 +203,33 @@ fn validate_where_expression_variables(
                         known_bindings,
                         local_scopes,
                     )?;
+                }
+            } else if is_reduce_call(call) && call.args.len() == 5 {
+                validate_where_expression_variables(&call.args[1], known_bindings, local_scopes)?;
+                validate_where_expression_variables(&call.args[3], known_bindings, local_scopes)?;
+
+                let mut scope = HashSet::new();
+                if let Expression::Variable(var) = &call.args[0] {
+                    scope.insert(var.clone());
+                }
+                if let Expression::Variable(var) = &call.args[2] {
+                    scope.insert(var.clone());
+                }
+
+                if scope.is_empty() {
+                    validate_where_expression_variables(
+                        &call.args[4],
+                        known_bindings,
+                        local_scopes,
+                    )?;
+                } else {
+                    local_scopes.push(scope);
+                    validate_where_expression_variables(
+                        &call.args[4],
+                        known_bindings,
+                        local_scopes,
+                    )?;
+                    local_scopes.pop();
                 }
             } else {
                 for arg in &call.args {

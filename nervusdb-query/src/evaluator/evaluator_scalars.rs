@@ -23,6 +23,11 @@ pub(super) fn evaluate_scalar_function(name: &str, args: &[Value]) -> Option<Val
         "sqrt" => Some(evaluate_sqrt(args)),
         "sign" => Some(evaluate_sign(args)),
         "ceil" => Some(evaluate_ceil(args)),
+        "floor" => Some(evaluate_floor(args)),
+        "round" => Some(evaluate_round(args)),
+        "log" => Some(evaluate_log(args)),
+        "e" => Some(evaluate_e(args)),
+        "pi" => Some(evaluate_pi(args)),
         _ => None,
     }
 }
@@ -255,6 +260,72 @@ fn evaluate_ceil(args: &[Value]) -> Value {
     }
 }
 
+fn evaluate_floor(args: &[Value]) -> Value {
+    match args.first() {
+        Some(Value::Int(i)) => Value::Float(*i as f64),
+        Some(Value::Float(f)) => Value::Float(f.floor()),
+        _ => Value::Null,
+    }
+}
+
+fn evaluate_round(args: &[Value]) -> Value {
+    match args.first() {
+        Some(Value::Int(i)) => Value::Float(*i as f64),
+        Some(Value::Float(f)) => Value::Float(f.round()),
+        _ => Value::Null,
+    }
+}
+
+fn value_as_positive_f64(v: Option<&Value>) -> Option<f64> {
+    match v {
+        Some(Value::Int(i)) if *i > 0 => Some(*i as f64),
+        Some(Value::Float(f)) if *f > 0.0 => Some(*f),
+        _ => None,
+    }
+}
+
+fn evaluate_log(args: &[Value]) -> Value {
+    if args.is_empty() {
+        return Value::Null;
+    }
+
+    let Some(first) = value_as_positive_f64(args.first()) else {
+        return Value::Null;
+    };
+
+    if args.len() == 1 {
+        return Value::Float(first.ln());
+    }
+
+    let Some(base) = value_as_positive_f64(args.first()) else {
+        return Value::Null;
+    };
+    let Some(value) = value_as_positive_f64(args.get(1)) else {
+        return Value::Null;
+    };
+
+    if (base - 1.0).abs() < f64::EPSILON {
+        return Value::Null;
+    }
+    Value::Float(value.ln() / base.ln())
+}
+
+fn evaluate_e(args: &[Value]) -> Value {
+    if args.is_empty() {
+        Value::Float(std::f64::consts::E)
+    } else {
+        Value::Null
+    }
+}
+
+fn evaluate_pi(args: &[Value]) -> Value {
+    if args.is_empty() {
+        Value::Float(std::f64::consts::PI)
+    } else {
+        Value::Null
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::evaluate_scalar_function;
@@ -286,6 +357,36 @@ mod tests {
             evaluate_scalar_function("ceil", &[Value::Int(2)]),
             Some(Value::Float(2.0))
         );
+    }
+
+    #[test]
+    fn floor_round_log_and_constants_work() {
+        assert_eq!(
+            evaluate_scalar_function("floor", &[Value::Float(2.7)]),
+            Some(Value::Float(2.0))
+        );
+        assert_eq!(
+            evaluate_scalar_function("round", &[Value::Float(2.5)]),
+            Some(Value::Float(3.0))
+        );
+
+        let log = evaluate_scalar_function("log", &[Value::Int(1)]).unwrap();
+        match log {
+            Value::Float(v) => assert!(v.abs() < 1e-12),
+            other => panic!("expected float for log(1), got {other:?}"),
+        }
+
+        let e = evaluate_scalar_function("e", &[]).unwrap();
+        match e {
+            Value::Float(v) => assert!((v - std::f64::consts::E).abs() < 1e-12),
+            other => panic!("expected float for e(), got {other:?}"),
+        }
+
+        let pi = evaluate_scalar_function("pi", &[]).unwrap();
+        match pi {
+            Value::Float(v) => assert!((v - std::f64::consts::PI).abs() < 1e-12),
+            other => panic!("expected float for pi(), got {other:?}"),
+        }
     }
 
     #[test]

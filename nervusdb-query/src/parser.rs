@@ -1221,6 +1221,36 @@ impl TokenParser {
                         }));
                     }
 
+                    if quant_name == "reduce" {
+                        let accumulator = self.parse_identifier("reduce accumulator variable")?;
+                        self.consume(
+                            &TokenType::Equals,
+                            "Expected '=' after reduce accumulator variable",
+                        )?;
+                        let init_expr = self.parse_expression()?;
+                        self.consume(&TokenType::Comma, "Expected ',' after reduce initial value")?;
+
+                        let variable = self.parse_identifier("reduce iteration variable")?;
+                        self.consume(&TokenType::In, "Expected IN in reduce")?;
+                        let list_expr = self.parse_expression()?;
+                        self.consume(&TokenType::Pipe, "Expected '|' in reduce")?;
+                        let step_expr = self.parse_expression()?;
+                        self.consume(
+                            &TokenType::RightParen,
+                            "Expected ')' after reduce arguments",
+                        )?;
+                        return Ok(Expression::FunctionCall(FunctionCall {
+                            name: "__reduce".to_string(),
+                            args: vec![
+                                Expression::Variable(accumulator),
+                                init_expr,
+                                Expression::Variable(variable),
+                                list_expr,
+                                step_expr,
+                            ],
+                        }));
+                    }
+
                     let has_distinct_arg = self.match_token(&TokenType::Distinct);
                     let mut args = self.parse_function_arguments()?;
                     if has_distinct_arg {

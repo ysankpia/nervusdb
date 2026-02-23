@@ -97,6 +97,54 @@ fn test_left_and_right_string_functions() -> nervusdb::Result<()> {
 }
 
 #[test]
+fn test_floor_round_log_and_constants() -> nervusdb::Result<()> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("t313.ndb");
+    let db = Db::open(&db_path)?;
+
+    let query = "RETURN floor(2.7) AS f, round(2.5) AS r, log(1) AS l, e() AS e, pi() AS p";
+    let prep = nervusdb::query::prepare(query)?;
+    let snapshot = db.snapshot();
+    let results: Vec<_> = prep
+        .execute_streaming(&snapshot, &Default::default())
+        .collect::<Result<Vec<_>, _>>()?;
+
+    assert_eq!(results.len(), 1);
+
+    let f = match results[0].get("f").unwrap() {
+        Value::Float(v) => *v,
+        other => panic!("expected float floor result, got {other:?}"),
+    };
+    assert!((f - 2.0).abs() < 1e-9, "floor(2.7) should be 2.0");
+
+    let r = match results[0].get("r").unwrap() {
+        Value::Float(v) => *v,
+        other => panic!("expected float round result, got {other:?}"),
+    };
+    assert!((r - 3.0).abs() < 1e-9, "round(2.5) should be 3.0");
+
+    let l = match results[0].get("l").unwrap() {
+        Value::Float(v) => *v,
+        other => panic!("expected float log result, got {other:?}"),
+    };
+    assert!(l.abs() < 1e-9, "log(1) should be 0.0");
+
+    let e = match results[0].get("e").unwrap() {
+        Value::Float(v) => *v,
+        other => panic!("expected float e() result, got {other:?}"),
+    };
+    assert!((e - std::f64::consts::E).abs() < 1e-9, "e() mismatch");
+
+    let p = match results[0].get("p").unwrap() {
+        Value::Float(v) => *v,
+        other => panic!("expected float pi() result, got {other:?}"),
+    };
+    assert!((p - std::f64::consts::PI).abs() < 1e-9, "pi() mismatch");
+
+    Ok(())
+}
+
+#[test]
 fn test_size_of_path_is_compile_error() {
     let err = nervusdb::query::prepare("MATCH p = (a)-[*]->(b) RETURN size(p)")
         .expect_err("size(path) should be rejected at compile time")

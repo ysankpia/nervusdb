@@ -37,8 +37,33 @@ pub(super) fn extract_variables_from_expr(expr: &Expression, vars: &mut HashSet<
             vars.insert(pa.variable.clone());
         }
         Expression::FunctionCall(f) => {
-            for arg in &f.args {
-                extract_variables_from_expr(arg, vars);
+            if f.name.starts_with("__quant_") && f.args.len() == 3 {
+                extract_variables_from_expr(&f.args[1], vars);
+                if let Expression::Variable(bound_var) = &f.args[0] {
+                    let mut scoped = HashSet::new();
+                    extract_variables_from_expr(&f.args[2], &mut scoped);
+                    scoped.remove(bound_var);
+                    vars.extend(scoped);
+                } else {
+                    extract_variables_from_expr(&f.args[2], vars);
+                }
+            } else if f.name.eq_ignore_ascii_case("__reduce") && f.args.len() == 5 {
+                extract_variables_from_expr(&f.args[1], vars);
+                extract_variables_from_expr(&f.args[3], vars);
+
+                let mut scoped = HashSet::new();
+                extract_variables_from_expr(&f.args[4], &mut scoped);
+                if let Expression::Variable(acc) = &f.args[0] {
+                    scoped.remove(acc);
+                }
+                if let Expression::Variable(item) = &f.args[2] {
+                    scoped.remove(item);
+                }
+                vars.extend(scoped);
+            } else {
+                for arg in &f.args {
+                    extract_variables_from_expr(arg, vars);
+                }
             }
         }
         Expression::Binary(b) => {
