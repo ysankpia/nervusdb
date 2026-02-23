@@ -337,6 +337,37 @@ fn collect_delete_targets_from_value(
     Ok(())
 }
 
+fn ensure_non_detach_delete_safety<S: GraphSnapshot>(
+    snapshot: &S,
+    detach: bool,
+    nodes_to_delete: &[InternalNodeId],
+    explicit_edges: &std::collections::HashSet<EdgeKey>,
+) -> Result<()> {
+    if detach {
+        return Ok(());
+    }
+
+    for &node_id in nodes_to_delete {
+        let mut attached = std::collections::HashSet::new();
+        for edge in snapshot.neighbors(node_id, None) {
+            attached.insert(edge);
+        }
+        for edge in snapshot.incoming_neighbors(node_id, None) {
+            attached.insert(edge);
+        }
+        for edge in attached {
+            if !explicit_edges.contains(&edge) {
+                return Err(Error::Other(
+                    "execution error: Cannot delete node with relationships without DETACH DELETE"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub(super) fn execute_delete_on_rows<S: GraphSnapshot>(
     snapshot: &S,
     rows: &[Row],
@@ -369,11 +400,23 @@ pub(super) fn execute_delete_on_rows<S: GraphSnapshot>(
         }
     }
 
+    ensure_non_detach_delete_safety(snapshot, detach, &nodes_to_delete, &seen_edges)?;
+
     if detach {
+        let mut detached_edges: std::collections::HashSet<EdgeKey> =
+            std::collections::HashSet::new();
         for &node_id in &nodes_to_delete {
             for edge in snapshot.neighbors(node_id, None) {
-                txn.tombstone_edge(edge.src, edge.rel, edge.dst)?;
-                deleted_count += 1;
+                if detached_edges.insert(edge) {
+                    txn.tombstone_edge(edge.src, edge.rel, edge.dst)?;
+                    deleted_count += 1;
+                }
+            }
+            for edge in snapshot.incoming_neighbors(node_id, None) {
+                if detached_edges.insert(edge) {
+                    txn.tombstone_edge(edge.src, edge.rel, edge.dst)?;
+                    deleted_count += 1;
+                }
             }
         }
     }
@@ -496,13 +539,25 @@ pub(super) fn execute_delete<S: GraphSnapshot>(
         }
     }
 
+    ensure_non_detach_delete_safety(snapshot, detach, &nodes_to_delete, &seen_edges)?;
+
     // If detach=true, delete all edges connected to nodes being deleted
     if detach {
+        let mut detached_edges: std::collections::HashSet<EdgeKey> =
+            std::collections::HashSet::new();
         for &node_id in &nodes_to_delete {
             // Get all edges connected to this node and delete them
             for edge in snapshot.neighbors(node_id, None) {
-                txn.tombstone_edge(edge.src, edge.rel, edge.dst)?;
-                deleted_count += 1;
+                if detached_edges.insert(edge) {
+                    txn.tombstone_edge(edge.src, edge.rel, edge.dst)?;
+                    deleted_count += 1;
+                }
+            }
+            for edge in snapshot.incoming_neighbors(node_id, None) {
+                if detached_edges.insert(edge) {
+                    txn.tombstone_edge(edge.src, edge.rel, edge.dst)?;
+                    deleted_count += 1;
+                }
             }
         }
     }

@@ -245,6 +245,34 @@ fn validate_quantifier_argument_types(call: &crate::ast::FunctionCall) -> Result
     Ok(())
 }
 
+fn validate_reduce_arguments(call: &crate::ast::FunctionCall) -> Result<()> {
+    if !call.name.eq_ignore_ascii_case("__reduce") && !call.name.eq_ignore_ascii_case("reduce") {
+        return Ok(());
+    }
+
+    if call.args.len() != 5 {
+        return Err(Error::Other(
+            "syntax error: InvalidArgumentType".to_string(),
+        ));
+    }
+
+    if !matches!(call.args[0], Expression::Variable(_))
+        || !matches!(call.args[2], Expression::Variable(_))
+    {
+        return Err(Error::Other(
+            "syntax error: InvalidArgumentType".to_string(),
+        ));
+    }
+
+    if is_definitely_non_list_literal(&call.args[3]) {
+        return Err(Error::Other(
+            "syntax error: InvalidArgumentType".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 fn is_supported_function_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     if lower.starts_with("__quant_") {
@@ -292,6 +320,11 @@ fn is_supported_function_name(name: &str) -> bool {
             | "sqrt"
             | "sign"
             | "ceil"
+            | "floor"
+            | "round"
+            | "log"
+            | "e"
+            | "pi"
             | "tointeger"
             | "tofloat"
             | "toboolean"
@@ -339,6 +372,7 @@ fn is_supported_function_name(name: &str) -> bool {
             | "__slice"
             | "__getprop"
             | "__distinct"
+            | "__reduce"
             | "__nervus_singleton_path"
     )
 }
@@ -384,6 +418,7 @@ pub(super) fn validate_expression_types(expr: &Expression) -> Result<()> {
                 return Err(Error::Other("syntax error: UnknownFunction".to_string()));
             }
             validate_quantifier_argument_types(call)?;
+            validate_reduce_arguments(call)?;
             if call.name.eq_ignore_ascii_case("properties") {
                 if call.args.len() != 1 {
                     return Err(Error::Other(

@@ -32,7 +32,7 @@ mod evaluator_timezone;
 use evaluator_arithmetic::{add_values, divide_values, multiply_values, subtract_values};
 use evaluator_collections::evaluate_collection_function;
 use evaluator_compare::{compare_values, order_compare_non_null};
-use evaluator_comprehension::{evaluate_list_comprehension, evaluate_quantifier};
+use evaluator_comprehension::{evaluate_list_comprehension, evaluate_quantifier, evaluate_reduce};
 use evaluator_duration::duration_from_value;
 use evaluator_duration_core::build_duration_parts;
 use evaluator_equality::cypher_equals;
@@ -266,6 +266,8 @@ pub fn evaluate_expression_value<S: GraphSnapshot>(
         Expression::FunctionCall(call) => {
             if call.name.starts_with("__quant_") {
                 evaluate_quantifier(call, row, snapshot, params)
+            } else if call.name.eq_ignore_ascii_case("__reduce") {
+                evaluate_reduce(call, row, snapshot, params)
             } else {
                 evaluate_function(call, row, snapshot, params)
             }

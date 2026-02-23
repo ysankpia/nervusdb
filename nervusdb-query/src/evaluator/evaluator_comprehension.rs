@@ -147,3 +147,43 @@ pub(super) fn evaluate_quantifier<S: GraphSnapshot>(
         _ => Value::Null,
     }
 }
+
+pub(super) fn evaluate_reduce<S: GraphSnapshot>(
+    call: &FunctionCall,
+    row: &Row,
+    snapshot: &S,
+    params: &Params,
+) -> Value {
+    if call.args.len() != 5 {
+        return Value::Null;
+    }
+
+    let acc_name = match &call.args[0] {
+        Expression::Variable(v) => v.clone(),
+        _ => return Value::Null,
+    };
+    let item_name = match &call.args[2] {
+        Expression::Variable(v) => v.clone(),
+        _ => return Value::Null,
+    };
+
+    let mut acc = evaluate_expression_value(&call.args[1], row, snapshot, params);
+    let list_value = evaluate_expression_value(&call.args[3], row, snapshot, params);
+    let step_expression = &call.args[4];
+
+    let items = match list_value {
+        Value::List(items) => items,
+        Value::Null => return Value::Null,
+        _ => return Value::Null,
+    };
+
+    for item in items {
+        let local_row = row
+            .clone()
+            .with(acc_name.clone(), acc.clone())
+            .with(item_name.clone(), item);
+        acc = evaluate_expression_value(step_expression, &local_row, snapshot, params);
+    }
+
+    acc
+}

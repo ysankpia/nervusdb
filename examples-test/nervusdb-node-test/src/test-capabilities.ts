@@ -182,14 +182,10 @@ console.log("── 1. 基础 CRUD ──");
     assertEq(rows[0].c, 0);
   });
 
-  test("multi-node CREATE in single statement (known limitation)", () => {
-    try {
-      db.executeWrite("CREATE (:Multi1 {v: 1}), (:Multi2 {v: 2})");
-      const rows = db.query("MATCH (n:Multi1) RETURN count(n) AS c");
-      assert((rows[0].c as number) >= 1, "multi-create should work");
-    } catch (e: any) {
-      console.log(`    (limitation observed: ${e.message?.substring(0, 80)})`);
-    }
+  test("multi-node CREATE in single statement", () => {
+    db.executeWrite("CREATE (:Multi1 {v: 1}), (:Multi2 {v: 2})");
+    const rows = db.query("MATCH (n:Multi1) RETURN count(n) AS c");
+    assert((rows[0].c as number) >= 1, "multi-create should work");
   });
 
   db.close();
@@ -719,13 +715,9 @@ console.log("\n── 12. EXISTS 子查询 ──");
   db.executeWrite("CREATE (:E {name: 'no-rel'})");
 
   test("WHERE EXISTS pattern", () => {
-    try {
-      const rows = db.query("MATCH (n:E) WHERE EXISTS { (n)-[:R]->() } RETURN n.name");
-      assertEq(rows.length, 1);
-      assertEq(rows[0]["n.name"], "has-rel");
-    } catch (e: any) {
-      console.log(`    (EXISTS unsupported: ${String(e?.message || e).slice(0, 60)})`);
-    }
+    const rows = db.query("MATCH (n:E) WHERE EXISTS { (n)-[:R]->() } RETURN n.name");
+    assertEq(rows.length, 1);
+    assertEq(rows[0]["n.name"], "has-rel");
   });
 
   db.close();
@@ -738,13 +730,9 @@ console.log("\n── 13. FOREACH ──");
   const { db } = freshDb("foreach");
 
   test("FOREACH create nodes", () => {
-    try {
-      db.executeWrite("FOREACH (i IN [1, 2, 3] | CREATE (:FE {idx: i}))");
-      const rows = db.query("MATCH (n:FE) RETURN n.idx ORDER BY n.idx");
-      assertEq(rows.length, 3);
-    } catch (e: any) {
-      console.log(`    (FOREACH unsupported: ${e.message?.substring(0, 60)})`);
-    }
+    db.executeWrite("FOREACH (i IN [1, 2, 3] | CREATE (:FE {idx: i}))");
+    const rows = db.query("MATCH (n:FE) RETURN n.idx ORDER BY n.idx");
+    assertEq(rows.length, 3);
   });
 
   db.close();
@@ -815,15 +803,9 @@ console.log("\n── 15. 错误处理 ──");
     assertThrows(() => db.executeWrite("BLAH BLAH"));
   });
 
-  test("write via query() behavior", () => {
-    try {
-      db.query("CREATE (:ShouldFail)");
-      console.log("    (note: query() accepted write — no read/write separation at query level)");
-    } catch {
-      console.log("    (note: query() correctly rejected write)");
-    }
-    passed++;
-    console.log("  ✅ write-via-query behavior documented");
+  test("write via query() is rejected", () => {
+    const msg = assertThrows(() => db.query("CREATE (:ShouldFail)"));
+    assert(msg.includes("execute_write") || msg.includes("read"), `unexpected error: ${msg}`);
   });
 
   test("error payload is structured JSON", () => {
@@ -1343,21 +1325,13 @@ console.log("\n── 42. Math functions ──");
   });
 
   test("floor", () => {
-    try {
-      const rows = db.query("RETURN floor(2.7) AS v");
-      assertEq(rows[0].v, 2);
-    } catch (e: any) {
-      console.log(`    (floor unsupported: ${String(e?.message || e).slice(0, 60)})`);
-    }
+    const rows = db.query("RETURN floor(2.7) AS v");
+    assertEq(rows[0].v, 2.0);
   });
 
   test("round", () => {
-    try {
-      const rows = db.query("RETURN round(2.5) AS v");
-      assertEq(rows[0].v, 3);
-    } catch (e: any) {
-      console.log(`    (round unsupported: ${String(e?.message || e).slice(0, 60)})`);
-    }
+    const rows = db.query("RETURN round(2.5) AS v");
+    assertEq(rows[0].v, 3.0);
   });
 
   test("sign", () => {
@@ -1373,22 +1347,14 @@ console.log("\n── 42. Math functions ──");
   });
 
   test("log", () => {
-    try {
-      const rows = db.query("RETURN log(1) AS v");
-      assertEq(rows[0].v, 0.0);
-    } catch (e: any) {
-      console.log(`    (log unsupported: ${String(e?.message || e).slice(0, 60)})`);
-    }
+    const rows = db.query("RETURN log(1) AS v");
+    assertEq(rows[0].v, 0.0);
   });
 
   test("e() and pi()", () => {
-    try {
-      const rows = db.query("RETURN e() AS e, pi() AS pi");
-      assert(Math.abs((rows[0].e as number) - Math.E) < 0.001, `e() should be ~2.718`);
-      assert(Math.abs((rows[0].pi as number) - Math.PI) < 0.001, `pi() should be ~3.14159`);
-    } catch (e: any) {
-      console.log(`    (e()/pi() unsupported: ${String(e?.message || e).slice(0, 60)})`);
-    }
+    const rows = db.query("RETURN e() AS e, pi() AS pi");
+    assert(Math.abs((rows[0].e as number) - Math.E) < 0.001, `e() should be ~2.718`);
+    assert(Math.abs((rows[0].pi as number) - Math.PI) < 0.001, `pi() should be ~3.14159`);
   });
 
   test("rand() returns 0..1", () => {
@@ -1467,21 +1433,13 @@ console.log("\n── 44. List operations ──");
   });
 
   test("list comprehension", () => {
-    try {
-      const rows = db.query("RETURN [x IN [1, 2, 3, 4] WHERE x > 2] AS v");
-      assertEq((rows[0].v as any).length, 2);
-    } catch (e: any) {
-      console.log(`    (list comprehension unsupported: ${String(e?.message || e).slice(0, 60)})`);
-    }
+    const rows = db.query("RETURN [x IN [1, 2, 3, 4] WHERE x > 2] AS v");
+    assertEq((rows[0].v as any).length, 2);
   });
 
   test("reduce", () => {
-    try {
-      const rows = db.query("RETURN reduce(acc = 0, x IN [1, 2, 3] | acc + x) AS v");
-      assertEq(rows[0].v, 6);
-    } catch (e: any) {
-      console.log(`    (reduce unsupported: ${String(e?.message || e).slice(0, 60)})`);
-    }
+    const rows = db.query("RETURN reduce(acc = 0, x IN [1, 2, 3] | acc + x) AS v");
+    assertEq(rows[0].v, 6);
   });
 
   db.close();
@@ -1598,12 +1556,8 @@ console.log("\n── 49. EXPLAIN ──");
   db.executeWrite("CREATE (:EX {name: 'test'})");
 
   test("EXPLAIN returns plan", () => {
-    try {
-      const rows = db.query("EXPLAIN MATCH (n:EX) RETURN n");
-      assert(rows.length >= 1, "EXPLAIN should return at least one row");
-    } catch (e: any) {
-      console.log(`    (EXPLAIN unsupported: ${String(e?.message || e).slice(0, 60)})`);
-    }
+    const rows = db.query("EXPLAIN MATCH (n:EX) RETURN n");
+    assert(rows.length >= 1, "EXPLAIN should return at least one row");
   });
 
   db.close();
@@ -1660,13 +1614,8 @@ console.log("\n── 52. Error handling (expanded) ──");
 
   test("delete connected node error", () => {
     db.executeWrite("CREATE (:DE {id: 1})-[:R]->(:DE {id: 2})");
-    try {
-      db.executeWrite("MATCH (n:DE {id: 1}) DELETE n");
-      // Engine may auto-detach — that's acceptable behavior
-      console.log("    (note: DELETE connected node succeeded — engine auto-detaches)");
-    } catch {
-      // Expected: error when deleting connected node without DETACH
-    }
+    const msg = assertThrows(() => db.executeWrite("MATCH (n:DE {id: 1}) DELETE n"));
+    assert(msg.includes("DETACH DELETE") || msg.includes("execute"), `unexpected error: ${msg}`);
   });
 
   test("missing property returns null", () => {
@@ -1676,12 +1625,8 @@ console.log("\n── 52. Error handling (expanded) ──");
   });
 
   test("division by zero", () => {
-    try {
-      const rows = db.query("RETURN 1/0 AS v");
-      assert(rows[0].v === null || rows[0].v === Infinity, "division by zero should return null or Infinity");
-    } catch {
-      // Some engines throw on division by zero
-    }
+    const rows = db.query("RETURN 1/0 AS v");
+    assertEq(rows[0].v, null);
   });
 
   db.close();

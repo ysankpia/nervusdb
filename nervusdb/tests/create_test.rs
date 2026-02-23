@@ -124,14 +124,14 @@ fn test_delete_basic() {
 
     // Now delete
     let snapshot = db.snapshot();
-    let delete_query = prepare("MATCH (a)-[:1]->(b) DELETE a").unwrap();
+    let delete_query = prepare("MATCH (a)-[:1]->(b) DETACH DELETE a").unwrap();
     let mut txn = db.begin_write();
     let deleted = delete_query
         .execute_write(&snapshot, &mut txn, &nervusdb_query::Params::new())
         .unwrap();
     txn.commit().unwrap();
 
-    assert_eq!(deleted, 1);
+    assert_eq!(deleted, 2);
 }
 
 #[test]
@@ -150,14 +150,14 @@ fn test_delete_second_node() {
 
     // Delete the second node
     let snapshot = db.snapshot();
-    let delete_query = prepare("MATCH (a)-[:1]->(b) DELETE b").unwrap();
+    let delete_query = prepare("MATCH (a)-[:1]->(b) DETACH DELETE b").unwrap();
     let mut txn = db.begin_write();
     let deleted = delete_query
         .execute_write(&snapshot, &mut txn, &nervusdb_query::Params::new())
         .unwrap();
     txn.commit().unwrap();
 
-    assert_eq!(deleted, 1);
+    assert_eq!(deleted, 2);
 }
 
 #[test]
@@ -245,13 +245,13 @@ fn test_delete_multiple_nodes() {
 
     // Delete node with self-loop
     let snapshot = db.snapshot();
-    let delete_query = prepare("MATCH (a)-[:1]->(a) DELETE a").unwrap();
+    let delete_query = prepare("MATCH (a)-[:1]->(a) DETACH DELETE a").unwrap();
     let mut txn = db.begin_write();
     let deleted = delete_query
         .execute_write(&snapshot, &mut txn, &nervusdb_query::Params::new())
         .unwrap();
     txn.commit().unwrap();
-    assert_eq!(deleted, 1);
+    assert_eq!(deleted, 2);
 }
 
 #[test]

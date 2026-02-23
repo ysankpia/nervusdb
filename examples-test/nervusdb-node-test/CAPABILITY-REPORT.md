@@ -45,7 +45,7 @@
 | 39 | ORDER BY + SKIP + LIMIT (pagination/DESC) | 3 | Pass |
 | 40 | Null handling (IS NULL/IS NOT NULL/COALESCE/propagation) | 4 | Pass |
 | 41 | Type conversion (toInteger/toFloat/toString/toBoolean) | 4 | Pass |
-| 42 | Math functions (abs/ceil/floor/round/sign/sqrt/log/e/pi/rand) | 9 | Pass* |
+| 42 | Math functions (abs/ceil/floor/round/sign/sqrt/log/e/pi/rand) | 9 | Pass |
 | 43 | String functions expanded (replace/split/reverse/trim/substring) | 5 | Pass |
 | 44 | List operations (range/index/size/comprehension/reduce) | 6 | Pass |
 | 45 | Map operations (literal/access/nested/keys) | 4 | Pass |

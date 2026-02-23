@@ -1,0 +1,92 @@
+version: 1
+baseline: rust-current
+policy:
+  hard_alignment: true
+  open_cypher_strict: true
+  block_on_mismatch: true
+capabilities:
+  - id: query_read_only_rejects_write
+    scope: shared
+    blocking: true
+    expected:
+      mode: error
+      category: execution
+      code: READ_QUERY_WRITE_REJECTED
+  - id: delete_requires_detach_for_connected_node
+    scope: shared
+    blocking: true
+    expected:
+      mode: error
+      category: execution
+      code: DELETE_CONNECTED_NODE
+  - id: function_floor
+    scope: shared
+    blocking: true
+    expected:
+      mode: success
+      value: 2.0
+  - id: function_round
+    scope: shared
+    blocking: true
+    expected:
+      mode: success
+      value: 3.0
+  - id: function_log
+    scope: shared
+    blocking: true
+    expected:
+      mode: success
+      value: 0.0
+  - id: function_e
+    scope: shared
+    blocking: true
+    expected:
+      mode: success
+      value: 2.718281828
+  - id: function_pi
+    scope: shared
+    blocking: true
+    expected:
+      mode: success
+      value: 3.1415926535
+  - id: function_reduce
+    scope: shared
+    blocking: true
+    expected:
+      mode: success
+      value: 6
+  - id: write_txn_commit
+    scope: low_level
+    blocking: true
+    expected:
+      mode: success
+  - id: write_txn_rollback
+    scope: low_level
+    blocking: true
+    expected:
+      mode: success
+  - id: low_level_create_node
+    scope: low_level
+    blocking: true
+    expected:
+      mode: success
+  - id: low_level_create_edge
+    scope: low_level
+    blocking: true
+    expected:
+      mode: success
+  - id: low_level_set_remove_node_property
+    scope: low_level
+    blocking: true
+    expected:
+      mode: success
+  - id: low_level_set_remove_edge_property
+    scope: low_level
+    blocking: true
+    expected:
+      mode: success
+  - id: low_level_tombstone_node_edge
+    scope: low_level
+    blocking: true
+    expected:
+      mode: success

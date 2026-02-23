@@ -77,6 +77,10 @@ fn is_quantifier_call(call: &crate::ast::FunctionCall) -> bool {
     )
 }
 
+fn is_reduce_call(call: &crate::ast::FunctionCall) -> bool {
+    call.name.eq_ignore_ascii_case("__reduce")
+}
+
 fn resolve_projection_source_expr<'a>(plan: &'a Plan, variable: &str) -> Option<&'a Expression> {
     match plan {
         Plan::Project { input, projections } => {
@@ -245,6 +249,45 @@ fn validate_projection_expression_bindings(
                         local_scopes,
                         input_plan,
                     )?;
+                }
+            } else if is_reduce_call(call) && call.args.len() == 5 {
+                validate_projection_expression_bindings(
+                    &call.args[1],
+                    known_bindings,
+                    local_scopes,
+                    input_plan,
+                )?;
+                validate_projection_expression_bindings(
+                    &call.args[3],
+                    known_bindings,
+                    local_scopes,
+                    input_plan,
+                )?;
+
+                let mut scope = std::collections::HashSet::new();
+                if let Expression::Variable(acc) = &call.args[0] {
+                    scope.insert(acc.clone());
+                }
+                if let Expression::Variable(item) = &call.args[2] {
+                    scope.insert(item.clone());
+                }
+
+                if scope.is_empty() {
+                    validate_projection_expression_bindings(
+                        &call.args[4],
+                        known_bindings,
+                        local_scopes,
+                        input_plan,
+                    )?;
+                } else {
+                    local_scopes.push(scope);
+                    validate_projection_expression_bindings(
+                        &call.args[4],
+                        known_bindings,
+                        local_scopes,
+                        input_plan,
+                    )?;
+                    local_scopes.pop();
                 }
             } else {
                 for arg in &call.args {
@@ -687,6 +730,47 @@ fn expression_uses_allowed_group_refs(
                 );
                 local_scopes.pop();
                 return ok;
+            } else if is_reduce_call(call) && call.args.len() == 5 {
+                if !expression_uses_allowed_group_refs(
+                    &call.args[1],
+                    grouping_keys,
+                    grouping_aliases,
+                    local_scopes,
+                ) || !expression_uses_allowed_group_refs(
+                    &call.args[3],
+                    grouping_keys,
+                    grouping_aliases,
+                    local_scopes,
+                ) {
+                    return false;
+                }
+
+                let mut scope = std::collections::HashSet::new();
+                if let Expression::Variable(acc) = &call.args[0] {
+                    scope.insert(acc.clone());
+                }
+                if let Expression::Variable(item) = &call.args[2] {
+                    scope.insert(item.clone());
+                }
+
+                if scope.is_empty() {
+                    return expression_uses_allowed_group_refs(
+                        &call.args[4],
+                        grouping_keys,
+                        grouping_aliases,
+                        local_scopes,
+                    );
+                }
+
+                local_scopes.push(scope);
+                let ok = expression_uses_allowed_group_refs(
+                    &call.args[4],
+                    grouping_keys,
+                    grouping_aliases,
+                    local_scopes,
+                );
+                local_scopes.pop();
+                return ok;
             }
             call.args.iter().all(|arg| {
                 expression_uses_allowed_group_refs(
@@ -858,6 +942,47 @@ fn validate_aggregate_mixed_expression_impl(
                 local_scopes.push(scope);
                 let ok = validate_aggregate_mixed_expression_impl(
                     &call.args[2],
+                    grouping_keys,
+                    grouping_aliases,
+                    local_scopes,
+                )?;
+                local_scopes.pop();
+                return Ok(ok);
+            } else if is_reduce_call(call) && call.args.len() == 5 {
+                if !validate_aggregate_mixed_expression_impl(
+                    &call.args[1],
+                    grouping_keys,
+                    grouping_aliases,
+                    local_scopes,
+                )? || !validate_aggregate_mixed_expression_impl(
+                    &call.args[3],
+                    grouping_keys,
+                    grouping_aliases,
+                    local_scopes,
+                )? {
+                    return Ok(false);
+                }
+
+                let mut scope = std::collections::HashSet::new();
+                if let Expression::Variable(acc) = &call.args[0] {
+                    scope.insert(acc.clone());
+                }
+                if let Expression::Variable(item) = &call.args[2] {
+                    scope.insert(item.clone());
+                }
+
+                if scope.is_empty() {
+                    return validate_aggregate_mixed_expression_impl(
+                        &call.args[4],
+                        grouping_keys,
+                        grouping_aliases,
+                        local_scopes,
+                    );
+                }
+
+                local_scopes.push(scope);
+                let ok = validate_aggregate_mixed_expression_impl(
+                    &call.args[4],
                     grouping_keys,
                     grouping_aliases,
                     local_scopes,

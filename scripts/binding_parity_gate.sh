@@ -32,6 +32,8 @@ run_step() {
 all_passed=true
 examples_status="success"
 examples_rc=0
+softgate_status="success"
+softgate_rc=0
 binding_status="success"
 binding_rc=0
 contract_status="success"
@@ -43,6 +45,15 @@ examples_rc=$?
 set -e
 if [[ $examples_rc -ne 0 ]]; then
   examples_status="failed"
+  all_passed=false
+fi
+
+set +e
+run_step "parity-softgate-audit" bash scripts/parity_softgate_audit.sh
+softgate_rc=$?
+set -e
+if [[ $softgate_rc -ne 0 ]]; then
+  softgate_status="failed"
   all_passed=false
 fi
 
@@ -71,6 +82,7 @@ cat > "$JSON_FILE" <<JSON
   "all_passed": ${all_passed},
   "checks": {
     "examples_test": { "status": "${examples_status}", "exit_code": ${examples_rc} },
+    "parity_softgate_audit": { "status": "${softgate_status}", "exit_code": ${softgate_rc} },
     "binding_smoke": { "status": "${binding_status}", "exit_code": ${binding_rc} },
     "contract_smoke": { "status": "${contract_status}", "exit_code": ${contract_rc} }
   }
@@ -86,6 +98,7 @@ cat > "$MD_FILE" <<MD
 | Check | Status | Exit Code |
 |---|---|---:|
 | examples-test/run_all.sh | ${examples_status} | ${examples_rc} |
+| scripts/parity_softgate_audit.sh | ${softgate_status} | ${softgate_rc} |
 | scripts/binding_smoke.sh | ${binding_status} | ${binding_rc} |
 | scripts/contract_smoke.sh | ${contract_status} | ${contract_rc} |
 

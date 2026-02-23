@@ -72,6 +72,10 @@ jobs:
         if: runner.os == 'Linux'
         run: bash scripts/examples_smoke.sh
 
+      - name: Parity soft-gate audit
+        if: runner.os == 'Linux'
+        run: bash scripts/parity_softgate_audit.sh
+
       - name: Binding parity gate (Rust/Node/Python)
         if: runner.os == 'Linux'
         run: bash scripts/binding_parity_gate.sh
