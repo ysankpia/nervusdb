@@ -1,0 +1,71 @@
+name: Perf SLO Nightly
+
+on:
+  schedule:
+    - cron: "15 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  perf-slo-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run bench_v2 (read/write profile)
+        run: |
+          mkdir -p artifacts/perf
+          DATE_UTC="$(date -u +%F)"
+          CONCURRENCY_JSON="artifacts/perf/concurrency-slo-${DATE_UTC}.json"
+          LINE="$({
+            cargo run --example bench_v2 -p nervusdb-storage --release -- \
+              --nodes 50000 \
+              --degree 8 \
+              --iters 2000 \
+              --write-iters 200;
+          } | tail -n 1)"
+          echo "${LINE}" > "${CONCURRENCY_JSON}"
+          echo "[perf-slo-nightly] wrote ${CONCURRENCY_JSON}"
+
+      - name: Run hnsw_tune (single run for gate)
+        run: |
+          mkdir -p artifacts/perf
+          DATE_UTC="$(date -u +%F)"
+          HNSW_JSON="artifacts/perf/hnsw-slo-${DATE_UTC}.json"
+          LINE="$({
+            cargo run --example hnsw_tune -p nervusdb-storage --release -- \
+              --nodes 10000 \
+              --dim 64 \
+              --queries 100 \
+              --k 10 \
+              --m 8 \
+              --ef-construction 100 \
+              --ef-search 64;
+          } | tail -n 1)"
+          echo "${LINE}" > "${HNSW_JSON}"
+          echo "[perf-slo-nightly] wrote ${HNSW_JSON}"
+
+      - name: Run perf SLO gate
+        run: |
+          DATE_UTC="$(date -u +%F)"
+          CONCURRENCY_JSON="artifacts/perf/concurrency-slo-${DATE_UTC}.json"
+          HNSW_JSON="artifacts/perf/hnsw-slo-${DATE_UTC}.json"
+          bash scripts/perf_slo_gate.sh \
+            --concurrency-json "${CONCURRENCY_JSON}" \
+            --hnsw-json "${HNSW_JSON}" \
+            --out-dir artifacts/perf \
+            --as-of-date "${DATE_UTC}"
+
+      - name: Upload perf SLO artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-slo-artifacts
+          path: artifacts/perf/

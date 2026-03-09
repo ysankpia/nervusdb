@@ -33,7 +33,7 @@ Stability window rules:
 - Any blocking failure in main CI or nightly resets the counter.
 - Nightly suite includes: TCK Tier-3, benchmark, chaos, soak, fuzz.
 
-## Phase C: Performance Line — PLANNED
+## Phase C: Performance Line — IN PROGRESS
 
 **Goal**: Large-scale SLO benchmarks pass before Beta release.
 
@@ -60,7 +60,7 @@ All three must be met simultaneously:
 
 1. TCK pass rate >= 95% — **achieved** (100%).
 2. 7 consecutive days stable CI + nightly — **in progress**.
-3. Performance SLOs on large dataset — **planned**.
+3. Performance SLOs on large dataset — **in progress**.
 
 ## Future (Post-Beta)
 

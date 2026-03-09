@@ -36,12 +36,24 @@ jobs:
             --github-repo "${GITHUB_REPOSITORY}" \
             --github-token-env GITHUB_TOKEN
 
+      - name: Enforce perf SLO window gate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p artifacts/perf
+          bash scripts/perf_slo_window.sh \
+            --date "$(date -u +%F)" \
+            --github-repo "${GITHUB_REPOSITORY}" \
+            --github-token-env GITHUB_TOKEN
+
       - name: Upload beta release gate artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: beta-release-gate-artifacts
-          path: artifacts/tck/
+          path: |
+            artifacts/tck/
+            artifacts/perf/
 
   linux:
     name: Build Linux (x64)
