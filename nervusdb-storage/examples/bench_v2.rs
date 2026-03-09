@@ -13,6 +13,7 @@ struct Config {
     nodes: usize,
     degree: usize,
     iters: usize,
+    write_iters: usize,
     rel: u32,
     label: u32,
 }
@@ -26,12 +27,20 @@ struct NeighborBenchResult {
     p99_us: f64,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct WriteTxnBenchResult {
+    avg_us: f64,
+    p95_us: f64,
+    p99_us: f64,
+}
+
 impl Config {
     fn from_args() -> Self {
         let mut cfg = Self {
             nodes: 50_000,
             degree: 8,
             iters: 2_000,
+            write_iters: 200,
             rel: 1,
             label: 1,
         };
@@ -42,11 +51,12 @@ impl Config {
                 "--nodes" => cfg.nodes = parse_usize(args.next()),
                 "--degree" => cfg.degree = parse_usize(args.next()),
                 "--iters" => cfg.iters = parse_usize(args.next()),
+                "--write-iters" => cfg.write_iters = parse_usize(args.next()),
                 "--rel" => cfg.rel = parse_u32(args.next()),
                 "--label" => cfg.label = parse_u32(args.next()),
                 _ => {
                     eprintln!(
-                        "unknown arg: {arg}\n  supported: --nodes N --degree D --iters I --rel R --label L"
+                        "unknown arg: {arg}\n  supported: --nodes N --degree D --iters I --write-iters W --rel R --label L"
                     );
                     std::process::exit(2);
                 }
@@ -63,6 +73,10 @@ impl Config {
         }
         if cfg.iters == 0 {
             eprintln!("--iters must be > 0");
+            std::process::exit(2);
+        }
+        if cfg.write_iters == 0 {
+            eprintln!("--write-iters must be > 0");
             std::process::exit(2);
         }
 
@@ -125,6 +139,21 @@ fn summarize_neighbor_bench(
     }
 }
 
+fn summarize_write_txn_bench(latencies_us: Vec<f64>) -> WriteTxnBenchResult {
+    let avg_us = if latencies_us.is_empty() {
+        0.0
+    } else {
+        latencies_us.iter().sum::<f64>() / latencies_us.len() as f64
+    };
+    let p95_us = percentile_us(latencies_us.clone(), 0.95);
+    let p99_us = percentile_us(latencies_us, 0.99);
+    WriteTxnBenchResult {
+        avg_us,
+        p95_us,
+        p99_us,
+    }
+}
+
 fn main() {
     let cfg = Config::from_args();
 
@@ -150,11 +179,14 @@ fn main() {
 
     let m2_hot = bench_neighbors_hot(&engine, &nodes, cfg.rel, cfg.iters);
     let m2_cold = bench_neighbors_cold(&engine, &nodes, cfg.rel, cfg.iters);
+    let write_txn = bench_write_txn(&engine, cfg.label, cfg.nodes as u64 + 1, cfg.write_iters);
+    let read_query_p99_ms = m2_cold.p99_us / 1_000.0;
+    let write_txn_p99_ms = write_txn.p99_us / 1_000.0;
 
     println!("=== NervusDB v2 Bench (M1/M2) ===");
     println!(
-        "nodes={} degree={} edges={} iters={}",
-        cfg.nodes, cfg.degree, total_edges, cfg.iters
+        "nodes={} degree={} edges={} iters={} write_iters={}",
+        cfg.nodes, cfg.degree, total_edges, cfg.iters, cfg.write_iters
     );
     println!(
         "insert: {:.3}s ({:.0} edges/sec), wal={:.2} B/edge",
@@ -182,14 +214,19 @@ fn main() {
         m2_cold.p95_us,
         m2_cold.p99_us
     );
+    println!(
+        "write_txn: avg={:.2}us, p95={:.2}us, p99={:.2}us ({:.4}ms)",
+        write_txn.avg_us, write_txn.p95_us, write_txn.p99_us, write_txn_p99_ms
+    );
     println!("compact: {:.3}s", compact_secs);
 
     println!(
-        "{{\"nodes\":{},\"degree\":{},\"edges\":{},\"iters\":{},\"insert_edges_per_sec\":{:.3},\"wal_bytes_per_edge\":{:.3},\"neighbors_hot_m1_edges_per_sec\":{:.3},\"neighbors_hot_m2_edges_per_sec\":{:.3},\"neighbors_cold_m1_edges_per_sec\":{:.3},\"neighbors_cold_m2_edges_per_sec\":{:.3},\"neighbors_hot_m1_p95_us\":{:.3},\"neighbors_hot_m1_p99_us\":{:.3},\"neighbors_hot_m2_p95_us\":{:.3},\"neighbors_hot_m2_p99_us\":{:.3},\"neighbors_cold_m1_p95_us\":{:.3},\"neighbors_cold_m1_p99_us\":{:.3},\"neighbors_cold_m2_p95_us\":{:.3},\"neighbors_cold_m2_p99_us\":{:.3},\"neighbors_hot_m2_avg_us\":{:.3},\"neighbors_cold_m2_avg_us\":{:.3},\"compact_secs\":{:.6}}}",
+        "{{\"nodes\":{},\"degree\":{},\"edges\":{},\"iters\":{},\"write_iters\":{},\"insert_edges_per_sec\":{:.3},\"wal_bytes_per_edge\":{:.3},\"neighbors_hot_m1_edges_per_sec\":{:.3},\"neighbors_hot_m2_edges_per_sec\":{:.3},\"neighbors_cold_m1_edges_per_sec\":{:.3},\"neighbors_cold_m2_edges_per_sec\":{:.3},\"neighbors_hot_m1_p95_us\":{:.3},\"neighbors_hot_m1_p99_us\":{:.3},\"neighbors_hot_m2_p95_us\":{:.3},\"neighbors_hot_m2_p99_us\":{:.3},\"neighbors_cold_m1_p95_us\":{:.3},\"neighbors_cold_m1_p99_us\":{:.3},\"neighbors_cold_m2_p95_us\":{:.3},\"neighbors_cold_m2_p99_us\":{:.3},\"neighbors_hot_m2_avg_us\":{:.3},\"neighbors_cold_m2_avg_us\":{:.3},\"write_txn_avg_us\":{:.3},\"write_txn_p95_us\":{:.3},\"write_txn_p99_us\":{:.3},\"write_txn_p99_ms\":{:.6},\"read_query_p99_ms\":{:.6},\"compact_secs\":{:.6}}}",
         cfg.nodes,
         cfg.degree,
         total_edges,
         cfg.iters,
+        cfg.write_iters,
         insert_edges_per_sec,
         wal_bytes_per_edge,
         m1_hot.edges_per_sec,
@@ -206,6 +243,11 @@ fn main() {
         m2_cold.p99_us,
         m2_hot.avg_us,
         m2_cold.avg_us,
+        write_txn.avg_us,
+        write_txn.p95_us,
+        write_txn.p99_us,
+        write_txn_p99_ms,
+        read_query_p99_ms,
         compact_secs
     );
 }
@@ -275,6 +317,23 @@ fn bench_neighbors_cold(
     }
     let secs = start.elapsed().as_secs_f64().max(1e-9);
     summarize_neighbor_bench(edges_total, secs, latencies_us)
+}
+
+fn bench_write_txn(
+    engine: &GraphEngine,
+    label: u32,
+    start_external_id: u64,
+    write_iters: usize,
+) -> WriteTxnBenchResult {
+    let mut latencies_us = Vec::with_capacity(write_iters);
+    for i in 0..write_iters {
+        let t0 = Instant::now();
+        let mut tx = engine.begin_write();
+        tx.create_node(start_external_id + i as u64, label).unwrap();
+        tx.commit().unwrap();
+        latencies_us.push(t0.elapsed().as_secs_f64() * 1_000_000.0);
+    }
+    summarize_write_txn_bench(latencies_us)
 }
 
 fn file_len(path: &PathBuf) -> u64 {

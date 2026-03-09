@@ -6,13 +6,14 @@
 
 ```bash
 cargo run --example bench_v2 -p nervusdb-storage --release -- \
-  --nodes 50000 --degree 8 --iters 2000
+  --nodes 50000 --degree 8 --iters 2000 --write-iters 200
 ```
 
 参数：
 - `--nodes`：节点数
 - `--degree`：每个节点出边数（总边数 = nodes * degree）
 - `--iters`：neighbors hot/cold 的重复次数
+- `--write-iters`：写事务延迟采样次数（P99 写入门禁）
 
 输出：
 - 人类可读 summary
@@ -31,6 +32,24 @@ bash scripts/v2_bench.sh --nodes 50000 --degree 8 --iters 2000
 当前阶段不在 CI 默认跑重基准；release 前至少跑一次并对比上一份结果：
 - `neighbors_hot_m2_edges_per_sec` 不应比上一次基线差超过 ~10%
 - M2 相对 M1 的 `neighbors_hot` 至少应有明显提升（目标：数量级）
+
+## Perf SLO Gate（自动门禁）
+
+当前 `BETA-05` 采用统一门禁脚本：
+
+```bash
+bash scripts/perf_slo_gate.sh \
+  --concurrency-json artifacts/perf/concurrency-YYYYMMDD-HHMMSS.json \
+  --hnsw-json artifacts/perf/hnsw-slo-YYYY-MM-DD.json \
+  --out-dir artifacts/perf \
+  --as-of-date 2026-03-08
+```
+
+默认阈值：
+- `read_query_p99_ms <= 120`
+- `write_txn_p99_ms <= 180`
+- `vector_search_p99_ms <= 220`
+- `vector_recall_at_k >= 0.95`
 
 ## 基准方法论
 
@@ -85,4 +104,3 @@ cargo run --example bench_v2 -p nervusdb-storage --release -- \
 # neighbors_hot: M1 15000000 edges/sec, M2 30000000 edges/sec
 # M2 相对 M1 提升 ~2x
 ```
-

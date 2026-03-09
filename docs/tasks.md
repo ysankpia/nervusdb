@@ -108,7 +108,7 @@
 | BETA-03R13    | [Hardening] `TypeError` 断言收紧（compile-time + any-time + runtime） | High   | Done   | codex/feat/beta-04-r13w2-anytime-hardening | R13-W1/W2/W3 已全部完成：compile-time、any-time、runtime 三类 `TypeError` 断言均切换为严格模式；补齐递归运行期表达式类型守卫（含 list comprehension 作用域）与属性写入非法 list 元素拦截，定向簇与基线门禁全绿。 |
 | BETA-03R14    | [Hardening] runtime 语义一致性收口（WHERE guard + type(rel)） | High   | Done   | codex/feat/beta-04-r14w2-unwind-guard | R14-W1~W13 已完成：`WHERE/UNWIND/SET/MERGE/FOREACH/DELETE/CREATE/CALL/Aggregate/IndexSeek` 入口 runtime guard 全覆盖，`runtime_guard_audit` 热点清零并接入 CI；W13-A 全量证据：core gates 全绿、Tier-3 全量 `3897/3897` 全通过。 |
 | BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | Done   | feat/TB1-stability-window   | strict 稳定窗基建已落地（`ci-daily-snapshot` + `stability_window.sh --mode strict` + `beta_release_gate.sh` + release 接线）；截至 2026-02-22（UTC）累计 `consecutive_days=7/7`，`window_passed=true`，发布门禁放行。 |
-| BETA-05       | [Perf] 大规模 SLO 封板（读120/写180/向量220 ms P99）       | High   | WIP    | codex/feat/w13-perf-guard-stream | W13-PERF 已落地资源护栏+高内存算子收敛；稳定窗已达标，进入主分支 Nightly 8h 复测与 SLO 封板阶段。 |
+| BETA-05       | [Perf] 大规模 SLO 封板（读120/写180/向量220 ms P99）       | High   | WIP    | codex/feat/beta-05-perf-gate | 已落地 `perf_slo_gate` + `perf-slo-nightly` + `perf_slo_window` + release 接线；进入 7 天性能窗累计与超阈值收敛阶段。 |
 
 ### BETA-03R4 子进展（2026-02-13）
 - W1：引入 `BindingKind::RelationshipList`，varlen 关系变量输出统一为 `List<Relationship>`，0-hop 命中输出 `[]`，OPTIONAL miss 保持 `null`。
@@ -613,6 +613,23 @@
   - `bash examples-test/run_all.sh` 通过（Rust/Node/Python 全绿）。
   - `bash scripts/binding_parity_gate.sh` 通过。
   - `cargo test -p nervusdb --test t311_expressions --test t313_functions --test t343_parity_semantics` 通过。
+
+### BETA-05 子进展（2026-03-08，Gate-First 基建落地）
+- PR-1（指标生产）：
+  - `bench_v2` 新增 `--write-iters` 参数（默认 `200`）。
+  - 输出新增：`write_txn_avg_us`、`write_txn_p95_us`、`write_txn_p99_us`、`write_txn_p99_ms`、`read_query_p99_ms`。
+  - 新增 fixture：`scripts/tests/perf_bench_fixture.sh`（先红后绿，验证新字段与参数）。
+- PR-2（SLO Gate + Nightly 阻断）：
+  - 新增 `scripts/perf_slo_gate.sh`（输入 `concurrency + hnsw` JSON，输出 `perf-slo-gate-YYYY-MM-DD.json/md`，超阈值即非零退出）。
+  - 阈值固定：读 `<=120ms`、写 `<=180ms`、向量 `<=220ms`、`recall>=0.95`。
+  - 新增 workflow：`.github/workflows/perf-slo-nightly.yml`（`bench_v2 -> hnsw_tune(single-run) -> perf_slo_gate`）。
+  - 新增 fixture：`scripts/tests/perf_slo_fixture.sh`（覆盖读/写/向量延迟/recall/缺字段）。
+- PR-5（Release Gate 接线）：
+  - 新增 `scripts/perf_slo_window.sh`（统计 `perf-slo-nightly` 连续通过天数，默认 `7` 天）。
+  - 新增 fixture：`scripts/tests/perf_slo_window_fixture.sh`（7天全绿通过、失败重置、缺日报失败）。
+  - `release.yml` 已接入性能窗口阻断；未达 `7` 天或当日失败则阻断发布。
+- 当前状态：
+  - 性能门禁链路已成型，进入 `M5-04/M5-05` 超阈值项定向优化与 7 天窗口累计阶段。
 
 ## Archived (v1/Alpha)
 
