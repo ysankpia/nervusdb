@@ -41,7 +41,7 @@ fn load_hnsw_params_from_env() -> HnswParams {
     HnswParams {
         m: parse_hnsw_env_usize("NERVUSDB_HNSW_M", 16),
         ef_construction: parse_hnsw_env_usize("NERVUSDB_HNSW_EF_CONSTRUCTION", 200),
-        ef_search: parse_hnsw_env_usize("NERVUSDB_HNSW_EF_SEARCH", 200),
+        ef_search: parse_hnsw_env_usize("NERVUSDB_HNSW_EF_SEARCH", 128),
     }
 }
 
@@ -1313,7 +1313,7 @@ mod tests {
         let params = load_hnsw_params_from_env();
         assert_eq!(params.m, 16);
         assert_eq!(params.ef_construction, 200);
-        assert_eq!(params.ef_search, 200);
+        assert_eq!(params.ef_search, 128);
 
         if let Some(v) = m_old {
             set_env("NERVUSDB_HNSW_M", &v);
@@ -1341,7 +1341,7 @@ mod tests {
         let params = load_hnsw_params_from_env();
         assert_eq!(params.m, 32);
         assert_eq!(params.ef_construction, 200);
-        assert_eq!(params.ef_search, 200);
+        assert_eq!(params.ef_search, 128);
 
         if let Some(v) = m_old {
             set_env("NERVUSDB_HNSW_M", &v);

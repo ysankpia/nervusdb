@@ -13,7 +13,7 @@ impl Default for HnswParams {
         Self {
             m: 16,
             ef_construction: 200,
-            ef_search: 200,
+            ef_search: 128,
         }
     }
 }

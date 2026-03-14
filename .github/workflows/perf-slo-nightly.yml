@@ -58,9 +58,9 @@ jobs:
             --dim 64 \
             --queries 100 \
             --k 10 \
-            --m 8 \
-            --ef-construction 100 \
-            --ef-search 64 \
+            --m 16 \
+            --ef-construction 200 \
+            --ef-search 128 \
             2>&1 | tee "${HNSW_LOG}"
           RUN_RC=${PIPESTATUS[0]}
           set -e
