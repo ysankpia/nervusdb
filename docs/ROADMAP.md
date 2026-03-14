@@ -45,6 +45,12 @@ Stability window rules:
 
 Any SLO miss blocks Beta release.
 
+Current branch status (`codex/feat/m5-05-hnsw-blob-reuse`):
+- P0 correctness/stability blockers cleared.
+- Current default HNSW params converged to `M=16`, `efConstruction=200`, `efSearch=128`.
+- Branch `perf-slo-nightly` is green with the current gate dataset.
+- Next step is merging to `main` so the 7-day performance window can begin accumulating on trunk.
+
 ## Industrial Quality (Continuous)
 
 | Area | Status |

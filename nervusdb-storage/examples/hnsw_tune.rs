@@ -28,6 +28,8 @@ struct SearchStats {
     p95_us: f64,
     p99_us: f64,
     recall_at_k: f64,
+    top1_hit_rate: f64,
+    avg_candidates_returned: f64,
 }
 
 impl Config {
@@ -39,7 +41,7 @@ impl Config {
             k: 10,
             m: 16,
             ef_construction: 200,
-            ef_search: 200,
+            ef_search: 128,
             label: 1,
         };
 
@@ -176,6 +178,8 @@ fn run_search_eval(
     let mut rng = SplitMix64::new(0x1234_5678_9abc_def0);
 
     let mut total_recall = 0.0;
+    let mut top1_hits = 0usize;
+    let mut total_candidates_returned = 0usize;
     let mut latencies_us = Vec::with_capacity(cfg.queries);
 
     for _ in 0..cfg.queries {
@@ -187,6 +191,7 @@ fn run_search_eval(
         }
 
         let expected = brute_force_topk(vectors, &query, cfg.k.min(vectors.len()));
+        let expected_top1_id = ids[expected[0]];
         let expected_ids: HashSet<u32> = expected.into_iter().map(|idx| ids[idx]).collect();
 
         let t0 = Instant::now();
@@ -194,6 +199,13 @@ fn run_search_eval(
             .search_vector(&query, cfg.k.min(ids.len()))
             .expect("hnsw search should succeed");
         latencies_us.push(t0.elapsed().as_secs_f64() * 1_000_000.0);
+
+        if let Some((top1_id, _)) = actual.first() {
+            if *top1_id == expected_top1_id {
+                top1_hits += 1;
+            }
+        }
+        total_candidates_returned += actual.len();
 
         let actual_ids: HashSet<u32> = actual.into_iter().map(|(id, _)| id).collect();
         let hit_count = actual_ids.intersection(&expected_ids).count();
@@ -211,6 +223,8 @@ fn run_search_eval(
         p95_us: percentile_us(latencies_us.clone(), 0.95),
         p99_us: percentile_us(latencies_us, 0.99),
         recall_at_k: total_recall / cfg.queries as f64,
+        top1_hit_rate: top1_hits as f64 / cfg.queries as f64,
+        avg_candidates_returned: total_candidates_returned as f64 / cfg.queries as f64,
     }
 }
 
@@ -257,10 +271,11 @@ fn main() {
     let ndb = dir.path().join("hnsw_tune.ndb");
     let wal = dir.path().join("hnsw_tune.wal");
 
-    let (stats, ndb_bytes, wal_bytes) = with_hnsw_env(&cfg, || {
+    let (stats, ndb_bytes, wal_bytes, build_secs) = with_hnsw_env(&cfg, || {
         let engine = GraphEngine::open(&ndb, &wal).expect("engine open should succeed");
 
         let mut ids = Vec::with_capacity(cfg.nodes);
+        let build_t0 = Instant::now();
         {
             let mut tx = engine.begin_write();
             for (idx, vector) in vectors.iter().enumerate() {
@@ -273,17 +288,18 @@ fn main() {
             }
             tx.commit().expect("commit should succeed");
         }
+        let build_secs = build_t0.elapsed().as_secs_f64();
 
         let stats = run_search_eval(&engine, &ids, &vectors, &cfg);
         let ndb_bytes = file_len(&ndb);
         let wal_bytes = file_len(&wal);
-        (stats, ndb_bytes, wal_bytes)
+        (stats, ndb_bytes, wal_bytes, build_secs)
     });
 
     let total_bytes = ndb_bytes + wal_bytes;
 
     println!(
-        "{{\"nodes\":{},\"dim\":{},\"queries\":{},\"k\":{},\"m\":{},\"ef_construction\":{},\"ef_search\":{},\"recall_at_k\":{:.6},\"avg_us\":{:.3},\"p95_us\":{:.3},\"p99_us\":{:.3},\"ndb_bytes\":{},\"wal_bytes\":{},\"memory_proxy_bytes\":{}}}",
+        "{{\"nodes\":{},\"dim\":{},\"queries\":{},\"k\":{},\"m\":{},\"ef_construction\":{},\"ef_search\":{},\"recall_at_k\":{:.6},\"top1_hit_rate\":{:.6},\"avg_candidates_returned\":{:.3},\"avg_us\":{:.3},\"p95_us\":{:.3},\"p99_us\":{:.3},\"vector_search_p99_ms\":{:.6},\"build_secs\":{:.6},\"ndb_bytes\":{},\"wal_bytes\":{},\"memory_proxy_bytes\":{}}}",
         cfg.nodes,
         cfg.dim,
         cfg.queries,
@@ -292,9 +308,13 @@ fn main() {
         cfg.ef_construction,
         cfg.ef_search,
         stats.recall_at_k,
+        stats.top1_hit_rate,
+        stats.avg_candidates_returned,
         stats.avg_us,
         stats.p95_us,
         stats.p99_us,
+        stats.p99_us / 1000.0,
+        build_secs,
         ndb_bytes,
         wal_bytes,
         total_bytes

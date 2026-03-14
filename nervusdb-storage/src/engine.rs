@@ -41,7 +41,7 @@ fn load_hnsw_params_from_env() -> HnswParams {
     HnswParams {
         m: parse_hnsw_env_usize("NERVUSDB_HNSW_M", 16),
         ef_construction: parse_hnsw_env_usize("NERVUSDB_HNSW_EF_CONSTRUCTION", 200),
-        ef_search: parse_hnsw_env_usize("NERVUSDB_HNSW_EF_SEARCH", 200),
+        ef_search: parse_hnsw_env_usize("NERVUSDB_HNSW_EF_SEARCH", 128),
     }
 }
 
@@ -292,9 +292,29 @@ impl GraphEngine {
 
     // T203: HNSW Public API
     pub fn insert_vector(&self, id: InternalNodeId, vector: Vec<f32>) -> Result<()> {
+        let (vec_root, graph_root) = {
+            let mut pager = self.pager.write().unwrap();
+            let mut idx = self.vector_index.lock().unwrap();
+            idx.insert(&mut *pager, id, vector)?;
+            idx.persistent_roots()
+        };
+
+        let mut catalog = self.index_catalog.lock().unwrap();
         let mut pager = self.pager.write().unwrap();
-        let mut idx = self.vector_index.lock().unwrap();
-        idx.insert(&mut *pager, id, vector)
+
+        if let Some(re) = catalog.entries.get_mut("__sys_hnsw_vec") {
+            re.root = vec_root;
+        } else {
+            return Err(Error::WalProtocol("missing __sys_hnsw_vec index entry"));
+        }
+        if let Some(re) = catalog.entries.get_mut("__sys_hnsw_graph") {
+            re.root = graph_root;
+        } else {
+            return Err(Error::WalProtocol("missing __sys_hnsw_graph index entry"));
+        }
+
+        catalog.flush(&mut pager)?;
+        Ok(())
     }
 
     pub fn search_vector(&self, query: &[f32], k: usize) -> Result<Vec<(InternalNodeId, f32)>> {
@@ -1092,6 +1112,12 @@ impl<'a> WriteTxn<'a> {
             self.engine.publish_run(Arc::new(run));
         }
 
+        // Finalize all pager-backed state for this tx, including HNSW and IdMap writes.
+        {
+            let mut pager = self.engine.pager.write().unwrap();
+            pager.sync()?;
+        }
+
         self.engine.next_txid.fetch_add(1, Ordering::Relaxed);
 
         Ok(())
@@ -1287,7 +1313,7 @@ mod tests {
         let params = load_hnsw_params_from_env();
         assert_eq!(params.m, 16);
         assert_eq!(params.ef_construction, 200);
-        assert_eq!(params.ef_search, 200);
+        assert_eq!(params.ef_search, 128);
 
         if let Some(v) = m_old {
             set_env("NERVUSDB_HNSW_M", &v);
@@ -1315,7 +1341,7 @@ mod tests {
         let params = load_hnsw_params_from_env();
         assert_eq!(params.m, 32);
         assert_eq!(params.ef_construction, 200);
-        assert_eq!(params.ef_search, 200);
+        assert_eq!(params.ef_search, 128);
 
         if let Some(v) = m_old {
             set_env("NERVUSDB_HNSW_M", &v);

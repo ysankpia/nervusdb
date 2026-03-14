@@ -248,6 +248,26 @@ impl<'a> Page<'a> {
         Ok((&self.buf[key_start..key_end], payload))
     }
 
+    fn leaf_set_payload_at(&mut self, idx: usize, payload: u64) -> Result<()> {
+        if self.kind()? != PageKind::Leaf {
+            return Err(Error::WalProtocol("index page: not leaf"));
+        }
+        if idx >= self.cell_count() {
+            return Err(Error::WalProtocol("index page: cell idx out of bounds"));
+        }
+
+        let cell_off = self.slot_get(idx)?;
+        let (key_len, var_len) =
+            read_varint_u32(&self.buf[cell_off..]).ok_or(Error::WalProtocol("bad varint"))?;
+        let key_len = key_len as usize;
+        let payload_off = cell_off + var_len + key_len;
+        if payload_off + 8 > PAGE_SIZE {
+            return Err(Error::WalProtocol("index page: cell out of range"));
+        }
+        write_u64_le(self.buf, payload_off, payload);
+        Ok(())
+    }
+
     fn internal_cell_key_and_right_child(&self, idx: usize) -> Result<(&[u8], PageId)> {
         if self.kind()? != PageKind::Internal {
             return Err(Error::WalProtocol("index page: not internal"));
@@ -520,6 +540,104 @@ impl BTree {
                 }
             }
         }
+    }
+
+    /// Insert-or-replace for unique-key indexes.
+    ///
+    /// If `key` exists, replaces its payload and returns `Some(old_payload)`.
+    /// Otherwise inserts a new entry and returns `None`.
+    pub fn upsert_unique(
+        &mut self,
+        pager: &mut Pager,
+        key: &[u8],
+        payload: u64,
+    ) -> Result<Option<u64>> {
+        if let Some((leaf_id, slot, old_payload)) = self.find_exact_leaf_entry(pager, key)? {
+            if old_payload == payload {
+                return Ok(Some(old_payload));
+            }
+
+            let mut buf = pager.read_page(leaf_id)?;
+            let mut page = Page::new(&mut buf);
+            page.leaf_set_payload_at(slot, payload)?;
+            pager.write_page(leaf_id, &buf)?;
+            return Ok(Some(old_payload));
+        }
+        self.insert(pager, key, payload)?;
+
+        debug_assert!(
+            self.count_key_occurrences(pager, key).unwrap_or(0) >= 1,
+            "btree upsert_unique: key missing after upsert"
+        );
+
+        Ok(None)
+    }
+
+    pub fn count_payload_refs_for_key(
+        &self,
+        pager: &Pager,
+        key: &[u8],
+        payload: u64,
+    ) -> Result<usize> {
+        let mut cursor = self.cursor_lower_bound(pager, key)?;
+        let mut refs = 0usize;
+        while cursor.is_valid()? {
+            let found_key = cursor.key()?;
+            if found_key != key {
+                break;
+            }
+            if cursor.payload()? == payload {
+                refs += 1;
+            }
+            if !cursor.advance()? {
+                break;
+            }
+        }
+        Ok(refs)
+    }
+
+    fn find_exact_leaf_entry(
+        &self,
+        pager: &Pager,
+        key: &[u8],
+    ) -> Result<Option<(PageId, usize, u64)>> {
+        let mut cursor = self.cursor_lower_bound(pager, key)?;
+        if !cursor.is_valid()? {
+            return Ok(None);
+        }
+        let found_key = cursor.key()?;
+        if found_key != key {
+            return Ok(None);
+        }
+        Ok(Some((cursor.leaf, cursor.slot as usize, cursor.payload()?)))
+    }
+
+    fn count_key_occurrences(&self, pager: &Pager, key: &[u8]) -> Result<usize> {
+        let mut cursor = self.cursor_lower_bound(pager, key)?;
+        let mut count = 0usize;
+        while cursor.is_valid()? {
+            let found_key = cursor.key()?;
+            if found_key != key {
+                break;
+            }
+            count += 1;
+            if !cursor.advance()? {
+                break;
+            }
+        }
+        Ok(count)
+    }
+
+    pub(crate) fn exact_key_payloads_full_scan(
+        &self,
+        pager: &mut Pager,
+        key: &[u8],
+    ) -> Result<Vec<u64>> {
+        Ok(self
+            .scan_all(pager)?
+            .into_iter()
+            .filter_map(|(k, v)| if k == key { Some(v) } else { None })
+            .collect())
     }
 
     /// Delete an exact `(key, payload)` tuple using incremental leaf modification.
@@ -1023,5 +1141,86 @@ mod tests {
             }
         }
         assert_eq!(got, keys);
+    }
+
+    #[test]
+    fn upsert_unique_keeps_single_tuple_after_split_churn() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("btree-upsert-unique.ndb");
+        let mut pager = Pager::open(&path).unwrap();
+        let mut tree = BTree::create(&mut pager).unwrap();
+
+        // Seed enough large keys to force frequent leaf/internal splits.
+        for i in 0..64u64 {
+            let mut k = vec![b's'; 1900];
+            k[0..8].copy_from_slice(&i.to_be_bytes());
+            tree.insert(&mut pager, &k, i).unwrap();
+        }
+
+        let mut hot_key = vec![b'h'; 1900];
+        hot_key[0..8].copy_from_slice(&999u64.to_be_bytes());
+        for round in 0..200u64 {
+            let replaced = tree
+                .upsert_unique(&mut pager, &hot_key, 10_000 + round)
+                .unwrap();
+            if round == 0 {
+                assert!(replaced.is_none());
+            } else {
+                assert!(replaced.is_some());
+            }
+        }
+
+        let mut cur = tree.cursor_lower_bound(&pager, &hot_key).unwrap();
+        let mut payloads = Vec::new();
+        while cur.is_valid().unwrap() {
+            let k = cur.key().unwrap();
+            if k != hot_key {
+                break;
+            }
+            payloads.push(cur.payload().unwrap());
+            if !cur.advance().unwrap() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            payloads.len(),
+            1,
+            "upsert_unique should keep exactly one tuple for the key"
+        );
+        assert_eq!(payloads[0], 10_199);
+    }
+
+    #[test]
+    fn many_small_keys_preserve_payloads_after_heavy_splits() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("btree-small-keys.ndb");
+        let mut pager = Pager::open(&path).unwrap();
+        let mut tree = BTree::create(&mut pager).unwrap();
+
+        for i in 0..12_000u64 {
+            let mut key = Vec::with_capacity(5);
+            key.push(0xAA);
+            key.extend_from_slice(&(i as u32).to_be_bytes());
+            tree.insert(&mut pager, &key, 50_000 + i).unwrap();
+        }
+
+        for i in [0u64, 1, 7, 32, 255, 1024, 4096, 8191, 11_999] {
+            let mut key = Vec::with_capacity(5);
+            key.push(0xAA);
+            key.extend_from_slice(&(i as u32).to_be_bytes());
+            let mut cur = tree.cursor_lower_bound(&pager, &key).unwrap();
+            assert!(cur.is_valid().unwrap(), "key should be found: {i}");
+            assert_eq!(
+                cur.key().unwrap(),
+                key,
+                "key mismatch after split churn: {i}"
+            );
+            assert_eq!(
+                cur.payload().unwrap(),
+                50_000 + i,
+                "payload mismatch after split churn: {i}"
+            );
+        }
     }
 }

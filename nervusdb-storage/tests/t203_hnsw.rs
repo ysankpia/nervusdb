@@ -1,7 +1,7 @@
+use nervusdb_storage::engine::GraphEngine;
 use nervusdb_storage::index::btree::BTree;
 use nervusdb_storage::index::hnsw::storage::{PersistentGraphStorage, PersistentVectorStorage};
 use nervusdb_storage::index::hnsw::{HnswIndex, HnswParams};
-
 use nervusdb_storage::pager::Pager;
 use tempfile::tempdir;
 
@@ -77,5 +77,43 @@ fn test_hnsw_persistence() {
         // Query near origin
         let res2 = index.search(&mut pager, &[0.0, 0.0], 1).unwrap();
         assert_eq!(res2[0].0, 3);
+    }
+}
+
+#[test]
+fn test_hnsw_large_create_node_boundary_does_not_corrupt_vectors() {
+    let dir = tempdir().unwrap();
+    let ndb = dir.path().join("test_hnsw_large.ndb");
+    let wal = dir.path().join("test_hnsw_large.wal");
+
+    {
+        let engine = GraphEngine::open(&ndb, &wal).unwrap();
+        let mut tx = engine.begin_write();
+        for idx in 0..1025u32 {
+            let node = tx.create_node((idx as u64) + 1, 1).unwrap();
+            let vector = vec![
+                idx as f32 * 0.001,
+                1.0 + idx as f32 * 0.0001,
+                (idx % 17) as f32,
+                (idx % 31) as f32 * 0.5,
+                0.25,
+                0.5,
+                0.75,
+                1.25,
+            ];
+            tx.set_vector(node, vector).unwrap();
+        }
+        tx.commit().unwrap();
+
+        let query = vec![0.512, 1.0512, 2.0, 1.5, 0.25, 0.5, 0.75, 1.25];
+        let results = engine.search_vector(&query, 8).unwrap();
+        assert!(!results.is_empty());
+    }
+
+    {
+        let engine = GraphEngine::open(&ndb, &wal).unwrap();
+        let query = vec![0.512, 1.0512, 2.0, 1.5, 0.25, 0.5, 0.75, 1.25];
+        let results = engine.search_vector(&query, 8).unwrap();
+        assert!(!results.is_empty());
     }
 }
