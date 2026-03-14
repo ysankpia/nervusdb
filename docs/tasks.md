@@ -87,7 +87,7 @@
 | M5-02         | [Docs] 用户文档与支持矩阵对齐                             | High   | WIP    | feat/M5-02-user-guide       | 已切换到 Beta 收敛口径；待补 95%/7天稳定窗发布说明与日报模板 |
 | M5-03         | [Benchmark] NervusDB vs Neo4j/Memgraph 对标               | Medium | WIP    | feat/M5-03-benchmark        | 已有流程；待绑定 Beta 发布 SLO 阻断 |
 | M5-04         | [Performance] 并发读热点优化                               | Medium | WIP    | feat/M5-04-concurrency      | 已有基线；待收敛到 Beta P99 门槛 |
-| M5-05         | [AI] HNSW 参数调优与默认策略                              | Low    | WIP    | feat/M5-05-hnsw             | 已有参数面与报告；待收敛到 recall/latency 发布门槛 |
+| M5-05         | [AI] HNSW 参数调优与默认策略                              | Low    | WIP    | codex/feat/m5-05-hnsw-blob-reuse | 已完成默认参数收敛：`M=16 / efConstruction=200 / efSearch=128` 在 `nodes=10000, dim=64, queries=100, k=10` 下达到 `recall_at_k=0.951`、`vector_search_p99_ms=12.702`；待主干累计 7 天性能窗。 |
 | M5-06         | [Binding] Rust/Python/Node 三端硬对齐（0 soft gate）      | High   | Done   | codex/feat/p0-align-01-hard-parity | 能力契约落地 + soft-pass 审计阻断 + 三端能力测试硬断言；`binding_parity_gate` 已作为 PR 阻断。 |
 | **Industrial**| **Industrial Quality (Nightly Gates)**                    |        |        |                             |                                                          |
 | I5-01         | [Quality] `cargo-fuzz` 分层接入                            | High   | WIP    | feat/I5-01-fuzz             | 已 nightly；待接入“7天稳定窗”统一统计 |
@@ -630,6 +630,28 @@
   - `release.yml` 已接入性能窗口阻断；未达 `7` 天或当日失败则阻断发布。
 - 当前状态：
   - 性能门禁链路已成型，进入 `M5-04/M5-05` 超阈值项定向优化与 7 天窗口累计阶段。
+
+### BETA-05 子进展（2026-03-14，P0 清零 + M5-05 默认值收敛）
+- P0（正确性/稳定性 blocker）：
+  - 修复 `IdMap` I2E 连续页扩展覆盖 blob/BTree 页的问题，清零 `Invalid vector data length`、`Invalid neighbor list data length`、`index page: bad magic`。
+  - 修复 HNSW 持久化 BTree root split 后未回写 `IndexCatalog` 的问题，清零重启后的 `Vector not found`。
+  - 保留 `Pager` 热路径去掉逐页 `sync_data()` 的优化，`hnsw_tune` 默认规模恢复到正常完成时间，不再表现为“长时间卡住”。
+- M5-05（参数收敛）：
+  - 对 `nodes=10000, dim=64, queries=100, k=10` 进行代表性 sweep，确认参数 alone 即可满足向量门禁，无需进入算法修正。
+  - 新默认值回写：
+    - `M=16`
+    - `efConstruction=200`
+    - `efSearch=128`
+  - `hnsw_tune` 新增观测字段：`top1_hit_rate`、`avg_candidates_returned`、`build_secs`、`vector_search_p99_ms`。
+  - 默认值结果（本地）：
+    - `recall_at_k=0.951`
+    - `vector_search_p99_ms=12.702`
+    - `top1_hit_rate=1.000`
+- Nightly 验证：
+  - 分支 `codex/feat/m5-05-hnsw-blob-reuse` 手动触发 `perf-slo-nightly` 已全绿：`bench_v2 -> hnsw_tune -> perf_slo_gate`。
+  - 证据：GitHub Actions run `23090012577`。
+- 当前状态：
+  - 当前分支上的 `BETA-05` 阻塞问题已清零，下一步为合并到 `main` 并开始累计性能 7 天稳定窗。
 
 ## Archived (v1/Alpha)
 
