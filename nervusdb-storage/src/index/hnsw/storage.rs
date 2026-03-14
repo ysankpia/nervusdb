@@ -50,7 +50,17 @@ impl VectorStorage<Pager> for PersistentVectorStorage {
 
         let blob_id = BlobStore::write_direct(pager, &data)?;
         self.cache.put(id, vector.to_vec());
-        self.btree.insert(pager, &key, blob_id)
+        let replaced_blob_id = match self.btree.upsert_unique(pager, &key, blob_id) {
+            Ok(replaced_blob_id) => replaced_blob_id,
+            Err(err) => {
+                let _ = BlobStore::delete(pager, blob_id);
+                return Err(err);
+            }
+        };
+        if let Some(old_blob_id) = replaced_blob_id.filter(|old| *old != blob_id) {
+            BlobStore::delete(pager, old_blob_id)?;
+        }
+        Ok(())
     }
 
     fn get_vector(&mut self, pager: &mut Pager, id: u32) -> Result<Vec<f32>> {
@@ -157,7 +167,17 @@ impl GraphStorage<Pager> for PersistentGraphStorage {
         }
 
         let blob_id = BlobStore::write_direct(pager, &data)?;
-        self.btree.insert(pager, &key, blob_id)
+        let replaced_blob_id = match self.btree.upsert_unique(pager, &key, blob_id) {
+            Ok(replaced_blob_id) => replaced_blob_id,
+            Err(err) => {
+                let _ = BlobStore::delete(pager, blob_id);
+                return Err(err);
+            }
+        };
+        if let Some(old_blob_id) = replaced_blob_id.filter(|old| *old != blob_id) {
+            BlobStore::delete(pager, old_blob_id)?;
+        }
+        Ok(())
     }
 
     fn get_neighbors(&mut self, pager: &mut Pager, layer: u8, node: u32) -> Result<Vec<u32>> {
@@ -206,7 +226,17 @@ impl GraphStorage<Pager> for PersistentGraphStorage {
         data.push(max_layer);
 
         let blob_id = BlobStore::write_direct(pager, &data)?;
-        self.btree.insert(pager, &key, blob_id)
+        let replaced_blob_id = match self.btree.upsert_unique(pager, &key, blob_id) {
+            Ok(replaced_blob_id) => replaced_blob_id,
+            Err(err) => {
+                let _ = BlobStore::delete(pager, blob_id);
+                return Err(err);
+            }
+        };
+        if let Some(old_blob_id) = replaced_blob_id.filter(|old| *old != blob_id) {
+            BlobStore::delete(pager, old_blob_id)?;
+        }
+        Ok(())
     }
 
     fn get_meta(&mut self, pager: &mut Pager) -> Result<(Option<u32>, u8)> {
@@ -258,4 +288,60 @@ fn encode_graph_key(layer: u8, node: u32) -> Vec<u8> {
     key.push(layer);
     key.extend_from_slice(&node.to_be_bytes()); // BE for order
     key
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::index::catalog::IndexCatalog;
+    use crate::pager::Pager;
+    use tempfile::tempdir;
+
+    fn ndb_len(path: &std::path::Path) -> u64 {
+        std::fs::metadata(path).unwrap().len()
+    }
+
+    #[test]
+    fn vector_overwrite_does_not_grow_pages_unbounded() {
+        let dir = tempdir().unwrap();
+        let ndb = dir.path().join("vector-overwrite.ndb");
+        let mut pager = Pager::open(&ndb).unwrap();
+        let mut catalog = IndexCatalog::open_or_create(&mut pager).unwrap();
+        let def = catalog.get_or_create(&mut pager, "__test_hnsw_vec").unwrap();
+        let mut storage = PersistentVectorStorage::new(BTree::load(def.root));
+
+        let vector = vec![1.0_f32; 4096];
+        for _ in 0..400 {
+            storage.insert_vector(&mut pager, 7, &vector).unwrap();
+        }
+
+        let bytes = ndb_len(&ndb);
+        assert!(
+            bytes < 8 * 1024 * 1024,
+            "vector overwrite leaked blob pages: {bytes} bytes"
+        );
+    }
+
+    #[test]
+    fn graph_overwrite_does_not_grow_pages_unbounded() {
+        let dir = tempdir().unwrap();
+        let ndb = dir.path().join("graph-overwrite.ndb");
+        let mut pager = Pager::open(&ndb).unwrap();
+        let mut catalog = IndexCatalog::open_or_create(&mut pager).unwrap();
+        let def = catalog.get_or_create(&mut pager, "__test_hnsw_graph").unwrap();
+        let mut storage = PersistentGraphStorage::new(BTree::load(def.root));
+
+        let neighbors: Vec<u32> = (0..4096).collect();
+        for _ in 0..400 {
+            storage
+                .set_neighbors(&mut pager, 0, 42, neighbors.clone())
+                .unwrap();
+        }
+
+        let bytes = ndb_len(&ndb);
+        assert!(
+            bytes < 8 * 1024 * 1024,
+            "graph overwrite leaked blob pages: {bytes} bytes"
+        );
+    }
 }

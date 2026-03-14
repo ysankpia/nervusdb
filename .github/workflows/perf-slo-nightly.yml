@@ -21,25 +21,31 @@ jobs:
 
       - name: Run bench_v2 (read/write profile)
         run: |
+          set -euo pipefail
           mkdir -p artifacts/perf
           DATE_UTC="$(date -u +%F)"
           CONCURRENCY_JSON="artifacts/perf/concurrency-slo-${DATE_UTC}.json"
-          LINE="$({
+          LINE="$(
             cargo run --example bench_v2 -p nervusdb-storage --release -- \
               --nodes 50000 \
               --degree 8 \
               --iters 2000 \
-              --write-iters 200;
-          } | tail -n 1)"
-          echo "${LINE}" > "${CONCURRENCY_JSON}"
+              --write-iters 200 \
+              | grep -E '^\{.*\}$' \
+              | tail -n 1
+          )"
+          test -n "${LINE}"
+          printf '%s\n' "${LINE}" > "${CONCURRENCY_JSON}"
+          jq -e . "${CONCURRENCY_JSON}" >/dev/null
           echo "[perf-slo-nightly] wrote ${CONCURRENCY_JSON}"
 
       - name: Run hnsw_tune (single run for gate)
         run: |
+          set -euo pipefail
           mkdir -p artifacts/perf
           DATE_UTC="$(date -u +%F)"
           HNSW_JSON="artifacts/perf/hnsw-slo-${DATE_UTC}.json"
-          LINE="$({
+          LINE="$(
             cargo run --example hnsw_tune -p nervusdb-storage --release -- \
               --nodes 10000 \
               --dim 64 \
@@ -47,9 +53,13 @@ jobs:
               --k 10 \
               --m 8 \
               --ef-construction 100 \
-              --ef-search 64;
-          } | tail -n 1)"
-          echo "${LINE}" > "${HNSW_JSON}"
+              --ef-search 64 \
+              | grep -E '^\{.*\}$' \
+              | tail -n 1
+          )"
+          test -n "${LINE}"
+          printf '%s\n' "${LINE}" > "${HNSW_JSON}"
+          jq -e . "${HNSW_JSON}" >/dev/null
           echo "[perf-slo-nightly] wrote ${HNSW_JSON}"
 
       - name: Run perf SLO gate

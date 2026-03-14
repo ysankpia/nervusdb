@@ -248,6 +248,26 @@ impl<'a> Page<'a> {
         Ok((&self.buf[key_start..key_end], payload))
     }
 
+    fn leaf_set_payload_at(&mut self, idx: usize, payload: u64) -> Result<()> {
+        if self.kind()? != PageKind::Leaf {
+            return Err(Error::WalProtocol("index page: not leaf"));
+        }
+        if idx >= self.cell_count() {
+            return Err(Error::WalProtocol("index page: cell idx out of bounds"));
+        }
+
+        let cell_off = self.slot_get(idx)?;
+        let (key_len, var_len) =
+            read_varint_u32(&self.buf[cell_off..]).ok_or(Error::WalProtocol("bad varint"))?;
+        let key_len = key_len as usize;
+        let payload_off = cell_off + var_len + key_len;
+        if payload_off + 8 > PAGE_SIZE {
+            return Err(Error::WalProtocol("index page: cell out of range"));
+        }
+        write_u64_le(self.buf, payload_off, payload);
+        Ok(())
+    }
+
     fn internal_cell_key_and_right_child(&self, idx: usize) -> Result<(&[u8], PageId)> {
         if self.kind()? != PageKind::Internal {
             return Err(Error::WalProtocol("index page: not internal"));
@@ -506,6 +526,84 @@ impl BTree {
 
                             self.insert_into_parent(pager, &mut path, cur, sep_key, right_id)?;
                             return Ok(());
+                        }
+                    }
+                }
+                PageKind::Internal => {
+                    let page = Page::new(&mut buf);
+                    let (child, child_pos) = page.internal_child_for_key(key)?;
+                    path.push(PathEntry {
+                        page: cur,
+                        child_pos,
+                    });
+                    cur = child;
+                }
+            }
+        }
+    }
+
+    /// Insert-or-replace for unique-key indexes.
+    ///
+    /// If `key` exists, updates its payload in-place and returns `Some(old_payload)`.
+    /// Otherwise inserts a new entry and returns `None`.
+    pub fn upsert_unique(
+        &mut self,
+        pager: &mut Pager,
+        key: &[u8],
+        payload: u64,
+    ) -> Result<Option<u64>> {
+        let mut path: Vec<PathEntry> = Vec::new();
+        let mut cur = self.root;
+
+        loop {
+            let mut buf = pager.read_page(cur)?;
+            let kind = Page::new(&mut buf).kind()?;
+            match kind {
+                PageKind::Leaf => {
+                    let mut page = Page::new(&mut buf);
+                    let idx = page.leaf_lower_bound(key)?;
+                    if idx < page.cell_count() {
+                        let (found_key, old_payload) = page.leaf_cell_key_and_payload(idx)?;
+                        if found_key == key {
+                            page.leaf_set_payload_at(idx, payload)?;
+                            pager.write_page(cur, &buf)?;
+                            return Ok(Some(old_payload));
+                        }
+                    }
+
+                    match page.leaf_insert_at(idx, key, payload) {
+                        Ok(()) => {
+                            pager.write_page(cur, &buf)?;
+                            return Ok(None);
+                        }
+                        Err(_) => {
+                            let old_right = page.right_sibling();
+                            let mut entries: Vec<(Vec<u8>, u64)> = (0..page.cell_count())
+                                .map(|i| {
+                                    let (k, v) = page.leaf_cell_key_and_payload(i).unwrap();
+                                    (k.to_vec(), v)
+                                })
+                                .collect();
+                            let pos = entries
+                                .binary_search_by(|(k, _)| k.as_slice().cmp(key))
+                                .unwrap_or_else(|p| p);
+                            entries.insert(pos, (key.to_vec(), payload));
+
+                            let mid = entries.len() / 2;
+                            let left_entries = entries[..mid].to_vec();
+                            let right_entries = entries[mid..].to_vec();
+                            let sep_key = right_entries[0].0.clone();
+
+                            let right_id = pager.allocate_page()?;
+                            let mut right_buf = [0u8; PAGE_SIZE];
+                            Page::new(&mut right_buf).rebuild_leaf(old_right, &right_entries);
+                            page.rebuild_leaf(right_id, &left_entries);
+
+                            pager.write_page(cur, &buf)?;
+                            pager.write_page(right_id, &right_buf)?;
+
+                            self.insert_into_parent(pager, &mut path, cur, sep_key, right_id)?;
+                            return Ok(None);
                         }
                     }
                 }
