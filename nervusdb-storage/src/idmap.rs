@@ -8,6 +8,8 @@ pub type LabelId = u32;
 
 const I2E_RECORD_SIZE: usize = 16;
 const I2E_RECORDS_PER_PAGE: usize = PAGE_SIZE / I2E_RECORD_SIZE;
+const FIRST_DATA_PAGE_ID_U64: u64 = 2;
+const MAX_DATA_PAGES: u64 = (PAGE_SIZE as u64) * 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct I2eRecord {
@@ -162,16 +164,40 @@ impl IdMap {
 
         // For now, only persist first label in I2E (backward compat)
         let first_label = labels.first().copied().unwrap_or(0);
-        write_i2e_record(
-            pager,
-            start,
-            internal_id as u64,
-            I2eRecord {
-                external_id,
-                label_id: first_label,
-                flags: 0,
-            },
-        )?;
+        let record = I2eRecord {
+            external_id,
+            label_id: first_label,
+            flags: 0,
+        };
+
+        let current_pages = if self.i2e_start.is_some() {
+            required_i2e_pages(self.i2e_len).max(1)
+        } else {
+            0
+        };
+        let required_pages = required_i2e_pages(self.i2e_len + 1);
+
+        let start = if required_pages > current_pages {
+            let target = PageId::new(start.as_u64() + (required_pages - 1) as u64);
+            if !pager.is_page_allocated(target) {
+                pager.ensure_allocated(target)?;
+                write_i2e_record(pager, start, internal_id as u64, record)?;
+                start
+            } else {
+                self.relocate_i2e_and_write_record(
+                    pager,
+                    start,
+                    current_pages,
+                    required_pages,
+                    internal_id as u64,
+                    record,
+                )?
+            }
+        } else {
+            write_i2e_record(pager, start, internal_id as u64, record)?;
+            start
+        };
+        self.i2e_start = Some(start);
 
         self.i2e_len += 1;
         pager.set_i2e_len(self.i2e_len)?;
@@ -221,6 +247,93 @@ impl IdMap {
         labels.retain(|&l| l != label);
         Ok(())
     }
+
+    fn relocate_i2e_and_write_record(
+        &mut self,
+        pager: &mut Pager,
+        old_start: PageId,
+        used_pages: usize,
+        required_pages: usize,
+        internal_id_u64: u64,
+        record: I2eRecord,
+    ) -> Result<PageId> {
+        let new_start = find_contiguous_free(pager, required_pages)
+            .ok_or(Error::WalProtocol("I2E extent collision: no contiguous free extent"))?;
+
+        for offset in 0..required_pages {
+            let page_id = PageId::new(new_start.as_u64() + offset as u64);
+            pager.ensure_allocated(page_id)?;
+        }
+
+        for offset in 0..used_pages {
+            let old_page_id = PageId::new(old_start.as_u64() + offset as u64);
+            let new_page_id = PageId::new(new_start.as_u64() + offset as u64);
+            let page = pager.read_page(old_page_id)?;
+            pager.write_page(new_page_id, &page)?;
+        }
+
+        pager.set_i2e_start_page(Some(new_start))?;
+        self.i2e_start = Some(new_start);
+        write_i2e_record(pager, new_start, internal_id_u64, record)?;
+
+        for offset in 0..used_pages {
+            let old_page_id = PageId::new(old_start.as_u64() + offset as u64);
+            pager.free_page(old_page_id)?;
+        }
+
+        Ok(new_start)
+    }
+}
+
+fn required_i2e_pages(len: u64) -> usize {
+    if len == 0 {
+        0
+    } else {
+        ((len as usize - 1) / I2E_RECORDS_PER_PAGE) + 1
+    }
+}
+
+fn find_contiguous_free(pager: &Pager, count: usize) -> Option<PageId> {
+    if count == 0 {
+        return None;
+    }
+
+    let file_pages = std::fs::metadata(pager.path())
+        .ok()?
+        .len()
+        .checked_div(PAGE_SIZE as u64)?
+        .max(FIRST_DATA_PAGE_ID_U64);
+
+    scan_for_contiguous_free(pager, file_pages, MAX_DATA_PAGES, count)
+        .or_else(|| scan_for_contiguous_free(pager, FIRST_DATA_PAGE_ID_U64, file_pages, count))
+}
+
+fn scan_for_contiguous_free(pager: &Pager, start: u64, end: u64, count: usize) -> Option<PageId> {
+    let count_u64 = u64::try_from(count).ok()?;
+    if start >= end || end.saturating_sub(start) < count_u64 {
+        return None;
+    }
+
+    let mut run_start = 0u64;
+    let mut run_len = 0u64;
+
+    for page_id in start..end {
+        let allocated = pager.is_page_allocated(PageId::new(page_id));
+        if allocated {
+            run_len = 0;
+            continue;
+        }
+
+        if run_len == 0 {
+            run_start = page_id;
+        }
+        run_len += 1;
+        if run_len == count_u64 {
+            return Some(PageId::new(run_start));
+        }
+    }
+
+    None
 }
 
 fn read_i2e_record(pager: &mut Pager, start: PageId, internal_id_u64: u64) -> Result<I2eRecord> {
@@ -256,6 +369,7 @@ fn i2e_location(start: PageId, internal_id_u64: u64) -> Result<(PageId, usize)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blob_store::BlobStore;
     use tempfile::tempdir;
 
     #[test]
@@ -277,5 +391,107 @@ mod tests {
         assert_eq!(idmap2.lookup(100), Some(0));
         assert_eq!(idmap2.lookup(200), Some(1));
         assert_eq!(idmap2.len(), 2);
+    }
+
+    #[test]
+    fn idmap_interleaved_blob_writes_survive_boundary_extension() {
+        let dir = tempdir().unwrap();
+        let ndb = dir.path().join("i2e-boundary.ndb");
+        let mut pager = Pager::open(&ndb).unwrap();
+        let mut idmap = IdMap::load(&mut pager).unwrap();
+
+        let mut blobs = Vec::new();
+        for internal_id in 0..513u32 {
+            let external_id = 10_000 + internal_id as u64;
+            idmap
+                .apply_create_node(&mut pager, external_id, 7, internal_id)
+                .unwrap();
+
+            let payload = vec![(internal_id % 251) as u8; 256];
+            let blob_id = BlobStore::write_direct(&mut pager, &payload).unwrap();
+            blobs.push((blob_id, payload));
+        }
+
+        for (blob_id, expected) in &blobs {
+            let actual = BlobStore::read_direct(&pager, *blob_id).unwrap();
+            assert_eq!(actual, *expected);
+        }
+
+        drop(pager);
+
+        let mut pager = Pager::open(&ndb).unwrap();
+        let idmap2 = IdMap::load(&mut pager).unwrap();
+        assert_eq!(idmap2.lookup(10_000), Some(0));
+        assert_eq!(idmap2.lookup(10_512), Some(512));
+        assert_eq!(idmap2.len(), 513);
+    }
+
+    #[test]
+    fn idmap_relocates_when_next_contiguous_page_is_taken() {
+        let dir = tempdir().unwrap();
+        let ndb = dir.path().join("i2e-relocate.ndb");
+        let mut pager = Pager::open(&ndb).unwrap();
+        let mut idmap = IdMap::load(&mut pager).unwrap();
+
+        idmap.apply_create_node(&mut pager, 100, 7, 0).unwrap();
+        let old_start = idmap.i2e_start.unwrap();
+
+        let payload = vec![0xAB; 256];
+        let blob_id = BlobStore::write_direct(&mut pager, &payload).unwrap();
+        assert_eq!(blob_id, old_start.as_u64() + 1);
+
+        for internal_id in 1..=512u32 {
+            let external_id = 100 + internal_id as u64;
+            idmap
+                .apply_create_node(&mut pager, external_id, 7, internal_id)
+                .unwrap();
+        }
+
+        let new_start = idmap.i2e_start.unwrap();
+        assert_ne!(new_start, old_start);
+        assert!(!pager.is_page_allocated(old_start));
+        assert!(pager.is_page_allocated(PageId::new(blob_id)));
+        assert_eq!(BlobStore::read_direct(&pager, blob_id).unwrap(), payload);
+
+        drop(pager);
+
+        let mut pager = Pager::open(&ndb).unwrap();
+        let idmap2 = IdMap::load(&mut pager).unwrap();
+        assert_eq!(idmap2.lookup(100), Some(0));
+        assert_eq!(idmap2.lookup(612), Some(512));
+        assert_eq!(idmap2.len(), 513);
+    }
+
+    #[test]
+    fn idmap_interleaved_blob_writes_survive_multiple_relocations() {
+        let dir = tempdir().unwrap();
+        let ndb = dir.path().join("i2e-multi-relocate.ndb");
+        let mut pager = Pager::open(&ndb).unwrap();
+        let mut idmap = IdMap::load(&mut pager).unwrap();
+
+        let mut blobs = Vec::new();
+        for internal_id in 0..1025u32 {
+            let external_id = 20_000 + internal_id as u64;
+            idmap
+                .apply_create_node(&mut pager, external_id, 9, internal_id)
+                .unwrap();
+
+            let payload = vec![(internal_id % 239) as u8; 256];
+            let blob_id = BlobStore::write_direct(&mut pager, &payload).unwrap();
+            blobs.push((blob_id, payload));
+        }
+
+        for (blob_id, expected) in &blobs {
+            let actual = BlobStore::read_direct(&pager, *blob_id).unwrap();
+            assert_eq!(actual, *expected);
+        }
+
+        drop(pager);
+
+        let mut pager = Pager::open(&ndb).unwrap();
+        let idmap2 = IdMap::load(&mut pager).unwrap();
+        assert_eq!(idmap2.lookup(20_000), Some(0));
+        assert_eq!(idmap2.lookup(21_024), Some(1024));
+        assert_eq!(idmap2.len(), 1025);
     }
 }

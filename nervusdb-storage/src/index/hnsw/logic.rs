@@ -1,7 +1,8 @@
 use super::params::HnswParams;
-use super::storage::{GraphStorage, VectorStorage};
+use super::storage::{GraphStorage, PersistentGraphStorage, PersistentVectorStorage, VectorStorage};
 use crate::Result;
 use crate::index::vector::euclidean_distance;
+use crate::pager::PageId;
 use ordered_float::OrderedFloat;
 use rand::Rng;
 use std::cmp::Reverse;
@@ -279,5 +280,11 @@ impl<V, G> HnswIndex<V, G> {
             }
         }
         Ok(results)
+    }
+}
+
+impl HnswIndex<PersistentVectorStorage, PersistentGraphStorage> {
+    pub fn persistent_roots(&self) -> (PageId, PageId) {
+        (self.vector_store.root(), self.graph_store.root())
     }
 }

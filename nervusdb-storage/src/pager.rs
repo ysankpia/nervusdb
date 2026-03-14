@@ -371,7 +371,7 @@ impl Pager {
     pub fn allocate_index_id(&mut self) -> Result<u32> {
         let id = self.next_index_id();
         self.meta.next_index_id = id.saturating_add(1);
-        self.flush_meta_and_bitmap()?;
+        self.flush_meta_and_bitmap_no_sync()?;
         Ok(id)
     }
 
@@ -401,7 +401,7 @@ impl Pager {
         }
 
         self.bitmap.set_allocated(page_id, false);
-        self.flush_meta_and_bitmap()?;
+        self.flush_meta_and_bitmap_no_sync()?;
         Ok(())
     }
 
@@ -426,6 +426,13 @@ impl Pager {
         Ok(())
     }
 
+    pub(crate) fn is_page_allocated(&self, page_id: PageId) -> bool {
+        if self.validate_data_page_id(page_id).is_err() {
+            return false;
+        }
+        self.bitmap.is_allocated(page_id)
+    }
+
     pub fn sync(&mut self) -> Result<()> {
         self.file.sync_data()?;
         Ok(())
@@ -448,7 +455,7 @@ impl Pager {
             self.file.set_len(required_bytes)?;
         }
 
-        self.flush_meta_and_bitmap()
+        self.flush_meta_and_bitmap_no_sync()
     }
 
     fn validate_data_page_id(&self, page_id: PageId) -> Result<()> {
@@ -459,12 +466,17 @@ impl Pager {
     }
 
     fn flush_meta_and_bitmap(&mut self) -> Result<()> {
-        let meta_page = self.meta.encode_page();
-        write_page_raw(&self.file, META_PAGE_ID, &meta_page)?;
-        write_page_raw(&self.file, BITMAP_PAGE_ID, &self.bitmap.data)?;
+        self.flush_meta_and_bitmap_no_sync()?;
         // Ensure meta + bitmap durability. WAL replay can recover data pages, but
         // durable metadata reduces recovery work and avoids pathological re-scan.
         self.file.sync_data()?;
+        Ok(())
+    }
+
+    fn flush_meta_and_bitmap_no_sync(&mut self) -> Result<()> {
+        let meta_page = self.meta.encode_page();
+        write_page_raw(&self.file, META_PAGE_ID, &meta_page)?;
+        write_page_raw(&self.file, BITMAP_PAGE_ID, &self.bitmap.data)?;
         Ok(())
     }
 }

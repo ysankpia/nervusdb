@@ -1,6 +1,6 @@
 use crate::blob_store::BlobStore;
 use crate::index::btree::BTree;
-use crate::pager::Pager;
+use crate::pager::{PageId, Pager};
 use crate::{Error, Result};
 use std::collections::{HashMap, VecDeque};
 
@@ -37,6 +37,29 @@ impl PersistentVectorStorage {
             cache: VectorCache::new(DEFAULT_VECTOR_CACHE_CAP),
         }
     }
+
+    pub fn root(&self) -> PageId {
+        self.btree.root()
+    }
+}
+
+fn maybe_delete_replaced_blob(
+    pager: &mut Pager,
+    btree: &BTree,
+    key: &[u8],
+    replaced_blob_id: Option<u64>,
+    new_blob_id: u64,
+) -> Result<()> {
+    let Some(old_blob_id) = replaced_blob_id.filter(|old| *old != new_blob_id) else {
+        return Ok(());
+    };
+
+    // Guard against deleting a blob that is still referenced by duplicate tuples.
+    let refs = btree.count_payload_refs_for_key(pager, key, old_blob_id)?;
+    if refs == 0 {
+        BlobStore::delete(pager, old_blob_id)?;
+    }
+    Ok(())
 }
 
 impl VectorStorage<Pager> for PersistentVectorStorage {
@@ -57,9 +80,7 @@ impl VectorStorage<Pager> for PersistentVectorStorage {
                 return Err(err);
             }
         };
-        if let Some(old_blob_id) = replaced_blob_id.filter(|old| *old != blob_id) {
-            BlobStore::delete(pager, old_blob_id)?;
-        }
+        maybe_delete_replaced_blob(pager, &self.btree, &key, replaced_blob_id, blob_id)?;
         Ok(())
     }
 
@@ -83,6 +104,17 @@ impl VectorStorage<Pager> for PersistentVectorStorage {
         let data = BlobStore::read_direct(pager, blob_id)?;
 
         if data.len() % 4 != 0 {
+            let payloads = self
+                .btree
+                .exact_key_payloads_full_scan(pager, &key)
+                .unwrap_or_default();
+            eprintln!(
+                "hnsw vector decode mismatch: key={:?} blob_id={} len={} payloads={:?}",
+                key,
+                blob_id,
+                data.len(),
+                payloads
+            );
             return Err(Error::StorageCorrupted("Invalid vector data length"));
         }
         let mut vector = Vec::with_capacity(data.len() / 4);
@@ -149,6 +181,10 @@ impl PersistentGraphStorage {
     pub fn new(btree: BTree) -> Self {
         Self { btree }
     }
+
+    pub fn root(&self) -> PageId {
+        self.btree.root()
+    }
 }
 
 impl GraphStorage<Pager> for PersistentGraphStorage {
@@ -174,9 +210,7 @@ impl GraphStorage<Pager> for PersistentGraphStorage {
                 return Err(err);
             }
         };
-        if let Some(old_blob_id) = replaced_blob_id.filter(|old| *old != blob_id) {
-            BlobStore::delete(pager, old_blob_id)?;
-        }
+        maybe_delete_replaced_blob(pager, &self.btree, &key, replaced_blob_id, blob_id)?;
         Ok(())
     }
 
@@ -196,6 +230,17 @@ impl GraphStorage<Pager> for PersistentGraphStorage {
         let data = BlobStore::read_direct(pager, blob_id)?;
 
         if data.len() % 4 != 0 {
+            let payloads = self
+                .btree
+                .exact_key_payloads_full_scan(pager, &key)
+                .unwrap_or_default();
+            eprintln!(
+                "hnsw neighbor decode mismatch: key={:?} blob_id={} len={} payloads={:?}",
+                key,
+                blob_id,
+                data.len(),
+                payloads
+            );
             return Err(Error::StorageCorrupted("Invalid neighbor list data length"));
         }
         let mut neighbors = Vec::with_capacity(data.len() / 4);
@@ -233,9 +278,7 @@ impl GraphStorage<Pager> for PersistentGraphStorage {
                 return Err(err);
             }
         };
-        if let Some(old_blob_id) = replaced_blob_id.filter(|old| *old != blob_id) {
-            BlobStore::delete(pager, old_blob_id)?;
-        }
+        maybe_delete_replaced_blob(pager, &self.btree, &key, replaced_blob_id, blob_id)?;
         Ok(())
     }
 
@@ -301,6 +344,22 @@ mod tests {
         std::fs::metadata(path).unwrap().len()
     }
 
+    fn payloads_for_exact_key(tree: &BTree, pager: &Pager, key: &[u8]) -> Vec<u64> {
+        let mut cur = tree.cursor_lower_bound(pager, key).unwrap();
+        let mut out = Vec::new();
+        while cur.is_valid().unwrap() {
+            let found = cur.key().unwrap();
+            if found != key {
+                break;
+            }
+            out.push(cur.payload().unwrap());
+            if !cur.advance().unwrap() {
+                break;
+            }
+        }
+        out
+    }
+
     #[test]
     fn vector_overwrite_does_not_grow_pages_unbounded() {
         let dir = tempdir().unwrap();
@@ -343,5 +402,90 @@ mod tests {
             bytes < 8 * 1024 * 1024,
             "graph overwrite leaked blob pages: {bytes} bytes"
         );
+    }
+
+    #[test]
+    fn vector_upsert_does_not_delete_blob_still_referenced_by_duplicate_key() {
+        let dir = tempdir().unwrap();
+        let ndb = dir.path().join("vector-duplicate-ref.ndb");
+        let mut pager = Pager::open(&ndb).unwrap();
+        let mut catalog = IndexCatalog::open_or_create(&mut pager).unwrap();
+        let def = catalog.get_or_create(&mut pager, "__test_hnsw_vec_dup").unwrap();
+        let mut storage = PersistentVectorStorage::new(BTree::load(def.root));
+
+        let key = encode_vector_key(7);
+        let mut old_data = Vec::new();
+        for _ in 0..16 {
+            old_data.extend_from_slice(&1.0_f32.to_le_bytes());
+        }
+        let old_blob = BlobStore::write_direct(&mut pager, &old_data).unwrap();
+
+        // Simulate legacy duplicate tuples for the same key.
+        storage.btree.insert(&mut pager, &key, old_blob).unwrap();
+        storage.btree.insert(&mut pager, &key, old_blob).unwrap();
+
+        let new_vector = vec![2.0_f32; 16];
+        storage.insert_vector(&mut pager, 7, &new_vector).unwrap();
+
+        let payloads = payloads_for_exact_key(&storage.btree, &pager, &key);
+        assert!(
+            !payloads.is_empty(),
+            "expected at least one tuple for vector key"
+        );
+        for blob_id in payloads {
+            let bytes = BlobStore::read_direct(&pager, blob_id)
+                .expect("all blob ids referenced by key should remain readable");
+            assert_eq!(
+                bytes.len() % 4,
+                0,
+                "vector blob should keep float-aligned layout"
+            );
+        }
+    }
+
+    #[test]
+    fn graph_churn_keeps_single_live_payload_per_key() {
+        let dir = tempdir().unwrap();
+        let ndb = dir.path().join("graph-churn.ndb");
+        let mut pager = Pager::open(&ndb).unwrap();
+        let mut catalog = IndexCatalog::open_or_create(&mut pager).unwrap();
+        let def = catalog.get_or_create(&mut pager, "__test_hnsw_graph_churn").unwrap();
+        let mut storage = PersistentGraphStorage::new(BTree::load(def.root));
+
+        for node in 0..1500u32 {
+            let base = node.saturating_sub(4);
+            let neighbors: Vec<u32> = (base..=node).collect();
+            storage.set_neighbors(&mut pager, 0, node, neighbors).unwrap();
+        }
+
+        for round in 0..8u32 {
+            for node in 0..1500u32 {
+                let span = ((node + round) % 12) + 1;
+                let start = node.saturating_sub(span);
+                let neighbors: Vec<u32> = (start..=node).rev().take(span as usize).collect();
+                storage.set_neighbors(&mut pager, 0, node, neighbors).unwrap();
+            }
+        }
+
+        for node in [3u32, 17, 129, 511, 1024, 1499] {
+            let key = encode_graph_key(0, node);
+            let payloads = storage
+                .btree
+                .exact_key_payloads_full_scan(&mut pager, &key)
+                .unwrap();
+            assert_eq!(
+                payloads.len(),
+                1,
+                "graph key should not accumulate duplicate tuples: node={node}"
+            );
+
+            let bytes = BlobStore::read_direct(&pager, payloads[0]).unwrap();
+            assert_eq!(
+                bytes.len() % 4,
+                0,
+                "graph key should point to a valid neighbor blob: node={node}, len={}",
+                bytes.len()
+            );
+        }
     }
 }

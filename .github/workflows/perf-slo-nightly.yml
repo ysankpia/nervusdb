@@ -25,15 +25,21 @@ jobs:
           mkdir -p artifacts/perf
           DATE_UTC="$(date -u +%F)"
           CONCURRENCY_JSON="artifacts/perf/concurrency-slo-${DATE_UTC}.json"
-          LINE="$(
-            cargo run --example bench_v2 -p nervusdb-storage --release -- \
-              --nodes 50000 \
-              --degree 8 \
-              --iters 2000 \
-              --write-iters 200 \
-              | grep -E '^\{.*\}$' \
-              | tail -n 1
-          )"
+          BENCH_LOG="artifacts/perf/concurrency-slo-${DATE_UTC}.log"
+          set +e
+          cargo run --example bench_v2 -p nervusdb-storage --release -- \
+            --nodes 50000 \
+            --degree 8 \
+            --iters 2000 \
+            --write-iters 200 \
+            2>&1 | tee "${BENCH_LOG}"
+          RUN_RC=${PIPESTATUS[0]}
+          set -e
+          if [[ "${RUN_RC}" -ne 0 ]]; then
+            printf '{"error":"bench_v2_failed","exit_code":%s}\n' "${RUN_RC}" > "${CONCURRENCY_JSON}"
+            exit "${RUN_RC}"
+          fi
+          LINE="$(grep -E '^\{.*\}$' "${BENCH_LOG}" | tail -n 1 || true)"
           test -n "${LINE}"
           printf '%s\n' "${LINE}" > "${CONCURRENCY_JSON}"
           jq -e . "${CONCURRENCY_JSON}" >/dev/null
@@ -45,18 +51,24 @@ jobs:
           mkdir -p artifacts/perf
           DATE_UTC="$(date -u +%F)"
           HNSW_JSON="artifacts/perf/hnsw-slo-${DATE_UTC}.json"
-          LINE="$(
-            cargo run --example hnsw_tune -p nervusdb-storage --release -- \
-              --nodes 10000 \
-              --dim 64 \
-              --queries 100 \
-              --k 10 \
-              --m 8 \
-              --ef-construction 100 \
-              --ef-search 64 \
-              | grep -E '^\{.*\}$' \
-              | tail -n 1
-          )"
+          HNSW_LOG="artifacts/perf/hnsw-slo-${DATE_UTC}.log"
+          set +e
+          cargo run --example hnsw_tune -p nervusdb-storage --release -- \
+            --nodes 10000 \
+            --dim 64 \
+            --queries 100 \
+            --k 10 \
+            --m 8 \
+            --ef-construction 100 \
+            --ef-search 64 \
+            2>&1 | tee "${HNSW_LOG}"
+          RUN_RC=${PIPESTATUS[0]}
+          set -e
+          if [[ "${RUN_RC}" -ne 0 ]]; then
+            printf '{"error":"hnsw_tune_failed","exit_code":%s}\n' "${RUN_RC}" > "${HNSW_JSON}"
+            exit "${RUN_RC}"
+          fi
+          LINE="$(grep -E '^\{.*\}$' "${HNSW_LOG}" | tail -n 1 || true)"
           test -n "${LINE}"
           printf '%s\n' "${LINE}" > "${HNSW_JSON}"
           jq -e . "${HNSW_JSON}" >/dev/null
@@ -64,6 +76,7 @@ jobs:
 
       - name: Run perf SLO gate
         run: |
+          set -euo pipefail
           DATE_UTC="$(date -u +%F)"
           CONCURRENCY_JSON="artifacts/perf/concurrency-slo-${DATE_UTC}.json"
           HNSW_JSON="artifacts/perf/hnsw-slo-${DATE_UTC}.json"
@@ -72,6 +85,39 @@ jobs:
             --hnsw-json "${HNSW_JSON}" \
             --out-dir artifacts/perf \
             --as-of-date "${DATE_UTC}"
+
+      - name: Summarize perf SLO outcome
+        if: always()
+        run: |
+          set -euo pipefail
+          DATE_UTC="$(date -u +%F)"
+          CONCURRENCY_JSON="artifacts/perf/concurrency-slo-${DATE_UTC}.json"
+          HNSW_JSON="artifacts/perf/hnsw-slo-${DATE_UTC}.json"
+          GATE_JSON="artifacts/perf/perf-slo-gate-${DATE_UTC}.json"
+          HNSW_LOG="artifacts/perf/hnsw-slo-${DATE_UTC}.log"
+
+          {
+            echo "## Perf SLO Nightly Summary (${DATE_UTC} UTC)"
+            if [[ -f "${GATE_JSON}" ]] && jq -e . "${GATE_JSON}" >/dev/null 2>&1; then
+              echo "- Overall: $(jq -r '.overall_status // \"unknown\"' "${GATE_JSON}")"
+              echo "- Read p99: $(jq -r '.checks.read_query_p99_ms.actual_ms // \"n/a\"' "${GATE_JSON}") ms / threshold $(jq -r '.checks.read_query_p99_ms.threshold_ms // \"n/a\"' "${GATE_JSON}")"
+              echo "- Write p99: $(jq -r '.checks.write_txn_p99_ms.actual_ms // \"n/a\"' "${GATE_JSON}") ms / threshold $(jq -r '.checks.write_txn_p99_ms.threshold_ms // \"n/a\"' "${GATE_JSON}")"
+              echo "- Vector p99: $(jq -r '.checks.vector_search_p99_ms.actual_ms // \"n/a\"' "${GATE_JSON}") ms / threshold $(jq -r '.checks.vector_search_p99_ms.threshold_ms // \"n/a\"' "${GATE_JSON}")"
+              echo "- Recall@k: $(jq -r '.checks.vector_recall_at_k.actual // \"n/a\"' "${GATE_JSON}") / threshold $(jq -r '.checks.vector_recall_at_k.threshold_min // \"n/a\"' "${GATE_JSON}")"
+            else
+              echo "- Overall: failed before gate report generation"
+              echo "- concurrency JSON: $(if [[ -f "${CONCURRENCY_JSON}" ]]; then echo present; else echo missing; fi)"
+              echo "- hnsw JSON: $(if [[ -f "${HNSW_JSON}" ]]; then echo present; else echo missing; fi)"
+              if [[ -f "${HNSW_JSON}" ]] && jq -e . "${HNSW_JSON}" >/dev/null 2>&1; then
+                echo "- hnsw JSON payload: $(jq -c . "${HNSW_JSON}")"
+              fi
+              if [[ -f "${HNSW_LOG}" ]]; then
+                echo ""
+                echo "### hnsw_tune log tail"
+                tail -n 25 "${HNSW_LOG}"
+              fi
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload perf SLO artifacts
         if: always()
