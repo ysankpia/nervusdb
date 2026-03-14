@@ -1,8 +1,14 @@
 use crate::idmap::{ExternalId, I2eRecord, IdMap, InternalNodeId, LabelId};
+use std::sync::Arc;
 use std::sync::Mutex;
 
+#[cfg(test)]
 pub(crate) fn read_i2e_snapshot(idmap: &Mutex<IdMap>) -> Vec<I2eRecord> {
     idmap.lock().unwrap().get_i2e_snapshot()
+}
+
+pub(crate) fn read_i2e_arc(idmap: &Mutex<IdMap>) -> Arc<Vec<I2eRecord>> {
+    idmap.lock().unwrap().get_i2e_arc()
 }
 
 pub(crate) fn lookup_internal_node_id(
@@ -12,8 +18,13 @@ pub(crate) fn lookup_internal_node_id(
     idmap.lock().unwrap().lookup(external_id)
 }
 
+#[cfg(test)]
 pub(crate) fn read_i2l_snapshot(idmap: &Mutex<IdMap>) -> Vec<Vec<LabelId>> {
     idmap.lock().unwrap().get_i2l_snapshot()
+}
+
+pub(crate) fn read_i2l_arc(idmap: &Mutex<IdMap>) -> Arc<Vec<Vec<LabelId>>> {
+    idmap.lock().unwrap().get_i2l_arc()
 }
 
 #[cfg(test)]

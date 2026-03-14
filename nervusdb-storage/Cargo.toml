@@ -8,6 +8,7 @@ documentation = "https://docs.rs/nervusdb-storage"
 edition = "2024"
 
 [dependencies]
+arc-swap = "1.7"
 chrono = { version = "0.4", features = ["serde"] }
 crc32fast = "1.5.0"
 serde = { version = "1.0", features = ["derive"] }

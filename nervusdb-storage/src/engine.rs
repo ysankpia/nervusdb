@@ -7,11 +7,9 @@ use crate::index::hnsw::params::HnswParams;
 use crate::index::hnsw::storage::{PersistentGraphStorage, PersistentVectorStorage};
 use crate::index::ordered_key::encode_ordered_value;
 use crate::label_interner::{LabelInterner, LabelSnapshot};
-use crate::memtable::MemTable;
+use crate::memtable::{MemTable, WalPropertyOp};
 use crate::pager::{PageId, Pager};
-use crate::read_path_engine_idmap::{
-    lookup_internal_node_id, read_i2e_snapshot, read_i2l_snapshot,
-};
+use crate::read_path_engine_idmap::{lookup_internal_node_id, read_i2e_arc, read_i2l_arc};
 use crate::read_path_engine_labels::{
     lookup_label_id, lookup_label_name, published_label_snapshot,
 };
@@ -21,6 +19,7 @@ use crate::read_path_engine_view::{
 use crate::snapshot::{L0Run, RelTypeId, Snapshot};
 use crate::wal::{CommittedTx, SegmentPointer, Wal, WalRecord};
 use crate::{Error, Result};
+use arc_swap::ArcSwap;
 use nervusdb_api::{GraphSnapshot, GraphStore};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -59,10 +58,11 @@ pub struct GraphEngine {
     // T203: Vector Search Index
     vector_index: Arc<Mutex<NativeHnsw>>,
 
-    published_runs: RwLock<Arc<Vec<Arc<L0Run>>>>,
-    published_segments: RwLock<Arc<Vec<Arc<CsrSegment>>>>,
-    published_labels: RwLock<Arc<LabelSnapshot>>,
-    published_node_labels: RwLock<Arc<Vec<Vec<LabelId>>>>,
+    published_runs: ArcSwap<Vec<Arc<L0Run>>>,
+    published_segments: ArcSwap<Vec<Arc<CsrSegment>>>,
+    published_labels: ArcSwap<LabelSnapshot>,
+    published_node_labels: ArcSwap<Vec<Vec<LabelId>>>,
+    published_i2e: ArcSwap<Vec<I2eRecord>>,
     write_lock: Mutex<()>,
     next_txid: AtomicU64,
     next_segment_id: AtomicU64,
@@ -124,7 +124,8 @@ impl GraphEngine {
         runs.reverse(); // newest first for read path
 
         let label_snapshot = label_interner.snapshot();
-        let node_labels_snapshot = idmap.get_i2l_snapshot();
+        let node_labels_snapshot = idmap.get_i2l_arc();
+        let i2e_snapshot = idmap.get_i2e_arc();
 
         Ok(Self {
             ndb_path,
@@ -135,10 +136,11 @@ impl GraphEngine {
             label_interner: Mutex::new(label_interner),
             index_catalog: Arc::new(Mutex::new(index_catalog)),
             vector_index: Arc::new(Mutex::new(vector_index)),
-            published_runs: RwLock::new(Arc::new(runs)),
-            published_segments: RwLock::new(Arc::new(segments)),
-            published_labels: RwLock::new(Arc::new(label_snapshot)),
-            published_node_labels: RwLock::new(Arc::new(node_labels_snapshot)),
+            published_runs: ArcSwap::from_pointee(runs),
+            published_segments: ArcSwap::from_pointee(segments),
+            published_labels: ArcSwap::from(Arc::new(label_snapshot)),
+            published_node_labels: ArcSwap::from(node_labels_snapshot),
+            published_i2e: ArcSwap::from(i2e_snapshot),
             write_lock: Mutex::new(()),
             next_txid: AtomicU64::new(state.max_txid.saturating_add(1).max(1)),
             next_segment_id: AtomicU64::new(max_seg_id.saturating_add(1).max(1)),
@@ -167,6 +169,10 @@ impl GraphEngine {
         self.index_catalog.clone()
     }
 
+    pub(crate) fn get_published_i2e(&self) -> Arc<Vec<I2eRecord>> {
+        self.published_i2e.load_full()
+    }
+
     /// Creates a B-Tree index for the given label and property.
     ///
     /// If the index already exists, this is a no-op.
@@ -186,10 +192,10 @@ impl GraphEngine {
     }
 
     pub fn begin_read(&self) -> Snapshot {
-        let runs = self.published_runs.read().unwrap().clone();
-        let segments = self.published_segments.read().unwrap().clone();
-        let labels = self.published_labels.read().unwrap().clone();
-        let node_labels = self.published_node_labels.read().unwrap().clone();
+        let runs = self.published_runs.load_full();
+        let segments = self.published_segments.load_full();
+        let labels = self.published_labels.load_full();
+        let node_labels = self.published_node_labels.load_full();
         let (properties_root, stats_root) =
             load_properties_and_stats_roots(&self.properties_root, &self.stats_root);
         build_snapshot_from_published(
@@ -261,18 +267,18 @@ impl GraphEngine {
 
         // Update Published Snapshot
         let snapshot = interner.snapshot();
-        let mut published = self.published_labels.write().unwrap();
-        *published = Arc::new(snapshot);
+        self.published_labels.store(Arc::new(snapshot));
 
         Ok(returned_id)
     }
 
     /// Update published node labels from IdMap.
     /// Should be called after write transactions that create nodes.
-    fn update_published_node_labels(&self) {
-        let snapshot = read_i2l_snapshot(&self.idmap);
-        let mut published = self.published_node_labels.write().unwrap();
-        *published = Arc::new(snapshot);
+    fn update_published_idmap_snapshots(&self) {
+        let labels = read_i2l_arc(&self.idmap);
+        let i2e = read_i2e_arc(&self.idmap);
+        self.published_node_labels.store(labels);
+        self.published_i2e.store(i2e);
     }
 
     /// Get a snapshot of the current label state for reading.
@@ -324,15 +330,15 @@ impl GraphEngine {
     }
 
     pub fn scan_i2e_records(&self) -> Vec<I2eRecord> {
-        read_i2e_snapshot(&self.idmap)
+        self.published_i2e.load_full().as_ref().clone()
     }
 
     fn publish_run(&self, run: Arc<L0Run>) {
-        let mut current = self.published_runs.write().unwrap();
+        let current = self.published_runs.load_full();
         let mut next = Vec::with_capacity(current.len() + 1);
         next.push(run);
         next.extend(current.iter().cloned());
-        *current = Arc::new(next);
+        self.published_runs.store(Arc::new(next));
     }
 
     /// M2/T45: Explicit compaction.
@@ -343,7 +349,7 @@ impl GraphEngine {
     pub fn compact(&self) -> Result<()> {
         let _guard = self.write_lock.lock().unwrap();
 
-        let runs = self.published_runs.read().unwrap().clone();
+        let runs = self.published_runs.load_full();
 
         if runs.is_empty() {
             return Ok(());
@@ -364,7 +370,7 @@ impl GraphEngine {
         let epoch = self.manifest_epoch.load(Ordering::Relaxed) + 1;
 
         let new_segments = {
-            let current = self.published_segments.read().unwrap().clone();
+            let current = self.published_segments.load_full();
             let mut next = Vec::with_capacity(current.len() + 1);
             next.push(Arc::new(seg));
             next.extend(current.iter().cloned());
@@ -494,12 +500,8 @@ impl GraphEngine {
         self.properties_root.store(current_root, Ordering::SeqCst);
         self.stats_root.store(stats_root, Ordering::SeqCst);
         {
-            let mut cur_runs = self.published_runs.write().unwrap();
-            *cur_runs = Arc::new(Vec::new());
-        }
-        {
-            let mut cur_segs = self.published_segments.write().unwrap();
-            *cur_segs = new_segments;
+            self.published_runs.store(Arc::new(Vec::new()));
+            self.published_segments.store(new_segments);
         }
 
         self.manifest_epoch.store(epoch, Ordering::Relaxed);
@@ -521,7 +523,7 @@ impl GraphEngine {
     pub fn checkpoint_on_close(&self) -> Result<()> {
         let _guard = self.write_lock.lock().unwrap();
 
-        let runs = self.published_runs.read().unwrap().clone();
+        let runs = self.published_runs.load_full();
         if !runs.is_empty() {
             // Cannot compact WAL safely while L0 runs (esp. properties) are WAL-only.
             // Best-effort durability: flush NDB + WAL.
@@ -547,7 +549,7 @@ impl GraphEngine {
             interner.snapshot()
         };
 
-        let segments = self.published_segments.read().unwrap().clone();
+        let segments = self.published_segments.load_full();
         let pointers: Vec<SegmentPointer> = segments
             .iter()
             .map(|s| SegmentPointer {
@@ -827,16 +829,10 @@ impl<'a> WriteTxn<'a> {
     }
 
     pub fn commit(self) -> Result<()> {
-        // Extract property data before freezing (since freeze consumes memtable)
         let node_properties = self.memtable.node_properties_for_wal();
-        let edge_properties = self.memtable.edge_properties_for_wal();
         let removed_node_props = self.memtable.removed_node_properties_for_wal();
-        let removed_edge_props = self.memtable.removed_edge_properties_for_wal();
-
-        let run = self.memtable.freeze_into_run(self.txid);
-
         // 1) Append WAL and fsync (durability Full by default).
-        {
+        let run = {
             let mut wal = self.engine.wal.lock().unwrap();
             wal.append(&WalRecord::BeginTx { txid: self.txid })?;
 
@@ -860,6 +856,41 @@ impl<'a> WriteTxn<'a> {
                 })?;
             }
 
+            self.memtable.try_for_each_wal_property_op(|op| match op {
+                WalPropertyOp::SetNode { node, key, value } => wal
+                    .append(&WalRecord::SetNodeProperty {
+                        node,
+                        key: key.to_string(),
+                        value: value.clone(),
+                    })
+                    .map(|_| ()),
+                WalPropertyOp::RemoveNode { node, key } => wal
+                    .append(&WalRecord::RemoveNodeProperty {
+                        node,
+                        key: key.to_string(),
+                    })
+                    .map(|_| ()),
+                WalPropertyOp::SetEdge { edge, key, value } => wal
+                    .append(&WalRecord::SetEdgeProperty {
+                        src: edge.src,
+                        rel: edge.rel,
+                        dst: edge.dst,
+                        key: key.to_string(),
+                        value: value.clone(),
+                    })
+                    .map(|_| ()),
+                WalPropertyOp::RemoveEdge { edge, key } => wal
+                    .append(&WalRecord::RemoveEdgeProperty {
+                        src: edge.src,
+                        rel: edge.rel,
+                        dst: edge.dst,
+                        key: key.to_string(),
+                    })
+                    .map(|_| ()),
+            })?;
+
+            let run = self.memtable.freeze_into_run(self.txid);
+
             for edge in run.iter_edges() {
                 wal.append(&WalRecord::CreateEdge {
                     src: edge.src,
@@ -875,42 +906,6 @@ impl<'a> WriteTxn<'a> {
                     src: edge.src,
                     rel: edge.rel,
                     dst: edge.dst,
-                })?;
-            }
-
-            // Write property operations
-            // Write property operations
-            for (node, key, value) in &node_properties {
-                wal.append(&WalRecord::SetNodeProperty {
-                    node: *node,
-                    key: key.clone(),
-                    value: value.clone(),
-                })?;
-            }
-            // Removed Node properties
-            for (node, key) in &removed_node_props {
-                wal.append(&WalRecord::RemoveNodeProperty {
-                    node: *node,
-                    key: key.clone(),
-                })?;
-            }
-
-            for (src, rel, dst, key, value) in edge_properties {
-                wal.append(&WalRecord::SetEdgeProperty {
-                    src,
-                    rel,
-                    dst,
-                    key,
-                    value,
-                })?;
-            }
-            // Removed Edge properties
-            for (src, rel, dst, key) in &removed_edge_props {
-                wal.append(&WalRecord::RemoveEdgeProperty {
-                    src: *src,
-                    rel: *rel,
-                    dst: *dst,
-                    key: key.clone(),
                 })?;
             }
 
@@ -1082,7 +1077,8 @@ impl<'a> WriteTxn<'a> {
             // wal.append calls flush internally, we just need fsync at end of commit
             wal.append(&WalRecord::CommitTx { txid: self.txid })?;
             wal.fsync()?;
-        }
+            run
+        };
 
         let has_new_nodes = !self.created_nodes.is_empty();
         let has_label_additions = !self.pending_label_additions.is_empty();
@@ -1105,7 +1101,7 @@ impl<'a> WriteTxn<'a> {
 
         let has_label_mutations = has_new_nodes || has_label_additions || has_label_removals;
         if has_label_mutations {
-            self.engine.update_published_node_labels();
+            self.engine.update_published_idmap_snapshots();
         }
 
         if !run.is_empty() {
@@ -1385,13 +1381,13 @@ mod tests {
             }
 
             engine.compact().unwrap();
-            assert_eq!(engine.published_runs.read().unwrap().len(), 0);
-            assert_eq!(engine.published_segments.read().unwrap().len(), 1);
+            assert_eq!(engine.published_runs.load_full().len(), 0);
+            assert_eq!(engine.published_segments.load_full().len(), 1);
         }
 
         let engine = GraphEngine::open(&ndb, &wal).unwrap();
-        assert_eq!(engine.published_runs.read().unwrap().len(), 0);
-        assert_eq!(engine.published_segments.read().unwrap().len(), 1);
+        assert_eq!(engine.published_runs.load_full().len(), 0);
+        assert_eq!(engine.published_segments.load_full().len(), 1);
 
         let snap = engine.begin_read();
         let a = engine.lookup_internal_id(10).unwrap();
@@ -1422,7 +1418,7 @@ mod tests {
 
             engine.compact().unwrap();
             // Runs MUST BE cleared because properties are now persisted.
-            assert!(engine.published_runs.read().unwrap().is_empty());
+            assert!(engine.published_runs.load_full().is_empty());
         }
 
         let engine = GraphEngine::open(&ndb, &wal).unwrap();
@@ -1431,6 +1427,6 @@ mod tests {
         let age = snap.node_property(internal_id, "age").unwrap();
         assert_eq!(age, nervusdb_api::PropertyValue::Int(30));
         // And we must have NO runs after restart, because they were checkpointed.
-        assert!(engine.published_runs.read().unwrap().is_empty());
+        assert!(engine.published_runs.load_full().is_empty());
     }
 }

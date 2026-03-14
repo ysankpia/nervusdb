@@ -1,6 +1,7 @@
 use crate::pager::{PageId, Pager};
 use crate::{Error, PAGE_SIZE, Result};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub type ExternalId = u64;
 pub type InternalNodeId = u32;
@@ -43,8 +44,8 @@ impl I2eRecord {
 pub struct IdMap {
     e2i: HashMap<ExternalId, InternalNodeId>,
     /// Internal node ID → Label IDs (sorted, deduplicated)
-    i2l: Vec<Vec<LabelId>>,
-    i2e: Vec<I2eRecord>,
+    i2l: Arc<Vec<Vec<LabelId>>>,
+    i2e: Arc<Vec<I2eRecord>>,
     i2e_start: Option<PageId>,
     i2e_len: u64,
 }
@@ -72,8 +73,8 @@ impl IdMap {
 
         Ok(Self {
             e2i,
-            i2l,
-            i2e,
+            i2l: Arc::new(i2l),
+            i2e: Arc::new(i2e),
             i2e_start,
             i2e_len,
         })
@@ -109,16 +110,24 @@ impl IdMap {
     /// Get all label IDs for an internal node ID.
     #[inline]
     pub fn get_labels(&self, internal_id: InternalNodeId) -> Option<Vec<LabelId>> {
-        self.i2l.get(internal_id as usize).cloned()
+        self.i2l.as_ref().get(internal_id as usize).cloned()
     }
 
     /// Get the entire label mapping vector (for snapshotting).
     pub fn get_i2l_snapshot(&self) -> Vec<Vec<LabelId>> {
-        self.i2l.clone()
+        self.i2l.as_ref().clone()
     }
 
     pub fn get_i2e_snapshot(&self) -> Vec<I2eRecord> {
-        self.i2e.clone()
+        self.i2e.as_ref().clone()
+    }
+
+    pub fn get_i2l_arc(&self) -> Arc<Vec<Vec<LabelId>>> {
+        Arc::clone(&self.i2l)
+    }
+
+    pub fn get_i2e_arc(&self) -> Arc<Vec<I2eRecord>> {
+        Arc::clone(&self.i2e)
     }
 
     /// Create node with single label (backward compat).
@@ -204,12 +213,18 @@ impl IdMap {
         pager.set_next_internal_id(self.next_internal_id())?;
 
         self.e2i.insert(external_id, internal_id);
-        self.i2l.push(labels.clone());
-        self.i2e.push(I2eRecord {
+
+        let mut i2l = self.i2l.as_ref().clone();
+        i2l.push(labels.clone());
+        self.i2l = Arc::new(i2l);
+
+        let mut i2e = self.i2e.as_ref().clone();
+        i2e.push(I2eRecord {
             external_id,
             label_id: first_label,
             flags: 0,
         });
+        self.i2e = Arc::new(i2e);
         Ok(())
     }
 
@@ -220,14 +235,15 @@ impl IdMap {
         internal_id: InternalNodeId,
         label: LabelId,
     ) -> Result<()> {
-        let labels = self
-            .i2l
+        let mut i2l = self.i2l.as_ref().clone();
+        let labels = i2l
             .get_mut(internal_id as usize)
             .ok_or(Error::WalProtocol("node not found"))?;
 
         if !labels.contains(&label) {
             labels.push(label);
             labels.sort_unstable();
+            self.i2l = Arc::new(i2l);
         }
         Ok(())
     }
@@ -239,12 +255,16 @@ impl IdMap {
         internal_id: InternalNodeId,
         label: LabelId,
     ) -> Result<()> {
-        let labels = self
-            .i2l
+        let mut i2l = self.i2l.as_ref().clone();
+        let labels = i2l
             .get_mut(internal_id as usize)
             .ok_or(Error::WalProtocol("node not found"))?;
 
+        let original_len = labels.len();
         labels.retain(|&l| l != label);
+        if labels.len() != original_len {
+            self.i2l = Arc::new(i2l);
+        }
         Ok(())
     }
 

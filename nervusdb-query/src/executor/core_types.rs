@@ -2,6 +2,7 @@ use super::{
     EdgeKey, ErasedSnapshot, ExternalId, InternalNodeId, Result, convert_api_property_to_value,
 };
 use serde::ser::{SerializeMap, SerializeSeq};
+use smallvec::SmallVec;
 use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Hash)]
@@ -310,17 +311,18 @@ impl Eq for Value {}
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Row {
-    // Small row: linear search is fine for MVP.
-    pub(crate) cols: Vec<(String, Value)>,
+    pub(crate) cols: SmallVec<[(String, Value); 8]>,
 }
 
 impl Row {
     pub fn new(cols: Vec<(String, Value)>) -> Self {
-        Self { cols }
+        Self {
+            cols: SmallVec::from_vec(cols),
+        }
     }
 
     pub fn reify(&self, snapshot: &dyn ErasedSnapshot) -> Result<Row> {
-        let mut cols = Vec::with_capacity(self.cols.len());
+        let mut cols = SmallVec::<[(String, Value); 8]>::with_capacity(self.cols.len());
         for (k, v) in &self.cols {
             cols.push((k.clone(), v.reify(snapshot)?));
         }
@@ -328,45 +330,50 @@ impl Row {
     }
 
     pub fn get(&self, name: &str) -> Option<&Value> {
-        self.cols.iter().find(|(k, _)| k == name).map(|(_, v)| v)
+        for (k, v) in &self.cols {
+            if k == name {
+                return Some(v);
+            }
+        }
+        None
     }
 
     pub fn with(mut self, name: impl Into<String>, value: Value) -> Self {
         let name = name.into();
-        if let Some((_k, v)) = self.cols.iter_mut().find(|(k, _)| *k == name) {
-            *v = value;
-        } else {
-            self.cols.push((name, value));
+        for (k, v) in &mut self.cols {
+            if *k == name {
+                *v = value;
+                return self;
+            }
         }
+        self.cols.push((name, value));
         self
     }
 
     pub fn get_node(&self, name: &str) -> Option<InternalNodeId> {
-        self.cols.iter().find_map(|(k, v)| {
+        for (k, v) in &self.cols {
             if k == name {
-                match v {
+                return match v {
                     Value::NodeId(iid) => Some(*iid),
                     Value::Node(node) => Some(node.id),
                     _ => None,
-                }
-            } else {
-                None
+                };
             }
-        })
+        }
+        None
     }
 
     pub fn get_edge(&self, name: &str) -> Option<EdgeKey> {
-        self.cols.iter().find_map(|(k, v)| {
+        for (k, v) in &self.cols {
             if k == name {
-                match v {
+                return match v {
                     Value::EdgeKey(e) => Some(*e),
                     Value::Relationship(rel) => Some(rel.key),
                     _ => None,
-                }
-            } else {
-                None
+                };
             }
-        })
+        }
+        None
     }
 
     pub fn project(&self, names: &[&str]) -> Row {
@@ -382,12 +389,15 @@ impl Row {
     }
 
     pub fn columns(&self) -> &[(String, Value)] {
-        &self.cols
+        self.cols.as_slice()
     }
 
     pub fn join(&self, other: &Row) -> Row {
-        let mut out = self.clone();
-        out.cols.extend(other.cols.clone());
+        let mut out = Row {
+            cols: self.cols.clone(),
+        };
+        out.cols.reserve(other.cols.len());
+        out.cols.extend(other.cols.iter().cloned());
         out
     }
 
@@ -417,10 +427,12 @@ impl Row {
     }
 
     fn with_mut(&mut self, name: &str, value: Value) {
-        if let Some((_, v)) = self.cols.iter_mut().find(|(k, _)| k == name) {
-            *v = value;
-        } else {
-            self.cols.push((name.to_string(), value));
+        for (k, v) in &mut self.cols {
+            if k == name {
+                *v = value;
+                return;
+            }
         }
+        self.cols.push((name.to_string(), value));
     }
 }

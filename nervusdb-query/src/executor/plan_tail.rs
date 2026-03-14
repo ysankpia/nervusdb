@@ -1,5 +1,11 @@
 use super::{Error, GraphSnapshot, Plan, PlanIterator, Row, Value, execute_plan};
 
+type RowValueKey = Vec<Value>;
+
+fn row_value_key(row: &Row) -> RowValueKey {
+    row.columns().iter().map(|(_, v)| v.clone()).collect()
+}
+
 fn evaluate_row_window_expression<S: GraphSnapshot>(
     snapshot: &S,
     expr: &crate::ast::Expression,
@@ -56,13 +62,7 @@ pub(super) fn execute_distinct<'a, S: GraphSnapshot + 'a>(
     let mut seen = std::collections::HashSet::new();
     PlanIterator::Dynamic(Box::new(input_iter.filter(move |result| {
         if let Ok(row) = result {
-            let key = row
-                .columns()
-                .iter()
-                .map(|(_, v)| format!("{:?}", v))
-                .collect::<Vec<_>>()
-                .join(",");
-            if seen.insert(key) {
+            if seen.insert(row_value_key(row)) {
                 return true;
             }
         }
@@ -143,13 +143,7 @@ pub(super) fn execute_union<'a, S: GraphSnapshot + 'a>(
         let mut seen = std::collections::HashSet::new();
         PlanIterator::Dynamic(Box::new(chained.filter(move |result| {
             if let Ok(row) = result {
-                let key = row
-                    .columns()
-                    .iter()
-                    .map(|(_, v)| format!("{:?}", v))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                if seen.insert(key) {
+                if seen.insert(row_value_key(row)) {
                     return true;
                 }
             }

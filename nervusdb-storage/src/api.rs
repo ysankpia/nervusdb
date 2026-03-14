@@ -33,7 +33,7 @@ pub struct StorageSnapshot {
 }
 
 impl StorageSnapshot {
-    fn ensure_stats_cache_loaded(&self) {
+    fn cached_stats_clone(&self) -> Option<crate::stats::GraphStatistics> {
         let mut cache = self.stats_cache.lock().unwrap();
         if cache.is_none() {
             let pager = self.pager.read().unwrap();
@@ -41,11 +41,7 @@ impl StorageSnapshot {
                 *cache = Some(stats);
             }
         }
-    }
-
-    fn cached_stats_clone(&self) -> Option<crate::stats::GraphStatistics> {
-        self.ensure_stats_cache_loaded();
-        self.stats_cache.lock().unwrap().clone()
+        cache.clone()
     }
 }
 
@@ -53,7 +49,7 @@ impl GraphStore for GraphEngine {
     type Snapshot = StorageSnapshot;
 
     fn snapshot(&self) -> Self::Snapshot {
-        let i2e = Arc::new(self.scan_i2e_records());
+        let i2e = self.get_published_i2e();
         let inner = self.begin_read();
         let tombstoned_nodes: HashSet<InternalNodeId> = collect_tombstoned_nodes(inner.runs());
         StorageSnapshot {

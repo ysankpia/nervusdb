@@ -331,15 +331,13 @@ pub(super) fn execute_project<'a, S: GraphSnapshot + 'a>(
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
     let input_iter = execute_plan(snapshot, input, params);
-    let projections = projections.to_vec();
-    let params = params.clone();
 
     PlanIterator::Dynamic(Box::new(input_iter.map(move |result| {
         let row = result?;
         let mut new_row = Row::default();
-        for (alias, expr) in &projections {
-            ensure_runtime_expression_compatible(expr, &row, snapshot, &params)?;
-            let val = crate::evaluator::evaluate_expression_value(expr, &row, snapshot, &params);
+        for (alias, expr) in projections {
+            ensure_runtime_expression_compatible(expr, &row, snapshot, params)?;
+            let val = crate::evaluator::evaluate_expression_value(expr, &row, snapshot, params);
             new_row = new_row.with(alias.clone(), val);
         }
         Ok(new_row)
