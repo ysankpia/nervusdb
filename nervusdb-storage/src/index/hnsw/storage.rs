@@ -366,7 +366,9 @@ mod tests {
         let ndb = dir.path().join("vector-overwrite.ndb");
         let mut pager = Pager::open(&ndb).unwrap();
         let mut catalog = IndexCatalog::open_or_create(&mut pager).unwrap();
-        let def = catalog.get_or_create(&mut pager, "__test_hnsw_vec").unwrap();
+        let def = catalog
+            .get_or_create(&mut pager, "__test_hnsw_vec")
+            .unwrap();
         let mut storage = PersistentVectorStorage::new(BTree::load(def.root));
 
         let vector = vec![1.0_f32; 4096];
@@ -387,7 +389,9 @@ mod tests {
         let ndb = dir.path().join("graph-overwrite.ndb");
         let mut pager = Pager::open(&ndb).unwrap();
         let mut catalog = IndexCatalog::open_or_create(&mut pager).unwrap();
-        let def = catalog.get_or_create(&mut pager, "__test_hnsw_graph").unwrap();
+        let def = catalog
+            .get_or_create(&mut pager, "__test_hnsw_graph")
+            .unwrap();
         let mut storage = PersistentGraphStorage::new(BTree::load(def.root));
 
         let neighbors: Vec<u32> = (0..4096).collect();
@@ -410,7 +414,9 @@ mod tests {
         let ndb = dir.path().join("vector-duplicate-ref.ndb");
         let mut pager = Pager::open(&ndb).unwrap();
         let mut catalog = IndexCatalog::open_or_create(&mut pager).unwrap();
-        let def = catalog.get_or_create(&mut pager, "__test_hnsw_vec_dup").unwrap();
+        let def = catalog
+            .get_or_create(&mut pager, "__test_hnsw_vec_dup")
+            .unwrap();
         let mut storage = PersistentVectorStorage::new(BTree::load(def.root));
 
         let key = encode_vector_key(7);
@@ -449,13 +455,17 @@ mod tests {
         let ndb = dir.path().join("graph-churn.ndb");
         let mut pager = Pager::open(&ndb).unwrap();
         let mut catalog = IndexCatalog::open_or_create(&mut pager).unwrap();
-        let def = catalog.get_or_create(&mut pager, "__test_hnsw_graph_churn").unwrap();
+        let def = catalog
+            .get_or_create(&mut pager, "__test_hnsw_graph_churn")
+            .unwrap();
         let mut storage = PersistentGraphStorage::new(BTree::load(def.root));
 
         for node in 0..1500u32 {
             let base = node.saturating_sub(4);
             let neighbors: Vec<u32> = (base..=node).collect();
-            storage.set_neighbors(&mut pager, 0, node, neighbors).unwrap();
+            storage
+                .set_neighbors(&mut pager, 0, node, neighbors)
+                .unwrap();
         }
 
         for round in 0..8u32 {
@@ -463,7 +473,9 @@ mod tests {
                 let span = ((node + round) % 12) + 1;
                 let start = node.saturating_sub(span);
                 let neighbors: Vec<u32> = (start..=node).rev().take(span as usize).collect();
-                storage.set_neighbors(&mut pager, 0, node, neighbors).unwrap();
+                storage
+                    .set_neighbors(&mut pager, 0, node, neighbors)
+                    .unwrap();
             }
         }
 

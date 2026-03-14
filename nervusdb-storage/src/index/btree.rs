@@ -1211,7 +1211,11 @@ mod tests {
             key.extend_from_slice(&(i as u32).to_be_bytes());
             let mut cur = tree.cursor_lower_bound(&pager, &key).unwrap();
             assert!(cur.is_valid().unwrap(), "key should be found: {i}");
-            assert_eq!(cur.key().unwrap(), key, "key mismatch after split churn: {i}");
+            assert_eq!(
+                cur.key().unwrap(),
+                key,
+                "key mismatch after split churn: {i}"
+            );
             assert_eq!(
                 cur.payload().unwrap(),
                 50_000 + i,

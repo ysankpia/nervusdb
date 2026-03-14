@@ -257,8 +257,9 @@ impl IdMap {
         internal_id_u64: u64,
         record: I2eRecord,
     ) -> Result<PageId> {
-        let new_start = find_contiguous_free(pager, required_pages)
-            .ok_or(Error::WalProtocol("I2E extent collision: no contiguous free extent"))?;
+        let new_start = find_contiguous_free(pager, required_pages).ok_or(Error::WalProtocol(
+            "I2E extent collision: no contiguous free extent",
+        ))?;
 
         for offset in 0..required_pages {
             let page_id = PageId::new(new_start.as_u64() + offset as u64);

@@ -1,5 +1,7 @@
 use super::params::HnswParams;
-use super::storage::{GraphStorage, PersistentGraphStorage, PersistentVectorStorage, VectorStorage};
+use super::storage::{
+    GraphStorage, PersistentGraphStorage, PersistentVectorStorage, VectorStorage,
+};
 use crate::Result;
 use crate::index::vector::euclidean_distance;
 use crate::pager::PageId;
