@@ -3,11 +3,12 @@ use crate::index::btree::BTree;
 use crate::pager::{PageId, Pager};
 use crate::{Error, Result};
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 /// Trait for storing vectors.
 pub trait VectorStorage<Ctx> {
     fn insert_vector(&mut self, ctx: &mut Ctx, id: u32, vector: &[f32]) -> Result<()>;
-    fn get_vector(&mut self, ctx: &mut Ctx, id: u32) -> Result<Vec<f32>>;
+    fn get_vector(&mut self, ctx: &mut Ctx, id: u32) -> Result<Arc<Vec<f32>>>;
 }
 
 /// Trait for storing the HNSW graph structure.
@@ -72,7 +73,7 @@ impl VectorStorage<Pager> for PersistentVectorStorage {
         }
 
         let blob_id = BlobStore::write_direct(pager, &data)?;
-        self.cache.put(id, vector.to_vec());
+        self.cache.put(id, Arc::new(vector.to_vec()));
         let replaced_blob_id = match self.btree.upsert_unique(pager, &key, blob_id) {
             Ok(replaced_blob_id) => replaced_blob_id,
             Err(err) => {
@@ -84,7 +85,7 @@ impl VectorStorage<Pager> for PersistentVectorStorage {
         Ok(())
     }
 
-    fn get_vector(&mut self, pager: &mut Pager, id: u32) -> Result<Vec<f32>> {
+    fn get_vector(&mut self, pager: &mut Pager, id: u32) -> Result<Arc<Vec<f32>>> {
         if let Some(v) = self.cache.get(id) {
             return Ok(v);
         }
@@ -123,7 +124,8 @@ impl VectorStorage<Pager> for PersistentVectorStorage {
             vector.push(val);
         }
 
-        self.cache.put(id, vector.clone());
+        let vector = Arc::new(vector);
+        self.cache.put(id, Arc::clone(&vector));
         Ok(vector)
     }
 }
@@ -133,7 +135,7 @@ const DEFAULT_VECTOR_CACHE_CAP: usize = 1024;
 #[derive(Debug)]
 struct VectorCache {
     cap: usize,
-    map: HashMap<u32, Vec<f32>>,
+    map: HashMap<u32, Arc<Vec<f32>>>,
     lru: VecDeque<u32>,
 }
 
@@ -146,13 +148,13 @@ impl VectorCache {
         }
     }
 
-    fn get(&mut self, id: u32) -> Option<Vec<f32>> {
-        let v = self.map.get(&id)?.clone();
+    fn get(&mut self, id: u32) -> Option<Arc<Vec<f32>>> {
+        let v = Arc::clone(self.map.get(&id)?);
         self.touch(id);
         Some(v)
     }
 
-    fn put(&mut self, id: u32, v: Vec<f32>) {
+    fn put(&mut self, id: u32, v: Arc<Vec<f32>>) {
         self.map.insert(id, v);
         self.touch(id);
         while self.map.len() > self.cap {

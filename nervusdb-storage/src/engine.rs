@@ -16,7 +16,7 @@ use crate::read_path_engine_labels::{
 use crate::read_path_engine_view::{
     build_snapshot_from_published, load_properties_and_stats_roots,
 };
-use crate::snapshot::{L0Run, RelTypeId, Snapshot};
+use crate::snapshot::{L0Run, PublishedRuns, RelTypeId, Snapshot};
 use crate::wal::{CommittedTx, SegmentPointer, Wal, WalRecord};
 use crate::{Error, Result};
 use arc_swap::ArcSwap;
@@ -58,7 +58,7 @@ pub struct GraphEngine {
     // T203: Vector Search Index
     vector_index: Arc<Mutex<NativeHnsw>>,
 
-    published_runs: ArcSwap<Vec<Arc<L0Run>>>,
+    published_runs: ArcSwap<PublishedRuns>,
     published_segments: ArcSwap<Vec<Arc<CsrSegment>>>,
     published_labels: ArcSwap<LabelSnapshot>,
     published_node_labels: ArcSwap<Vec<Vec<LabelId>>>,
@@ -136,7 +136,7 @@ impl GraphEngine {
             label_interner: Mutex::new(label_interner),
             index_catalog: Arc::new(Mutex::new(index_catalog)),
             vector_index: Arc::new(Mutex::new(vector_index)),
-            published_runs: ArcSwap::from_pointee(runs),
+            published_runs: ArcSwap::from_pointee(PublishedRuns::from(runs)),
             published_segments: ArcSwap::from_pointee(segments),
             published_labels: ArcSwap::from(Arc::new(label_snapshot)),
             published_node_labels: ArcSwap::from(node_labels_snapshot),
@@ -335,9 +335,8 @@ impl GraphEngine {
 
     fn publish_run(&self, run: Arc<L0Run>) {
         let current = self.published_runs.load_full();
-        let mut next = Vec::with_capacity(current.len() + 1);
-        next.push(run);
-        next.extend(current.iter().cloned());
+        let mut next = current.as_ref().clone();
+        next.push_front(run);
         self.published_runs.store(Arc::new(next));
     }
 
@@ -500,7 +499,7 @@ impl GraphEngine {
         self.properties_root.store(current_root, Ordering::SeqCst);
         self.stats_root.store(stats_root, Ordering::SeqCst);
         {
-            self.published_runs.store(Arc::new(Vec::new()));
+            self.published_runs.store(Arc::new(PublishedRuns::new()));
             self.published_segments.store(new_segments);
         }
 
@@ -597,7 +596,7 @@ impl GraphEngine {
     }
 }
 
-fn build_segment_from_runs(seg_id: SegmentId, runs: &Arc<Vec<Arc<L0Run>>>) -> CsrSegment {
+fn build_segment_from_runs(seg_id: SegmentId, runs: &Arc<PublishedRuns>) -> CsrSegment {
     // Apply the same semantics as snapshot merge: newest->oldest, key-based tombstones.
     use std::collections::{BTreeMap, HashSet};
 

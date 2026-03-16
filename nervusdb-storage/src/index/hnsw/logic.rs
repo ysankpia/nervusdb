@@ -80,7 +80,7 @@ impl<V, G> HnswIndex<V, G> {
         for &ep in entry_points {
             if visited.insert(ep) {
                 let vec = self.vector_store.get_vector(ctx, ep)?;
-                let dist = euclidean_distance(query, &vec);
+                let dist = euclidean_distance(query, vec.as_slice());
                 let dist = OrderedFloat(dist);
                 candidates.push(Reverse((dist, ep)));
                 nearest_neighbors.push((dist, ep));
@@ -97,7 +97,7 @@ impl<V, G> HnswIndex<V, G> {
             for &n in &neighbors {
                 if visited.insert(n) {
                     let vec_n = self.vector_store.get_vector(ctx, n)?;
-                    let dist_n = euclidean_distance(query, &vec_n);
+                    let dist_n = euclidean_distance(query, vec_n.as_slice());
                     let dist_n_ord = OrderedFloat(dist_n);
 
                     if nearest_neighbors.len() < ef
@@ -172,7 +172,7 @@ impl<V, G> HnswIndex<V, G> {
         // 3. Zoom down from max_layer to level+1
         let mut curr_dist = {
             let vec = self.vector_store.get_vector(ctx, curr_ep)?;
-            OrderedFloat(euclidean_distance(&vector, &vec))
+            OrderedFloat(euclidean_distance(&vector, vec.as_slice()))
         };
 
         for l in (level + 1..=curr_max_layer).rev() {
@@ -182,7 +182,7 @@ impl<V, G> HnswIndex<V, G> {
                 let neighbors = self.graph_store.get_neighbors(ctx, l, curr_ep)?;
                 for &n in &neighbors {
                     let vec_n = self.vector_store.get_vector(ctx, n)?;
-                    let dist_n = OrderedFloat(euclidean_distance(&vector, &vec_n));
+                    let dist_n = OrderedFloat(euclidean_distance(&vector, vec_n.as_slice()));
                     if dist_n < curr_dist {
                         curr_dist = dist_n;
                         curr_ep = n;
@@ -251,7 +251,7 @@ impl<V, G> HnswIndex<V, G> {
         // Zoom down
         let mut curr_dist = {
             let vec = self.vector_store.get_vector(ctx, curr_ep)?;
-            OrderedFloat(euclidean_distance(query, &vec))
+            OrderedFloat(euclidean_distance(query, vec.as_slice()))
         };
 
         for l in (1..=max_layer).rev() {
@@ -261,7 +261,7 @@ impl<V, G> HnswIndex<V, G> {
                 let neighbors = self.graph_store.get_neighbors(ctx, l, curr_ep)?;
                 for &n in &neighbors {
                     let vec_n = self.vector_store.get_vector(ctx, n)?;
-                    let dist_n = OrderedFloat(euclidean_distance(query, &vec_n));
+                    let dist_n = OrderedFloat(euclidean_distance(query, vec_n.as_slice()));
                     if dist_n < curr_dist {
                         curr_dist = dist_n;
                         curr_ep = n;

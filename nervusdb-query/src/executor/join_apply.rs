@@ -37,12 +37,7 @@ impl<'a, S: GraphSnapshot> Iterator for ApplyIter<'a, S> {
                 Some(Ok(outer_row)) => {
                     self.current_outer_row = Some(outer_row.clone());
 
-                    // Prepare params
-                    // We need to merge base_params and outer_row
-                    let mut extended_params = self.base_params.clone();
-                    for (k, v) in &outer_row.cols {
-                        extended_params.insert(k.clone(), v.clone());
-                    }
+                    let extended_params = self.base_params.with_overlay_from_row(&outer_row);
 
                     // Execute subquery
                     // We must materialize to avoid lifetime issues with local extended_params

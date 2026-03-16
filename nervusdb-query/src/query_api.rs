@@ -166,6 +166,18 @@ impl Params {
         self.execute_options = options;
     }
 
+    pub(crate) fn with_overlay_from_row(&self, row: &crate::executor::Row) -> Self {
+        let mut inner = self.inner.clone();
+        for (k, v) in row.columns() {
+            inner.insert(k.clone(), v.clone());
+        }
+        Self {
+            inner,
+            execute_options: self.execute_options.clone(),
+            runtime: Arc::clone(&self.runtime),
+        }
+    }
+
     pub(crate) fn begin_execution(&self) {
         if let Ok(mut state) = self.runtime.state.lock() {
             state.started_at = Some(Instant::now());
