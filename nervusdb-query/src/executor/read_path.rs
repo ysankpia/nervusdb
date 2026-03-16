@@ -117,7 +117,7 @@ type VarLenStackItem = (
 );
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub(super) struct MatchOutVarLenIter<'a, S: GraphSnapshot + 'a> {
+pub struct MatchOutVarLenIter<'a, S: GraphSnapshot + 'a> {
     snapshot: &'a S,
     input: Option<Box<dyn Iterator<Item = Result<Row>> + 'a>>,
     cur_row: Option<Row>,
@@ -549,10 +549,8 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
                             if self.snapshot.is_tombstoned_node(id) {
                                 continue;
                             }
-                            self.cur_row = Some(Row::new(vec![(
-                                self.src_alias.to_string(),
-                                Value::NodeId(id),
-                            )]));
+                            self.cur_row =
+                                Some(Row::default().with(self.src_alias, Value::NodeId(id)));
                             self.yielded_any = false;
                             self.start_dfs(id);
                         }
@@ -566,7 +564,7 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
     }
 }
 
-pub(super) struct ExpandIter<'a, S: GraphSnapshot + 'a> {
+pub struct ExpandIter<'a, S: GraphSnapshot + 'a> {
     snapshot: &'a S,
     input: Box<dyn Iterator<Item = Result<Row>> + 'a>,
     src_alias: &'a str,

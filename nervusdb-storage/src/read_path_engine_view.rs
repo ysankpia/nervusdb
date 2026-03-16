@@ -1,7 +1,7 @@
 use crate::csr::CsrSegment;
 use crate::idmap::LabelId;
 use crate::label_interner::LabelSnapshot;
-use crate::snapshot::{L0Run, Snapshot};
+use crate::snapshot::{PublishedRuns, Snapshot};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -16,7 +16,7 @@ pub(crate) fn load_properties_and_stats_roots(
 }
 
 pub(crate) fn build_snapshot_from_published(
-    runs: Arc<Vec<Arc<L0Run>>>,
+    runs: Arc<PublishedRuns>,
     segments: Arc<Vec<Arc<CsrSegment>>>,
     labels: Arc<LabelSnapshot>,
     node_labels: Arc<Vec<Vec<LabelId>>>,
@@ -37,6 +37,7 @@ pub(crate) fn build_snapshot_from_published(
 mod tests {
     use super::{build_snapshot_from_published, load_properties_and_stats_roots};
     use crate::label_interner::LabelInterner;
+    use crate::snapshot::PublishedRuns;
     use std::sync::Arc;
     use std::sync::atomic::AtomicU64;
 
@@ -55,7 +56,7 @@ mod tests {
         let interner = LabelInterner::new();
         let labels = Arc::new(interner.snapshot());
         let snapshot = build_snapshot_from_published(
-            Arc::new(Vec::new()),
+            Arc::new(PublishedRuns::new()),
             Arc::new(Vec::new()),
             labels,
             Arc::new(Vec::new()),

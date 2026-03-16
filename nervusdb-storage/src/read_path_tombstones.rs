@@ -1,9 +1,9 @@
 use crate::idmap::InternalNodeId;
-use crate::snapshot::L0Run;
+use crate::snapshot::PublishedRuns;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-pub(crate) fn collect_tombstoned_nodes(runs: &Arc<Vec<Arc<L0Run>>>) -> HashSet<InternalNodeId> {
+pub(crate) fn collect_tombstoned_nodes(runs: &Arc<PublishedRuns>) -> HashSet<InternalNodeId> {
     runs.iter()
         .flat_map(|run| run.iter_tombstoned_nodes())
         .collect()
@@ -12,7 +12,7 @@ pub(crate) fn collect_tombstoned_nodes(runs: &Arc<Vec<Arc<L0Run>>>) -> HashSet<I
 #[cfg(test)]
 mod tests {
     use super::collect_tombstoned_nodes;
-    use crate::snapshot::L0Run;
+    use crate::snapshot::{L0Run, PublishedRuns};
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
 
@@ -41,7 +41,7 @@ mod tests {
             BTreeMap::new(),
         ));
 
-        let runs = Arc::new(vec![run1, run2]);
+        let runs = Arc::new(PublishedRuns::from(vec![run1, run2]));
         let got = collect_tombstoned_nodes(&runs);
         assert_eq!(got.len(), 3);
         assert!(got.contains(&1));

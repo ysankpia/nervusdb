@@ -33,7 +33,7 @@ pub(super) fn compile_foreach_plan(
 
     Ok(Plan::Foreach {
         input: Box::new(input),
-        variable: foreach.variable,
+        variable: foreach.variable.into(),
         list: foreach.list,
         sub_plan: Box::new(compiled_sub.plan),
     })

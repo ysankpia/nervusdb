@@ -116,7 +116,7 @@ fn resolve_projection_source_expr<'a>(plan: &'a Plan, variable: &str) -> Option<
             alias,
             expression,
         } => {
-            if alias == variable {
+            if alias.as_ref() == variable {
                 Some(expression)
             } else {
                 resolve_projection_source_expr(input, variable)

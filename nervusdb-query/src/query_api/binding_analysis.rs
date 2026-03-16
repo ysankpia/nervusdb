@@ -192,7 +192,7 @@ pub(super) fn extract_output_var_kinds(plan: &Plan, vars: &mut BTreeMap<String, 
     match plan {
         Plan::ReturnOne => {}
         Plan::NodeScan { alias, .. } => {
-            merge_binding_kind(vars, alias.clone(), BindingKind::Node);
+            merge_binding_kind(vars, alias.to_string(), BindingKind::Node);
         }
         Plan::MatchOut {
             src_alias,
@@ -221,15 +221,15 @@ pub(super) fn extract_output_var_kinds(plan: &Plan, vars: &mut BTreeMap<String, 
             if let Some(p) = input {
                 extract_output_var_kinds(p, vars);
             }
-            merge_binding_kind(vars, src_alias.clone(), BindingKind::Node);
-            merge_binding_kind(vars, dst_alias.clone(), BindingKind::Node);
+            merge_binding_kind(vars, src_alias.to_string(), BindingKind::Node);
+            merge_binding_kind(vars, dst_alias.to_string(), BindingKind::Node);
             if let Some(e) = edge_alias {
-                merge_binding_kind(vars, e.clone(), BindingKind::Relationship);
+                merge_binding_kind(vars, e.to_string(), BindingKind::Relationship);
             }
             if let Some(p) = path_alias
                 && !is_internal_path_alias(p)
             {
-                merge_binding_kind(vars, p.clone(), BindingKind::Path);
+                merge_binding_kind(vars, p.to_string(), BindingKind::Path);
             }
         }
         Plan::MatchOutVarLen {
@@ -243,15 +243,15 @@ pub(super) fn extract_output_var_kinds(plan: &Plan, vars: &mut BTreeMap<String, 
             if let Some(p) = input {
                 extract_output_var_kinds(p, vars);
             }
-            merge_binding_kind(vars, src_alias.clone(), BindingKind::Node);
-            merge_binding_kind(vars, dst_alias.clone(), BindingKind::Node);
+            merge_binding_kind(vars, src_alias.to_string(), BindingKind::Node);
+            merge_binding_kind(vars, dst_alias.to_string(), BindingKind::Node);
             if let Some(e) = edge_alias {
-                merge_binding_kind(vars, e.clone(), BindingKind::RelationshipList);
+                merge_binding_kind(vars, e.to_string(), BindingKind::RelationshipList);
             }
             if let Some(p) = path_alias
                 && !is_internal_path_alias(p)
             {
-                merge_binding_kind(vars, p.clone(), BindingKind::Path);
+                merge_binding_kind(vars, p.to_string(), BindingKind::Path);
             }
         }
         Plan::MatchBoundRel {
@@ -263,13 +263,13 @@ pub(super) fn extract_output_var_kinds(plan: &Plan, vars: &mut BTreeMap<String, 
             ..
         } => {
             extract_output_var_kinds(input, vars);
-            merge_binding_kind(vars, rel_alias.clone(), BindingKind::Relationship);
-            merge_binding_kind(vars, src_alias.clone(), BindingKind::Node);
-            merge_binding_kind(vars, dst_alias.clone(), BindingKind::Node);
+            merge_binding_kind(vars, rel_alias.to_string(), BindingKind::Relationship);
+            merge_binding_kind(vars, src_alias.to_string(), BindingKind::Node);
+            merge_binding_kind(vars, dst_alias.to_string(), BindingKind::Node);
             if let Some(p) = path_alias
                 && !is_internal_path_alias(p)
             {
-                merge_binding_kind(vars, p.clone(), BindingKind::Path);
+                merge_binding_kind(vars, p.to_string(), BindingKind::Path);
             }
         }
         Plan::Filter { input, .. }
@@ -320,7 +320,7 @@ pub(super) fn extract_output_var_kinds(plan: &Plan, vars: &mut BTreeMap<String, 
         }
         Plan::Unwind { input, alias, .. } => {
             extract_output_var_kinds(input, vars);
-            vars.insert(alias.clone(), BindingKind::Unknown);
+            vars.insert(alias.to_string(), BindingKind::Unknown);
         }
         Plan::Union { left, right, .. } => {
             extract_output_var_kinds(left, vars);
@@ -360,7 +360,7 @@ pub(super) fn extract_output_var_kinds(plan: &Plan, vars: &mut BTreeMap<String, 
             alias, fallback, ..
         } => {
             extract_output_var_kinds(fallback, vars);
-            merge_binding_kind(vars, alias.clone(), BindingKind::Node);
+            merge_binding_kind(vars, alias.to_string(), BindingKind::Node);
         }
         Plan::Foreach { input, .. } => extract_output_var_kinds(input, vars),
         Plan::Values { rows } => {
@@ -415,7 +415,7 @@ mod tests {
     fn extract_output_var_kinds_keeps_new_match_alias_after_project_input() {
         let with_project = Plan::Project {
             input: Box::new(Plan::NodeScan {
-                alias: "a".to_string(),
+                alias: "a".to_string().into(),
                 label: None,
                 optional: false,
             }),
@@ -423,10 +423,10 @@ mod tests {
         };
         let plan = Plan::MatchOut {
             input: Some(Box::new(with_project)),
-            src_alias: "a".to_string(),
+            src_alias: "a".to_string().into(),
             rels: vec![],
             edge_alias: None,
-            dst_alias: "b".to_string(),
+            dst_alias: "b".to_string().into(),
             dst_labels: vec![],
             src_prebound: true,
             limit: None,
@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn extract_output_var_kinds_apply_preserves_input_aliases() {
         let input = Plan::NodeScan {
-            alias: "p".to_string(),
+            alias: "p".to_string().into(),
             label: Some("Person".to_string()),
             optional: false,
         };

@@ -1,12 +1,13 @@
 use super::{
-    GraphSnapshot, Plan, PlanIterator, Row, Value, evaluate_expression_value, execute_plan,
+    GraphSnapshot, IndexSeekIter, Plan, PlanIterator, Row, Value, evaluate_expression_value,
+    execute_plan,
 };
 
 pub(super) fn execute_index_seek<'a, S: GraphSnapshot + 'a>(
     snapshot: &'a S,
-    alias: &str,
-    label: &str,
-    field: &str,
+    alias: &'a str,
+    label: &'a str,
+    field: &'a str,
     value_expr: &'a crate::ast::Expression,
     fallback: &'a Plan,
     params: &'a crate::query_api::Params,
@@ -17,7 +18,7 @@ pub(super) fn execute_index_seek<'a, S: GraphSnapshot + 'a>(
         snapshot,
         params,
     ) {
-        return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err))));
+        return PlanIterator::ReturnOne(std::iter::once(Err(err)));
     }
     let val = evaluate_expression_value(value_expr, &Row::default(), snapshot, params);
 
@@ -34,12 +35,10 @@ pub(super) fn execute_index_seek<'a, S: GraphSnapshot + 'a>(
 
     if let Some(mut node_ids) = snapshot.lookup_index(label, field, &prop_val) {
         node_ids.sort();
-        let alias = alias.to_string();
-        PlanIterator::Dynamic(Box::new(
-            node_ids
-                .into_iter()
-                .map(move |iid| Ok(Row::default().with(alias.clone(), Value::NodeId(iid)))),
-        ))
+        PlanIterator::IndexSeek(Box::new(IndexSeekIter {
+            alias: alias.to_owned(),
+            node_ids: node_ids.into_iter(),
+        }))
     } else {
         execute_plan(snapshot, fallback, params)
     }

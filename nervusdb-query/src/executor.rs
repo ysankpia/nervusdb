@@ -39,15 +39,23 @@ use binding_utils::{
 };
 use join_apply::{ApplyIter, ProcedureCallIter};
 use label_constraint::{LabelConstraint, node_matches_label_constraint, resolve_label_constraint};
+use match_bound_rel_plan::MatchBoundRelIter;
+use match_in_undirected_plan::{MatchInIter, MatchUndirectedIter};
+use match_out_plan::FilteredMatchOutIter;
 use merge_overlay::{MergeOverlayEdge, MergeOverlayNode, MergeOverlayState};
 pub use nervusdb_api::LabelId;
 use nervusdb_api::{EdgeKey, ExternalId, GraphSnapshot, InternalNodeId, RelTypeId};
 use path_usage::{edge_multiplicity, path_alias_contains_edge};
-use plan_iterators::{CartesianProductIter, FilterIter, NodeScanIter};
+use plan_iterators::{
+    CartesianProductIter, ChainIter, DistinctIter, FilterIter, IndexSeekIter, LimitIter,
+    NodeScanIter, ProjectIter, ResultRowsIter, SkipIter, UnionDistinctIter, UnwindIter, ValuesIter,
+};
 use projection_sort::execute_aggregate;
 use property_bridge::{
     api_property_map_to_storage, merge_props_to_values, merge_storage_property_to_api,
 };
+use read_path::{ExpandIter, MatchOutVarLenIter};
+use runtime_limits::RuntimeGuardIter;
 use write_forwarders::{
     convert_executor_value_to_property, execute_create, execute_create_write_rows, execute_delete,
     execute_delete_on_rows, execute_foreach, execute_merge_create_from_rows,

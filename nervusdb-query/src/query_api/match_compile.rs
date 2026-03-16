@@ -151,7 +151,7 @@ fn compile_pattern_chain(
             );
 
             let start_plan = Plan::NodeScan {
-                alias: src_alias.clone(),
+                alias: src_alias.clone().into(),
                 label: src_label.clone(),
                 optional,
             };
@@ -172,7 +172,7 @@ fn compile_pattern_chain(
         );
 
         let mut start_plan = Plan::NodeScan {
-            alias: src_alias.clone(),
+            alias: src_alias.clone().into(),
             label: src_label.clone(),
             optional,
         };
@@ -183,7 +183,7 @@ fn compile_pattern_chain(
             && let Some((field, val_expr)) = var_preds.iter().next()
         {
             start_plan = Plan::IndexSeek {
-                alias: src_alias.clone(),
+                alias: src_alias.clone().into(),
                 label: label_name.clone(),
                 field: field.clone(),
                 value_expr: val_expr.clone(),
@@ -246,11 +246,11 @@ fn compile_pattern_chain(
         if let Some(var_len) = &rel_el.variable_length {
             plan = Plan::MatchOutVarLen {
                 input: Some(Box::new(plan)),
-                src_alias: curr_src_alias.clone(),
-                dst_alias: dst_alias.clone(),
+                src_alias: curr_src_alias.clone().into(),
+                dst_alias: dst_alias.clone().into(),
                 dst_labels: dst_labels.clone(),
                 src_prebound,
-                edge_alias: edge_alias.clone(),
+                edge_alias: edge_alias.clone().map(Into::into),
                 rels: rel_types,
                 direction: rel_el.direction.clone(),
                 min_hops: var_len.min.unwrap_or(1),
@@ -260,7 +260,7 @@ fn compile_pattern_chain(
                 project_external: false,
                 optional,
                 optional_unbind: optional_unbind.clone(),
-                path_alias: path_alias.clone(),
+                path_alias: path_alias.clone().map(Into::into),
             };
         } else if let Some(rel_alias) = &edge_alias
             && matches!(
@@ -270,64 +270,64 @@ fn compile_pattern_chain(
         {
             plan = Plan::MatchBoundRel {
                 input: Box::new(plan),
-                rel_alias: rel_alias.clone(),
-                src_alias: curr_src_alias.clone(),
-                dst_alias: dst_alias.clone(),
+                rel_alias: rel_alias.clone().into(),
+                src_alias: curr_src_alias.clone().into(),
+                dst_alias: dst_alias.clone().into(),
                 dst_labels: dst_labels.clone(),
                 src_prebound,
                 rels: rel_types,
                 direction: rel_el.direction.clone(),
                 optional,
                 optional_unbind: optional_unbind.clone(),
-                path_alias: path_alias.clone(),
+                path_alias: path_alias.clone().map(Into::into),
             };
         } else {
             match rel_el.direction {
                 crate::ast::RelationshipDirection::LeftToRight => {
                     plan = Plan::MatchOut {
                         input: Some(Box::new(plan)),
-                        src_alias: curr_src_alias.clone(),
-                        dst_alias: dst_alias.clone(),
+                        src_alias: curr_src_alias.clone().into(),
+                        dst_alias: dst_alias.clone().into(),
                         dst_labels: dst_labels.clone(),
                         src_prebound,
-                        edge_alias: edge_alias.clone(),
+                        edge_alias: edge_alias.clone().map(Into::into),
                         rels: rel_types,
                         limit: None,
                         project: Vec::new(),
                         project_external: false,
                         optional,
                         optional_unbind: optional_unbind.clone(),
-                        path_alias: path_alias.clone(),
+                        path_alias: path_alias.clone().map(Into::into),
                     };
                 }
                 crate::ast::RelationshipDirection::RightToLeft => {
                     plan = Plan::MatchIn {
                         input: Some(Box::new(plan)),
-                        src_alias: curr_src_alias.clone(),
-                        dst_alias: dst_alias.clone(),
+                        src_alias: curr_src_alias.clone().into(),
+                        dst_alias: dst_alias.clone().into(),
                         dst_labels: dst_labels.clone(),
                         src_prebound,
-                        edge_alias: edge_alias.clone(),
+                        edge_alias: edge_alias.clone().map(Into::into),
                         rels: rel_types,
                         limit: None,
                         optional,
                         optional_unbind: optional_unbind.clone(),
-                        path_alias: path_alias.clone(),
+                        path_alias: path_alias.clone().map(Into::into),
                     };
                 }
                 crate::ast::RelationshipDirection::Undirected => {
                     plan = Plan::MatchUndirected {
                         input: Some(Box::new(plan)),
-                        src_alias: curr_src_alias.clone(),
-                        dst_alias: dst_alias.clone(),
+                        src_alias: curr_src_alias.clone().into(),
+                        dst_alias: dst_alias.clone().into(),
                         dst_labels: dst_labels.clone(),
                         src_prebound,
-                        edge_alias: edge_alias.clone(),
+                        edge_alias: edge_alias.clone().map(Into::into),
                         rels: rel_types,
                         limit: None,
                         optional,
                         optional_unbind: optional_unbind.clone(),
-                        path_alias: path_alias.clone(),
+                        path_alias: path_alias.clone().map(Into::into),
                     };
                 }
             }

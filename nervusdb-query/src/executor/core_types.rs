@@ -2,6 +2,8 @@ use super::{
     EdgeKey, ErasedSnapshot, ExternalId, InternalNodeId, Result, convert_api_property_to_value,
 };
 use serde::ser::{SerializeMap, SerializeSeq};
+use smallvec::SmallVec;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, PartialEq, PartialOrd, Hash)]
@@ -308,65 +310,103 @@ impl Hash for Value {
 
 impl Eq for Value {}
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug)]
 pub struct Row {
-    // Small row: linear search is fine for MVP.
-    pub(crate) cols: Vec<(String, Value)>,
+    pub(crate) cols: SmallVec<[(String, Value); 8]>,
+    index: Option<HashMap<String, usize>>,
+}
+
+impl Clone for Row {
+    fn clone(&self) -> Self {
+        Self {
+            cols: self.cols.clone(),
+            index: self.index.clone(),
+        }
+    }
+}
+
+impl Default for Row {
+    fn default() -> Self {
+        Self {
+            cols: SmallVec::new(),
+            index: None,
+        }
+    }
+}
+
+impl PartialEq for Row {
+    fn eq(&self, other: &Self) -> bool {
+        self.cols == other.cols
+    }
 }
 
 impl Row {
     pub fn new(cols: Vec<(String, Value)>) -> Self {
-        Self { cols }
+        let mut row = Self {
+            cols: SmallVec::from_vec(cols),
+            index: None,
+        };
+        row.maybe_rebuild_index();
+        row
     }
 
     pub fn reify(&self, snapshot: &dyn ErasedSnapshot) -> Result<Row> {
-        let mut cols = Vec::with_capacity(self.cols.len());
+        let mut cols = SmallVec::<[(String, Value); 8]>::with_capacity(self.cols.len());
         for (k, v) in &self.cols {
             cols.push((k.clone(), v.reify(snapshot)?));
         }
-        Ok(Row { cols })
+        let mut row = Row { cols, index: None };
+        row.maybe_rebuild_index();
+        Ok(row)
     }
 
     pub fn get(&self, name: &str) -> Option<&Value> {
-        self.cols.iter().find(|(k, _)| k == name).map(|(_, v)| v)
+        if let Some(index) = &self.index
+            && let Some(idx) = index.get(name)
+        {
+            return self.cols.get(*idx).map(|(_, v)| v);
+        }
+        for (k, v) in &self.cols {
+            if k == name {
+                return Some(v);
+            }
+        }
+        None
     }
 
     pub fn with(mut self, name: impl Into<String>, value: Value) -> Self {
         let name = name.into();
-        if let Some((_k, v)) = self.cols.iter_mut().find(|(k, _)| *k == name) {
-            *v = value;
-        } else {
-            self.cols.push((name, value));
+        if let Some(index) = &self.index
+            && let Some(idx) = index.get(&name).copied()
+        {
+            self.cols[idx].1 = value;
+            return self;
         }
+        for (k, v) in &mut self.cols {
+            if *k == name {
+                *v = value;
+                return self;
+            }
+        }
+        self.cols.push((name, value));
+        self.maybe_rebuild_index();
         self
     }
 
     pub fn get_node(&self, name: &str) -> Option<InternalNodeId> {
-        self.cols.iter().find_map(|(k, v)| {
-            if k == name {
-                match v {
-                    Value::NodeId(iid) => Some(*iid),
-                    Value::Node(node) => Some(node.id),
-                    _ => None,
-                }
-            } else {
-                None
-            }
-        })
+        match self.get(name) {
+            Some(Value::NodeId(iid)) => Some(*iid),
+            Some(Value::Node(node)) => Some(node.id),
+            _ => None,
+        }
     }
 
     pub fn get_edge(&self, name: &str) -> Option<EdgeKey> {
-        self.cols.iter().find_map(|(k, v)| {
-            if k == name {
-                match v {
-                    Value::EdgeKey(e) => Some(*e),
-                    Value::Relationship(rel) => Some(rel.key),
-                    _ => None,
-                }
-            } else {
-                None
-            }
-        })
+        match self.get(name) {
+            Some(Value::EdgeKey(e)) => Some(*e),
+            Some(Value::Relationship(rel)) => Some(rel.key),
+            _ => None,
+        }
     }
 
     pub fn project(&self, names: &[&str]) -> Row {
@@ -382,12 +422,21 @@ impl Row {
     }
 
     pub fn columns(&self) -> &[(String, Value)] {
-        &self.cols
+        self.cols.as_slice()
+    }
+
+    pub fn value_key(&self) -> Vec<Value> {
+        self.cols.iter().map(|(_, v)| v.clone()).collect()
     }
 
     pub fn join(&self, other: &Row) -> Row {
-        let mut out = self.clone();
-        out.cols.extend(other.cols.clone());
+        let mut out = Row {
+            cols: self.cols.clone(),
+            index: self.index.clone(),
+        };
+        out.cols.reserve(other.cols.len());
+        out.cols.extend(other.cols.iter().cloned());
+        out.maybe_rebuild_index();
         out
     }
 
@@ -417,10 +466,32 @@ impl Row {
     }
 
     fn with_mut(&mut self, name: &str, value: Value) {
-        if let Some((_, v)) = self.cols.iter_mut().find(|(k, _)| k == name) {
-            *v = value;
-        } else {
-            self.cols.push((name.to_string(), value));
+        if let Some(index) = &self.index
+            && let Some(idx) = index.get(name).copied()
+        {
+            self.cols[idx].1 = value;
+            return;
         }
+        for (k, v) in &mut self.cols {
+            if k == name {
+                *v = value;
+                return;
+            }
+        }
+        self.cols.push((name.to_string(), value));
+        self.maybe_rebuild_index();
+    }
+
+    fn maybe_rebuild_index(&mut self) {
+        if self.cols.len() <= 8 {
+            self.index = None;
+            return;
+        }
+
+        let mut index = HashMap::with_capacity(self.cols.len());
+        for (idx, (key, _)) in self.cols.iter().enumerate() {
+            index.insert(key.clone(), idx);
+        }
+        self.index = Some(index);
     }
 }

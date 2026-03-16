@@ -1,10 +1,14 @@
-use super::{Error, GraphSnapshot, Plan, PlanIterator, Row, Value, execute_plan};
+use super::{
+    ChainIter, DistinctIter, Error, GraphSnapshot, LimitIter, Plan, PlanIterator, Row, SkipIter,
+    UnionDistinctIter, UnwindIter, Value, ValuesIter, execute_plan,
+};
 
 fn evaluate_row_window_expression<S: GraphSnapshot>(
     snapshot: &S,
     expr: &crate::ast::Expression,
     params: &crate::query_api::Params,
 ) -> super::Result<usize> {
+    super::plan_mid::ensure_runtime_expression_compatible(expr, &Row::default(), snapshot, params)?;
     let value =
         crate::evaluator::evaluate_expression_value(expr, &Row::default(), snapshot, params);
     match value {
@@ -27,10 +31,13 @@ pub(super) fn execute_skip<'a, S: GraphSnapshot + 'a>(
 ) -> PlanIterator<'a, S> {
     let skip = match evaluate_row_window_expression(snapshot, skip, params) {
         Ok(value) => value,
-        Err(err) => return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err)))),
+        Err(err) => return PlanIterator::ReturnOne(std::iter::once(Err(err))),
     };
     let input_iter = execute_plan(snapshot, input, params);
-    PlanIterator::Dynamic(Box::new(input_iter.skip(skip)))
+    PlanIterator::Skip(Box::new(SkipIter {
+        input: Box::new(input_iter),
+        remaining: skip,
+    }))
 }
 
 pub(super) fn execute_limit<'a, S: GraphSnapshot + 'a>(
@@ -41,10 +48,13 @@ pub(super) fn execute_limit<'a, S: GraphSnapshot + 'a>(
 ) -> PlanIterator<'a, S> {
     let limit = match evaluate_row_window_expression(snapshot, limit, params) {
         Ok(value) => value,
-        Err(err) => return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err)))),
+        Err(err) => return PlanIterator::ReturnOne(std::iter::once(Err(err))),
     };
     let input_iter = execute_plan(snapshot, input, params);
-    PlanIterator::Dynamic(Box::new(input_iter.take(limit)))
+    PlanIterator::Limit(Box::new(LimitIter {
+        input: Box::new(input_iter),
+        remaining: limit,
+    }))
 }
 
 pub(super) fn execute_distinct<'a, S: GraphSnapshot + 'a>(
@@ -53,21 +63,10 @@ pub(super) fn execute_distinct<'a, S: GraphSnapshot + 'a>(
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
     let input_iter = execute_plan(snapshot, input, params);
-    let mut seen = std::collections::HashSet::new();
-    PlanIterator::Dynamic(Box::new(input_iter.filter(move |result| {
-        if let Ok(row) = result {
-            let key = row
-                .columns()
-                .iter()
-                .map(|(_, v)| format!("{:?}", v))
-                .collect::<Vec<_>>()
-                .join(",");
-            if seen.insert(key) {
-                return true;
-            }
-        }
-        false
-    })))
+    PlanIterator::Distinct(Box::new(DistinctIter {
+        input: Box::new(input_iter),
+        seen: std::collections::HashSet::new(),
+    }))
 }
 
 pub(super) fn execute_unwind<'a, S: GraphSnapshot + 'a>(
@@ -78,52 +77,15 @@ pub(super) fn execute_unwind<'a, S: GraphSnapshot + 'a>(
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
     let input_iter = execute_plan(snapshot, input, params);
-    let expression = expression.clone();
-    let alias = alias.to_string();
-    let params = params.clone();
-
-    PlanIterator::Dynamic(Box::new(input_iter.flat_map(
-        move |result| -> Box<dyn Iterator<Item = super::Result<Row>>> {
-            match result {
-                Ok(row) => {
-                    if let Err(err) = params.check_timeout("Unwind.eval") {
-                        return Box::new(std::iter::once(Err(err)));
-                    }
-                    if let Err(err) = super::plan_mid::ensure_runtime_expression_compatible(
-                        &expression,
-                        &row,
-                        snapshot,
-                        &params,
-                    ) {
-                        return Box::new(std::iter::once(Err(err)));
-                    }
-                    let val = crate::evaluator::evaluate_expression_value(
-                        &expression,
-                        &row,
-                        snapshot,
-                        &params,
-                    );
-                    match val {
-                        Value::List(list) => {
-                            if let Err(err) =
-                                params.check_collection_size("Unwind.list", list.len())
-                            {
-                                return Box::new(std::iter::once(Err(err)));
-                            }
-                            let alias = alias.clone();
-                            Box::new(
-                                list.into_iter()
-                                    .map(move |item| Ok(row.clone().with(alias.clone(), item))),
-                            )
-                        }
-                        Value::Null => Box::new(std::iter::empty()),
-                        _ => Box::new(std::iter::once(Ok(row.with(alias.clone(), val)))),
-                    }
-                }
-                Err(e) => Box::new(std::iter::once(Err(e))),
-            }
-        },
-    )))
+    PlanIterator::Unwind(Box::new(UnwindIter {
+        snapshot,
+        input: Box::new(input_iter),
+        expression,
+        alias,
+        params,
+        current_row: None,
+        current_items: Vec::new().into_iter(),
+    }))
 }
 
 pub(super) fn execute_union<'a, S: GraphSnapshot + 'a>(
@@ -135,36 +97,30 @@ pub(super) fn execute_union<'a, S: GraphSnapshot + 'a>(
 ) -> PlanIterator<'a, S> {
     let left_iter = execute_plan(snapshot, left, params);
     let right_iter = execute_plan(snapshot, right, params);
-    let chained = left_iter.chain(right_iter);
 
     if all {
-        PlanIterator::Dynamic(Box::new(chained))
+        PlanIterator::Chain(Box::new(ChainIter {
+            left: Box::new(left_iter),
+            right: Box::new(right_iter),
+            draining_left: true,
+        }))
     } else {
-        let mut seen = std::collections::HashSet::new();
-        PlanIterator::Dynamic(Box::new(chained.filter(move |result| {
-            if let Ok(row) = result {
-                let key = row
-                    .columns()
-                    .iter()
-                    .map(|(_, v)| format!("{:?}", v))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                if seen.insert(key) {
-                    return true;
-                }
-            }
-            false
-        })))
+        let chained = left_iter.chain(right_iter);
+        PlanIterator::UnionDistinct(Box::new(UnionDistinctIter {
+            input: chained,
+            seen: std::collections::HashSet::new(),
+        }))
     }
 }
 
 pub(super) fn write_only_plan_error<'a, S: GraphSnapshot + 'a>(
     message: &'static str,
 ) -> PlanIterator<'a, S> {
-    PlanIterator::Dynamic(Box::new(std::iter::once(Err(Error::Other(message.into())))))
+    PlanIterator::ReturnOne(std::iter::once(Err(Error::Other(message.into()))))
 }
 
 pub(super) fn execute_values<'a, S: GraphSnapshot + 'a>(rows: &[Row]) -> PlanIterator<'a, S> {
-    let rows = rows.to_vec();
-    PlanIterator::Dynamic(Box::new(rows.into_iter().map(Ok::<Row, super::Error>)))
+    PlanIterator::Values(Box::new(ValuesIter {
+        rows: Vec::from(rows).into_iter(),
+    }))
 }

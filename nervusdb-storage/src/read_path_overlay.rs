@@ -1,11 +1,11 @@
 use crate::idmap::InternalNodeId;
 use crate::property::PropertyValue;
-use crate::snapshot::{EdgeKey, L0Run};
+use crate::snapshot::{EdgeKey, PublishedRuns};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 pub(crate) fn node_property_from_runs(
-    runs: &Arc<Vec<Arc<L0Run>>>,
+    runs: &Arc<PublishedRuns>,
     node: InternalNodeId,
     key: &str,
 ) -> Option<PropertyValue> {
@@ -23,7 +23,7 @@ pub(crate) fn node_property_from_runs(
 }
 
 pub(crate) fn edge_property_from_runs(
-    runs: &Arc<Vec<Arc<L0Run>>>,
+    runs: &Arc<PublishedRuns>,
     edge: EdgeKey,
     key: &str,
 ) -> Option<PropertyValue> {
@@ -41,7 +41,7 @@ pub(crate) fn edge_property_from_runs(
 }
 
 pub(crate) fn merge_node_properties_from_runs(
-    runs: &Arc<Vec<Arc<L0Run>>>,
+    runs: &Arc<PublishedRuns>,
     node: InternalNodeId,
 ) -> Option<BTreeMap<String, PropertyValue>> {
     let mut merged = BTreeMap::new();
@@ -71,7 +71,7 @@ pub(crate) fn merge_node_properties_from_runs(
 }
 
 pub(crate) fn merge_edge_properties_from_runs(
-    runs: &Arc<Vec<Arc<L0Run>>>,
+    runs: &Arc<PublishedRuns>,
     edge: EdgeKey,
 ) -> Option<BTreeMap<String, PropertyValue>> {
     let mut merged = BTreeMap::new();
@@ -107,7 +107,7 @@ mod tests {
         node_property_from_runs,
     };
     use crate::property::PropertyValue;
-    use crate::snapshot::{EdgeKey, L0Run};
+    use crate::snapshot::{EdgeKey, L0Run, PublishedRuns};
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
 
@@ -156,7 +156,7 @@ mod tests {
             BTreeMap::new(),
         );
 
-        let runs = Arc::new(vec![new_run, old_run]);
+        let runs = Arc::new(PublishedRuns::from(vec![new_run, old_run]));
         assert_eq!(node_property_from_runs(&runs, 1, "name"), None);
     }
 
@@ -187,7 +187,7 @@ mod tests {
             BTreeMap::new(),
         );
 
-        let runs = Arc::new(vec![new_run, old_run]);
+        let runs = Arc::new(PublishedRuns::from(vec![new_run, old_run]));
         let merged = merge_node_properties_from_runs(&runs, 1).expect("merged node props");
         assert_eq!(merged.get("a"), Some(&PropertyValue::Int(9)));
         assert_eq!(merged.get("b"), Some(&PropertyValue::Int(2)));
@@ -220,7 +220,7 @@ mod tests {
             BTreeMap::from([(edge, BTreeSet::from(["k".to_string()]))]),
         );
 
-        let runs = Arc::new(vec![new_run, old_run]);
+        let runs = Arc::new(PublishedRuns::from(vec![new_run, old_run]));
         assert_eq!(edge_property_from_runs(&runs, edge, "k"), None);
     }
 
@@ -257,7 +257,7 @@ mod tests {
             BTreeMap::new(),
         );
 
-        let runs = Arc::new(vec![new_run, old_run]);
+        let runs = Arc::new(PublishedRuns::from(vec![new_run, old_run]));
         let merged = merge_edge_properties_from_runs(&runs, edge).expect("merged edge props");
         assert_eq!(merged.get("x"), Some(&PropertyValue::Int(3)));
         assert_eq!(merged.get("y"), Some(&PropertyValue::Int(2)));
@@ -287,7 +287,7 @@ mod tests {
             BTreeMap::new(),
         );
 
-        let runs = Arc::new(vec![new_run, old_run]);
+        let runs = Arc::new(PublishedRuns::from(vec![new_run, old_run]));
         let merged = merge_node_properties_from_runs(&runs, 1).expect("merged node props");
         assert!(!merged.contains_key("a"));
         assert_eq!(merged.get("b"), Some(&PropertyValue::Int(2)));
@@ -323,7 +323,7 @@ mod tests {
             BTreeMap::from([(edge, BTreeSet::from(["x".to_string()]))]),
         );
 
-        let runs = Arc::new(vec![new_run, old_run]);
+        let runs = Arc::new(PublishedRuns::from(vec![new_run, old_run]));
         let merged = merge_edge_properties_from_runs(&runs, edge).expect("merged edge props");
         assert!(!merged.contains_key("x"));
         assert_eq!(merged.get("y"), Some(&PropertyValue::Int(2)));

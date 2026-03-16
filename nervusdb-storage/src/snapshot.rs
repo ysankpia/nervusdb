@@ -24,11 +24,13 @@ use crate::read_path_run_props::{edge_property_in_run, node_property_in_run};
 use crate::read_path_run_state::{run_has_properties, run_is_empty};
 use crate::read_path_stats::read_statistics;
 use crate::read_path_symbols::{resolve_symbol_id, resolve_symbol_name};
+use im::Vector as ImVector;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 pub type RelTypeId = nervusdb_api::RelTypeId;
 pub type EdgeKey = nervusdb_api::EdgeKey;
+pub type PublishedRuns = ImVector<Arc<L0Run>>;
 
 #[derive(Debug)]
 pub struct L0Run {
@@ -144,7 +146,7 @@ impl L0Run {
 
 #[derive(Debug, Clone)]
 pub struct Snapshot {
-    runs: Arc<Vec<Arc<L0Run>>>,
+    runs: Arc<PublishedRuns>,
     segments: Arc<Vec<Arc<CsrSegment>>>,
     labels: Arc<crate::label_interner::LabelSnapshot>,
     node_labels: Arc<Vec<Vec<crate::idmap::LabelId>>>,
@@ -154,7 +156,7 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub fn new(
-        runs: Arc<Vec<Arc<L0Run>>>,
+        runs: Arc<PublishedRuns>,
         segments: Arc<Vec<Arc<CsrSegment>>>,
         labels: Arc<crate::label_interner::LabelSnapshot>,
         node_labels: Arc<Vec<Vec<crate::idmap::LabelId>>>,
@@ -183,7 +185,7 @@ impl Snapshot {
         IncomingNeighborsIter::new(self.runs.clone(), self.segments.clone(), dst, rel)
     }
 
-    pub(crate) fn runs(&self) -> &Arc<Vec<Arc<L0Run>>> {
+    pub(crate) fn runs(&self) -> &Arc<PublishedRuns> {
         &self.runs
     }
 

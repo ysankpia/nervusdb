@@ -19,6 +19,27 @@ pub struct MemTable {
     removed_edge_properties: HashMap<EdgeKey, BTreeSet<String>>,
 }
 
+pub enum WalPropertyOp<'a> {
+    SetNode {
+        node: InternalNodeId,
+        key: &'a str,
+        value: &'a PropertyValue,
+    },
+    RemoveNode {
+        node: InternalNodeId,
+        key: &'a str,
+    },
+    SetEdge {
+        edge: EdgeKey,
+        key: &'a str,
+        value: &'a PropertyValue,
+    },
+    RemoveEdge {
+        edge: EdgeKey,
+        key: &'a str,
+    },
+}
+
 impl MemTable {
     pub fn create_edge(&mut self, src: InternalNodeId, rel: RelTypeId, dst: InternalNodeId) {
         let key = EdgeKey { src, rel, dst };
@@ -108,6 +129,61 @@ impl MemTable {
             .entry(edge)
             .or_default()
             .insert(key.to_string());
+    }
+
+    pub fn try_for_each_wal_property_op<E>(
+        &self,
+        mut f: impl FnMut(WalPropertyOp<'_>) -> std::result::Result<(), E>,
+    ) -> std::result::Result<(), E> {
+        for (node, props) in &self.node_properties {
+            for (key, value) in props {
+                f(WalPropertyOp::SetNode {
+                    node: *node,
+                    key,
+                    value,
+                })?;
+            }
+        }
+
+        for (node, keys) in &self.removed_node_properties {
+            for key in keys {
+                f(WalPropertyOp::RemoveNode { node: *node, key })?;
+            }
+        }
+
+        for (edge, props) in &self.edge_properties {
+            for (key, value) in props {
+                f(WalPropertyOp::SetEdge {
+                    edge: *edge,
+                    key,
+                    value,
+                })?;
+            }
+        }
+
+        for (edge, keys) in &self.removed_edge_properties {
+            for key in keys {
+                f(WalPropertyOp::RemoveEdge { edge: *edge, key })?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn for_each_node_property(&self, mut f: impl FnMut(InternalNodeId, &str, &PropertyValue)) {
+        for (node, props) in &self.node_properties {
+            for (key, value) in props {
+                f(*node, key, value);
+            }
+        }
+    }
+
+    pub fn for_each_removed_node_property(&self, mut f: impl FnMut(InternalNodeId, &str)) {
+        for (node, keys) in &self.removed_node_properties {
+            for key in keys {
+                f(*node, key);
+            }
+        }
     }
 
     /// Get removed node properties for WAL writing.

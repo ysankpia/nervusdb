@@ -33,7 +33,7 @@ pub struct StorageSnapshot {
 }
 
 impl StorageSnapshot {
-    fn ensure_stats_cache_loaded(&self) {
+    fn cached_stats_clone(&self) -> Option<crate::stats::GraphStatistics> {
         let mut cache = self.stats_cache.lock().unwrap();
         if cache.is_none() {
             let pager = self.pager.read().unwrap();
@@ -41,11 +41,7 @@ impl StorageSnapshot {
                 *cache = Some(stats);
             }
         }
-    }
-
-    fn cached_stats_clone(&self) -> Option<crate::stats::GraphStatistics> {
-        self.ensure_stats_cache_loaded();
-        self.stats_cache.lock().unwrap().clone()
+        cache.clone()
     }
 }
 
@@ -53,7 +49,7 @@ impl GraphStore for GraphEngine {
     type Snapshot = StorageSnapshot;
 
     fn snapshot(&self) -> Self::Snapshot {
-        let i2e = Arc::new(self.scan_i2e_records());
+        let i2e = self.get_published_i2e();
         let inner = self.begin_read();
         let tombstoned_nodes: HashSet<InternalNodeId> = collect_tombstoned_nodes(inner.runs());
         StorageSnapshot {
@@ -270,5 +266,70 @@ impl GraphSnapshot for StorageSnapshot {
     fn edge_count(&self, rel: Option<RelTypeId>) -> u64 {
         let stats = self.cached_stats_clone();
         edge_count_from_stats(stats.as_ref(), rel)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nervusdb_api::{GraphSnapshot, GraphStore};
+    use tempfile::tempdir;
+
+    #[test]
+    fn snapshot_keeps_old_i2e_view_after_new_commit() {
+        let dir = tempdir().unwrap();
+        let ndb = dir.path().join("snapshot-i2e.ndb");
+        let wal = dir.path().join("snapshot-i2e.wal");
+        let engine = GraphEngine::open(&ndb, &wal).unwrap();
+
+        {
+            let mut tx = engine.begin_write();
+            tx.create_node(10, 1).unwrap();
+            tx.commit().unwrap();
+        }
+
+        let snap_before = engine.snapshot();
+        assert_eq!(snap_before.resolve_external(0), Some(10));
+        assert_eq!(snap_before.resolve_external(1), None);
+
+        {
+            let mut tx = engine.begin_write();
+            tx.create_node(20, 1).unwrap();
+            tx.commit().unwrap();
+        }
+
+        let snap_after = engine.snapshot();
+        assert_eq!(snap_before.resolve_external(0), Some(10));
+        assert_eq!(snap_before.resolve_external(1), None);
+        assert_eq!(snap_after.resolve_external(0), Some(10));
+        assert_eq!(snap_after.resolve_external(1), Some(20));
+    }
+
+    #[test]
+    fn snapshot_keeps_old_node_labels_after_label_mutation() {
+        let dir = tempdir().unwrap();
+        let ndb = dir.path().join("snapshot-labels.ndb");
+        let wal = dir.path().join("snapshot-labels.wal");
+        let engine = GraphEngine::open(&ndb, &wal).unwrap();
+
+        let node = {
+            let mut tx = engine.begin_write();
+            let node = tx.create_node(10, 1).unwrap();
+            tx.commit().unwrap();
+            node
+        };
+
+        let snap_before = engine.snapshot();
+        assert_eq!(snap_before.resolve_node_labels(node), Some(vec![1]));
+
+        {
+            let mut tx = engine.begin_write();
+            tx.add_node_label(node, 5).unwrap();
+            tx.commit().unwrap();
+        }
+
+        let snap_after = engine.snapshot();
+        assert_eq!(snap_before.resolve_node_labels(node), Some(vec![1]));
+        assert_eq!(snap_after.resolve_node_labels(node), Some(vec![1, 5]));
     }
 }

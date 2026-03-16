@@ -1,8 +1,172 @@
 use super::{
-    EdgeKey, ErasedSnapshot, GraphSnapshot, Plan, PlanIterator, RelTypeId, Result, Row, Value,
-    apply_optional_unbinds_row, execute_plan, node_matches_label_constraint,
+    EdgeKey, ErasedSnapshot, GraphSnapshot, LabelConstraint, Plan, PlanIterator, RelTypeId, Result,
+    Row, Value, apply_optional_unbinds_row, execute_plan, node_matches_label_constraint,
     path_alias_contains_edge, resolve_label_constraint, row_matches_node_binding,
 };
+
+pub struct MatchInIter<'a, S: GraphSnapshot + 'a> {
+    snapshot: &'a S,
+    input: Box<PlanIterator<'a, S>>,
+    src_alias: &'a str,
+    rel_ids: Option<Vec<RelTypeId>>,
+    edge_alias: Option<&'a str>,
+    dst_alias: &'a str,
+    dst_label_constraint: LabelConstraint,
+    src_prebound: bool,
+    optional: bool,
+    optional_unbind: &'a [String],
+    path_alias: Option<&'a str>,
+    pending: std::vec::IntoIter<Result<Row>>,
+}
+
+impl<'a, S: GraphSnapshot + 'a> MatchInIter<'a, S> {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        snapshot: &'a S,
+        input: Box<PlanIterator<'a, S>>,
+        src_alias: &'a str,
+        rel_ids: Option<Vec<RelTypeId>>,
+        edge_alias: Option<&'a str>,
+        dst_alias: &'a str,
+        dst_label_constraint: LabelConstraint,
+        src_prebound: bool,
+        optional: bool,
+        optional_unbind: &'a [String],
+        path_alias: Option<&'a str>,
+    ) -> Self {
+        Self {
+            snapshot,
+            input,
+            src_alias,
+            rel_ids,
+            edge_alias,
+            dst_alias,
+            dst_label_constraint,
+            src_prebound,
+            optional,
+            optional_unbind,
+            path_alias,
+            pending: Vec::new().into_iter(),
+        }
+    }
+}
+
+impl<'a, S: GraphSnapshot + 'a> Iterator for MatchInIter<'a, S> {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(next) = self.pending.next() {
+                return Some(next);
+            }
+
+            let row = match self.input.next()? {
+                Ok(row) => row,
+                Err(err) => return Some(Err(err)),
+            };
+
+            let results = collect_match_in_rows(
+                self.snapshot,
+                &row,
+                self.src_alias,
+                &self.rel_ids,
+                self.edge_alias,
+                self.dst_alias,
+                &self.dst_label_constraint,
+                self.src_prebound,
+                self.optional,
+                self.optional_unbind,
+                self.path_alias,
+            );
+            if results.is_empty() {
+                continue;
+            }
+            self.pending = results.into_iter();
+        }
+    }
+}
+
+pub struct MatchUndirectedIter<'a, S: GraphSnapshot + 'a> {
+    snapshot: &'a S,
+    input: Box<PlanIterator<'a, S>>,
+    src_alias: &'a str,
+    rel_ids: Option<Vec<RelTypeId>>,
+    edge_alias: Option<&'a str>,
+    dst_alias: &'a str,
+    dst_label_constraint: LabelConstraint,
+    src_prebound: bool,
+    optional: bool,
+    optional_unbind: &'a [String],
+    path_alias: Option<&'a str>,
+    pending: std::vec::IntoIter<Result<Row>>,
+}
+
+impl<'a, S: GraphSnapshot + 'a> MatchUndirectedIter<'a, S> {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        snapshot: &'a S,
+        input: Box<PlanIterator<'a, S>>,
+        src_alias: &'a str,
+        rel_ids: Option<Vec<RelTypeId>>,
+        edge_alias: Option<&'a str>,
+        dst_alias: &'a str,
+        dst_label_constraint: LabelConstraint,
+        src_prebound: bool,
+        optional: bool,
+        optional_unbind: &'a [String],
+        path_alias: Option<&'a str>,
+    ) -> Self {
+        Self {
+            snapshot,
+            input,
+            src_alias,
+            rel_ids,
+            edge_alias,
+            dst_alias,
+            dst_label_constraint,
+            src_prebound,
+            optional,
+            optional_unbind,
+            path_alias,
+            pending: Vec::new().into_iter(),
+        }
+    }
+}
+
+impl<'a, S: GraphSnapshot + 'a> Iterator for MatchUndirectedIter<'a, S> {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(next) = self.pending.next() {
+                return Some(next);
+            }
+
+            let row = match self.input.next()? {
+                Ok(row) => row,
+                Err(err) => return Some(Err(err)),
+            };
+
+            let results = collect_match_undirected_rows(
+                self.snapshot,
+                &row,
+                self.src_alias,
+                &self.rel_ids,
+                self.edge_alias,
+                self.dst_alias,
+                &self.dst_label_constraint,
+                self.src_prebound,
+                self.optional,
+                self.optional_unbind,
+                self.path_alias,
+            );
+            if results.is_empty() {
+                continue;
+            }
+            self.pending = results.into_iter();
+        }
+    }
+}
 
 fn resolve_rel_ids<S: GraphSnapshot>(snapshot: &S, rels: &[String]) -> Option<Vec<RelTypeId>> {
     if rels.is_empty() {
@@ -37,248 +201,246 @@ fn chain_incoming_candidates<'a, S: GraphSnapshot + 'a>(
 pub(super) fn execute_match_in<'a, S: GraphSnapshot + 'a>(
     snapshot: &'a S,
     input: &'a Option<Box<Plan>>,
-    src_alias: &str,
-    rels: &[String],
-    edge_alias: &Option<String>,
-    dst_alias: &str,
-    dst_labels: &[String],
+    src_alias: &'a str,
+    rels: &'a [String],
+    edge_alias: &'a Option<std::sync::Arc<str>>,
+    dst_alias: &'a str,
+    dst_labels: &'a [String],
     src_prebound: bool,
     optional: bool,
-    optional_unbind: &[String],
-    path_alias: &Option<String>,
+    optional_unbind: &'a [String],
+    path_alias: &'a Option<std::sync::Arc<str>>,
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
     let rel_ids = resolve_rel_ids(snapshot, rels);
     let dst_label_constraint = resolve_label_constraint(snapshot, dst_labels);
+    let input_iter = input
+        .as_ref()
+        .map(|plan| execute_plan(snapshot, plan, params))
+        .unwrap_or_else(|| PlanIterator::ReturnOne(std::iter::once(Ok(Row::default()))));
 
-    let input_iter: Box<dyn Iterator<Item = Result<Row>>> = if let Some(input_plan) = input {
-        Box::new(execute_plan(snapshot, input_plan, params))
-    } else {
-        Box::new(std::iter::once(Ok(Row::default())))
-    };
-
-    let src_alias = src_alias.to_string();
-    let dst_alias = dst_alias.to_string();
-    let edge_alias = edge_alias.clone();
-    let optional_unbind = optional_unbind.to_vec();
-    let path_alias = path_alias.clone();
-
-    PlanIterator::Dynamic(Box::new(input_iter.flat_map(move |result| match result {
-        Ok(row) => {
-            let target_iid = match row.get(&src_alias).cloned() {
-                Some(Value::NodeId(id)) => id,
-                Some(Value::Null) | None if optional => {
-                    let new_row = apply_optional_unbinds_row(row.clone(), &optional_unbind);
-                    return Box::new(std::iter::once(Ok(new_row)))
-                        as Box<dyn Iterator<Item = Result<Row>>>;
-                }
-                _ => return Box::new(std::iter::empty()) as Box<dyn Iterator<Item = Result<Row>>>,
-            };
-
-            let candidates = chain_incoming_candidates(snapshot, target_iid, &rel_ids);
-            let dst_alias_binding = dst_alias.clone();
-            let edge_alias_binding = edge_alias.clone();
-            let row_for_map = row.clone();
-            let path_alias = path_alias.clone();
-            let dst_label_constraint = dst_label_constraint.clone();
-
-            let mapped = candidates.filter_map(move |edge| {
-                if path_alias_contains_edge(snapshot, &row_for_map, path_alias.as_deref(), edge) {
-                    return None;
-                }
-                if !row_matches_node_binding(&row_for_map, &dst_alias_binding, edge.src) {
-                    return None;
-                }
-                if !node_matches_label_constraint(snapshot, edge.src, &dst_label_constraint) {
-                    return None;
-                }
-
-                let mut new_row = row_for_map.clone();
-                new_row = new_row.with(dst_alias_binding.clone(), Value::NodeId(edge.src));
-                if let Some(ea) = &edge_alias_binding {
-                    new_row = new_row.with(ea.clone(), Value::EdgeKey(edge));
-                }
-                if let Some(pa) = &path_alias {
-                    new_row.join_path(pa, edge.dst, edge, edge.src);
-                }
-                Some(Ok(new_row))
-            });
-
-            if optional {
-                let results: Vec<_> = mapped.collect();
-                if results.is_empty() {
-                    if !src_prebound {
-                        return Box::new(std::iter::empty())
-                            as Box<dyn Iterator<Item = Result<Row>>>;
-                    }
-                    let new_row = apply_optional_unbinds_row(row.clone(), &optional_unbind);
-                    Box::new(std::iter::once(Ok(new_row))) as Box<dyn Iterator<Item = Result<Row>>>
-                } else {
-                    Box::new(results.into_iter()) as Box<dyn Iterator<Item = Result<Row>>>
-                }
-            } else {
-                Box::new(mapped) as Box<dyn Iterator<Item = Result<Row>>>
-            }
-        }
-        Err(e) => Box::new(std::iter::once(Err(e))) as Box<dyn Iterator<Item = Result<Row>>>,
-    })))
+    PlanIterator::MatchIn(Box::new(MatchInIter::new(
+        snapshot,
+        Box::new(input_iter),
+        src_alias,
+        rel_ids,
+        edge_alias.as_deref(),
+        dst_alias,
+        dst_label_constraint,
+        src_prebound,
+        optional,
+        optional_unbind,
+        path_alias.as_deref(),
+    )))
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn execute_match_undirected<'a, S: GraphSnapshot + 'a>(
     snapshot: &'a S,
     input: &'a Option<Box<Plan>>,
-    src_alias: &str,
-    rels: &[String],
-    edge_alias: &Option<String>,
-    dst_alias: &str,
-    dst_labels: &[String],
+    src_alias: &'a str,
+    rels: &'a [String],
+    edge_alias: &'a Option<std::sync::Arc<str>>,
+    dst_alias: &'a str,
+    dst_labels: &'a [String],
     src_prebound: bool,
     limit: Option<usize>,
     optional: bool,
-    optional_unbind: &[String],
-    path_alias: &Option<String>,
+    optional_unbind: &'a [String],
+    path_alias: &'a Option<std::sync::Arc<str>>,
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
     let rel_ids = resolve_rel_ids(snapshot, rels);
     let dst_label_constraint = resolve_label_constraint(snapshot, dst_labels);
-
-    let input_iter: Box<dyn Iterator<Item = Result<Row>>> = if let Some(input_plan) = input {
-        Box::new(execute_plan(snapshot, input_plan, params))
+    let input_iter = input
+        .as_ref()
+        .map(|plan| execute_plan(snapshot, plan, params))
+        .unwrap_or_else(|| PlanIterator::ReturnOne(std::iter::once(Ok(Row::default()))));
+    let iter = PlanIterator::MatchUndirected(Box::new(MatchUndirectedIter::new(
+        snapshot,
+        Box::new(input_iter),
+        src_alias,
+        rel_ids,
+        edge_alias.as_deref(),
+        dst_alias,
+        dst_label_constraint,
+        src_prebound,
+        optional,
+        optional_unbind,
+        path_alias.as_deref(),
+    )));
+    if let Some(limit) = limit {
+        PlanIterator::Limit(Box::new(super::LimitIter {
+            input: Box::new(iter),
+            remaining: limit,
+        }))
     } else {
-        Box::new(std::iter::once(Ok(Row::default())))
+        iter
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_match_in_rows<S: GraphSnapshot>(
+    snapshot: &S,
+    row: &Row,
+    src_alias: &str,
+    rel_ids: &Option<Vec<RelTypeId>>,
+    edge_alias: Option<&str>,
+    dst_alias: &str,
+    dst_label_constraint: &LabelConstraint,
+    src_prebound: bool,
+    optional: bool,
+    optional_unbind: &[String],
+    path_alias: Option<&str>,
+) -> Vec<Result<Row>> {
+    let target_iid = match row.get(src_alias).cloned() {
+        Some(Value::NodeId(id)) => id,
+        Some(Value::Null) | None if optional => {
+            return vec![Ok(apply_optional_unbinds_row(row.clone(), optional_unbind))];
+        }
+        _ => return Vec::new(),
     };
 
-    let src_alias = src_alias.to_string();
-    let dst_alias = dst_alias.to_string();
-    let edge_alias = edge_alias.clone();
-    let optional_unbind = optional_unbind.to_vec();
-    let path_alias = path_alias.clone();
+    let mut rows = Vec::new();
+    for edge in chain_incoming_candidates(snapshot, target_iid, rel_ids) {
+        if path_alias_contains_edge(snapshot, row, path_alias, edge) {
+            continue;
+        }
+        if !row_matches_node_binding(row, dst_alias, edge.src) {
+            continue;
+        }
+        if !node_matches_label_constraint(snapshot, edge.src, dst_label_constraint) {
+            continue;
+        }
 
-    let expanded = input_iter.flat_map(move |res| match res {
-        Ok(row) => {
-            let src_iid = match row.get(&src_alias).cloned() {
-                Some(Value::NodeId(id)) => id,
-                Some(Value::Null) | None if optional => {
-                    let null_row = apply_optional_unbinds_row(row.clone(), &optional_unbind);
-                    return Box::new(std::iter::once(Ok(null_row)))
-                        as Box<dyn Iterator<Item = Result<Row>>>;
-                }
-                _ => return Box::new(std::iter::empty()) as Box<dyn Iterator<Item = Result<Row>>>,
-            };
+        let mut new_row = row.clone();
+        new_row = new_row.with(dst_alias, Value::NodeId(edge.src));
+        if let Some(ea) = edge_alias {
+            new_row = new_row.with(ea, Value::EdgeKey(edge));
+        }
+        if let Some(pa) = path_alias {
+            new_row.join_path(pa, edge.dst, edge, edge.src);
+        }
+        rows.push(Ok(new_row));
+    }
 
-            let mut rows: Vec<Result<Row>> = Vec::new();
+    if optional && rows.is_empty() && src_prebound {
+        rows.push(Ok(apply_optional_unbinds_row(row.clone(), optional_unbind)));
+    }
 
-            if let Some(rids) = &rel_ids {
-                for rid in rids {
-                    for edge in snapshot.neighbors(src_iid, Some(*rid)) {
-                        if path_alias_contains_edge(snapshot, &row, path_alias.as_deref(), edge) {
-                            continue;
-                        }
-                        if !row_matches_node_binding(&row, &dst_alias, edge.dst) {
-                            continue;
-                        }
-                        if !node_matches_label_constraint(snapshot, edge.dst, &dst_label_constraint)
-                        {
-                            continue;
-                        }
-                        let mut new_row = row.clone();
-                        new_row = new_row.with(dst_alias.clone(), Value::NodeId(edge.dst));
-                        if let Some(ea) = &edge_alias {
-                            new_row = new_row.with(ea.clone(), Value::EdgeKey(edge));
-                        }
-                        if let Some(pa) = &path_alias {
-                            new_row.join_path(pa, edge.src, edge, edge.dst);
-                        }
-                        rows.push(Ok(new_row));
-                    }
-                    for edge in snapshot.incoming_neighbors_erased(src_iid, Some(*rid)) {
-                        if path_alias_contains_edge(snapshot, &row, path_alias.as_deref(), edge) {
-                            continue;
-                        }
-                        if edge.src == edge.dst {
-                            continue;
-                        }
-                        if !row_matches_node_binding(&row, &dst_alias, edge.src) {
-                            continue;
-                        }
-                        if !node_matches_label_constraint(snapshot, edge.src, &dst_label_constraint)
-                        {
-                            continue;
-                        }
-                        let mut new_row = row.clone();
-                        new_row = new_row.with(dst_alias.clone(), Value::NodeId(edge.src));
-                        if let Some(ea) = &edge_alias {
-                            new_row = new_row.with(ea.clone(), Value::EdgeKey(edge));
-                        }
-                        if let Some(pa) = &path_alias {
-                            new_row.join_path(pa, edge.dst, edge, edge.src);
-                        }
-                        rows.push(Ok(new_row));
-                    }
-                }
-            } else {
-                for edge in snapshot.neighbors(src_iid, None) {
-                    if path_alias_contains_edge(snapshot, &row, path_alias.as_deref(), edge) {
-                        continue;
-                    }
-                    if !row_matches_node_binding(&row, &dst_alias, edge.dst) {
-                        continue;
-                    }
-                    if !node_matches_label_constraint(snapshot, edge.dst, &dst_label_constraint) {
-                        continue;
-                    }
-                    let mut new_row = row.clone();
-                    new_row = new_row.with(dst_alias.clone(), Value::NodeId(edge.dst));
-                    if let Some(ea) = &edge_alias {
-                        new_row = new_row.with(ea.clone(), Value::EdgeKey(edge));
-                    }
-                    if let Some(pa) = &path_alias {
-                        new_row.join_path(pa, edge.src, edge, edge.dst);
-                    }
-                    rows.push(Ok(new_row));
-                }
-                for edge in snapshot.incoming_neighbors_erased(src_iid, None) {
-                    if path_alias_contains_edge(snapshot, &row, path_alias.as_deref(), edge) {
-                        continue;
-                    }
-                    if edge.src == edge.dst {
-                        continue;
-                    }
-                    if !row_matches_node_binding(&row, &dst_alias, edge.src) {
-                        continue;
-                    }
-                    if !node_matches_label_constraint(snapshot, edge.src, &dst_label_constraint) {
-                        continue;
-                    }
-                    let mut new_row = row.clone();
-                    new_row = new_row.with(dst_alias.clone(), Value::NodeId(edge.src));
-                    if let Some(ea) = &edge_alias {
-                        new_row = new_row.with(ea.clone(), Value::EdgeKey(edge));
-                    }
-                    if let Some(pa) = &path_alias {
-                        new_row.join_path(pa, edge.dst, edge, edge.src);
-                    }
-                    rows.push(Ok(new_row));
-                }
-            }
+    rows
+}
 
-            if optional && rows.is_empty() {
-                if !src_prebound {
-                    return Box::new(std::iter::empty()) as Box<dyn Iterator<Item = Result<Row>>>;
-                }
-                let null_row = apply_optional_unbinds_row(row.clone(), &optional_unbind);
-                Box::new(std::iter::once(Ok(null_row))) as Box<dyn Iterator<Item = Result<Row>>>
-            } else {
-                Box::new(rows.into_iter()) as Box<dyn Iterator<Item = Result<Row>>>
+#[allow(clippy::too_many_arguments)]
+fn collect_match_undirected_rows<S: GraphSnapshot>(
+    snapshot: &S,
+    row: &Row,
+    src_alias: &str,
+    rel_ids: &Option<Vec<RelTypeId>>,
+    edge_alias: Option<&str>,
+    dst_alias: &str,
+    dst_label_constraint: &LabelConstraint,
+    src_prebound: bool,
+    optional: bool,
+    optional_unbind: &[String],
+    path_alias: Option<&str>,
+) -> Vec<Result<Row>> {
+    let src_iid = match row.get(src_alias).cloned() {
+        Some(Value::NodeId(id)) => id,
+        Some(Value::Null) | None if optional => {
+            return vec![Ok(apply_optional_unbinds_row(row.clone(), optional_unbind))];
+        }
+        _ => return Vec::new(),
+    };
+
+    let mut rows = Vec::new();
+    match rel_ids {
+        Some(rids) => {
+            for rid in rids {
+                append_undirected_rows(
+                    snapshot,
+                    row,
+                    src_iid,
+                    Some(*rid),
+                    edge_alias,
+                    dst_alias,
+                    dst_label_constraint,
+                    path_alias,
+                    &mut rows,
+                );
             }
         }
-        Err(e) => Box::new(std::iter::once(Err(e))) as Box<dyn Iterator<Item = Result<Row>>>,
-    });
+        None => append_undirected_rows(
+            snapshot,
+            row,
+            src_iid,
+            None,
+            edge_alias,
+            dst_alias,
+            dst_label_constraint,
+            path_alias,
+            &mut rows,
+        ),
+    }
 
-    if let Some(limit) = limit {
-        PlanIterator::Dynamic(Box::new(expanded.take(limit)))
-    } else {
-        PlanIterator::Dynamic(Box::new(expanded))
+    if optional && rows.is_empty() && src_prebound {
+        rows.push(Ok(apply_optional_unbinds_row(row.clone(), optional_unbind)));
+    }
+
+    rows
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_undirected_rows<S: GraphSnapshot>(
+    snapshot: &S,
+    row: &Row,
+    src_iid: super::InternalNodeId,
+    rel_id: Option<RelTypeId>,
+    edge_alias: Option<&str>,
+    dst_alias: &str,
+    dst_label_constraint: &LabelConstraint,
+    path_alias: Option<&str>,
+    rows: &mut Vec<Result<Row>>,
+) {
+    for edge in snapshot.neighbors(src_iid, rel_id) {
+        if path_alias_contains_edge(snapshot, row, path_alias, edge) {
+            continue;
+        }
+        if !row_matches_node_binding(row, dst_alias, edge.dst) {
+            continue;
+        }
+        if !node_matches_label_constraint(snapshot, edge.dst, dst_label_constraint) {
+            continue;
+        }
+        let mut new_row = row.clone();
+        new_row = new_row.with(dst_alias, Value::NodeId(edge.dst));
+        if let Some(ea) = edge_alias {
+            new_row = new_row.with(ea, Value::EdgeKey(edge));
+        }
+        if let Some(pa) = path_alias {
+            new_row.join_path(pa, edge.src, edge, edge.dst);
+        }
+        rows.push(Ok(new_row));
+    }
+
+    for edge in snapshot.incoming_neighbors_erased(src_iid, rel_id) {
+        if path_alias_contains_edge(snapshot, row, path_alias, edge) || edge.src == edge.dst {
+            continue;
+        }
+        if !row_matches_node_binding(row, dst_alias, edge.src) {
+            continue;
+        }
+        if !node_matches_label_constraint(snapshot, edge.src, dst_label_constraint) {
+            continue;
+        }
+        let mut new_row = row.clone();
+        new_row = new_row.with(dst_alias, Value::NodeId(edge.src));
+        if let Some(ea) = edge_alias {
+            new_row = new_row.with(ea, Value::EdgeKey(edge));
+        }
+        if let Some(pa) = path_alias {
+            new_row.join_path(pa, edge.dst, edge, edge.src);
+        }
+        rows.push(Ok(new_row));
     }
 }

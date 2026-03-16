@@ -5,20 +5,20 @@ pub(super) fn wrap_plan_iterator<'a, S: GraphSnapshot + 'a>(
     params: &'a crate::query_api::Params,
     stage: &'static str,
 ) -> PlanIterator<'a, S> {
-    PlanIterator::Dynamic(Box::new(RuntimeGuardIter {
+    PlanIterator::RuntimeGuard(Box::new(RuntimeGuardIter {
         inner: Box::new(iter),
         params,
         stage,
     }))
 }
 
-struct RuntimeGuardIter<'a> {
-    inner: Box<dyn Iterator<Item = Result<Row>> + 'a>,
+pub struct RuntimeGuardIter<'a, S: GraphSnapshot + 'a> {
+    inner: Box<PlanIterator<'a, S>>,
     params: &'a crate::query_api::Params,
     stage: &'static str,
 }
 
-impl<'a> Iterator for RuntimeGuardIter<'a> {
+impl<'a, S: GraphSnapshot + 'a> Iterator for RuntimeGuardIter<'a, S> {
     type Item = Result<Row>;
 
     fn next(&mut self) -> Option<Self::Item> {

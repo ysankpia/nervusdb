@@ -1,7 +1,11 @@
 use super::{
-    AggregateFunction, ApplyIter, CartesianProductIter, Direction, Expression, FilterIter,
-    GraphSnapshot, NodeScanIter, Pattern, ProcedureCallIter, RelationshipDirection, Result, Row,
+    AggregateFunction, ApplyIter, CartesianProductIter, ChainIter, Direction, DistinctIter,
+    ExpandIter, Expression, FilterIter, FilteredMatchOutIter, GraphSnapshot, IndexSeekIter,
+    LimitIter, MatchBoundRelIter, MatchInIter, MatchOutVarLenIter, MatchUndirectedIter,
+    NodeScanIter, Pattern, ProcedureCallIter, ProjectIter, RelationshipDirection, Result,
+    ResultRowsIter, Row, RuntimeGuardIter, SkipIter, UnionDistinctIter, UnwindIter, ValuesIter,
 };
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub enum Plan {
@@ -9,17 +13,17 @@ pub enum Plan {
     ReturnOne,
     /// `MATCH (n) RETURN ...`
     NodeScan {
-        alias: String,
+        alias: Arc<str>,
         label: Option<String>,
         optional: bool,
     },
     /// `MATCH (a)-[:rel]->(b) RETURN ...`
     MatchOut {
         input: Option<Box<Plan>>,
-        src_alias: String,
+        src_alias: Arc<str>,
         rels: Vec<String>,
-        edge_alias: Option<String>,
-        dst_alias: String,
+        edge_alias: Option<Arc<str>>,
+        dst_alias: Arc<str>,
         dst_labels: Vec<String>,
         src_prebound: bool,
         limit: Option<u32>,
@@ -29,15 +33,15 @@ pub enum Plan {
         project_external: bool,
         optional: bool,
         optional_unbind: Vec<String>,
-        path_alias: Option<String>,
+        path_alias: Option<Arc<str>>,
     },
     /// `MATCH (a)-[:rel*min..max]->(b) RETURN ...` (variable length)
     MatchOutVarLen {
         input: Option<Box<Plan>>,
-        src_alias: String,
+        src_alias: Arc<str>,
         rels: Vec<String>,
-        edge_alias: Option<String>,
-        dst_alias: String,
+        edge_alias: Option<Arc<str>>,
+        dst_alias: Arc<str>,
         dst_labels: Vec<String>,
         src_prebound: bool,
         direction: RelationshipDirection,
@@ -48,46 +52,46 @@ pub enum Plan {
         project_external: bool,
         optional: bool,
         optional_unbind: Vec<String>,
-        path_alias: Option<String>,
+        path_alias: Option<Arc<str>>,
     },
     MatchIn {
         input: Option<Box<Plan>>,
-        src_alias: String,
+        src_alias: Arc<str>,
         rels: Vec<String>,
-        edge_alias: Option<String>,
-        dst_alias: String,
+        edge_alias: Option<Arc<str>>,
+        dst_alias: Arc<str>,
         dst_labels: Vec<String>,
         src_prebound: bool,
         limit: Option<u32>,
         optional: bool,
         optional_unbind: Vec<String>,
-        path_alias: Option<String>,
+        path_alias: Option<Arc<str>>,
     },
     MatchUndirected {
         input: Option<Box<Plan>>,
-        src_alias: String,
+        src_alias: Arc<str>,
         rels: Vec<String>,
-        edge_alias: Option<String>,
-        dst_alias: String,
+        edge_alias: Option<Arc<str>>,
+        dst_alias: Arc<str>,
         dst_labels: Vec<String>,
         src_prebound: bool,
         limit: Option<u32>,
         optional: bool,
         optional_unbind: Vec<String>,
-        path_alias: Option<String>,
+        path_alias: Option<Arc<str>>,
     },
     MatchBoundRel {
         input: Box<Plan>,
-        rel_alias: String,
-        src_alias: String,
-        dst_alias: String,
+        rel_alias: Arc<str>,
+        src_alias: Arc<str>,
+        dst_alias: Arc<str>,
         dst_labels: Vec<String>,
         src_prebound: bool,
         rels: Vec<String>,
         direction: RelationshipDirection,
         optional: bool,
         optional_unbind: Vec<String>,
-        path_alias: Option<String>,
+        path_alias: Option<Arc<str>>,
     },
     /// `MATCH ... WHERE ... RETURN ...` (with filter)
     Filter {
@@ -134,7 +138,7 @@ pub enum Plan {
     Unwind {
         input: Box<Plan>,
         expression: Expression,
-        alias: String,
+        alias: Arc<str>,
     },
     /// `UNION` / `UNION ALL` - combine results from two queries
     Union {
@@ -176,7 +180,7 @@ pub enum Plan {
     },
     /// `IndexSeek` - optimize scan using index if available, else fallback
     IndexSeek {
-        alias: String,
+        alias: Arc<str>,
         label: String,
         field: String,
         value_expr: Expression,
@@ -191,7 +195,7 @@ pub enum Plan {
     Apply {
         input: Box<Plan>,
         subquery: Box<Plan>,
-        alias: Option<String>, // Optional alias for subquery result? usually subquery projects...
+        alias: Option<Arc<str>>, // Optional alias for subquery result? usually subquery projects...
     },
     /// `CALL namespace.name(args) YIELD x, y`
     ProcedureCall {
@@ -202,7 +206,7 @@ pub enum Plan {
     },
     Foreach {
         input: Box<Plan>,
-        variable: String,
+        variable: Arc<str>,
         list: Expression,
         sub_plan: Box<Plan>,
     },
@@ -217,15 +221,31 @@ pub enum Plan {
     },
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum PlanIterator<'a, S: GraphSnapshot> {
     ReturnOne(std::iter::Once<Result<Row>>),
     NodeScan(NodeScanIter<'a, S>),
     Filter(FilterIter<'a, S>),
+    Project(Box<ProjectIter<'a, S>>),
+    Distinct(Box<DistinctIter<'a, S>>),
+    UnionDistinct(Box<UnionDistinctIter<'a, S>>),
+    IndexSeek(Box<IndexSeekIter>),
+    Skip(Box<SkipIter<'a, S>>),
+    Limit(Box<LimitIter<'a, S>>),
+    Unwind(Box<UnwindIter<'a, S>>),
+    Values(Box<ValuesIter>),
+    ResultRows(Box<ResultRowsIter>),
+    Chain(Box<ChainIter<'a, S>>),
+    Expand(Box<ExpandIter<'a, S>>),
+    MatchOutVarLen(Box<MatchOutVarLenIter<'a, S>>),
+    MatchOutFiltered(Box<FilteredMatchOutIter<'a, S>>),
+    MatchIn(Box<MatchInIter<'a, S>>),
+    MatchUndirected(Box<MatchUndirectedIter<'a, S>>),
+    MatchBoundRel(Box<MatchBoundRelIter<'a, S>>),
+    RuntimeGuard(Box<RuntimeGuardIter<'a, S>>),
     CartesianProduct(Box<CartesianProductIter<'a, S>>),
     Apply(Box<ApplyIter<'a, S>>),
     ProcedureCall(Box<ProcedureCallIter<'a, S>>),
-
-    Dynamic(Box<dyn Iterator<Item = Result<Row>> + 'a>),
 }
 
 impl<'a, S: GraphSnapshot> Iterator for PlanIterator<'a, S> {
@@ -236,11 +256,26 @@ impl<'a, S: GraphSnapshot> Iterator for PlanIterator<'a, S> {
             PlanIterator::ReturnOne(iter) => iter.next(),
             PlanIterator::NodeScan(iter) => iter.next(),
             PlanIterator::Filter(iter) => iter.next(),
+            PlanIterator::Project(iter) => iter.next(),
+            PlanIterator::Distinct(iter) => iter.next(),
+            PlanIterator::UnionDistinct(iter) => iter.next(),
+            PlanIterator::IndexSeek(iter) => iter.next(),
+            PlanIterator::Skip(iter) => iter.next(),
+            PlanIterator::Limit(iter) => iter.next(),
+            PlanIterator::Unwind(iter) => iter.next(),
+            PlanIterator::Values(iter) => iter.next(),
+            PlanIterator::ResultRows(iter) => iter.next(),
+            PlanIterator::Chain(iter) => iter.next(),
+            PlanIterator::Expand(iter) => iter.next(),
+            PlanIterator::MatchOutVarLen(iter) => iter.next(),
+            PlanIterator::MatchOutFiltered(iter) => iter.next(),
+            PlanIterator::MatchIn(iter) => iter.next(),
+            PlanIterator::MatchUndirected(iter) => iter.next(),
+            PlanIterator::MatchBoundRel(iter) => iter.next(),
+            PlanIterator::RuntimeGuard(iter) => iter.next(),
             PlanIterator::CartesianProduct(iter) => iter.next(),
             PlanIterator::Apply(iter) => iter.next(),
             PlanIterator::ProcedureCall(iter) => iter.next(),
-
-            PlanIterator::Dynamic(iter) => iter.next(),
         }
     }
 }

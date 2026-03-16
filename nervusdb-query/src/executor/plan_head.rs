@@ -1,5 +1,5 @@
 use super::{
-    ApplyIter, CartesianProductIter, GraphSnapshot, NodeScanIter, Plan, PlanIterator,
+    ApplyIter, CartesianProductIter, ChainIter, GraphSnapshot, NodeScanIter, Plan, PlanIterator,
     ProcedureCallIter, Row, Value, execute_plan,
 };
 use crate::ast::Expression;
@@ -58,14 +58,14 @@ pub(super) fn execute_procedure_call<'a, S: GraphSnapshot + 'a>(
 }
 
 pub(super) fn write_only_foreach_error<'a, S: GraphSnapshot + 'a>() -> PlanIterator<'a, S> {
-    PlanIterator::Dynamic(Box::new(std::iter::once(Err(crate::error::Error::Other(
+    PlanIterator::ReturnOne(std::iter::once(Err(crate::error::Error::Other(
         "FOREACH must be executed via execute_write".into(),
-    )))))
+    ))))
 }
 
 pub(super) fn execute_node_scan<'a, S: GraphSnapshot + 'a>(
     snapshot: &'a S,
-    alias: &str,
+    alias: &'a str,
     label: &'a Option<String>,
     optional: bool,
 ) -> PlanIterator<'a, S> {
@@ -74,10 +74,12 @@ pub(super) fn execute_node_scan<'a, S: GraphSnapshot + 'a>(
             Some(id) => Some(id),
             None => {
                 if optional {
-                    let row = Row::new(vec![(alias.to_string(), Value::Null)]);
-                    return PlanIterator::Dynamic(Box::new(std::iter::once(Ok(row))));
+                    let row = Row::new(vec![(alias.to_owned(), Value::Null)]);
+                    return PlanIterator::ReturnOne(std::iter::once(Ok(row)));
                 }
-                return PlanIterator::Dynamic(Box::new(std::iter::empty()));
+                return PlanIterator::Values(Box::new(super::ValuesIter {
+                    rows: Vec::new().into_iter(),
+                }));
             }
         }
     } else {
@@ -87,16 +89,20 @@ pub(super) fn execute_node_scan<'a, S: GraphSnapshot + 'a>(
     let mut iter = NodeScanIter {
         snapshot,
         node_iter: Box::new(snapshot.nodes()),
-        alias: alias.to_string(),
+        alias,
         label_id,
     };
 
     if optional {
         match iter.next() {
-            Some(first) => PlanIterator::Dynamic(Box::new(std::iter::once(first).chain(iter))),
+            Some(first) => PlanIterator::Chain(Box::new(ChainIter {
+                left: Box::new(PlanIterator::ReturnOne(std::iter::once(first))),
+                right: Box::new(PlanIterator::NodeScan(iter)),
+                draining_left: true,
+            })),
             None => {
-                let row = Row::new(vec![(alias.to_string(), Value::Null)]);
-                PlanIterator::Dynamic(Box::new(std::iter::once(Ok(row))))
+                let row = Row::new(vec![(alias.to_owned(), Value::Null)]);
+                PlanIterator::ReturnOne(std::iter::once(Ok(row)))
             }
         }
     } else {

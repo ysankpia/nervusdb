@@ -1,11 +1,12 @@
 use crate::idmap::LabelId;
 use crate::label_interner::{LabelInterner, LabelSnapshot};
-use std::sync::{Arc, Mutex, RwLock};
+use arc_swap::ArcSwap;
+use std::sync::{Arc, Mutex};
 
 pub(crate) fn published_label_snapshot(
-    published_labels: &RwLock<Arc<LabelSnapshot>>,
+    published_labels: &ArcSwap<LabelSnapshot>,
 ) -> Arc<LabelSnapshot> {
-    published_labels.read().unwrap().clone()
+    published_labels.load_full()
 }
 
 pub(crate) fn lookup_label_id(
@@ -30,7 +31,8 @@ pub(crate) fn lookup_label_name(
 mod tests {
     use super::{lookup_label_id, lookup_label_name, published_label_snapshot};
     use crate::label_interner::LabelInterner;
-    use std::sync::{Arc, Mutex, RwLock};
+    use arc_swap::ArcSwap;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn lookup_helpers_read_interner_state() {
@@ -50,7 +52,7 @@ mod tests {
         let mut interner = LabelInterner::new();
         let user_id = interner.get_or_create("User");
         let snapshot = Arc::new(interner.snapshot());
-        let published = RwLock::new(snapshot.clone());
+        let published = ArcSwap::from(snapshot.clone());
 
         let got = published_label_snapshot(&published);
         assert_eq!(got.get_id("User"), Some(user_id));
