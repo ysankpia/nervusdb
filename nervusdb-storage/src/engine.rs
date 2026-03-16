@@ -850,10 +850,7 @@ impl<'a> WriteTxn<'a> {
         }
         let mut index_ops = Vec::new();
         let label_snapshot = self.engine.published_labels.load_full();
-        let index_defs = {
-            let catalog = self.engine.index_catalog.lock().unwrap();
-            catalog.entries.clone()
-        };
+        let index_defs = self.engine.published_index_entries.load_full();
         let read_snapshot = self.engine.snapshot();
         // 1) Append WAL and fsync (durability Full by default).
         let run = {
