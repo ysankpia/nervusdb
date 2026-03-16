@@ -91,16 +91,20 @@ fn overlay_set_property_value(row: &mut Row, var: &str, key: &str, value: &Value
         Value::Node(mut node) => {
             if is_remove {
                 node.properties.remove(key);
+            } else if let Some(existing) = node.properties.get_mut(key) {
+                *existing = value.clone();
             } else {
-                node.properties.insert(key.to_string(), value.clone());
+                node.properties.insert(key.to_owned(), value.clone());
             }
             Value::Node(node)
         }
         Value::Relationship(mut rel) => {
             if is_remove {
                 rel.properties.remove(key);
+            } else if let Some(existing) = rel.properties.get_mut(key) {
+                *existing = value.clone();
             } else {
-                rel.properties.insert(key.to_string(), value.clone());
+                rel.properties.insert(key.to_owned(), value.clone());
             }
             Value::Relationship(rel)
         }
