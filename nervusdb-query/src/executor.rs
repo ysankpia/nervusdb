@@ -41,6 +41,7 @@ use join_apply::{ApplyIter, ProcedureCallIter};
 use label_constraint::{LabelConstraint, node_matches_label_constraint, resolve_label_constraint};
 use match_bound_rel_plan::MatchBoundRelIter;
 use match_in_undirected_plan::{MatchInIter, MatchUndirectedIter};
+use match_out_plan::FilteredMatchOutIter;
 use merge_overlay::{MergeOverlayEdge, MergeOverlayNode, MergeOverlayState};
 pub use nervusdb_api::LabelId;
 use nervusdb_api::{EdgeKey, ExternalId, GraphSnapshot, InternalNodeId, RelTypeId};

@@ -2,9 +2,59 @@ use super::binding_utils::value_node_id;
 use super::label_constraint::{node_matches_label_constraint, resolve_label_constraint};
 use super::read_path::{ExpandIter, MatchOutIter, MatchOutVarLenIter};
 use super::{
-    GraphSnapshot, LimitIter, Plan, PlanIterator, RelTypeId, RelationshipDirection, Result, Row,
-    execute_plan,
+    GraphSnapshot, LabelConstraint, LimitIter, Plan, PlanIterator, RelTypeId,
+    RelationshipDirection, Result, Row, execute_plan,
 };
+
+pub struct FilteredMatchOutIter<'a, S: GraphSnapshot + 'a> {
+    snapshot: &'a S,
+    inner: MatchOutIter<'a, S>,
+    dst_alias: &'a str,
+    dst_label_constraint: LabelConstraint,
+}
+
+impl<'a, S: GraphSnapshot + 'a> FilteredMatchOutIter<'a, S> {
+    fn new(
+        snapshot: &'a S,
+        inner: MatchOutIter<'a, S>,
+        dst_alias: &'a str,
+        dst_label_constraint: LabelConstraint,
+    ) -> Self {
+        Self {
+            snapshot,
+            inner,
+            dst_alias,
+            dst_label_constraint,
+        }
+    }
+}
+
+impl<'a, S: GraphSnapshot + 'a> Iterator for FilteredMatchOutIter<'a, S> {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.inner.next()? {
+                Ok(row) => {
+                    let matches = row
+                        .get(self.dst_alias)
+                        .and_then(value_node_id)
+                        .is_some_and(|id| {
+                            node_matches_label_constraint(
+                                self.snapshot,
+                                id,
+                                &self.dst_label_constraint,
+                            )
+                        });
+                    if matches {
+                        return Some(Ok(row));
+                    }
+                }
+                Err(err) => return Some(Err(err)),
+            }
+        }
+    }
+}
 
 fn resolve_rel_ids<S: GraphSnapshot>(snapshot: &S, rels: &[String]) -> Option<Vec<RelTypeId>> {
     if rels.is_empty() {
@@ -70,19 +120,19 @@ pub(super) fn execute_match_out<'a, S: GraphSnapshot + 'a>(
             dst_alias,
             path_alias.as_deref(),
         );
-        let filtered = base.filter(move |result| match result {
-            Ok(row) => row
-                .get(dst_alias)
-                .and_then(value_node_id)
-                .is_some_and(|id| {
-                    node_matches_label_constraint(snapshot, id, &dst_label_constraint)
-                }),
-            Err(_) => true,
-        });
+        let filtered = PlanIterator::MatchOutFiltered(Box::new(FilteredMatchOutIter::new(
+            snapshot,
+            base,
+            dst_alias,
+            dst_label_constraint,
+        )));
         if let Some(limit) = limit {
-            PlanIterator::Dynamic(Box::new(filtered.take(limit as usize)))
+            PlanIterator::Limit(Box::new(LimitIter {
+                input: Box::new(filtered),
+                remaining: limit as usize,
+            }))
         } else {
-            PlanIterator::Dynamic(Box::new(filtered))
+            filtered
         }
     }
 }

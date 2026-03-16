@@ -1,7 +1,8 @@
 use super::{
     AggregateFunction, ApplyIter, CartesianProductIter, ChainIter, Direction, DistinctIter,
     ExpandIter, Expression, FilterIter, GraphSnapshot, IndexSeekIter, LimitIter,
-    MatchBoundRelIter, MatchInIter, MatchOutVarLenIter, MatchUndirectedIter, NodeScanIter,
+    FilteredMatchOutIter, MatchBoundRelIter, MatchInIter, MatchOutVarLenIter,
+    MatchUndirectedIter, NodeScanIter,
     Pattern, ProcedureCallIter, ProjectIter, RelationshipDirection, Result, ResultRowsIter, Row,
     RuntimeGuardIter, SkipIter, UnionDistinctIter, UnwindIter, ValuesIter,
 };
@@ -237,6 +238,7 @@ pub enum PlanIterator<'a, S: GraphSnapshot> {
     Chain(Box<ChainIter<'a, S>>),
     Expand(Box<ExpandIter<'a, S>>),
     MatchOutVarLen(Box<MatchOutVarLenIter<'a, S>>),
+    MatchOutFiltered(Box<FilteredMatchOutIter<'a, S>>),
     MatchIn(Box<MatchInIter<'a, S>>),
     MatchUndirected(Box<MatchUndirectedIter<'a, S>>),
     MatchBoundRel(Box<MatchBoundRelIter<'a, S>>),
@@ -244,8 +246,6 @@ pub enum PlanIterator<'a, S: GraphSnapshot> {
     CartesianProduct(Box<CartesianProductIter<'a, S>>),
     Apply(Box<ApplyIter<'a, S>>),
     ProcedureCall(Box<ProcedureCallIter<'a, S>>),
-
-    Dynamic(Box<dyn Iterator<Item = Result<Row>> + 'a>),
 }
 
 impl<'a, S: GraphSnapshot> Iterator for PlanIterator<'a, S> {
@@ -268,6 +268,7 @@ impl<'a, S: GraphSnapshot> Iterator for PlanIterator<'a, S> {
             PlanIterator::Chain(iter) => iter.next(),
             PlanIterator::Expand(iter) => iter.next(),
             PlanIterator::MatchOutVarLen(iter) => iter.next(),
+            PlanIterator::MatchOutFiltered(iter) => iter.next(),
             PlanIterator::MatchIn(iter) => iter.next(),
             PlanIterator::MatchUndirected(iter) => iter.next(),
             PlanIterator::MatchBoundRel(iter) => iter.next(),
@@ -275,8 +276,6 @@ impl<'a, S: GraphSnapshot> Iterator for PlanIterator<'a, S> {
             PlanIterator::CartesianProduct(iter) => iter.next(),
             PlanIterator::Apply(iter) => iter.next(),
             PlanIterator::ProcedureCall(iter) => iter.next(),
-
-            PlanIterator::Dynamic(iter) => iter.next(),
         }
     }
 }

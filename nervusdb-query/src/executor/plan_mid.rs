@@ -350,13 +350,16 @@ pub(super) fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
     let input_iter = execute_plan(snapshot, input, params);
-    PlanIterator::Dynamic(execute_aggregate_impl(
+    let rows = execute_aggregate_impl(
         snapshot,
         Box::new(input_iter),
         group_by.to_vec(),
         aggregates.to_vec(),
         params,
-    ))
+    );
+    PlanIterator::ResultRows(Box::new(ResultRowsIter {
+        rows: rows.into_iter(),
+    }))
 }
 
 pub(super) fn execute_order_by<'a, S: GraphSnapshot + 'a>(

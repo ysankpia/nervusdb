@@ -9,7 +9,7 @@ pub(super) fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
     group_by: Vec<String>,
     aggregates: Vec<(AggregateFunction, String)>,
     params: &'a crate::query_api::Params,
-) -> Box<dyn Iterator<Item = Result<Row>> + 'a> {
+) -> Vec<Result<Row>> {
     // Collect all rows and group them
     let mut groups: std::collections::HashMap<Vec<Value>, Vec<Row>> =
         std::collections::HashMap::new();
@@ -17,17 +17,17 @@ pub(super) fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
 
     for item in input {
         if let Err(err) = params.check_timeout("Aggregate.collect") {
-            return Box::new(std::iter::once(Err(err)));
+            return vec![Err(err)];
         }
         let row = match item {
             Ok(r) => r,
-            Err(e) => return Box::new(std::iter::once(Err(e))),
+            Err(e) => return vec![Err(e)],
         };
 
         if let Err(err) =
             validate_aggregate_runtime_expressions(&row, &aggregates, snapshot, params)
         {
-            return Box::new(std::iter::once(Err(err)));
+            return vec![Err(err)];
         }
 
         let key: Vec<Value> = group_by
@@ -43,10 +43,10 @@ pub(super) fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
         groups.entry(key).or_default().push(row);
         total_rows = total_rows.saturating_add(1);
         if let Err(err) = params.check_collection_size("Aggregate.groups", groups.len()) {
-            return Box::new(std::iter::once(Err(err)));
+            return vec![Err(err)];
         }
         if let Err(err) = params.check_collection_size("Aggregate.rows", total_rows) {
-            return Box::new(std::iter::once(Err(err)));
+            return vec![Err(err)];
         }
     }
 
@@ -56,7 +56,7 @@ pub(super) fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
     }
 
     // Convert to result rows
-    let results: Vec<Result<Row>> = groups
+    groups
         .into_iter()
         .map(|(key, rows)| {
             params.check_timeout("Aggregate.finalize")?;
@@ -329,9 +329,7 @@ pub(super) fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
 
             Ok(result)
         })
-        .collect();
-
-    Box::new(results.into_iter())
+        .collect()
 }
 
 fn validate_aggregate_runtime_expressions<S: GraphSnapshot>(
