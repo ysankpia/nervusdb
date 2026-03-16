@@ -13,7 +13,6 @@ use crate::read_path_property_store::{
     extend_edge_properties_from_store, extend_node_properties_from_store,
     read_edge_property_from_store, read_node_property_from_store,
 };
-use crate::read_path_tombstones::collect_tombstoned_nodes;
 use crate::snapshot;
 use nervusdb_api::{
     EdgeKey, ExternalId, GraphSnapshot, GraphStore, InternalNodeId, LabelId, PropertyValue,
@@ -51,11 +50,10 @@ impl GraphStore for GraphEngine {
     fn snapshot(&self) -> Self::Snapshot {
         let i2e = self.get_published_i2e();
         let inner = self.begin_read();
-        let tombstoned_nodes: HashSet<InternalNodeId> = collect_tombstoned_nodes(inner.runs());
         StorageSnapshot {
             inner,
             i2e,
-            tombstoned_nodes: Arc::new(tombstoned_nodes),
+            tombstoned_nodes: self.get_published_tombstoned_nodes(),
             pager: self.get_pager(),
             index_entries: self.get_published_index_entries(),
             stats_cache: Mutex::new(None),

@@ -14,11 +14,11 @@ use crate::read_path_engine_labels::published_label_snapshot;
 use crate::read_path_engine_view::{
     build_snapshot_from_published, load_properties_and_stats_roots,
 };
+use crate::read_path_tombstones::collect_tombstoned_nodes;
 use crate::snapshot::{L0Run, PublishedRuns, PublishedSegments, RelTypeId, Snapshot};
 use crate::wal::{CommittedTx, SegmentPointer, Wal, WalRecord};
 use crate::{Error, Result};
 use arc_swap::ArcSwap;
-use nervusdb_api::{GraphSnapshot, GraphStore};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -62,6 +62,7 @@ pub struct GraphEngine {
     published_node_labels: ArcSwap<Vec<Vec<LabelId>>>,
     published_i2e: ArcSwap<Vec<I2eRecord>>,
     published_index_entries: ArcSwap<BTreeMap<String, IndexDef>>,
+    published_tombstoned_nodes: ArcSwap<std::collections::HashSet<InternalNodeId>>,
     write_lock: Mutex<()>,
     next_txid: AtomicU64,
     next_segment_id: AtomicU64,
@@ -150,6 +151,8 @@ impl GraphEngine {
         let node_labels_snapshot = idmap.get_i2l_arc();
         let i2e_snapshot = idmap.get_i2e_arc();
         let index_entries_snapshot = index_catalog.entries.clone();
+        let tombstoned_nodes_snapshot =
+            collect_tombstoned_nodes(&Arc::new(PublishedRuns::from(runs.clone())));
 
         Ok(Self {
             ndb_path,
@@ -166,6 +169,7 @@ impl GraphEngine {
             published_node_labels: ArcSwap::from(node_labels_snapshot),
             published_i2e: ArcSwap::from(i2e_snapshot),
             published_index_entries: ArcSwap::from_pointee(index_entries_snapshot),
+            published_tombstoned_nodes: ArcSwap::from_pointee(tombstoned_nodes_snapshot),
             write_lock: Mutex::new(()),
             next_txid: AtomicU64::new(state.max_txid.saturating_add(1).max(1)),
             next_segment_id: AtomicU64::new(max_seg_id.saturating_add(1).max(1)),
@@ -192,6 +196,12 @@ impl GraphEngine {
 
     pub(crate) fn get_published_index_entries(&self) -> Arc<BTreeMap<String, IndexDef>> {
         self.published_index_entries.load_full()
+    }
+
+    pub(crate) fn get_published_tombstoned_nodes(
+        &self,
+    ) -> Arc<std::collections::HashSet<InternalNodeId>> {
+        self.published_tombstoned_nodes.load_full()
     }
 
     pub(crate) fn get_published_i2e(&self) -> Arc<Vec<I2eRecord>> {
@@ -349,10 +359,17 @@ impl GraphEngine {
     }
 
     fn publish_run(&self, run: Arc<L0Run>) {
+        let tombstoned_nodes = {
+            let current = self.published_tombstoned_nodes.load_full();
+            let mut next = current.as_ref().clone();
+            next.extend(run.iter_tombstoned_nodes());
+            Arc::new(next)
+        };
         let current = self.published_runs.load_full();
         let mut next = current.as_ref().clone();
         next.push_front(run);
         self.published_runs.store(Arc::new(next));
+        self.published_tombstoned_nodes.store(tombstoned_nodes);
     }
 
     /// M2/T45: Explicit compaction.
@@ -514,6 +531,8 @@ impl GraphEngine {
         {
             self.published_runs.store(Arc::new(PublishedRuns::new()));
             self.published_segments.store(new_segments);
+            self.published_tombstoned_nodes
+                .store(Arc::new(std::collections::HashSet::new()));
         }
 
         self.manifest_epoch.store(epoch, Ordering::Relaxed);
@@ -855,7 +874,7 @@ impl<'a> WriteTxn<'a> {
             .iter()
             .map(|(_, label_id, internal_id)| (*internal_id, *label_id))
             .collect();
-        let read_snapshot = self.engine.snapshot();
+        let read_snapshot = self.engine.begin_read();
         // 1) Append WAL and fsync (durability Full by default).
         let run = {
             let mut wal = self.engine.wal.lock().unwrap();
@@ -1250,6 +1269,7 @@ fn scan_recovery_state(committed: &[CommittedTx]) -> RecoveryState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nervusdb_api::GraphStore;
     use tempfile::tempdir;
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

@@ -186,10 +186,6 @@ impl Snapshot {
         IncomingNeighborsIter::new(self.runs.clone(), self.segments.clone(), dst, rel)
     }
 
-    pub(crate) fn runs(&self) -> &Arc<PublishedRuns> {
-        &self.runs
-    }
-
     pub fn get_statistics(
         &self,
         pager: &crate::pager::Pager,
