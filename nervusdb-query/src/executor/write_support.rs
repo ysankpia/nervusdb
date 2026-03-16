@@ -107,7 +107,7 @@ fn overlay_set_property_value(row: &mut Row, var: &str, key: &str, value: &Value
         other => other,
     };
 
-    *row = row.clone().with(var.to_string(), updated);
+    *row = row.clone().with(var, updated);
 }
 
 fn overlay_add_label_value(row: &mut Row, var: &str, label: &str) {
@@ -125,7 +125,7 @@ fn overlay_add_label_value(row: &mut Row, var: &str, label: &str) {
         other => other,
     };
 
-    *row = row.clone().with(var.to_string(), updated);
+    *row = row.clone().with(var, updated);
 }
 
 pub(super) fn merge_eval_props_on_row<S: GraphSnapshot>(
