@@ -65,7 +65,7 @@ pub(super) fn write_only_foreach_error<'a, S: GraphSnapshot + 'a>() -> PlanItera
 
 pub(super) fn execute_node_scan<'a, S: GraphSnapshot + 'a>(
     snapshot: &'a S,
-    alias: &str,
+    alias: &'a str,
     label: &'a Option<String>,
     optional: bool,
 ) -> PlanIterator<'a, S> {
@@ -74,7 +74,7 @@ pub(super) fn execute_node_scan<'a, S: GraphSnapshot + 'a>(
             Some(id) => Some(id),
             None => {
                 if optional {
-                    let row = Row::new(vec![(alias.to_string(), Value::Null)]);
+                    let row = Row::new(vec![(alias.to_owned(), Value::Null)]);
                     return PlanIterator::Dynamic(Box::new(std::iter::once(Ok(row))));
                 }
                 return PlanIterator::Dynamic(Box::new(std::iter::empty()));
@@ -87,7 +87,7 @@ pub(super) fn execute_node_scan<'a, S: GraphSnapshot + 'a>(
     let mut iter = NodeScanIter {
         snapshot,
         node_iter: Box::new(snapshot.nodes()),
-        alias: alias.to_string(),
+        alias,
         label_id,
     };
 
@@ -95,7 +95,7 @@ pub(super) fn execute_node_scan<'a, S: GraphSnapshot + 'a>(
         match iter.next() {
             Some(first) => PlanIterator::Dynamic(Box::new(std::iter::once(first).chain(iter))),
             None => {
-                let row = Row::new(vec![(alias.to_string(), Value::Null)]);
+                let row = Row::new(vec![(alias.to_owned(), Value::Null)]);
                 PlanIterator::Dynamic(Box::new(std::iter::once(Ok(row))))
             }
         }

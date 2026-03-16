@@ -6,7 +6,7 @@ use crate::ast::Expression;
 pub struct NodeScanIter<'a, S: GraphSnapshot> {
     pub(super) snapshot: &'a S,
     pub(super) node_iter: Box<dyn Iterator<Item = InternalNodeId> + 'a>,
-    pub(super) alias: String,
+    pub(super) alias: &'a str,
     pub(super) label_id: Option<LabelId>,
 }
 
@@ -28,9 +28,7 @@ impl<'a, S: GraphSnapshot> Iterator for NodeScanIter<'a, S> {
                     continue;
                 }
             }
-            return Some(Ok(
-                Row::default().with(self.alias.clone(), Value::NodeId(iid))
-            ));
+            return Some(Ok(Row::default().with(self.alias, Value::NodeId(iid))));
         }
         None
     }

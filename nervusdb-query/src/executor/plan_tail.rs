@@ -78,9 +78,6 @@ pub(super) fn execute_unwind<'a, S: GraphSnapshot + 'a>(
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
     let input_iter = execute_plan(snapshot, input, params);
-    let expression = expression.clone();
-    let alias = alias.to_string();
-    let params = params.clone();
 
     PlanIterator::Dynamic(Box::new(input_iter.flat_map(
         move |result| -> Box<dyn Iterator<Item = super::Result<Row>>> {
@@ -110,14 +107,13 @@ pub(super) fn execute_unwind<'a, S: GraphSnapshot + 'a>(
                             {
                                 return Box::new(std::iter::once(Err(err)));
                             }
-                            let alias = alias.clone();
                             Box::new(
                                 list.into_iter()
-                                    .map(move |item| Ok(row.clone().with(alias.clone(), item))),
+                                    .map(move |item| Ok(row.clone().with(alias, item))),
                             )
                         }
                         Value::Null => Box::new(std::iter::empty()),
-                        _ => Box::new(std::iter::once(Ok(row.with(alias.clone(), val)))),
+                        _ => Box::new(std::iter::once(Ok(row.with(alias, val)))),
                     }
                 }
                 Err(e) => Box::new(std::iter::once(Err(e))),

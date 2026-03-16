@@ -4,9 +4,9 @@ use super::{
 
 pub(super) fn execute_index_seek<'a, S: GraphSnapshot + 'a>(
     snapshot: &'a S,
-    alias: &str,
-    label: &str,
-    field: &str,
+    alias: &'a str,
+    label: &'a str,
+    field: &'a str,
     value_expr: &'a crate::ast::Expression,
     fallback: &'a Plan,
     params: &'a crate::query_api::Params,
@@ -34,11 +34,10 @@ pub(super) fn execute_index_seek<'a, S: GraphSnapshot + 'a>(
 
     if let Some(mut node_ids) = snapshot.lookup_index(label, field, &prop_val) {
         node_ids.sort();
-        let alias = alias.to_string();
         PlanIterator::Dynamic(Box::new(
             node_ids
                 .into_iter()
-                .map(move |iid| Ok(Row::default().with(alias.clone(), Value::NodeId(iid)))),
+                .map(move |iid| Ok(Row::default().with(alias, Value::NodeId(iid)))),
         ))
     } else {
         execute_plan(snapshot, fallback, params)
