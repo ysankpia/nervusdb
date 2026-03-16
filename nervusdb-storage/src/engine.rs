@@ -1,7 +1,7 @@
 use crate::csr::{CsrSegment, EdgeRecord, SegmentId};
 use crate::idmap::{ExternalId, I2eRecord, IdMap, InternalNodeId, LabelId};
 use crate::index::btree::BTree;
-use crate::index::catalog::IndexCatalog;
+use crate::index::catalog::{IndexCatalog, IndexDef};
 use crate::index::hnsw::HnswIndex;
 use crate::index::hnsw::params::HnswParams;
 use crate::index::hnsw::storage::{PersistentGraphStorage, PersistentVectorStorage};
@@ -61,6 +61,7 @@ pub struct GraphEngine {
     published_labels: ArcSwap<LabelSnapshot>,
     published_node_labels: ArcSwap<Vec<Vec<LabelId>>>,
     published_i2e: ArcSwap<Vec<I2eRecord>>,
+    published_index_entries: ArcSwap<BTreeMap<String, IndexDef>>,
     write_lock: Mutex<()>,
     next_txid: AtomicU64,
     next_segment_id: AtomicU64,
@@ -88,6 +89,11 @@ impl GraphEngine {
         let mut pager = self.pager.write().unwrap();
         let mut vector_index = self.vector_index.lock().unwrap();
         f(&mut catalog, &mut pager, &mut vector_index)
+    }
+
+    fn publish_index_entries_snapshot(&self, catalog: &IndexCatalog) {
+        self.published_index_entries
+            .store(Arc::new(catalog.entries.clone()));
     }
 
     pub fn open(ndb_path: impl AsRef<Path>, wal_path: impl AsRef<Path>) -> Result<Self> {
@@ -143,6 +149,7 @@ impl GraphEngine {
         let label_snapshot = label_interner.snapshot();
         let node_labels_snapshot = idmap.get_i2l_arc();
         let i2e_snapshot = idmap.get_i2e_arc();
+        let index_entries_snapshot = index_catalog.entries.clone();
 
         Ok(Self {
             ndb_path,
@@ -158,6 +165,7 @@ impl GraphEngine {
             published_labels: ArcSwap::from(Arc::new(label_snapshot)),
             published_node_labels: ArcSwap::from(node_labels_snapshot),
             published_i2e: ArcSwap::from(i2e_snapshot),
+            published_index_entries: ArcSwap::from_pointee(index_entries_snapshot),
             write_lock: Mutex::new(()),
             next_txid: AtomicU64::new(state.max_txid.saturating_add(1).max(1)),
             next_segment_id: AtomicU64::new(max_seg_id.saturating_add(1).max(1)),
@@ -182,8 +190,8 @@ impl GraphEngine {
         self.pager.clone()
     }
 
-    pub(crate) fn get_index_catalog(&self) -> Arc<Mutex<IndexCatalog>> {
-        self.index_catalog.clone()
+    pub(crate) fn get_published_index_entries(&self) -> Arc<BTreeMap<String, IndexDef>> {
+        self.published_index_entries.load_full()
     }
 
     pub(crate) fn get_published_i2e(&self) -> Arc<Vec<I2eRecord>> {
@@ -204,6 +212,7 @@ impl GraphEngine {
 
             catalog.get_or_create(pager, &name)?;
             catalog.flush(pager)?;
+            self.publish_index_entries_snapshot(catalog);
             Ok(())
         })
     }
@@ -322,6 +331,7 @@ impl GraphEngine {
             }
 
             catalog.flush(pager)?;
+            self.publish_index_entries_snapshot(catalog);
             Ok(())
         })
     }
@@ -1041,6 +1051,7 @@ impl<'a> WriteTxn<'a> {
                         }
                     }
                     catalog.flush(pager)?;
+                    self.engine.publish_index_entries_snapshot(catalog);
                     Ok(())
                 })?;
             }

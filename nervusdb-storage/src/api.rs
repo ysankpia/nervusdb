@@ -1,7 +1,7 @@
 use crate::engine::GraphEngine;
 use crate::idmap::I2eRecord;
 use crate::index::btree::BTree;
-use crate::index::catalog::IndexCatalog;
+use crate::index::catalog::IndexDef;
 use crate::index::ordered_key::encode_ordered_value;
 use crate::pager::Pager;
 use crate::read_path_api_stats::{edge_count_from_stats, node_count_from_stats};
@@ -28,7 +28,7 @@ pub struct StorageSnapshot {
     i2e: Arc<Vec<I2eRecord>>,
     tombstoned_nodes: Arc<HashSet<InternalNodeId>>,
     pager: Arc<RwLock<Pager>>,
-    index_catalog: Arc<Mutex<IndexCatalog>>,
+    index_entries: Arc<BTreeMap<String, IndexDef>>,
     stats_cache: Mutex<Option<crate::stats::GraphStatistics>>,
 }
 
@@ -57,7 +57,7 @@ impl GraphStore for GraphEngine {
             i2e,
             tombstoned_nodes: Arc::new(tombstoned_nodes),
             pager: self.get_pager(),
-            index_catalog: self.get_index_catalog(),
+            index_entries: self.get_published_index_entries(),
             stats_cache: Mutex::new(None),
         }
     }
@@ -98,10 +98,7 @@ impl GraphSnapshot for StorageSnapshot {
         // MVP Convention: Index name = "Label.Property"
         let index_name = format!("{}.{}", label, field);
 
-        let def = {
-            let catalog = self.index_catalog.lock().unwrap();
-            catalog.get(&index_name)?.clone()
-        };
+        let def = self.index_entries.get(&index_name)?.clone();
         let tree = BTree::load(def.root);
 
         // Use storage-level PropertyValue for encoding
