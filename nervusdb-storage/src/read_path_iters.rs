@@ -1,16 +1,15 @@
-use crate::csr::CsrSegment;
 use crate::idmap::InternalNodeId;
 use crate::read_path_neighbors::{
     edge_blocked_incoming, edge_blocked_outgoing, load_incoming_run_edges,
     load_incoming_segment_edges, load_outgoing_run_edges, load_outgoing_segment_edges,
 };
-use crate::snapshot::{EdgeKey, PublishedRuns, RelTypeId};
+use crate::snapshot::{EdgeKey, PublishedRuns, PublishedSegments, RelTypeId};
 use std::collections::HashSet;
 use std::sync::Arc;
 
 pub struct NeighborsIter {
     runs: Arc<PublishedRuns>,
-    segments: Arc<Vec<Arc<CsrSegment>>>,
+    segments: Arc<PublishedSegments>,
     src: InternalNodeId,
     rel: Option<RelTypeId>,
     run_idx: usize,
@@ -29,7 +28,7 @@ pub struct NeighborsIter {
 impl NeighborsIter {
     pub(crate) fn new(
         runs: Arc<PublishedRuns>,
-        segments: Arc<Vec<Arc<CsrSegment>>>,
+        segments: Arc<PublishedSegments>,
         src: InternalNodeId,
         rel: Option<RelTypeId>,
     ) -> Self {
@@ -171,7 +170,7 @@ impl Iterator for NeighborsIter {
 
 pub struct IncomingNeighborsIter {
     runs: Arc<PublishedRuns>,
-    segments: Arc<Vec<Arc<CsrSegment>>>,
+    segments: Arc<PublishedSegments>,
     dst_node: InternalNodeId,
     rel: Option<RelTypeId>,
     run_idx: usize,
@@ -190,7 +189,7 @@ pub struct IncomingNeighborsIter {
 impl IncomingNeighborsIter {
     pub(crate) fn new(
         runs: Arc<PublishedRuns>,
-        segments: Arc<Vec<Arc<CsrSegment>>>,
+        segments: Arc<PublishedSegments>,
         dst_node: InternalNodeId,
         rel: Option<RelTypeId>,
     ) -> Self {
@@ -338,7 +337,7 @@ impl Iterator for IncomingNeighborsIter {
 #[cfg(test)]
 mod tests {
     use super::{IncomingNeighborsIter, NeighborsIter};
-    use crate::snapshot::{EdgeKey, L0Run, PublishedRuns};
+    use crate::snapshot::{EdgeKey, L0Run, PublishedRuns, PublishedSegments};
     use std::collections::{BTreeMap, BTreeSet};
     use std::sync::Arc;
 
@@ -382,7 +381,7 @@ mod tests {
             run_with_edge(2, edge, 1, true),
             run_with_edge(1, edge, 2, false),
         ]));
-        let segments = Arc::new(Vec::new());
+        let segments = Arc::new(PublishedSegments::new());
 
         let got: Vec<EdgeKey> = NeighborsIter::new(runs, segments, 1, Some(7)).collect();
         assert_eq!(got, vec![edge]);
@@ -399,7 +398,7 @@ mod tests {
             run_with_edge(2, edge, 1, true),
             run_with_edge(1, edge, 3, false),
         ]));
-        let segments = Arc::new(Vec::new());
+        let segments = Arc::new(PublishedSegments::new());
 
         let got: Vec<EdgeKey> = IncomingNeighborsIter::new(runs, segments, 4, Some(9)).collect();
         assert_eq!(got, vec![edge]);

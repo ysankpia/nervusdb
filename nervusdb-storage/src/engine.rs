@@ -14,7 +14,7 @@ use crate::read_path_engine_labels::published_label_snapshot;
 use crate::read_path_engine_view::{
     build_snapshot_from_published, load_properties_and_stats_roots,
 };
-use crate::snapshot::{L0Run, PublishedRuns, RelTypeId, Snapshot};
+use crate::snapshot::{L0Run, PublishedRuns, PublishedSegments, RelTypeId, Snapshot};
 use crate::wal::{CommittedTx, SegmentPointer, Wal, WalRecord};
 use crate::{Error, Result};
 use arc_swap::ArcSwap;
@@ -57,7 +57,7 @@ pub struct GraphEngine {
     vector_index: Arc<Mutex<NativeHnsw>>,
 
     published_runs: ArcSwap<PublishedRuns>,
-    published_segments: ArcSwap<Vec<Arc<CsrSegment>>>,
+    published_segments: ArcSwap<PublishedSegments>,
     published_labels: ArcSwap<LabelSnapshot>,
     published_node_labels: ArcSwap<Vec<Vec<LabelId>>>,
     published_i2e: ArcSwap<Vec<I2eRecord>>,
@@ -120,7 +120,7 @@ impl GraphEngine {
         let committed = wal.replay_committed()?;
         let state = scan_recovery_state(&committed);
 
-        let mut segments: Vec<Arc<CsrSegment>> = Vec::new();
+        let mut segments = PublishedSegments::new();
         let mut max_seg_id = 0u64;
         for ptr in &state.manifest_segments {
             let seg = Arc::new(CsrSegment::load(&mut pager, ptr.meta_page_id)?);
@@ -128,7 +128,7 @@ impl GraphEngine {
                 return Err(Error::WalProtocol("csr segment id mismatch"));
             }
             max_seg_id = max_seg_id.max(seg.id.0);
-            segments.push(seg);
+            segments.push_back(seg);
         }
 
         // Build label interner from recovered state (first, before graph transactions)
@@ -385,9 +385,8 @@ impl GraphEngine {
 
         let new_segments = {
             let current = self.published_segments.load_full();
-            let mut next = Vec::with_capacity(current.len() + 1);
-            next.push(Arc::new(seg));
-            next.extend(current.iter().cloned());
+            let mut next = current.as_ref().clone();
+            next.push_front(Arc::new(seg));
             Arc::new(next)
         };
 
