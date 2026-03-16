@@ -1,5 +1,6 @@
 use super::{
-    GraphSnapshot, Plan, PlanIterator, Row, Value, evaluate_expression_value, execute_plan,
+    GraphSnapshot, IndexSeekIter, Plan, PlanIterator, Row, Value, evaluate_expression_value,
+    execute_plan,
 };
 
 pub(super) fn execute_index_seek<'a, S: GraphSnapshot + 'a>(
@@ -34,11 +35,10 @@ pub(super) fn execute_index_seek<'a, S: GraphSnapshot + 'a>(
 
     if let Some(mut node_ids) = snapshot.lookup_index(label, field, &prop_val) {
         node_ids.sort();
-        PlanIterator::Dynamic(Box::new(
-            node_ids
-                .into_iter()
-                .map(move |iid| Ok(Row::default().with(alias, Value::NodeId(iid)))),
-        ))
+        PlanIterator::IndexSeek(Box::new(IndexSeekIter {
+            alias: alias.to_owned(),
+            node_ids: node_ids.into_iter(),
+        }))
     } else {
         execute_plan(snapshot, fallback, params)
     }

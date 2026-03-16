@@ -2,6 +2,7 @@ use super::{
     GraphSnapshot, InternalNodeId, LabelId, Plan, PlanIterator, Result, Row, Value, execute_plan,
 };
 use crate::ast::Expression;
+use std::collections::HashSet;
 
 pub struct NodeScanIter<'a, S: GraphSnapshot> {
     pub(super) snapshot: &'a S,
@@ -39,6 +40,101 @@ pub struct FilterIter<'a, S: GraphSnapshot> {
     pub(super) input: Box<PlanIterator<'a, S>>,
     pub(super) predicate: &'a Expression,
     pub(super) params: &'a crate::query_api::Params,
+}
+
+pub struct ProjectIter<'a, S: GraphSnapshot> {
+    pub(super) snapshot: &'a S,
+    pub(super) input: Box<PlanIterator<'a, S>>,
+    pub(super) projections: &'a [(String, Expression)],
+    pub(super) params: &'a crate::query_api::Params,
+}
+
+impl<'a, S: GraphSnapshot> Iterator for ProjectIter<'a, S> {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let row = match self.input.next() {
+            Some(Ok(row)) => row,
+            Some(Err(err)) => return Some(Err(err)),
+            None => return None,
+        };
+        let mut new_row = Row::default();
+        for (alias, expr) in self.projections {
+            if let Err(err) = super::plan_mid::ensure_runtime_expression_compatible(
+                expr,
+                &row,
+                self.snapshot,
+                self.params,
+            ) {
+                return Some(Err(err));
+            }
+            let val =
+                crate::evaluator::evaluate_expression_value(expr, &row, self.snapshot, self.params);
+            new_row = new_row.with(alias.clone(), val);
+        }
+        Some(Ok(new_row))
+    }
+}
+
+pub struct DistinctIter<'a, S: GraphSnapshot> {
+    pub(super) input: Box<PlanIterator<'a, S>>,
+    pub(super) seen: HashSet<Vec<Value>>,
+}
+
+impl<'a, S: GraphSnapshot> Iterator for DistinctIter<'a, S> {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.input.next() {
+                Some(Ok(row)) => {
+                    if self.seen.insert(row.value_key()) {
+                        return Some(Ok(row));
+                    }
+                }
+                Some(Err(err)) => return Some(Err(err)),
+                None => return None,
+            }
+        }
+    }
+}
+
+pub struct UnionDistinctIter<'a, S: GraphSnapshot> {
+    pub(super) input: std::iter::Chain<PlanIterator<'a, S>, PlanIterator<'a, S>>,
+    pub(super) seen: HashSet<Vec<Value>>,
+}
+
+impl<'a, S: GraphSnapshot> Iterator for UnionDistinctIter<'a, S> {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.input.next() {
+                Some(Ok(row)) => {
+                    if self.seen.insert(row.value_key()) {
+                        return Some(Ok(row));
+                    }
+                }
+                Some(Err(err)) => return Some(Err(err)),
+                None => return None,
+            }
+        }
+    }
+}
+
+pub struct IndexSeekIter {
+    pub(super) alias: String,
+    pub(super) node_ids: std::vec::IntoIter<InternalNodeId>,
+}
+
+impl Iterator for IndexSeekIter {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.node_ids
+            .next()
+            .map(|iid| Ok(Row::default().with(self.alias.clone(), Value::NodeId(iid))))
+    }
 }
 
 impl<'a, S: GraphSnapshot> Iterator for FilterIter<'a, S> {

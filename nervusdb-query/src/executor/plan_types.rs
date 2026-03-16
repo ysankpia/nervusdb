@@ -1,6 +1,7 @@
 use super::{
-    AggregateFunction, ApplyIter, CartesianProductIter, Direction, Expression, FilterIter,
-    GraphSnapshot, NodeScanIter, Pattern, ProcedureCallIter, RelationshipDirection, Result, Row,
+    AggregateFunction, ApplyIter, CartesianProductIter, Direction, DistinctIter, Expression,
+    FilterIter, GraphSnapshot, IndexSeekIter, NodeScanIter, Pattern, ProcedureCallIter,
+    ProjectIter, RelationshipDirection, Result, Row, UnionDistinctIter,
 };
 
 #[derive(Debug, Clone)]
@@ -221,6 +222,10 @@ pub enum PlanIterator<'a, S: GraphSnapshot> {
     ReturnOne(std::iter::Once<Result<Row>>),
     NodeScan(NodeScanIter<'a, S>),
     Filter(FilterIter<'a, S>),
+    Project(Box<ProjectIter<'a, S>>),
+    Distinct(Box<DistinctIter<'a, S>>),
+    UnionDistinct(Box<UnionDistinctIter<'a, S>>),
+    IndexSeek(Box<IndexSeekIter>),
     CartesianProduct(Box<CartesianProductIter<'a, S>>),
     Apply(Box<ApplyIter<'a, S>>),
     ProcedureCall(Box<ProcedureCallIter<'a, S>>),
@@ -236,6 +241,10 @@ impl<'a, S: GraphSnapshot> Iterator for PlanIterator<'a, S> {
             PlanIterator::ReturnOne(iter) => iter.next(),
             PlanIterator::NodeScan(iter) => iter.next(),
             PlanIterator::Filter(iter) => iter.next(),
+            PlanIterator::Project(iter) => iter.next(),
+            PlanIterator::Distinct(iter) => iter.next(),
+            PlanIterator::UnionDistinct(iter) => iter.next(),
+            PlanIterator::IndexSeek(iter) => iter.next(),
             PlanIterator::CartesianProduct(iter) => iter.next(),
             PlanIterator::Apply(iter) => iter.next(),
             PlanIterator::ProcedureCall(iter) => iter.next(),

@@ -1,6 +1,6 @@
 use super::{
-    Direction, Error, FilterIter, GraphSnapshot, Plan, PlanIterator, Result, Row, Value,
-    execute_aggregate as execute_aggregate_impl, execute_plan, row_contains_all_bindings,
+    Direction, Error, FilterIter, GraphSnapshot, Plan, PlanIterator, ProjectIter, Result, Row,
+    Value, execute_aggregate as execute_aggregate_impl, execute_plan, row_contains_all_bindings,
 };
 use crate::ast::Expression;
 
@@ -331,17 +331,12 @@ pub(super) fn execute_project<'a, S: GraphSnapshot + 'a>(
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
     let input_iter = execute_plan(snapshot, input, params);
-
-    PlanIterator::Dynamic(Box::new(input_iter.map(move |result| {
-        let row = result?;
-        let mut new_row = Row::default();
-        for (alias, expr) in projections {
-            ensure_runtime_expression_compatible(expr, &row, snapshot, params)?;
-            let val = crate::evaluator::evaluate_expression_value(expr, &row, snapshot, params);
-            new_row = new_row.with(alias.clone(), val);
-        }
-        Ok(new_row)
-    })))
+    PlanIterator::Project(Box::new(ProjectIter {
+        snapshot,
+        input: Box::new(input_iter),
+        projections,
+        params,
+    }))
 }
 
 pub(super) fn execute_aggregate<'a, S: GraphSnapshot + 'a>(

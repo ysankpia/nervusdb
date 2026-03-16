@@ -43,7 +43,10 @@ use merge_overlay::{MergeOverlayEdge, MergeOverlayNode, MergeOverlayState};
 pub use nervusdb_api::LabelId;
 use nervusdb_api::{EdgeKey, ExternalId, GraphSnapshot, InternalNodeId, RelTypeId};
 use path_usage::{edge_multiplicity, path_alias_contains_edge};
-use plan_iterators::{CartesianProductIter, FilterIter, NodeScanIter};
+use plan_iterators::{
+    CartesianProductIter, DistinctIter, FilterIter, IndexSeekIter, NodeScanIter, ProjectIter,
+    UnionDistinctIter,
+};
 use projection_sort::execute_aggregate;
 use property_bridge::{
     api_property_map_to_storage, merge_props_to_values, merge_storage_property_to_api,
