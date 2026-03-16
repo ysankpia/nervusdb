@@ -850,6 +850,11 @@ impl<'a> WriteTxn<'a> {
         let mut index_ops = Vec::new();
         let label_snapshot = self.engine.published_labels.load_full();
         let index_defs = self.engine.published_index_entries.load_full();
+        let created_node_labels: std::collections::HashMap<InternalNodeId, LabelId> = self
+            .created_nodes
+            .iter()
+            .map(|(_, label_id, internal_id)| (*internal_id, *label_id))
+            .collect();
         let read_snapshot = self.engine.snapshot();
         // 1) Append WAL and fsync (durability Full by default).
         let run = {
@@ -913,15 +918,11 @@ impl<'a> WriteTxn<'a> {
             use crate::read_path_convert::convert_property_to_storage as to_storage;
 
             self.memtable.for_each_node_property(|node, key, value| {
-                let is_new = self.created_nodes.iter().any(|(_, _, iid)| *iid == node);
-                let label_id = if is_new {
-                    self.created_nodes
-                        .iter()
-                        .find(|(_, _, iid)| *iid == node)
-                        .map(|(_, l, _)| *l)
-                } else {
-                    read_snapshot.node_label(node)
-                };
+                let label_id = created_node_labels
+                    .get(&node)
+                    .copied()
+                    .or_else(|| read_snapshot.node_label(node));
+                let is_new = created_node_labels.contains_key(&node);
 
                 if let Some(lid) = label_id
                     && let Some(label_name) = label_snapshot.get_name(lid)
@@ -946,7 +947,7 @@ impl<'a> WriteTxn<'a> {
                 // If it was created in this tx, it won't be in index yet, so removing it is no-op for index
                 // (except if we added then removed in same tx, MemTable handles that by removing from node_properties)
                 // So we only care about existing nodes.
-                let is_new = self.created_nodes.iter().any(|(_, _, iid)| *iid == node);
+                let is_new = created_node_labels.contains_key(&node);
                 if is_new {
                     return;
                 }
