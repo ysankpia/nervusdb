@@ -10,9 +10,7 @@ use crate::label_interner::{LabelInterner, LabelSnapshot};
 use crate::memtable::{MemTable, WalPropertyOp};
 use crate::pager::{PageId, Pager};
 use crate::read_path_engine_idmap::{lookup_internal_node_id, read_i2e_arc, read_i2l_arc};
-use crate::read_path_engine_labels::{
-    lookup_label_id, lookup_label_name, published_label_snapshot,
-};
+use crate::read_path_engine_labels::published_label_snapshot;
 use crate::read_path_engine_view::{
     build_snapshot_from_published, load_properties_and_stats_roots,
 };
@@ -307,12 +305,15 @@ impl GraphEngine {
 
     /// Get label ID by name, returns None if not found.
     pub fn get_label_id(&self, name: &str) -> Option<LabelId> {
-        lookup_label_id(&self.label_interner, name)
+        self.published_labels.load_full().get_id(name)
     }
 
     /// Get label name by ID, returns None if not found.
     pub fn get_label_name(&self, id: LabelId) -> Option<String> {
-        lookup_label_name(&self.label_interner, id)
+        self.published_labels
+            .load_full()
+            .get_name(id)
+            .map(ToOwned::to_owned)
     }
 
     // T203: HNSW Public API
@@ -343,6 +344,8 @@ impl GraphEngine {
         idx.search(&mut *pager, query, k)
     }
 
+    /// Compatibility helper for callers that explicitly need an owned snapshot copy.
+    /// Hot read paths should prefer the published Arc snapshot instead.
     pub fn scan_i2e_records(&self) -> Vec<I2eRecord> {
         self.published_i2e.load_full().as_ref().clone()
     }
@@ -450,11 +453,10 @@ impl GraphEngine {
             current_root = tree.root().as_u64();
         }
 
-        // Statistics Collection - read directly from IdMap for accuracy
+        // Statistics Collection - read from published label snapshots to avoid cloning IdMap state.
         let mut stats = crate::stats::GraphStatistics::default();
         {
-            let idmap = self.idmap.lock().unwrap();
-            let node_labels = idmap.get_i2l_snapshot();
+            let node_labels = self.published_node_labels.load_full();
 
             // Count nodes per label (node_labels[iid] = vec of label_ids for that node)
             stats.total_nodes = node_labels.len() as u64;
@@ -557,10 +559,7 @@ impl GraphEngine {
             pager.sync()?;
         }
 
-        let labels = {
-            let interner = self.label_interner.lock().unwrap();
-            interner.snapshot()
-        };
+        let labels = self.published_labels.load_full();
 
         let segments = self.published_segments.load_full();
         let pointers: Vec<SegmentPointer> = segments
