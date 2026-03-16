@@ -3,6 +3,7 @@ use super::{
     FilterIter, GraphSnapshot, IndexSeekIter, NodeScanIter, Pattern, ProcedureCallIter,
     ProjectIter, RelationshipDirection, Result, Row, UnionDistinctIter,
 };
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub enum Plan {
@@ -10,7 +11,7 @@ pub enum Plan {
     ReturnOne,
     /// `MATCH (n) RETURN ...`
     NodeScan {
-        alias: String,
+        alias: Arc<str>,
         label: Option<String>,
         optional: bool,
     },
@@ -135,7 +136,7 @@ pub enum Plan {
     Unwind {
         input: Box<Plan>,
         expression: Expression,
-        alias: String,
+        alias: Arc<str>,
     },
     /// `UNION` / `UNION ALL` - combine results from two queries
     Union {
@@ -177,7 +178,7 @@ pub enum Plan {
     },
     /// `IndexSeek` - optimize scan using index if available, else fallback
     IndexSeek {
-        alias: String,
+        alias: Arc<str>,
         label: String,
         field: String,
         value_expr: Expression,
@@ -192,7 +193,7 @@ pub enum Plan {
     Apply {
         input: Box<Plan>,
         subquery: Box<Plan>,
-        alias: Option<String>, // Optional alias for subquery result? usually subquery projects...
+        alias: Option<Arc<str>>, // Optional alias for subquery result? usually subquery projects...
     },
     /// `CALL namespace.name(args) YIELD x, y`
     ProcedureCall {
@@ -203,7 +204,7 @@ pub enum Plan {
     },
     Foreach {
         input: Box<Plan>,
-        variable: String,
+        variable: Arc<str>,
         list: Expression,
         sub_plan: Box<Plan>,
     },

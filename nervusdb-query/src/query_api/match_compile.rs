@@ -151,7 +151,7 @@ fn compile_pattern_chain(
             );
 
             let start_plan = Plan::NodeScan {
-                alias: src_alias.clone(),
+                alias: src_alias.clone().into(),
                 label: src_label.clone(),
                 optional,
             };
@@ -172,7 +172,7 @@ fn compile_pattern_chain(
         );
 
         let mut start_plan = Plan::NodeScan {
-            alias: src_alias.clone(),
+            alias: src_alias.clone().into(),
             label: src_label.clone(),
             optional,
         };
@@ -183,7 +183,7 @@ fn compile_pattern_chain(
             && let Some((field, val_expr)) = var_preds.iter().next()
         {
             start_plan = Plan::IndexSeek {
-                alias: src_alias.clone(),
+                alias: src_alias.clone().into(),
                 label: label_name.clone(),
                 field: field.clone(),
                 value_expr: val_expr.clone(),

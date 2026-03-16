@@ -124,7 +124,7 @@ pub(super) fn compile_unwind_plan(input: Plan, unwind: crate::ast::UnwindClause)
     Plan::Unwind {
         input: Box::new(input),
         expression: unwind.expression,
-        alias: unwind.alias,
+        alias: unwind.alias.into(),
     }
 }
 
