@@ -17,7 +17,7 @@ pub(super) fn execute_match_bound_rel<'a, S: GraphSnapshot + 'a>(
     direction: &'a RelationshipDirection,
     optional: bool,
     optional_unbind: &'a [String],
-    path_alias: &'a Option<String>,
+    path_alias: &'a Option<std::sync::Arc<str>>,
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
     let rel_ids = if rels.is_empty() {

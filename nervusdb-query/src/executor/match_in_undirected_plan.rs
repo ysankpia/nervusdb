@@ -39,13 +39,13 @@ pub(super) fn execute_match_in<'a, S: GraphSnapshot + 'a>(
     input: &'a Option<Box<Plan>>,
     src_alias: &'a str,
     rels: &'a [String],
-    edge_alias: &'a Option<String>,
+    edge_alias: &'a Option<std::sync::Arc<str>>,
     dst_alias: &'a str,
     dst_labels: &'a [String],
     src_prebound: bool,
     optional: bool,
     optional_unbind: &'a [String],
-    path_alias: &'a Option<String>,
+    path_alias: &'a Option<std::sync::Arc<str>>,
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
     let rel_ids = resolve_rel_ids(snapshot, rels);
@@ -124,14 +124,14 @@ pub(super) fn execute_match_undirected<'a, S: GraphSnapshot + 'a>(
     input: &'a Option<Box<Plan>>,
     src_alias: &'a str,
     rels: &'a [String],
-    edge_alias: &'a Option<String>,
+    edge_alias: &'a Option<std::sync::Arc<str>>,
     dst_alias: &'a str,
     dst_labels: &'a [String],
     src_prebound: bool,
     limit: Option<usize>,
     optional: bool,
     optional_unbind: &'a [String],
-    path_alias: &'a Option<String>,
+    path_alias: &'a Option<std::sync::Arc<str>>,
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
     let rel_ids = resolve_rel_ids(snapshot, rels);

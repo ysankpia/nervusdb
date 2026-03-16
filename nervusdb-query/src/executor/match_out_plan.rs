@@ -24,14 +24,14 @@ pub(super) fn execute_match_out<'a, S: GraphSnapshot + 'a>(
     input: &'a Option<Box<Plan>>,
     src_alias: &'a str,
     rels: &[String],
-    edge_alias: &'a Option<String>,
+    edge_alias: &'a Option<std::sync::Arc<str>>,
     dst_alias: &'a str,
     dst_labels: &[String],
     src_prebound: bool,
     limit: Option<u32>,
     optional: bool,
     optional_unbind: &[String],
-    path_alias: &'a Option<String>,
+    path_alias: &'a Option<std::sync::Arc<str>>,
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
     let rel_ids = resolve_rel_ids(snapshot, rels);
@@ -89,7 +89,7 @@ pub(super) fn execute_match_out_var_len<'a, S: GraphSnapshot + 'a>(
     input: &'a Option<Box<Plan>>,
     src_alias: &'a str,
     rels: &[String],
-    edge_alias: &'a Option<String>,
+    edge_alias: &'a Option<std::sync::Arc<str>>,
     dst_alias: &'a str,
     dst_labels: &[String],
     src_prebound: bool,
@@ -99,7 +99,7 @@ pub(super) fn execute_match_out_var_len<'a, S: GraphSnapshot + 'a>(
     limit: Option<u32>,
     optional: bool,
     optional_unbind: &[String],
-    path_alias: &'a Option<String>,
+    path_alias: &'a Option<std::sync::Arc<str>>,
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
     let input_iter = input
