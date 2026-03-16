@@ -828,8 +828,6 @@ impl<'a> WriteTxn<'a> {
     }
 
     pub fn commit(self) -> Result<()> {
-        let node_properties = self.memtable.node_properties_for_wal();
-        let removed_node_props = self.memtable.removed_node_properties_for_wal();
         enum IndexOp {
             Insert(String, crate::property::PropertyValue),
             Update(
@@ -907,6 +905,60 @@ impl<'a> WriteTxn<'a> {
                     .map(|_| ()),
             })?;
 
+            // Helper to convert API PropertyValue to Storage PropertyValue
+            use crate::read_path_convert::convert_property_to_storage as to_storage;
+
+            self.memtable.for_each_node_property(|node, key, value| {
+                let is_new = self.created_nodes.iter().any(|(_, _, iid)| *iid == node);
+                let label_id = if is_new {
+                    self.created_nodes
+                        .iter()
+                        .find(|(_, _, iid)| *iid == node)
+                        .map(|(_, l, _)| *l)
+                } else {
+                    read_snapshot.node_label(node)
+                };
+
+                if let Some(lid) = label_id
+                    && let Some(label_name) = label_snapshot.get_name(lid)
+                {
+                    let index_name = format!("{}.{}", label_name, key);
+                    if index_defs.contains_key(&index_name) {
+                        if is_new {
+                            index_ops.push((IndexOp::Insert(index_name, value.clone()), node));
+                        } else {
+                            let old_value = read_snapshot.node_property(node, key).map(to_storage);
+                            index_ops.push((
+                                IndexOp::Update(index_name, old_value, value.clone()),
+                                node,
+                            ));
+                        }
+                    }
+                }
+            });
+
+            // Removed properties index updates
+            self.memtable.for_each_removed_node_property(|node, key| {
+                // If it was created in this tx, it won't be in index yet, so removing it is no-op for index
+                // (except if we added then removed in same tx, MemTable handles that by removing from node_properties)
+                // So we only care about existing nodes.
+                let is_new = self.created_nodes.iter().any(|(_, _, iid)| *iid == node);
+                if is_new {
+                    return;
+                }
+
+                let label_id = read_snapshot.node_label(node);
+                if let Some(lid) = label_id
+                    && let Some(label_name) = label_snapshot.get_name(lid)
+                {
+                    let index_name = format!("{}.{}", label_name, key);
+                    if index_defs.contains_key(&index_name) {
+                        let old_value = read_snapshot.node_property(node, key).map(to_storage);
+                        index_ops.push((IndexOp::Remove(index_name, old_value), node));
+                    }
+                }
+            });
+
             let run = self.memtable.freeze_into_run(self.txid);
 
             for edge in run.iter_edges() {
@@ -927,60 +979,6 @@ impl<'a> WriteTxn<'a> {
                 })?;
             }
 
-            // Helper to convert API PropertyValue to Storage PropertyValue
-            use crate::read_path_convert::convert_property_to_storage as to_storage;
-
-            for (node, key, value) in &node_properties {
-                let is_new = self.created_nodes.iter().any(|(_, _, iid)| iid == node);
-                let label_id = if is_new {
-                    self.created_nodes
-                        .iter()
-                        .find(|(_, _, iid)| iid == node)
-                        .map(|(_, l, _)| *l)
-                } else {
-                    read_snapshot.node_label(*node)
-                };
-
-                if let Some(lid) = label_id
-                    && let Some(label_name) = label_snapshot.get_name(lid)
-                {
-                    let index_name = format!("{}.{}", label_name, key);
-                    if index_defs.contains_key(&index_name) {
-                        if is_new {
-                            index_ops.push((IndexOp::Insert(index_name, value.clone()), *node));
-                        } else {
-                            let old_value = read_snapshot.node_property(*node, key).map(to_storage);
-                            index_ops.push((
-                                IndexOp::Update(index_name, old_value, value.clone()),
-                                *node,
-                            ));
-                        }
-                    }
-                }
-            }
-
-            // Removed properties index updates
-            for (node, key) in &removed_node_props {
-                // If it was created in this tx, it won't be in index yet, so removing it is no-op for index
-                // (except if we added then removed in same tx, MemTable handles that by removing from node_properties)
-                // So we only care about existing nodes.
-                let is_new = self.created_nodes.iter().any(|(_, _, iid)| iid == node);
-                if is_new {
-                    continue;
-                }
-
-                let label_id = read_snapshot.node_label(*node);
-                if let Some(lid) = label_id
-                    && let Some(label_name) = label_snapshot.get_name(lid)
-                {
-                    let index_name = format!("{}.{}", label_name, key);
-                    if index_defs.contains_key(&index_name) {
-                        let old_value = read_snapshot.node_property(*node, key).map(to_storage);
-                        index_ops.push((IndexOp::Remove(index_name, old_value), *node));
-                    }
-                }
-            }
-
             // Flush WAL
             // wal.append calls flush internally, we just need fsync at end of commit
             wal.append(&WalRecord::CommitTx { txid: self.txid })?;
@@ -992,12 +990,11 @@ impl<'a> WriteTxn<'a> {
         let has_label_additions = !self.pending_label_additions.is_empty();
         let has_label_removals = !self.pending_label_removals.is_empty();
 
-        // 3. Apply all pager-backed state under a single pager write lock.
+        // 3. Apply index updates under the same catalog->pager lock order as read-side lookup_index.
         {
-            let mut pager = self.engine.pager.write().unwrap();
-
             if !index_ops.is_empty() {
                 let mut catalog = self.engine.index_catalog.lock().unwrap();
+                let mut pager = self.engine.pager.write().unwrap();
                 for (op, node_id) in index_ops {
                     match op {
                         IndexOp::Insert(name, val) => {
@@ -1047,7 +1044,11 @@ impl<'a> WriteTxn<'a> {
                 }
                 catalog.flush(&mut pager)?;
             }
+        }
 
+        // 4. Apply IdMap updates and finalize pager durability.
+        {
+            let mut pager = self.engine.pager.write().unwrap();
             {
                 let mut idmap = self.engine.idmap.lock().unwrap();
                 for (external_id, label_id, internal_id) in self.created_nodes {

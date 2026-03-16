@@ -170,6 +170,22 @@ impl MemTable {
         Ok(())
     }
 
+    pub fn for_each_node_property(&self, mut f: impl FnMut(InternalNodeId, &str, &PropertyValue)) {
+        for (node, props) in &self.node_properties {
+            for (key, value) in props {
+                f(*node, key, value);
+            }
+        }
+    }
+
+    pub fn for_each_removed_node_property(&self, mut f: impl FnMut(InternalNodeId, &str)) {
+        for (node, keys) in &self.removed_node_properties {
+            for key in keys {
+                f(*node, key);
+            }
+        }
+    }
+
     /// Get removed node properties for WAL writing.
     pub fn removed_node_properties_for_wal(&self) -> Vec<(InternalNodeId, String)> {
         self.removed_node_properties
