@@ -120,6 +120,6 @@ pub(super) fn write_only_plan_error<'a, S: GraphSnapshot + 'a>(
 
 pub(super) fn execute_values<'a, S: GraphSnapshot + 'a>(rows: &[Row]) -> PlanIterator<'a, S> {
     PlanIterator::Values(Box::new(ValuesIter {
-        rows: rows.to_vec().into_iter(),
+        rows: Vec::from(rows).into_iter(),
     }))
 }

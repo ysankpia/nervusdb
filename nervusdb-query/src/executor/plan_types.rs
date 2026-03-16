@@ -1,10 +1,9 @@
 use super::{
     AggregateFunction, ApplyIter, CartesianProductIter, ChainIter, Direction, DistinctIter,
-    ExpandIter, Expression, FilterIter, GraphSnapshot, IndexSeekIter, LimitIter,
-    FilteredMatchOutIter, MatchBoundRelIter, MatchInIter, MatchOutVarLenIter,
-    MatchUndirectedIter, NodeScanIter,
-    Pattern, ProcedureCallIter, ProjectIter, RelationshipDirection, Result, ResultRowsIter, Row,
-    RuntimeGuardIter, SkipIter, UnionDistinctIter, UnwindIter, ValuesIter,
+    ExpandIter, Expression, FilterIter, FilteredMatchOutIter, GraphSnapshot, IndexSeekIter,
+    LimitIter, MatchBoundRelIter, MatchInIter, MatchOutVarLenIter, MatchUndirectedIter,
+    NodeScanIter, Pattern, ProcedureCallIter, ProjectIter, RelationshipDirection, Result,
+    ResultRowsIter, Row, RuntimeGuardIter, SkipIter, UnionDistinctIter, UnwindIter, ValuesIter,
 };
 use std::sync::Arc;
 
@@ -222,6 +221,7 @@ pub enum Plan {
     },
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum PlanIterator<'a, S: GraphSnapshot> {
     ReturnOne(std::iter::Once<Result<Row>>),
     NodeScan(NodeScanIter<'a, S>),

@@ -36,16 +36,16 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for FilteredMatchOutIter<'a, S> {
         loop {
             match self.inner.next()? {
                 Ok(row) => {
-                    let matches = row
-                        .get(self.dst_alias)
-                        .and_then(value_node_id)
-                        .is_some_and(|id| {
-                            node_matches_label_constraint(
-                                self.snapshot,
-                                id,
-                                &self.dst_label_constraint,
-                            )
-                        });
+                    let matches =
+                        row.get(self.dst_alias)
+                            .and_then(value_node_id)
+                            .is_some_and(|id| {
+                                node_matches_label_constraint(
+                                    self.snapshot,
+                                    id,
+                                    &self.dst_label_constraint,
+                                )
+                            });
                     if matches {
                         return Some(Ok(row));
                     }

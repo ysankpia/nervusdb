@@ -155,7 +155,7 @@ fn collect_bound_rel_rows<S: GraphSnapshot>(
     let bound_edge = row.get_edge(rel_alias);
 
     if let Some(edge) = bound_edge
-        && rel_ids.as_ref().is_none_or(|ids| ids.contains(&edge.rel))
+        && rel_ids.as_ref().map_or(true, |ids| ids.contains(&edge.rel))
     {
         let orientations: Vec<(InternalNodeId, InternalNodeId)> = match direction {
             RelationshipDirection::LeftToRight => vec![(edge.src, edge.dst)],
