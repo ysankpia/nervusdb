@@ -248,28 +248,17 @@ impl GraphEngine {
     ///
     /// This is a write operation and must be called within a write transaction.
     pub fn get_or_create_label(&self, name: &str) -> Result<LabelId> {
-        // Optimistic read
-        {
-            let interner = self.label_interner.lock().unwrap();
-            if let Some(id) = interner.get_id(name) {
-                return Ok(id);
-            }
+        if let Some(id) = self.published_labels.load_full().get_id(name) {
+            return Ok(id);
         }
 
-        // Write path: serialize with a lock or just rely on interner lock?
-        // We need to write to WAL, so let's handle it carefully.
-        // We'll just lock interner, check again, then write WAL, then update interner.
         let mut interner = self.label_interner.lock().unwrap();
         if let Some(id) = interner.get_id(name) {
             return Ok(id);
         }
 
-        // It's a new label.
-        // We update memory first to get the authoritative ID.
         let returned_id = interner.get_or_create(name);
 
-        // Durability: Log to WAL (post-facto, but before return)
-        // We wrap this in a mini-transaction to ensure replayability.
         {
             let txid = self.next_txid.fetch_add(1, Ordering::Relaxed);
             let mut wal = self.wal.lock().unwrap();
@@ -282,7 +271,6 @@ impl GraphEngine {
             wal.fsync()?;
         }
 
-        // Update Published Snapshot
         let snapshot = interner.snapshot();
         self.published_labels.store(Arc::new(snapshot));
 
@@ -819,7 +807,7 @@ impl<'a> WriteTxn<'a> {
             }
         }
 
-        let interner = self.engine.label_interner.lock().unwrap();
+        let labels = self.engine.published_labels.load_full();
         self.created_nodes
             .iter()
             .map(|(_, _, node_id)| {
@@ -828,7 +816,7 @@ impl<'a> WriteTxn<'a> {
                     .cloned()
                     .unwrap_or_default()
                     .into_iter()
-                    .filter_map(|label_id| interner.get_name(label_id).map(|name| name.to_string()))
+                    .filter_map(|label_id| labels.get_name(label_id).map(ToOwned::to_owned))
                     .collect::<Vec<_>>();
                 (*node_id, labels)
             })
@@ -851,10 +839,7 @@ impl<'a> WriteTxn<'a> {
             Remove(String, Option<crate::property::PropertyValue>),
         }
         let mut index_ops = Vec::new();
-        let label_snapshot = {
-            let interner = self.engine.label_interner.lock().unwrap();
-            interner.snapshot()
-        };
+        let label_snapshot = self.engine.published_labels.load_full();
         let index_defs = {
             let catalog = self.engine.index_catalog.lock().unwrap();
             catalog.entries.clone()
