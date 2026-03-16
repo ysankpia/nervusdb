@@ -73,6 +73,25 @@ pub struct GraphEngine {
 }
 
 impl GraphEngine {
+    fn with_catalog_pager<T>(
+        &self,
+        f: impl FnOnce(&mut IndexCatalog, &mut Pager) -> Result<T>,
+    ) -> Result<T> {
+        let mut catalog = self.index_catalog.lock().unwrap();
+        let mut pager = self.pager.write().unwrap();
+        f(&mut catalog, &mut pager)
+    }
+
+    fn with_catalog_pager_vector<T>(
+        &self,
+        f: impl FnOnce(&mut IndexCatalog, &mut Pager, &mut NativeHnsw) -> Result<T>,
+    ) -> Result<T> {
+        let mut catalog = self.index_catalog.lock().unwrap();
+        let mut pager = self.pager.write().unwrap();
+        let mut vector_index = self.vector_index.lock().unwrap();
+        f(&mut catalog, &mut pager, &mut vector_index)
+    }
+
     pub fn open(ndb_path: impl AsRef<Path>, wal_path: impl AsRef<Path>) -> Result<Self> {
         let ndb_path = ndb_path.as_ref().to_path_buf();
         let wal_path = wal_path.as_ref().to_path_buf();
@@ -179,16 +198,16 @@ impl GraphEngine {
     /// Note: This MVP does not backfill existing data. The index will only track
     /// valid data inserted *after* index creation.
     pub fn create_index(&self, label: &str, field: &str) -> Result<()> {
-        let mut catalog = self.index_catalog.lock().unwrap();
         let name = format!("{}.{}", label, field);
-        if catalog.get(&name).is_some() {
-            return Ok(());
-        }
+        self.with_catalog_pager(|catalog, pager| {
+            if catalog.get(&name).is_some() {
+                return Ok(());
+            }
 
-        let mut pager = self.pager.write().unwrap();
-        catalog.get_or_create(&mut pager, &name)?;
-        catalog.flush(&mut pager)?;
-        Ok(())
+            catalog.get_or_create(pager, &name)?;
+            catalog.flush(pager)?;
+            Ok(())
+        })
     }
 
     pub fn begin_read(&self) -> Snapshot {
@@ -298,29 +317,24 @@ impl GraphEngine {
 
     // T203: HNSW Public API
     pub fn insert_vector(&self, id: InternalNodeId, vector: Vec<f32>) -> Result<()> {
-        let (vec_root, graph_root) = {
-            let mut pager = self.pager.write().unwrap();
-            let mut idx = self.vector_index.lock().unwrap();
-            idx.insert(&mut *pager, id, vector)?;
-            idx.persistent_roots()
-        };
+        self.with_catalog_pager_vector(|catalog, pager, idx| {
+            idx.insert(pager, id, vector)?;
+            let (vec_root, graph_root) = idx.persistent_roots();
 
-        let mut catalog = self.index_catalog.lock().unwrap();
-        let mut pager = self.pager.write().unwrap();
+            if let Some(re) = catalog.entries.get_mut("__sys_hnsw_vec") {
+                re.root = vec_root;
+            } else {
+                return Err(Error::WalProtocol("missing __sys_hnsw_vec index entry"));
+            }
+            if let Some(re) = catalog.entries.get_mut("__sys_hnsw_graph") {
+                re.root = graph_root;
+            } else {
+                return Err(Error::WalProtocol("missing __sys_hnsw_graph index entry"));
+            }
 
-        if let Some(re) = catalog.entries.get_mut("__sys_hnsw_vec") {
-            re.root = vec_root;
-        } else {
-            return Err(Error::WalProtocol("missing __sys_hnsw_vec index entry"));
-        }
-        if let Some(re) = catalog.entries.get_mut("__sys_hnsw_graph") {
-            re.root = graph_root;
-        } else {
-            return Err(Error::WalProtocol("missing __sys_hnsw_graph index entry"));
-        }
-
-        catalog.flush(&mut pager)?;
-        Ok(())
+            catalog.flush(pager)?;
+            Ok(())
+        })
     }
 
     pub fn search_vector(&self, query: &[f32], k: usize) -> Result<Vec<(InternalNodeId, f32)>> {
@@ -993,56 +1007,58 @@ impl<'a> WriteTxn<'a> {
         // 3. Apply index updates under the same catalog->pager lock order as read-side lookup_index.
         {
             if !index_ops.is_empty() {
-                let mut catalog = self.engine.index_catalog.lock().unwrap();
-                let mut pager = self.engine.pager.write().unwrap();
-                for (op, node_id) in index_ops {
-                    match op {
-                        IndexOp::Insert(name, val) => {
-                            if let Some(re) = catalog.entries.get_mut(&name) {
-                                let mut tree = crate::index::btree::BTree::load(re.root);
+                self.engine.with_catalog_pager(|catalog, pager| {
+                    let index_ops = index_ops;
+                    for (op, node_id) in index_ops {
+                        match op {
+                            IndexOp::Insert(name, val) => {
+                                if let Some(re) = catalog.entries.get_mut(&name) {
+                                    let mut tree = crate::index::btree::BTree::load(re.root);
 
-                                let mut key = Vec::new();
-                                key.extend_from_slice(&re.id.to_be_bytes());
-                                key.extend_from_slice(&encode_ordered_value(&val));
+                                    let mut key = Vec::new();
+                                    key.extend_from_slice(&re.id.to_be_bytes());
+                                    key.extend_from_slice(&encode_ordered_value(&val));
 
-                                let _ = tree.insert(&mut pager, &key, node_id as u64);
-                                re.root = tree.root();
+                                    let _ = tree.insert(pager, &key, node_id as u64);
+                                    re.root = tree.root();
+                                }
                             }
-                        }
-                        IndexOp::Update(name, old_val_opt, new_val) => {
-                            if let Some(re) = catalog.entries.get_mut(&name) {
-                                let mut tree = crate::index::btree::BTree::load(re.root);
+                            IndexOp::Update(name, old_val_opt, new_val) => {
+                                if let Some(re) = catalog.entries.get_mut(&name) {
+                                    let mut tree = crate::index::btree::BTree::load(re.root);
 
-                                if let Some(old_val) = old_val_opt {
+                                    if let Some(old_val) = old_val_opt {
+                                        let mut old_key = Vec::new();
+                                        old_key.extend_from_slice(&re.id.to_be_bytes());
+                                        old_key.extend_from_slice(&encode_ordered_value(&old_val));
+                                        let _ = tree.delete(pager, &old_key, node_id as u64);
+                                    }
+
+                                    let mut new_key = Vec::new();
+                                    new_key.extend_from_slice(&re.id.to_be_bytes());
+                                    new_key.extend_from_slice(&encode_ordered_value(&new_val));
+
+                                    let _ = tree.insert(pager, &new_key, node_id as u64);
+                                    re.root = tree.root();
+                                }
+                            }
+                            IndexOp::Remove(name, old_val_opt) => {
+                                if let Some(re) = catalog.entries.get_mut(&name)
+                                    && let Some(old_val) = old_val_opt
+                                {
+                                    let mut tree = crate::index::btree::BTree::load(re.root);
                                     let mut old_key = Vec::new();
                                     old_key.extend_from_slice(&re.id.to_be_bytes());
                                     old_key.extend_from_slice(&encode_ordered_value(&old_val));
-                                    let _ = tree.delete(&mut pager, &old_key, node_id as u64);
+                                    let _ = tree.delete(pager, &old_key, node_id as u64);
+                                    re.root = tree.root();
                                 }
-
-                                let mut new_key = Vec::new();
-                                new_key.extend_from_slice(&re.id.to_be_bytes());
-                                new_key.extend_from_slice(&encode_ordered_value(&new_val));
-
-                                let _ = tree.insert(&mut pager, &new_key, node_id as u64);
-                                re.root = tree.root();
-                            }
-                        }
-                        IndexOp::Remove(name, old_val_opt) => {
-                            if let Some(re) = catalog.entries.get_mut(&name)
-                                && let Some(old_val) = old_val_opt
-                            {
-                                let mut tree = crate::index::btree::BTree::load(re.root);
-                                let mut old_key = Vec::new();
-                                old_key.extend_from_slice(&re.id.to_be_bytes());
-                                old_key.extend_from_slice(&encode_ordered_value(&old_val));
-                                let _ = tree.delete(&mut pager, &old_key, node_id as u64);
-                                re.root = tree.root();
                             }
                         }
                     }
-                }
-                catalog.flush(&mut pager)?;
+                    catalog.flush(pager)?;
+                    Ok(())
+                })?;
             }
         }
 
