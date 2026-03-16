@@ -549,10 +549,8 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
                             if self.snapshot.is_tombstoned_node(id) {
                                 continue;
                             }
-                            self.cur_row = Some(Row::new(vec![(
-                                self.src_alias.to_string(),
-                                Value::NodeId(id),
-                            )]));
+                            self.cur_row =
+                                Some(Row::default().with(self.src_alias, Value::NodeId(id)));
                             self.yielded_any = false;
                             self.start_dfs(id);
                         }

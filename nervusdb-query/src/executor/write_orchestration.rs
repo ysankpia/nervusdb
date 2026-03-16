@@ -1325,12 +1325,12 @@ fn execute_node_scan_with_staged_creates<S: GraphSnapshot>(
             continue;
         }
 
-        out_rows.push(Row::default().with(alias.to_string(), Value::NodeId(node_id)));
+        out_rows.push(Row::default().with(alias, Value::NodeId(node_id)));
         seen_node_ids.insert(node_id);
     }
 
     if optional && out_rows.is_empty() {
-        out_rows.push(Row::default().with(alias.to_string(), Value::Null));
+        out_rows.push(Row::default().with(alias, Value::Null));
     }
 
     Ok(out_rows)
