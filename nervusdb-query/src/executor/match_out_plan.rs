@@ -2,7 +2,8 @@ use super::binding_utils::value_node_id;
 use super::label_constraint::{node_matches_label_constraint, resolve_label_constraint};
 use super::read_path::{ExpandIter, MatchOutIter, MatchOutVarLenIter};
 use super::{
-    GraphSnapshot, Plan, PlanIterator, RelTypeId, RelationshipDirection, Result, Row, execute_plan,
+    GraphSnapshot, LimitIter, Plan, PlanIterator, RelTypeId, RelationshipDirection, Result, Row,
+    execute_plan,
 };
 
 fn resolve_rel_ids<S: GraphSnapshot>(snapshot: &S, rels: &[String]) -> Option<Vec<RelTypeId>> {
@@ -53,9 +54,12 @@ pub(super) fn execute_match_out<'a, S: GraphSnapshot + 'a>(
             path_alias.as_deref(),
         );
         if let Some(limit) = limit {
-            PlanIterator::Dynamic(Box::new(expand.take(limit as usize)))
+            PlanIterator::Limit(Box::new(LimitIter {
+                input: Box::new(PlanIterator::Expand(Box::new(expand))),
+                remaining: limit as usize,
+            }))
         } else {
-            PlanIterator::Dynamic(Box::new(expand))
+            PlanIterator::Expand(Box::new(expand))
         }
     } else {
         let base = MatchOutIter::new(
@@ -126,8 +130,11 @@ pub(super) fn execute_match_out_var_len<'a, S: GraphSnapshot + 'a>(
         path_alias.as_deref(),
     );
     if let Some(limit) = limit {
-        PlanIterator::Dynamic(Box::new(base.take(limit as usize)))
+        PlanIterator::Limit(Box::new(LimitIter {
+            input: Box::new(PlanIterator::MatchOutVarLen(Box::new(base))),
+            remaining: limit as usize,
+        }))
     } else {
-        PlanIterator::Dynamic(Box::new(base))
+        PlanIterator::MatchOutVarLen(Box::new(base))
     }
 }

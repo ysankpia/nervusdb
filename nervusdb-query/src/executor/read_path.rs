@@ -117,7 +117,7 @@ type VarLenStackItem = (
 );
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub(super) struct MatchOutVarLenIter<'a, S: GraphSnapshot + 'a> {
+pub struct MatchOutVarLenIter<'a, S: GraphSnapshot + 'a> {
     snapshot: &'a S,
     input: Option<Box<dyn Iterator<Item = Result<Row>> + 'a>>,
     cur_row: Option<Row>,
@@ -564,7 +564,7 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
     }
 }
 
-pub(super) struct ExpandIter<'a, S: GraphSnapshot + 'a> {
+pub struct ExpandIter<'a, S: GraphSnapshot + 'a> {
     snapshot: &'a S,
     input: Box<dyn Iterator<Item = Result<Row>> + 'a>,
     src_alias: &'a str,
