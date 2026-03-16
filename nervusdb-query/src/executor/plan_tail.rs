@@ -1,5 +1,5 @@
 use super::{
-    DistinctIter, Error, GraphSnapshot, LimitIter, Plan, PlanIterator, Row, SkipIter,
+    ChainIter, DistinctIter, Error, GraphSnapshot, LimitIter, Plan, PlanIterator, Row, SkipIter,
     UnionDistinctIter, UnwindIter, Value, ValuesIter, execute_plan,
 };
 
@@ -96,11 +96,15 @@ pub(super) fn execute_union<'a, S: GraphSnapshot + 'a>(
 ) -> PlanIterator<'a, S> {
     let left_iter = execute_plan(snapshot, left, params);
     let right_iter = execute_plan(snapshot, right, params);
-    let chained = left_iter.chain(right_iter);
 
     if all {
-        PlanIterator::Dynamic(Box::new(chained))
+        PlanIterator::Chain(Box::new(ChainIter {
+            left: Box::new(left_iter),
+            right: Box::new(right_iter),
+            draining_left: true,
+        }))
     } else {
+        let chained = left_iter.chain(right_iter);
         PlanIterator::UnionDistinct(Box::new(UnionDistinctIter {
             input: chained,
             seen: std::collections::HashSet::new(),

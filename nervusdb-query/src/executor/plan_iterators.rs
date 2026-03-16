@@ -189,6 +189,38 @@ impl Iterator for ValuesIter {
     }
 }
 
+pub struct ResultRowsIter {
+    pub(super) rows: std::vec::IntoIter<Result<Row>>,
+}
+
+impl Iterator for ResultRowsIter {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.rows.next()
+    }
+}
+
+pub struct ChainIter<'a, S: GraphSnapshot> {
+    pub(super) left: Box<PlanIterator<'a, S>>,
+    pub(super) right: Box<PlanIterator<'a, S>>,
+    pub(super) draining_left: bool,
+}
+
+impl<'a, S: GraphSnapshot> Iterator for ChainIter<'a, S> {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.draining_left {
+            if let Some(next) = self.left.next() {
+                return Some(next);
+            }
+            self.draining_left = false;
+        }
+        self.right.next()
+    }
+}
+
 pub struct UnwindIter<'a, S: GraphSnapshot> {
     pub(super) snapshot: &'a S,
     pub(super) input: Box<PlanIterator<'a, S>>,

@@ -1,6 +1,7 @@
 use super::{
-    Direction, Error, FilterIter, GraphSnapshot, Plan, PlanIterator, ProjectIter, Result, Row,
-    Value, execute_aggregate as execute_aggregate_impl, execute_plan, row_contains_all_bindings,
+    Direction, Error, FilterIter, GraphSnapshot, Plan, PlanIterator, ProjectIter, Result,
+    ResultRowsIter, Row, Value, execute_aggregate as execute_aggregate_impl, execute_plan,
+    row_contains_all_bindings,
 };
 use crate::ast::Expression;
 
@@ -321,7 +322,9 @@ pub(super) fn execute_optional_where_fixup<'a, S: GraphSnapshot + 'a>(
         }
     }
 
-    PlanIterator::Dynamic(Box::new(out.into_iter()))
+    PlanIterator::ResultRows(Box::new(ResultRowsIter {
+        rows: out.into_iter(),
+    }))
 }
 
 pub(super) fn execute_project<'a, S: GraphSnapshot + 'a>(
@@ -414,5 +417,8 @@ pub(super) fn execute_order_by<'a, S: GraphSnapshot + 'a>(
         std::cmp::Ordering::Equal
     });
 
-    PlanIterator::Dynamic(Box::new(sortable.into_iter().map(|(row, _)| row)))
+    let rows: Vec<Result<Row>> = sortable.into_iter().map(|(row, _)| row).collect();
+    PlanIterator::ResultRows(Box::new(ResultRowsIter {
+        rows: rows.into_iter(),
+    }))
 }
