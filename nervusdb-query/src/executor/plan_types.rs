@@ -2,8 +2,8 @@ use super::{
     AggregateFunction, ApplyIter, CartesianProductIter, Direction, DistinctIter, ExpandIter,
     Expression, FilterIter, GraphSnapshot, IndexSeekIter, LimitIter, MatchBoundRelIter,
     MatchInIter, MatchOutVarLenIter, MatchUndirectedIter, NodeScanIter, Pattern, ProcedureCallIter,
-    ProjectIter, RelationshipDirection, Result, Row, SkipIter, UnionDistinctIter, UnwindIter,
-    ValuesIter,
+    ProjectIter, RelationshipDirection, Result, Row, RuntimeGuardIter, SkipIter,
+    UnionDistinctIter, UnwindIter, ValuesIter,
 };
 use std::sync::Arc;
 
@@ -238,6 +238,7 @@ pub enum PlanIterator<'a, S: GraphSnapshot> {
     MatchIn(Box<MatchInIter<'a, S>>),
     MatchUndirected(Box<MatchUndirectedIter<'a, S>>),
     MatchBoundRel(Box<MatchBoundRelIter<'a, S>>),
+    RuntimeGuard(Box<RuntimeGuardIter<'a, S>>),
     CartesianProduct(Box<CartesianProductIter<'a, S>>),
     Apply(Box<ApplyIter<'a, S>>),
     ProcedureCall(Box<ProcedureCallIter<'a, S>>),
@@ -266,6 +267,7 @@ impl<'a, S: GraphSnapshot> Iterator for PlanIterator<'a, S> {
             PlanIterator::MatchIn(iter) => iter.next(),
             PlanIterator::MatchUndirected(iter) => iter.next(),
             PlanIterator::MatchBoundRel(iter) => iter.next(),
+            PlanIterator::RuntimeGuard(iter) => iter.next(),
             PlanIterator::CartesianProduct(iter) => iter.next(),
             PlanIterator::Apply(iter) => iter.next(),
             PlanIterator::ProcedureCall(iter) => iter.next(),

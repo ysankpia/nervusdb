@@ -58,9 +58,9 @@ pub(super) fn execute_procedure_call<'a, S: GraphSnapshot + 'a>(
 }
 
 pub(super) fn write_only_foreach_error<'a, S: GraphSnapshot + 'a>() -> PlanIterator<'a, S> {
-    PlanIterator::Dynamic(Box::new(std::iter::once(Err(crate::error::Error::Other(
+    PlanIterator::ReturnOne(std::iter::once(Err(crate::error::Error::Other(
         "FOREACH must be executed via execute_write".into(),
-    )))))
+    ))))
 }
 
 pub(super) fn execute_node_scan<'a, S: GraphSnapshot + 'a>(
@@ -75,9 +75,11 @@ pub(super) fn execute_node_scan<'a, S: GraphSnapshot + 'a>(
             None => {
                 if optional {
                     let row = Row::new(vec![(alias.to_owned(), Value::Null)]);
-                    return PlanIterator::Dynamic(Box::new(std::iter::once(Ok(row))));
+                    return PlanIterator::ReturnOne(std::iter::once(Ok(row)));
                 }
-                return PlanIterator::Dynamic(Box::new(std::iter::empty()));
+                return PlanIterator::Values(Box::new(super::ValuesIter {
+                    rows: Vec::new().into_iter(),
+                }));
             }
         }
     } else {
@@ -96,7 +98,7 @@ pub(super) fn execute_node_scan<'a, S: GraphSnapshot + 'a>(
             Some(first) => PlanIterator::Dynamic(Box::new(std::iter::once(first).chain(iter))),
             None => {
                 let row = Row::new(vec![(alias.to_owned(), Value::Null)]);
-                PlanIterator::Dynamic(Box::new(std::iter::once(Ok(row))))
+                PlanIterator::ReturnOne(std::iter::once(Ok(row)))
             }
         }
     } else {

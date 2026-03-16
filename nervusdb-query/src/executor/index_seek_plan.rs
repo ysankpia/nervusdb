@@ -18,7 +18,7 @@ pub(super) fn execute_index_seek<'a, S: GraphSnapshot + 'a>(
         snapshot,
         params,
     ) {
-        return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err))));
+        return PlanIterator::ReturnOne(std::iter::once(Err(err)));
     }
     let val = evaluate_expression_value(value_expr, &Row::default(), snapshot, params);
 

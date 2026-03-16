@@ -267,40 +267,40 @@ pub(super) fn execute_optional_where_fixup<'a, S: GraphSnapshot + 'a>(
     let mut outer_rows: Vec<Row> = Vec::new();
     for item in execute_plan(snapshot, outer, params) {
         if let Err(err) = params.check_timeout("OptionalWhereFixup.outer") {
-            return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err))));
+            return PlanIterator::ReturnOne(std::iter::once(Err(err)));
         }
         let row = match item {
             Ok(row) => row,
-            Err(err) => return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err)))),
+            Err(err) => return PlanIterator::ReturnOne(std::iter::once(Err(err))),
         };
         outer_rows.push(row);
         if let Err(err) = params.check_collection_size("OptionalWhereFixup.outer", outer_rows.len())
         {
-            return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err))));
+            return PlanIterator::ReturnOne(std::iter::once(Err(err)));
         }
     }
 
     let mut filtered_rows: Vec<Row> = Vec::new();
     for item in execute_plan(snapshot, filtered, params) {
         if let Err(err) = params.check_timeout("OptionalWhereFixup.filtered") {
-            return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err))));
+            return PlanIterator::ReturnOne(std::iter::once(Err(err)));
         }
         let row = match item {
             Ok(row) => row,
-            Err(err) => return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err)))),
+            Err(err) => return PlanIterator::ReturnOne(std::iter::once(Err(err))),
         };
         filtered_rows.push(row);
         if let Err(err) =
             params.check_collection_size("OptionalWhereFixup.filtered", filtered_rows.len())
         {
-            return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err))));
+            return PlanIterator::ReturnOne(std::iter::once(Err(err)));
         }
     }
 
     let mut out: Vec<Result<Row>> = Vec::new();
     for outer_row in outer_rows {
         if let Err(err) = params.check_timeout("OptionalWhereFixup.merge") {
-            return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err))));
+            return PlanIterator::ReturnOne(std::iter::once(Err(err)));
         }
         let mut matched = false;
         for row in &filtered_rows {
@@ -317,7 +317,7 @@ pub(super) fn execute_optional_where_fixup<'a, S: GraphSnapshot + 'a>(
             out.push(Ok(null_row));
         }
         if let Err(err) = params.check_collection_size("OptionalWhereFixup.output", out.len()) {
-            return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err))));
+            return PlanIterator::ReturnOne(std::iter::once(Err(err)));
         }
     }
 
@@ -366,11 +366,11 @@ pub(super) fn execute_order_by<'a, S: GraphSnapshot + 'a>(
     let mut rows: Vec<Result<Row>> = Vec::new();
     for item in input_iter {
         if let Err(err) = params.check_timeout("OrderBy.collect") {
-            return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err))));
+            return PlanIterator::ReturnOne(std::iter::once(Err(err)));
         }
         rows.push(item);
         if let Err(err) = params.check_collection_size("OrderBy.collect", rows.len()) {
-            return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err))));
+            return PlanIterator::ReturnOne(std::iter::once(Err(err)));
         }
     }
     #[allow(clippy::type_complexity)]

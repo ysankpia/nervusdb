@@ -30,7 +30,7 @@ pub(super) fn execute_skip<'a, S: GraphSnapshot + 'a>(
 ) -> PlanIterator<'a, S> {
     let skip = match evaluate_row_window_expression(snapshot, skip, params) {
         Ok(value) => value,
-        Err(err) => return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err)))),
+        Err(err) => return PlanIterator::ReturnOne(std::iter::once(Err(err))),
     };
     let input_iter = execute_plan(snapshot, input, params);
     PlanIterator::Skip(Box::new(SkipIter {
@@ -47,7 +47,7 @@ pub(super) fn execute_limit<'a, S: GraphSnapshot + 'a>(
 ) -> PlanIterator<'a, S> {
     let limit = match evaluate_row_window_expression(snapshot, limit, params) {
         Ok(value) => value,
-        Err(err) => return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err)))),
+        Err(err) => return PlanIterator::ReturnOne(std::iter::once(Err(err))),
     };
     let input_iter = execute_plan(snapshot, input, params);
     PlanIterator::Limit(Box::new(LimitIter {
@@ -111,7 +111,7 @@ pub(super) fn execute_union<'a, S: GraphSnapshot + 'a>(
 pub(super) fn write_only_plan_error<'a, S: GraphSnapshot + 'a>(
     message: &'static str,
 ) -> PlanIterator<'a, S> {
-    PlanIterator::Dynamic(Box::new(std::iter::once(Err(Error::Other(message.into())))))
+    PlanIterator::ReturnOne(std::iter::once(Err(Error::Other(message.into()))))
 }
 
 pub(super) fn execute_values<'a, S: GraphSnapshot + 'a>(rows: &[Row]) -> PlanIterator<'a, S> {
