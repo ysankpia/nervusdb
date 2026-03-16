@@ -8,16 +8,16 @@ use super::{
 pub(super) fn execute_match_bound_rel<'a, S: GraphSnapshot + 'a>(
     snapshot: &'a S,
     input: &'a Plan,
-    rel_alias: &str,
-    src_alias: &str,
-    dst_alias: &str,
-    dst_labels: &[String],
+    rel_alias: &'a str,
+    src_alias: &'a str,
+    dst_alias: &'a str,
+    dst_labels: &'a [String],
     src_prebound: bool,
-    rels: &[String],
-    direction: &RelationshipDirection,
+    rels: &'a [String],
+    direction: &'a RelationshipDirection,
     optional: bool,
-    optional_unbind: &[String],
-    path_alias: &Option<String>,
+    optional_unbind: &'a [String],
+    path_alias: &'a Option<String>,
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
     let rel_ids = if rels.is_empty() {
@@ -34,12 +34,8 @@ pub(super) fn execute_match_bound_rel<'a, S: GraphSnapshot + 'a>(
     let dst_label_constraint = resolve_label_constraint(snapshot, dst_labels);
 
     let input_iter = execute_plan(snapshot, input, params);
-    let rel_alias = rel_alias.to_string();
-    let src_alias = src_alias.to_string();
-    let dst_alias = dst_alias.to_string();
     let direction = direction.clone();
-    let optional_unbind = optional_unbind.to_vec();
-    let path_alias = path_alias.clone();
+    let path_alias = path_alias.as_deref();
 
     PlanIterator::Dynamic(Box::new(input_iter.flat_map(move |res| match res {
         Ok(row) => {
@@ -62,7 +58,7 @@ pub(super) fn execute_match_bound_rel<'a, S: GraphSnapshot + 'a>(
                 };
 
                 for (src_id, dst_id) in orientations {
-                    if path_alias_contains_edge(snapshot, &row, path_alias.as_deref(), edge) {
+                    if path_alias_contains_edge(snapshot, &row, path_alias, edge) {
                         continue;
                     }
 
@@ -90,9 +86,9 @@ pub(super) fn execute_match_bound_rel<'a, S: GraphSnapshot + 'a>(
                     }
 
                     let mut new_row = row.clone();
-                    new_row = new_row.with(src_alias.clone(), Value::NodeId(src_id));
-                    new_row = new_row.with(dst_alias.clone(), Value::NodeId(dst_id));
-                    if let Some(pa) = &path_alias {
+                    new_row = new_row.with(src_alias, Value::NodeId(src_id));
+                    new_row = new_row.with(dst_alias, Value::NodeId(dst_id));
+                    if let Some(pa) = path_alias {
                         new_row.join_path(pa, src_id, edge, dst_id);
                     }
                     out.push(Ok(new_row));

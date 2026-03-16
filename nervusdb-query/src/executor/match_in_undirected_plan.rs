@@ -37,15 +37,15 @@ fn chain_incoming_candidates<'a, S: GraphSnapshot + 'a>(
 pub(super) fn execute_match_in<'a, S: GraphSnapshot + 'a>(
     snapshot: &'a S,
     input: &'a Option<Box<Plan>>,
-    src_alias: &str,
-    rels: &[String],
-    edge_alias: &Option<String>,
-    dst_alias: &str,
-    dst_labels: &[String],
+    src_alias: &'a str,
+    rels: &'a [String],
+    edge_alias: &'a Option<String>,
+    dst_alias: &'a str,
+    dst_labels: &'a [String],
     src_prebound: bool,
     optional: bool,
-    optional_unbind: &[String],
-    path_alias: &Option<String>,
+    optional_unbind: &'a [String],
+    path_alias: &'a Option<String>,
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
     let rel_ids = resolve_rel_ids(snapshot, rels);
@@ -57,11 +57,8 @@ pub(super) fn execute_match_in<'a, S: GraphSnapshot + 'a>(
         Box::new(std::iter::once(Ok(Row::default())))
     };
 
-    let src_alias = src_alias.to_string();
-    let dst_alias = dst_alias.to_string();
-    let edge_alias = edge_alias.clone();
-    let optional_unbind = optional_unbind.to_vec();
-    let path_alias = path_alias.clone();
+    let edge_alias = edge_alias.as_deref();
+    let path_alias = path_alias.as_deref();
 
     PlanIterator::Dynamic(Box::new(input_iter.flat_map(move |result| match result {
         Ok(row) => {
@@ -76,17 +73,14 @@ pub(super) fn execute_match_in<'a, S: GraphSnapshot + 'a>(
             };
 
             let candidates = chain_incoming_candidates(snapshot, target_iid, &rel_ids);
-            let dst_alias_binding = dst_alias.clone();
-            let edge_alias_binding = edge_alias.clone();
             let row_for_map = row.clone();
-            let path_alias = path_alias.clone();
             let dst_label_constraint = dst_label_constraint.clone();
 
             let mapped = candidates.filter_map(move |edge| {
-                if path_alias_contains_edge(snapshot, &row_for_map, path_alias.as_deref(), edge) {
+                if path_alias_contains_edge(snapshot, &row_for_map, path_alias, edge) {
                     return None;
                 }
-                if !row_matches_node_binding(&row_for_map, &dst_alias_binding, edge.src) {
+                if !row_matches_node_binding(&row_for_map, dst_alias, edge.src) {
                     return None;
                 }
                 if !node_matches_label_constraint(snapshot, edge.src, &dst_label_constraint) {
@@ -94,11 +88,11 @@ pub(super) fn execute_match_in<'a, S: GraphSnapshot + 'a>(
                 }
 
                 let mut new_row = row_for_map.clone();
-                new_row = new_row.with(dst_alias_binding.clone(), Value::NodeId(edge.src));
-                if let Some(ea) = &edge_alias_binding {
-                    new_row = new_row.with(ea.clone(), Value::EdgeKey(edge));
+                new_row = new_row.with(dst_alias, Value::NodeId(edge.src));
+                if let Some(ea) = edge_alias {
+                    new_row = new_row.with(ea, Value::EdgeKey(edge));
                 }
-                if let Some(pa) = &path_alias {
+                if let Some(pa) = path_alias {
                     new_row.join_path(pa, edge.dst, edge, edge.src);
                 }
                 Some(Ok(new_row))
@@ -128,16 +122,16 @@ pub(super) fn execute_match_in<'a, S: GraphSnapshot + 'a>(
 pub(super) fn execute_match_undirected<'a, S: GraphSnapshot + 'a>(
     snapshot: &'a S,
     input: &'a Option<Box<Plan>>,
-    src_alias: &str,
-    rels: &[String],
-    edge_alias: &Option<String>,
-    dst_alias: &str,
-    dst_labels: &[String],
+    src_alias: &'a str,
+    rels: &'a [String],
+    edge_alias: &'a Option<String>,
+    dst_alias: &'a str,
+    dst_labels: &'a [String],
     src_prebound: bool,
     limit: Option<usize>,
     optional: bool,
-    optional_unbind: &[String],
-    path_alias: &Option<String>,
+    optional_unbind: &'a [String],
+    path_alias: &'a Option<String>,
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
     let rel_ids = resolve_rel_ids(snapshot, rels);
@@ -149,11 +143,8 @@ pub(super) fn execute_match_undirected<'a, S: GraphSnapshot + 'a>(
         Box::new(std::iter::once(Ok(Row::default())))
     };
 
-    let src_alias = src_alias.to_string();
-    let dst_alias = dst_alias.to_string();
-    let edge_alias = edge_alias.clone();
-    let optional_unbind = optional_unbind.to_vec();
-    let path_alias = path_alias.clone();
+    let edge_alias = edge_alias.as_deref();
+    let path_alias = path_alias.as_deref();
 
     let expanded = input_iter.flat_map(move |res| match res {
         Ok(row) => {
@@ -183,11 +174,11 @@ pub(super) fn execute_match_undirected<'a, S: GraphSnapshot + 'a>(
                             continue;
                         }
                         let mut new_row = row.clone();
-                        new_row = new_row.with(dst_alias.clone(), Value::NodeId(edge.dst));
-                        if let Some(ea) = &edge_alias {
-                            new_row = new_row.with(ea.clone(), Value::EdgeKey(edge));
+                        new_row = new_row.with(dst_alias, Value::NodeId(edge.dst));
+                        if let Some(ea) = edge_alias {
+                            new_row = new_row.with(ea, Value::EdgeKey(edge));
                         }
-                        if let Some(pa) = &path_alias {
+                        if let Some(pa) = path_alias {
                             new_row.join_path(pa, edge.src, edge, edge.dst);
                         }
                         rows.push(Ok(new_row));
@@ -207,11 +198,11 @@ pub(super) fn execute_match_undirected<'a, S: GraphSnapshot + 'a>(
                             continue;
                         }
                         let mut new_row = row.clone();
-                        new_row = new_row.with(dst_alias.clone(), Value::NodeId(edge.src));
-                        if let Some(ea) = &edge_alias {
-                            new_row = new_row.with(ea.clone(), Value::EdgeKey(edge));
+                        new_row = new_row.with(dst_alias, Value::NodeId(edge.src));
+                        if let Some(ea) = edge_alias {
+                            new_row = new_row.with(ea, Value::EdgeKey(edge));
                         }
-                        if let Some(pa) = &path_alias {
+                        if let Some(pa) = path_alias {
                             new_row.join_path(pa, edge.dst, edge, edge.src);
                         }
                         rows.push(Ok(new_row));
@@ -229,11 +220,11 @@ pub(super) fn execute_match_undirected<'a, S: GraphSnapshot + 'a>(
                         continue;
                     }
                     let mut new_row = row.clone();
-                    new_row = new_row.with(dst_alias.clone(), Value::NodeId(edge.dst));
-                    if let Some(ea) = &edge_alias {
-                        new_row = new_row.with(ea.clone(), Value::EdgeKey(edge));
+                    new_row = new_row.with(dst_alias, Value::NodeId(edge.dst));
+                    if let Some(ea) = edge_alias {
+                        new_row = new_row.with(ea, Value::EdgeKey(edge));
                     }
-                    if let Some(pa) = &path_alias {
+                    if let Some(pa) = path_alias {
                         new_row.join_path(pa, edge.src, edge, edge.dst);
                     }
                     rows.push(Ok(new_row));
@@ -252,11 +243,11 @@ pub(super) fn execute_match_undirected<'a, S: GraphSnapshot + 'a>(
                         continue;
                     }
                     let mut new_row = row.clone();
-                    new_row = new_row.with(dst_alias.clone(), Value::NodeId(edge.src));
-                    if let Some(ea) = &edge_alias {
-                        new_row = new_row.with(ea.clone(), Value::EdgeKey(edge));
+                    new_row = new_row.with(dst_alias, Value::NodeId(edge.src));
+                    if let Some(ea) = edge_alias {
+                        new_row = new_row.with(ea, Value::EdgeKey(edge));
                     }
-                    if let Some(pa) = &path_alias {
+                    if let Some(pa) = path_alias {
                         new_row.join_path(pa, edge.dst, edge, edge.src);
                     }
                     rows.push(Ok(new_row));
