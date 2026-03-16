@@ -8,6 +8,7 @@ fn evaluate_row_window_expression<S: GraphSnapshot>(
     expr: &crate::ast::Expression,
     params: &crate::query_api::Params,
 ) -> super::Result<usize> {
+    super::plan_mid::ensure_runtime_expression_compatible(expr, &Row::default(), snapshot, params)?;
     let value =
         crate::evaluator::evaluate_expression_value(expr, &Row::default(), snapshot, params);
     match value {
