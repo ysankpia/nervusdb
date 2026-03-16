@@ -137,6 +137,121 @@ impl Iterator for IndexSeekIter {
     }
 }
 
+pub struct SkipIter<'a, S: GraphSnapshot> {
+    pub(super) input: Box<PlanIterator<'a, S>>,
+    pub(super) remaining: usize,
+}
+
+impl<'a, S: GraphSnapshot> Iterator for SkipIter<'a, S> {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.remaining > 0 {
+            match self.input.next() {
+                Some(Ok(_)) => self.remaining -= 1,
+                Some(Err(err)) => return Some(Err(err)),
+                None => return None,
+            }
+        }
+        self.input.next()
+    }
+}
+
+pub struct LimitIter<'a, S: GraphSnapshot> {
+    pub(super) input: Box<PlanIterator<'a, S>>,
+    pub(super) remaining: usize,
+}
+
+impl<'a, S: GraphSnapshot> Iterator for LimitIter<'a, S> {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.remaining == 0 {
+            return None;
+        }
+        let next = self.input.next();
+        if next.is_some() {
+            self.remaining -= 1;
+        }
+        next
+    }
+}
+
+pub struct ValuesIter {
+    pub(super) rows: std::vec::IntoIter<Row>,
+}
+
+impl Iterator for ValuesIter {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.rows.next().map(Ok)
+    }
+}
+
+pub struct UnwindIter<'a, S: GraphSnapshot> {
+    pub(super) snapshot: &'a S,
+    pub(super) input: Box<PlanIterator<'a, S>>,
+    pub(super) expression: &'a Expression,
+    pub(super) alias: &'a str,
+    pub(super) params: &'a crate::query_api::Params,
+    pub(super) current_row: Option<Row>,
+    pub(super) current_items: std::vec::IntoIter<Value>,
+}
+
+impl<'a, S: GraphSnapshot> Iterator for UnwindIter<'a, S> {
+    type Item = Result<Row>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(item) = self.current_items.next() {
+                if let Some(row) = &self.current_row {
+                    return Some(Ok(row.clone().with(self.alias, item)));
+                }
+            }
+
+            self.current_row = None;
+
+            let row = match self.input.next() {
+                Some(Ok(row)) => row,
+                Some(Err(err)) => return Some(Err(err)),
+                None => return None,
+            };
+
+            if let Err(err) = self.params.check_timeout("Unwind.eval") {
+                return Some(Err(err));
+            }
+            if let Err(err) = super::plan_mid::ensure_runtime_expression_compatible(
+                self.expression,
+                &row,
+                self.snapshot,
+                self.params,
+            ) {
+                return Some(Err(err));
+            }
+
+            let val = crate::evaluator::evaluate_expression_value(
+                self.expression,
+                &row,
+                self.snapshot,
+                self.params,
+            );
+
+            match val {
+                Value::List(list) => {
+                    if let Err(err) = self.params.check_collection_size("Unwind.list", list.len()) {
+                        return Some(Err(err));
+                    }
+                    self.current_row = Some(row);
+                    self.current_items = list.into_iter();
+                }
+                Value::Null => {}
+                other => return Some(Ok(row.with(self.alias, other))),
+            }
+        }
+    }
+}
+
 impl<'a, S: GraphSnapshot> Iterator for FilterIter<'a, S> {
     type Item = Result<Row>;
 

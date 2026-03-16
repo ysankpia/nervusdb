@@ -830,6 +830,25 @@ impl<'a> WriteTxn<'a> {
     pub fn commit(self) -> Result<()> {
         let node_properties = self.memtable.node_properties_for_wal();
         let removed_node_props = self.memtable.removed_node_properties_for_wal();
+        enum IndexOp {
+            Insert(String, crate::property::PropertyValue),
+            Update(
+                String,
+                Option<crate::property::PropertyValue>,
+                crate::property::PropertyValue,
+            ),
+            Remove(String, Option<crate::property::PropertyValue>),
+        }
+        let mut index_ops = Vec::new();
+        let label_snapshot = {
+            let interner = self.engine.label_interner.lock().unwrap();
+            interner.snapshot()
+        };
+        let index_defs = {
+            let catalog = self.engine.index_catalog.lock().unwrap();
+            catalog.entries.clone()
+        };
+        let read_snapshot = self.engine.snapshot();
         // 1) Append WAL and fsync (durability Full by default).
         let run = {
             let mut wal = self.engine.wal.lock().unwrap();
@@ -908,23 +927,6 @@ impl<'a> WriteTxn<'a> {
                 })?;
             }
 
-            // T107/T108: Update Indexes
-            // We separate Read (Old Values) phase from Write (Index Update) phase to avoid deadlocks
-            // caused by holding pager lock during property lookup.
-            enum IndexOp {
-                Insert(String, crate::property::PropertyValue),
-                Update(
-                    String,
-                    Option<crate::property::PropertyValue>,
-                    crate::property::PropertyValue,
-                ),
-                Remove(String, Option<crate::property::PropertyValue>),
-            }
-            let mut index_ops = Vec::new();
-
-            // Create a snapshot for reading current state (for old values/labels)
-            let snapshot = self.engine.snapshot();
-
             // Helper to convert API PropertyValue to Storage PropertyValue
             use crate::read_path_convert::convert_property_to_storage as to_storage;
 
@@ -936,41 +938,22 @@ impl<'a> WriteTxn<'a> {
                         .find(|(_, _, iid)| iid == node)
                         .map(|(_, l, _)| *l)
                 } else {
-                    snapshot.node_label(*node)
+                    read_snapshot.node_label(*node)
                 };
 
-                if let Some(lid) = label_id {
-                    // Resolve Label Name
-                    let label_name = self
-                        .engine
-                        .label_interner
-                        .lock()
-                        .unwrap()
-                        .get_name(lid)
-                        .map(|s| s.to_string());
-
-                    if let Some(label_name) = label_name {
-                        let index_name = format!("{}.{}", label_name, key);
-                        // Check if index exists without holding the lock for long
-                        let has_index = self
-                            .engine
-                            .index_catalog
-                            .lock()
-                            .unwrap()
-                            .get(&index_name)
-                            .is_some();
-
-                        if has_index {
-                            if is_new {
-                                index_ops.push((IndexOp::Insert(index_name, value.clone()), *node));
-                            } else {
-                                // For existing nodes, we need the old value to remove it from index
-                                let old_value = snapshot.node_property(*node, key).map(to_storage);
-                                index_ops.push((
-                                    IndexOp::Update(index_name, old_value, value.clone()),
-                                    *node,
-                                ));
-                            }
+                if let Some(lid) = label_id
+                    && let Some(label_name) = label_snapshot.get_name(lid)
+                {
+                    let index_name = format!("{}.{}", label_name, key);
+                    if index_defs.contains_key(&index_name) {
+                        if is_new {
+                            index_ops.push((IndexOp::Insert(index_name, value.clone()), *node));
+                        } else {
+                            let old_value = read_snapshot.node_property(*node, key).map(to_storage);
+                            index_ops.push((
+                                IndexOp::Update(index_name, old_value, value.clone()),
+                                *node,
+                            ));
                         }
                     }
                 }
@@ -986,38 +969,35 @@ impl<'a> WriteTxn<'a> {
                     continue;
                 }
 
-                let label_id = snapshot.node_label(*node);
-                if let Some(lid) = label_id {
-                    let label_name = self
-                        .engine
-                        .label_interner
-                        .lock()
-                        .unwrap()
-                        .get_name(lid)
-                        .map(|s| s.to_string());
-                    if let Some(label_name) = label_name {
-                        let index_name = format!("{}.{}", label_name, key);
-                        let has_index = self
-                            .engine
-                            .index_catalog
-                            .lock()
-                            .unwrap()
-                            .get(&index_name)
-                            .is_some();
-
-                        if has_index {
-                            let old_value = snapshot.node_property(*node, key).map(to_storage);
-                            index_ops.push((IndexOp::Remove(index_name, old_value), *node));
-                        }
+                let label_id = read_snapshot.node_label(*node);
+                if let Some(lid) = label_id
+                    && let Some(label_name) = label_snapshot.get_name(lid)
+                {
+                    let index_name = format!("{}.{}", label_name, key);
+                    if index_defs.contains_key(&index_name) {
+                        let old_value = read_snapshot.node_property(*node, key).map(to_storage);
+                        index_ops.push((IndexOp::Remove(index_name, old_value), *node));
                     }
                 }
             }
 
-            // Apply Index Updates
+            // Flush WAL
+            // wal.append calls flush internally, we just need fsync at end of commit
+            wal.append(&WalRecord::CommitTx { txid: self.txid })?;
+            wal.fsync()?;
+            run
+        };
+
+        let has_new_nodes = !self.created_nodes.is_empty();
+        let has_label_additions = !self.pending_label_additions.is_empty();
+        let has_label_removals = !self.pending_label_removals.is_empty();
+
+        // 3. Apply all pager-backed state under a single pager write lock.
+        {
+            let mut pager = self.engine.pager.write().unwrap();
+
             if !index_ops.is_empty() {
                 let mut catalog = self.engine.index_catalog.lock().unwrap();
-                let mut pager = self.engine.pager.write().unwrap();
-
                 for (op, node_id) in index_ops {
                     match op {
                         IndexOp::Insert(name, val) => {
@@ -1036,16 +1016,13 @@ impl<'a> WriteTxn<'a> {
                             if let Some(re) = catalog.entries.get_mut(&name) {
                                 let mut tree = crate::index::btree::BTree::load(re.root);
 
-                                // 1. Remove old value
                                 if let Some(old_val) = old_val_opt {
                                     let mut old_key = Vec::new();
                                     old_key.extend_from_slice(&re.id.to_be_bytes());
                                     old_key.extend_from_slice(&encode_ordered_value(&old_val));
-
                                     let _ = tree.delete(&mut pager, &old_key, node_id as u64);
                                 }
 
-                                // 2. Insert new value
                                 let mut new_key = Vec::new();
                                 new_key.extend_from_slice(&re.id.to_be_bytes());
                                 new_key.extend_from_slice(&encode_ordered_value(&new_val));
@@ -1055,16 +1032,15 @@ impl<'a> WriteTxn<'a> {
                             }
                         }
                         IndexOp::Remove(name, old_val_opt) => {
-                            if let Some(re) = catalog.entries.get_mut(&name) {
+                            if let Some(re) = catalog.entries.get_mut(&name)
+                                && let Some(old_val) = old_val_opt
+                            {
                                 let mut tree = crate::index::btree::BTree::load(re.root);
-
-                                if let Some(old_val) = old_val_opt {
-                                    let mut old_key = Vec::new();
-                                    old_key.extend_from_slice(&re.id.to_be_bytes());
-                                    old_key.extend_from_slice(&encode_ordered_value(&old_val));
-                                    let _ = tree.delete(&mut pager, &old_key, node_id as u64);
-                                    re.root = tree.root();
-                                }
+                                let mut old_key = Vec::new();
+                                old_key.extend_from_slice(&re.id.to_be_bytes());
+                                old_key.extend_from_slice(&encode_ordered_value(&old_val));
+                                let _ = tree.delete(&mut pager, &old_key, node_id as u64);
+                                re.root = tree.root();
                             }
                         }
                     }
@@ -1072,30 +1048,20 @@ impl<'a> WriteTxn<'a> {
                 catalog.flush(&mut pager)?;
             }
 
-            // Flush WAL
-            // wal.append calls flush internally, we just need fsync at end of commit
-            wal.append(&WalRecord::CommitTx { txid: self.txid })?;
-            wal.fsync()?;
-            run
-        };
+            {
+                let mut idmap = self.engine.idmap.lock().unwrap();
+                for (external_id, label_id, internal_id) in self.created_nodes {
+                    idmap.apply_create_node(&mut pager, external_id, label_id, internal_id)?;
+                }
+                for (node, label_id) in self.pending_label_additions {
+                    idmap.apply_add_label(&mut pager, node, label_id)?;
+                }
+                for (node, label_id) in self.pending_label_removals {
+                    idmap.apply_remove_label(&mut pager, node, label_id)?;
+                }
+            }
 
-        let has_new_nodes = !self.created_nodes.is_empty();
-        let has_label_additions = !self.pending_label_additions.is_empty();
-        let has_label_removals = !self.pending_label_removals.is_empty();
-
-        // 3. Apply created nodes to IdMap / Node Index
-        {
-            let mut idmap = self.engine.idmap.lock().unwrap();
-            let mut pager = self.engine.pager.write().unwrap();
-            for (external_id, label_id, internal_id) in self.created_nodes {
-                idmap.apply_create_node(&mut pager, external_id, label_id, internal_id)?;
-            }
-            for (node, label_id) in self.pending_label_additions {
-                idmap.apply_add_label(&mut pager, node, label_id)?;
-            }
-            for (node, label_id) in self.pending_label_removals {
-                idmap.apply_remove_label(&mut pager, node, label_id)?;
-            }
+            pager.sync()?;
         }
 
         let has_label_mutations = has_new_nodes || has_label_additions || has_label_removals;
@@ -1105,12 +1071,6 @@ impl<'a> WriteTxn<'a> {
 
         if !run.is_empty() {
             self.engine.publish_run(Arc::new(run));
-        }
-
-        // Finalize all pager-backed state for this tx, including HNSW and IdMap writes.
-        {
-            let mut pager = self.engine.pager.write().unwrap();
-            pager.sync()?;
         }
 
         self.engine.next_txid.fetch_add(1, Ordering::Relaxed);

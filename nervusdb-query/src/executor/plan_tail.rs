@@ -1,6 +1,6 @@
 use super::{
-    DistinctIter, Error, GraphSnapshot, Plan, PlanIterator, Row, UnionDistinctIter, Value,
-    execute_plan,
+    DistinctIter, Error, GraphSnapshot, LimitIter, Plan, PlanIterator, Row, SkipIter,
+    UnionDistinctIter, UnwindIter, Value, ValuesIter, execute_plan,
 };
 
 fn evaluate_row_window_expression<S: GraphSnapshot>(
@@ -33,7 +33,10 @@ pub(super) fn execute_skip<'a, S: GraphSnapshot + 'a>(
         Err(err) => return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err)))),
     };
     let input_iter = execute_plan(snapshot, input, params);
-    PlanIterator::Dynamic(Box::new(input_iter.skip(skip)))
+    PlanIterator::Skip(Box::new(SkipIter {
+        input: Box::new(input_iter),
+        remaining: skip,
+    }))
 }
 
 pub(super) fn execute_limit<'a, S: GraphSnapshot + 'a>(
@@ -47,7 +50,10 @@ pub(super) fn execute_limit<'a, S: GraphSnapshot + 'a>(
         Err(err) => return PlanIterator::Dynamic(Box::new(std::iter::once(Err(err)))),
     };
     let input_iter = execute_plan(snapshot, input, params);
-    PlanIterator::Dynamic(Box::new(input_iter.take(limit)))
+    PlanIterator::Limit(Box::new(LimitIter {
+        input: Box::new(input_iter),
+        remaining: limit,
+    }))
 }
 
 pub(super) fn execute_distinct<'a, S: GraphSnapshot + 'a>(
@@ -70,48 +76,15 @@ pub(super) fn execute_unwind<'a, S: GraphSnapshot + 'a>(
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
     let input_iter = execute_plan(snapshot, input, params);
-
-    PlanIterator::Dynamic(Box::new(input_iter.flat_map(
-        move |result| -> Box<dyn Iterator<Item = super::Result<Row>>> {
-            match result {
-                Ok(row) => {
-                    if let Err(err) = params.check_timeout("Unwind.eval") {
-                        return Box::new(std::iter::once(Err(err)));
-                    }
-                    if let Err(err) = super::plan_mid::ensure_runtime_expression_compatible(
-                        &expression,
-                        &row,
-                        snapshot,
-                        &params,
-                    ) {
-                        return Box::new(std::iter::once(Err(err)));
-                    }
-                    let val = crate::evaluator::evaluate_expression_value(
-                        &expression,
-                        &row,
-                        snapshot,
-                        &params,
-                    );
-                    match val {
-                        Value::List(list) => {
-                            if let Err(err) =
-                                params.check_collection_size("Unwind.list", list.len())
-                            {
-                                return Box::new(std::iter::once(Err(err)));
-                            }
-                            Box::new(
-                                list.into_iter()
-                                    .map(move |item| Ok(row.clone().with(alias, item))),
-                            )
-                        }
-                        Value::Null => Box::new(std::iter::empty()),
-                        _ => Box::new(std::iter::once(Ok(row.with(alias, val)))),
-                    }
-                }
-                Err(e) => Box::new(std::iter::once(Err(e))),
-            }
-        },
-    )))
+    PlanIterator::Unwind(Box::new(UnwindIter {
+        snapshot,
+        input: Box::new(input_iter),
+        expression,
+        alias,
+        params,
+        current_row: None,
+        current_items: Vec::new().into_iter(),
+    }))
 }
 
 pub(super) fn execute_union<'a, S: GraphSnapshot + 'a>(
@@ -142,6 +115,7 @@ pub(super) fn write_only_plan_error<'a, S: GraphSnapshot + 'a>(
 }
 
 pub(super) fn execute_values<'a, S: GraphSnapshot + 'a>(rows: &[Row]) -> PlanIterator<'a, S> {
-    let rows = rows.to_vec();
-    PlanIterator::Dynamic(Box::new(rows.into_iter().map(Ok::<Row, super::Error>)))
+    PlanIterator::Values(Box::new(ValuesIter {
+        rows: rows.to_vec().into_iter(),
+    }))
 }

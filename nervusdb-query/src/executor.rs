@@ -44,8 +44,8 @@ pub use nervusdb_api::LabelId;
 use nervusdb_api::{EdgeKey, ExternalId, GraphSnapshot, InternalNodeId, RelTypeId};
 use path_usage::{edge_multiplicity, path_alias_contains_edge};
 use plan_iterators::{
-    CartesianProductIter, DistinctIter, FilterIter, IndexSeekIter, NodeScanIter, ProjectIter,
-    UnionDistinctIter,
+    CartesianProductIter, DistinctIter, FilterIter, IndexSeekIter, LimitIter, NodeScanIter,
+    ProjectIter, SkipIter, UnionDistinctIter, UnwindIter, ValuesIter,
 };
 use projection_sort::execute_aggregate;
 use property_bridge::{
