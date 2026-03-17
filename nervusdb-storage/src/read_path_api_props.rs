@@ -52,7 +52,7 @@ mod tests {
     };
     use crate::label_interner::LabelSnapshot;
     use crate::property::PropertyValue;
-    use crate::snapshot::{EdgeKey, L0Run, PublishedRuns, Snapshot};
+    use crate::snapshot::{EdgeKey, L0Run, PublishedRuns, PublishedSegments, Snapshot};
     use std::collections::{BTreeMap, BTreeSet, HashMap};
     use std::sync::Arc;
 
@@ -82,7 +82,7 @@ mod tests {
 
         Snapshot::new(
             Arc::new(PublishedRuns::from(vec![run])),
-            Arc::new(Vec::new()),
+            Arc::new(PublishedSegments::new()),
             Arc::new(LabelSnapshot::new(HashMap::new(), Vec::new())),
             Arc::new(vec![Vec::new(); 4]),
             0,

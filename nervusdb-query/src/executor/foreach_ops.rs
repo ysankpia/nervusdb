@@ -30,7 +30,7 @@ pub(super) fn execute_foreach<S: GraphSnapshot>(
         };
 
         for item in items {
-            let sub_row = row.clone().with(variable, item.clone());
+            let sub_row = row.clone().with(variable, item);
             let mut current_sub_plan = sub_plan.clone();
             inject_rows(&mut current_sub_plan, vec![sub_row]);
             let mods = execute_write(&current_sub_plan, snapshot, txn, params)?;

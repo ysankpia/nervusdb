@@ -1,7 +1,12 @@
+#[cfg(test)]
 use crate::idmap::LabelId;
-use crate::label_interner::{LabelInterner, LabelSnapshot};
+#[cfg(test)]
+use crate::label_interner::LabelInterner;
+use crate::label_interner::LabelSnapshot;
 use arc_swap::ArcSwap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 
 pub(crate) fn published_label_snapshot(
     published_labels: &ArcSwap<LabelSnapshot>,
@@ -9,6 +14,7 @@ pub(crate) fn published_label_snapshot(
     published_labels.load_full()
 }
 
+#[cfg(test)]
 pub(crate) fn lookup_label_id(
     label_interner: &Mutex<LabelInterner>,
     name: &str,
@@ -16,6 +22,7 @@ pub(crate) fn lookup_label_id(
     label_interner.lock().unwrap().get_id(name)
 }
 
+#[cfg(test)]
 pub(crate) fn lookup_label_name(
     label_interner: &Mutex<LabelInterner>,
     id: LabelId,

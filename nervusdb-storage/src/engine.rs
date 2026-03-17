@@ -1,7 +1,7 @@
 use crate::csr::{CsrSegment, EdgeRecord, SegmentId};
 use crate::idmap::{ExternalId, I2eRecord, IdMap, InternalNodeId, LabelId};
 use crate::index::btree::BTree;
-use crate::index::catalog::IndexCatalog;
+use crate::index::catalog::{IndexCatalog, IndexDef};
 use crate::index::hnsw::HnswIndex;
 use crate::index::hnsw::params::HnswParams;
 use crate::index::hnsw::storage::{PersistentGraphStorage, PersistentVectorStorage};
@@ -10,17 +10,15 @@ use crate::label_interner::{LabelInterner, LabelSnapshot};
 use crate::memtable::{MemTable, WalPropertyOp};
 use crate::pager::{PageId, Pager};
 use crate::read_path_engine_idmap::{lookup_internal_node_id, read_i2e_arc, read_i2l_arc};
-use crate::read_path_engine_labels::{
-    lookup_label_id, lookup_label_name, published_label_snapshot,
-};
+use crate::read_path_engine_labels::published_label_snapshot;
 use crate::read_path_engine_view::{
     build_snapshot_from_published, load_properties_and_stats_roots,
 };
-use crate::snapshot::{L0Run, PublishedRuns, RelTypeId, Snapshot};
+use crate::read_path_tombstones::collect_tombstoned_nodes;
+use crate::snapshot::{L0Run, PublishedRuns, PublishedSegments, RelTypeId, Snapshot};
 use crate::wal::{CommittedTx, SegmentPointer, Wal, WalRecord};
 use crate::{Error, Result};
 use arc_swap::ArcSwap;
-use nervusdb_api::{GraphSnapshot, GraphStore};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -59,10 +57,12 @@ pub struct GraphEngine {
     vector_index: Arc<Mutex<NativeHnsw>>,
 
     published_runs: ArcSwap<PublishedRuns>,
-    published_segments: ArcSwap<Vec<Arc<CsrSegment>>>,
+    published_segments: ArcSwap<PublishedSegments>,
     published_labels: ArcSwap<LabelSnapshot>,
     published_node_labels: ArcSwap<Vec<Vec<LabelId>>>,
     published_i2e: ArcSwap<Vec<I2eRecord>>,
+    published_index_entries: ArcSwap<BTreeMap<String, IndexDef>>,
+    published_tombstoned_nodes: ArcSwap<std::collections::HashSet<InternalNodeId>>,
     write_lock: Mutex<()>,
     next_txid: AtomicU64,
     next_segment_id: AtomicU64,
@@ -73,6 +73,30 @@ pub struct GraphEngine {
 }
 
 impl GraphEngine {
+    fn with_catalog_pager<T>(
+        &self,
+        f: impl FnOnce(&mut IndexCatalog, &mut Pager) -> Result<T>,
+    ) -> Result<T> {
+        let mut catalog = self.index_catalog.lock().unwrap();
+        let mut pager = self.pager.write().unwrap();
+        f(&mut catalog, &mut pager)
+    }
+
+    fn with_catalog_pager_vector<T>(
+        &self,
+        f: impl FnOnce(&mut IndexCatalog, &mut Pager, &mut NativeHnsw) -> Result<T>,
+    ) -> Result<T> {
+        let mut catalog = self.index_catalog.lock().unwrap();
+        let mut pager = self.pager.write().unwrap();
+        let mut vector_index = self.vector_index.lock().unwrap();
+        f(&mut catalog, &mut pager, &mut vector_index)
+    }
+
+    fn publish_index_entries_snapshot(&self, catalog: &IndexCatalog) {
+        self.published_index_entries
+            .store(Arc::new(catalog.entries.clone()));
+    }
+
     pub fn open(ndb_path: impl AsRef<Path>, wal_path: impl AsRef<Path>) -> Result<Self> {
         let ndb_path = ndb_path.as_ref().to_path_buf();
         let wal_path = wal_path.as_ref().to_path_buf();
@@ -97,7 +121,7 @@ impl GraphEngine {
         let committed = wal.replay_committed()?;
         let state = scan_recovery_state(&committed);
 
-        let mut segments: Vec<Arc<CsrSegment>> = Vec::new();
+        let mut segments = PublishedSegments::new();
         let mut max_seg_id = 0u64;
         for ptr in &state.manifest_segments {
             let seg = Arc::new(CsrSegment::load(&mut pager, ptr.meta_page_id)?);
@@ -105,7 +129,7 @@ impl GraphEngine {
                 return Err(Error::WalProtocol("csr segment id mismatch"));
             }
             max_seg_id = max_seg_id.max(seg.id.0);
-            segments.push(seg);
+            segments.push_back(seg);
         }
 
         // Build label interner from recovered state (first, before graph transactions)
@@ -126,6 +150,9 @@ impl GraphEngine {
         let label_snapshot = label_interner.snapshot();
         let node_labels_snapshot = idmap.get_i2l_arc();
         let i2e_snapshot = idmap.get_i2e_arc();
+        let index_entries_snapshot = index_catalog.entries.clone();
+        let tombstoned_nodes_snapshot =
+            collect_tombstoned_nodes(&Arc::new(PublishedRuns::from(runs.clone())));
 
         Ok(Self {
             ndb_path,
@@ -141,6 +168,8 @@ impl GraphEngine {
             published_labels: ArcSwap::from(Arc::new(label_snapshot)),
             published_node_labels: ArcSwap::from(node_labels_snapshot),
             published_i2e: ArcSwap::from(i2e_snapshot),
+            published_index_entries: ArcSwap::from_pointee(index_entries_snapshot),
+            published_tombstoned_nodes: ArcSwap::from_pointee(tombstoned_nodes_snapshot),
             write_lock: Mutex::new(()),
             next_txid: AtomicU64::new(state.max_txid.saturating_add(1).max(1)),
             next_segment_id: AtomicU64::new(max_seg_id.saturating_add(1).max(1)),
@@ -165,8 +194,14 @@ impl GraphEngine {
         self.pager.clone()
     }
 
-    pub(crate) fn get_index_catalog(&self) -> Arc<Mutex<IndexCatalog>> {
-        self.index_catalog.clone()
+    pub(crate) fn get_published_index_entries(&self) -> Arc<BTreeMap<String, IndexDef>> {
+        self.published_index_entries.load_full()
+    }
+
+    pub(crate) fn get_published_tombstoned_nodes(
+        &self,
+    ) -> Arc<std::collections::HashSet<InternalNodeId>> {
+        self.published_tombstoned_nodes.load_full()
     }
 
     pub(crate) fn get_published_i2e(&self) -> Arc<Vec<I2eRecord>> {
@@ -179,16 +214,17 @@ impl GraphEngine {
     /// Note: This MVP does not backfill existing data. The index will only track
     /// valid data inserted *after* index creation.
     pub fn create_index(&self, label: &str, field: &str) -> Result<()> {
-        let mut catalog = self.index_catalog.lock().unwrap();
         let name = format!("{}.{}", label, field);
-        if catalog.get(&name).is_some() {
-            return Ok(());
-        }
+        self.with_catalog_pager(|catalog, pager| {
+            if catalog.get(&name).is_some() {
+                return Ok(());
+            }
 
-        let mut pager = self.pager.write().unwrap();
-        catalog.get_or_create(&mut pager, &name)?;
-        catalog.flush(&mut pager)?;
-        Ok(())
+            catalog.get_or_create(pager, &name)?;
+            catalog.flush(pager)?;
+            self.publish_index_entries_snapshot(catalog);
+            Ok(())
+        })
     }
 
     pub fn begin_read(&self) -> Snapshot {
@@ -231,28 +267,17 @@ impl GraphEngine {
     ///
     /// This is a write operation and must be called within a write transaction.
     pub fn get_or_create_label(&self, name: &str) -> Result<LabelId> {
-        // Optimistic read
-        {
-            let interner = self.label_interner.lock().unwrap();
-            if let Some(id) = interner.get_id(name) {
-                return Ok(id);
-            }
+        if let Some(id) = self.published_labels.load_full().get_id(name) {
+            return Ok(id);
         }
 
-        // Write path: serialize with a lock or just rely on interner lock?
-        // We need to write to WAL, so let's handle it carefully.
-        // We'll just lock interner, check again, then write WAL, then update interner.
         let mut interner = self.label_interner.lock().unwrap();
         if let Some(id) = interner.get_id(name) {
             return Ok(id);
         }
 
-        // It's a new label.
-        // We update memory first to get the authoritative ID.
         let returned_id = interner.get_or_create(name);
 
-        // Durability: Log to WAL (post-facto, but before return)
-        // We wrap this in a mini-transaction to ensure replayability.
         {
             let txid = self.next_txid.fetch_add(1, Ordering::Relaxed);
             let mut wal = self.wal.lock().unwrap();
@@ -265,7 +290,6 @@ impl GraphEngine {
             wal.fsync()?;
         }
 
-        // Update Published Snapshot
         let snapshot = interner.snapshot();
         self.published_labels.store(Arc::new(snapshot));
 
@@ -288,39 +312,38 @@ impl GraphEngine {
 
     /// Get label ID by name, returns None if not found.
     pub fn get_label_id(&self, name: &str) -> Option<LabelId> {
-        lookup_label_id(&self.label_interner, name)
+        self.published_labels.load_full().get_id(name)
     }
 
     /// Get label name by ID, returns None if not found.
     pub fn get_label_name(&self, id: LabelId) -> Option<String> {
-        lookup_label_name(&self.label_interner, id)
+        self.published_labels
+            .load_full()
+            .get_name(id)
+            .map(ToOwned::to_owned)
     }
 
     // T203: HNSW Public API
     pub fn insert_vector(&self, id: InternalNodeId, vector: Vec<f32>) -> Result<()> {
-        let (vec_root, graph_root) = {
-            let mut pager = self.pager.write().unwrap();
-            let mut idx = self.vector_index.lock().unwrap();
-            idx.insert(&mut *pager, id, vector)?;
-            idx.persistent_roots()
-        };
+        self.with_catalog_pager_vector(|catalog, pager, idx| {
+            idx.insert(pager, id, vector)?;
+            let (vec_root, graph_root) = idx.persistent_roots();
 
-        let mut catalog = self.index_catalog.lock().unwrap();
-        let mut pager = self.pager.write().unwrap();
+            if let Some(re) = catalog.entries.get_mut("__sys_hnsw_vec") {
+                re.root = vec_root;
+            } else {
+                return Err(Error::WalProtocol("missing __sys_hnsw_vec index entry"));
+            }
+            if let Some(re) = catalog.entries.get_mut("__sys_hnsw_graph") {
+                re.root = graph_root;
+            } else {
+                return Err(Error::WalProtocol("missing __sys_hnsw_graph index entry"));
+            }
 
-        if let Some(re) = catalog.entries.get_mut("__sys_hnsw_vec") {
-            re.root = vec_root;
-        } else {
-            return Err(Error::WalProtocol("missing __sys_hnsw_vec index entry"));
-        }
-        if let Some(re) = catalog.entries.get_mut("__sys_hnsw_graph") {
-            re.root = graph_root;
-        } else {
-            return Err(Error::WalProtocol("missing __sys_hnsw_graph index entry"));
-        }
-
-        catalog.flush(&mut pager)?;
-        Ok(())
+            catalog.flush(pager)?;
+            self.publish_index_entries_snapshot(catalog);
+            Ok(())
+        })
     }
 
     pub fn search_vector(&self, query: &[f32], k: usize) -> Result<Vec<(InternalNodeId, f32)>> {
@@ -329,15 +352,24 @@ impl GraphEngine {
         idx.search(&mut *pager, query, k)
     }
 
+    /// Compatibility helper for callers that explicitly need an owned snapshot copy.
+    /// Hot read paths should prefer the published Arc snapshot instead.
     pub fn scan_i2e_records(&self) -> Vec<I2eRecord> {
         self.published_i2e.load_full().as_ref().clone()
     }
 
     fn publish_run(&self, run: Arc<L0Run>) {
+        let tombstoned_nodes = {
+            let current = self.published_tombstoned_nodes.load_full();
+            let mut next = current.as_ref().clone();
+            next.extend(run.iter_tombstoned_nodes());
+            Arc::new(next)
+        };
         let current = self.published_runs.load_full();
         let mut next = current.as_ref().clone();
         next.push_front(run);
         self.published_runs.store(Arc::new(next));
+        self.published_tombstoned_nodes.store(tombstoned_nodes);
     }
 
     /// M2/T45: Explicit compaction.
@@ -370,9 +402,8 @@ impl GraphEngine {
 
         let new_segments = {
             let current = self.published_segments.load_full();
-            let mut next = Vec::with_capacity(current.len() + 1);
-            next.push(Arc::new(seg));
-            next.extend(current.iter().cloned());
+            let mut next = current.as_ref().clone();
+            next.push_front(Arc::new(seg));
             Arc::new(next)
         };
 
@@ -436,11 +467,10 @@ impl GraphEngine {
             current_root = tree.root().as_u64();
         }
 
-        // Statistics Collection - read directly from IdMap for accuracy
+        // Statistics Collection - read from published label snapshots to avoid cloning IdMap state.
         let mut stats = crate::stats::GraphStatistics::default();
         {
-            let idmap = self.idmap.lock().unwrap();
-            let node_labels = idmap.get_i2l_snapshot();
+            let node_labels = self.published_node_labels.load_full();
 
             // Count nodes per label (node_labels[iid] = vec of label_ids for that node)
             stats.total_nodes = node_labels.len() as u64;
@@ -501,6 +531,8 @@ impl GraphEngine {
         {
             self.published_runs.store(Arc::new(PublishedRuns::new()));
             self.published_segments.store(new_segments);
+            self.published_tombstoned_nodes
+                .store(Arc::new(std::collections::HashSet::new()));
         }
 
         self.manifest_epoch.store(epoch, Ordering::Relaxed);
@@ -543,10 +575,7 @@ impl GraphEngine {
             pager.sync()?;
         }
 
-        let labels = {
-            let interner = self.label_interner.lock().unwrap();
-            interner.snapshot()
-        };
+        let labels = self.published_labels.load_full();
 
         let segments = self.published_segments.load_full();
         let pointers: Vec<SegmentPointer> = segments
@@ -806,7 +835,7 @@ impl<'a> WriteTxn<'a> {
             }
         }
 
-        let interner = self.engine.label_interner.lock().unwrap();
+        let labels = self.engine.published_labels.load_full();
         self.created_nodes
             .iter()
             .map(|(_, _, node_id)| {
@@ -815,7 +844,7 @@ impl<'a> WriteTxn<'a> {
                     .cloned()
                     .unwrap_or_default()
                     .into_iter()
-                    .filter_map(|label_id| interner.get_name(label_id).map(|name| name.to_string()))
+                    .filter_map(|label_id| labels.get_name(label_id).map(ToOwned::to_owned))
                     .collect::<Vec<_>>();
                 (*node_id, labels)
             })
@@ -838,15 +867,14 @@ impl<'a> WriteTxn<'a> {
             Remove(String, Option<crate::property::PropertyValue>),
         }
         let mut index_ops = Vec::new();
-        let label_snapshot = {
-            let interner = self.engine.label_interner.lock().unwrap();
-            interner.snapshot()
-        };
-        let index_defs = {
-            let catalog = self.engine.index_catalog.lock().unwrap();
-            catalog.entries.clone()
-        };
-        let read_snapshot = self.engine.snapshot();
+        let label_snapshot = self.engine.published_labels.load_full();
+        let index_defs = self.engine.published_index_entries.load_full();
+        let created_node_labels: std::collections::HashMap<InternalNodeId, LabelId> = self
+            .created_nodes
+            .iter()
+            .map(|(_, label_id, internal_id)| (*internal_id, *label_id))
+            .collect();
+        let read_snapshot = self.engine.begin_read();
         // 1) Append WAL and fsync (durability Full by default).
         let run = {
             let mut wal = self.engine.wal.lock().unwrap();
@@ -909,15 +937,11 @@ impl<'a> WriteTxn<'a> {
             use crate::read_path_convert::convert_property_to_storage as to_storage;
 
             self.memtable.for_each_node_property(|node, key, value| {
-                let is_new = self.created_nodes.iter().any(|(_, _, iid)| *iid == node);
-                let label_id = if is_new {
-                    self.created_nodes
-                        .iter()
-                        .find(|(_, _, iid)| *iid == node)
-                        .map(|(_, l, _)| *l)
-                } else {
-                    read_snapshot.node_label(node)
-                };
+                let label_id = created_node_labels
+                    .get(&node)
+                    .copied()
+                    .or_else(|| read_snapshot.node_label(node));
+                let is_new = created_node_labels.contains_key(&node);
 
                 if let Some(lid) = label_id
                     && let Some(label_name) = label_snapshot.get_name(lid)
@@ -942,7 +966,7 @@ impl<'a> WriteTxn<'a> {
                 // If it was created in this tx, it won't be in index yet, so removing it is no-op for index
                 // (except if we added then removed in same tx, MemTable handles that by removing from node_properties)
                 // So we only care about existing nodes.
-                let is_new = self.created_nodes.iter().any(|(_, _, iid)| *iid == node);
+                let is_new = created_node_labels.contains_key(&node);
                 if is_new {
                     return;
                 }
@@ -993,56 +1017,59 @@ impl<'a> WriteTxn<'a> {
         // 3. Apply index updates under the same catalog->pager lock order as read-side lookup_index.
         {
             if !index_ops.is_empty() {
-                let mut catalog = self.engine.index_catalog.lock().unwrap();
-                let mut pager = self.engine.pager.write().unwrap();
-                for (op, node_id) in index_ops {
-                    match op {
-                        IndexOp::Insert(name, val) => {
-                            if let Some(re) = catalog.entries.get_mut(&name) {
-                                let mut tree = crate::index::btree::BTree::load(re.root);
+                self.engine.with_catalog_pager(|catalog, pager| {
+                    let index_ops = index_ops;
+                    for (op, node_id) in index_ops {
+                        match op {
+                            IndexOp::Insert(name, val) => {
+                                if let Some(re) = catalog.entries.get_mut(&name) {
+                                    let mut tree = crate::index::btree::BTree::load(re.root);
 
-                                let mut key = Vec::new();
-                                key.extend_from_slice(&re.id.to_be_bytes());
-                                key.extend_from_slice(&encode_ordered_value(&val));
+                                    let mut key = Vec::new();
+                                    key.extend_from_slice(&re.id.to_be_bytes());
+                                    key.extend_from_slice(&encode_ordered_value(&val));
 
-                                let _ = tree.insert(&mut pager, &key, node_id as u64);
-                                re.root = tree.root();
+                                    let _ = tree.insert(pager, &key, node_id as u64);
+                                    re.root = tree.root();
+                                }
                             }
-                        }
-                        IndexOp::Update(name, old_val_opt, new_val) => {
-                            if let Some(re) = catalog.entries.get_mut(&name) {
-                                let mut tree = crate::index::btree::BTree::load(re.root);
+                            IndexOp::Update(name, old_val_opt, new_val) => {
+                                if let Some(re) = catalog.entries.get_mut(&name) {
+                                    let mut tree = crate::index::btree::BTree::load(re.root);
 
-                                if let Some(old_val) = old_val_opt {
+                                    if let Some(old_val) = old_val_opt {
+                                        let mut old_key = Vec::new();
+                                        old_key.extend_from_slice(&re.id.to_be_bytes());
+                                        old_key.extend_from_slice(&encode_ordered_value(&old_val));
+                                        let _ = tree.delete(pager, &old_key, node_id as u64);
+                                    }
+
+                                    let mut new_key = Vec::new();
+                                    new_key.extend_from_slice(&re.id.to_be_bytes());
+                                    new_key.extend_from_slice(&encode_ordered_value(&new_val));
+
+                                    let _ = tree.insert(pager, &new_key, node_id as u64);
+                                    re.root = tree.root();
+                                }
+                            }
+                            IndexOp::Remove(name, old_val_opt) => {
+                                if let Some(re) = catalog.entries.get_mut(&name)
+                                    && let Some(old_val) = old_val_opt
+                                {
+                                    let mut tree = crate::index::btree::BTree::load(re.root);
                                     let mut old_key = Vec::new();
                                     old_key.extend_from_slice(&re.id.to_be_bytes());
                                     old_key.extend_from_slice(&encode_ordered_value(&old_val));
-                                    let _ = tree.delete(&mut pager, &old_key, node_id as u64);
+                                    let _ = tree.delete(pager, &old_key, node_id as u64);
+                                    re.root = tree.root();
                                 }
-
-                                let mut new_key = Vec::new();
-                                new_key.extend_from_slice(&re.id.to_be_bytes());
-                                new_key.extend_from_slice(&encode_ordered_value(&new_val));
-
-                                let _ = tree.insert(&mut pager, &new_key, node_id as u64);
-                                re.root = tree.root();
-                            }
-                        }
-                        IndexOp::Remove(name, old_val_opt) => {
-                            if let Some(re) = catalog.entries.get_mut(&name)
-                                && let Some(old_val) = old_val_opt
-                            {
-                                let mut tree = crate::index::btree::BTree::load(re.root);
-                                let mut old_key = Vec::new();
-                                old_key.extend_from_slice(&re.id.to_be_bytes());
-                                old_key.extend_from_slice(&encode_ordered_value(&old_val));
-                                let _ = tree.delete(&mut pager, &old_key, node_id as u64);
-                                re.root = tree.root();
                             }
                         }
                     }
-                }
-                catalog.flush(&mut pager)?;
+                    catalog.flush(pager)?;
+                    self.engine.publish_index_entries_snapshot(catalog);
+                    Ok(())
+                })?;
             }
         }
 
@@ -1242,6 +1269,7 @@ fn scan_recovery_state(committed: &[CommittedTx]) -> RecoveryState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nervusdb_api::GraphStore;
     use tempfile::tempdir;
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

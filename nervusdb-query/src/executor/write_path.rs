@@ -417,120 +417,127 @@ pub(super) fn apply_set_map_overlay_to_rows<S: GraphSnapshot>(
     params: &crate::query_api::Params,
 ) -> Vec<Row> {
     rows.into_iter()
-        .map(|mut row| {
-            // Keep evaluation semantics aligned with execute_set_from_maps.
-            let source_row = row.clone();
-
-            for (var, expr, append) in items {
-                let Some(current) = row.get(var).cloned() else {
-                    continue;
-                };
-
-                let evaluated = evaluate_expression_value(expr, &source_row, snapshot, params);
-                if matches!(evaluated, Value::Null) {
-                    continue;
-                }
-                let Value::Map(map_values) = evaluated else {
-                    continue;
-                };
-
-                match current {
-                    Value::Node(mut node) => {
-                        if !append {
-                            node.properties.clear();
-                        }
-                        for (key, value) in map_values {
-                            if matches!(value, Value::Null) {
-                                node.properties.remove(&key);
-                            } else {
-                                node.properties.insert(key, value);
-                            }
-                        }
-                        row = row.with(var.clone(), Value::Node(node));
-                    }
-                    Value::NodeId(node_id) => {
-                        let labels = snapshot
-                            .resolve_node_labels(node_id)
-                            .unwrap_or_default()
-                            .into_iter()
-                            .filter_map(|id| snapshot.resolve_label_name(id))
-                            .collect();
-                        let mut properties: std::collections::BTreeMap<String, Value> = if *append {
-                            snapshot
-                                .node_properties(node_id)
-                                .unwrap_or_default()
-                                .iter()
-                                .map(|(k, v)| (k.clone(), convert_api_property_to_value(v)))
-                                .collect()
-                        } else {
-                            std::collections::BTreeMap::new()
-                        };
-                        for (key, value) in map_values {
-                            if matches!(value, Value::Null) {
-                                properties.remove(&key);
-                            } else {
-                                properties.insert(key, value);
-                            }
-                        }
-                        row = row.with(
-                            var.clone(),
-                            Value::Node(NodeValue {
-                                id: node_id,
-                                labels,
-                                properties,
-                            }),
-                        );
-                    }
-                    Value::Relationship(mut rel) => {
-                        if !append {
-                            rel.properties.clear();
-                        }
-                        for (key, value) in map_values {
-                            if matches!(value, Value::Null) {
-                                rel.properties.remove(&key);
-                            } else {
-                                rel.properties.insert(key, value);
-                            }
-                        }
-                        row = row.with(var.clone(), Value::Relationship(rel));
-                    }
-                    Value::EdgeKey(edge) => {
-                        let rel_type = snapshot
-                            .resolve_rel_type_name(edge.rel)
-                            .unwrap_or_else(|| format!("<{}>", edge.rel));
-                        let mut properties: std::collections::BTreeMap<String, Value> = if *append {
-                            snapshot
-                                .edge_properties(edge)
-                                .unwrap_or_default()
-                                .iter()
-                                .map(|(k, v)| (k.clone(), convert_api_property_to_value(v)))
-                                .collect()
-                        } else {
-                            std::collections::BTreeMap::new()
-                        };
-                        for (key, value) in map_values {
-                            if matches!(value, Value::Null) {
-                                properties.remove(&key);
-                            } else {
-                                properties.insert(key, value);
-                            }
-                        }
-                        row = row.with(
-                            var.clone(),
-                            Value::Relationship(RelationshipValue {
-                                key: edge,
-                                rel_type,
-                                properties,
-                            }),
-                        );
-                    }
-                    _ => {}
-                }
-            }
-
-            row
-        })
+        .map(|row| apply_set_map_overlay_to_row(snapshot, row, items, params))
         .collect()
+}
+
+pub(super) fn apply_set_map_overlay_to_row<S: GraphSnapshot>(
+    snapshot: &S,
+    mut row: Row,
+    items: &[(String, Expression, bool)],
+    params: &crate::query_api::Params,
+) -> Row {
+    // Keep evaluation semantics aligned with execute_set_from_maps.
+    let source_row = row.clone();
+
+    for (var, expr, append) in items {
+        let Some(current) = row.get(var).cloned() else {
+            continue;
+        };
+
+        let evaluated = evaluate_expression_value(expr, &source_row, snapshot, params);
+        if matches!(evaluated, Value::Null) {
+            continue;
+        }
+        let Value::Map(map_values) = evaluated else {
+            continue;
+        };
+
+        match current {
+            Value::Node(mut node) => {
+                if !append {
+                    node.properties.clear();
+                }
+                for (key, value) in map_values {
+                    if matches!(value, Value::Null) {
+                        node.properties.remove(&key);
+                    } else {
+                        node.properties.insert(key, value);
+                    }
+                }
+                row = row.with(var.as_str(), Value::Node(node));
+            }
+            Value::NodeId(node_id) => {
+                let labels = snapshot
+                    .resolve_node_labels(node_id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|id| snapshot.resolve_label_name(id))
+                    .collect();
+                let mut properties: std::collections::BTreeMap<String, Value> = if *append {
+                    snapshot
+                        .node_properties(node_id)
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), convert_api_property_to_value(v)))
+                        .collect()
+                } else {
+                    std::collections::BTreeMap::new()
+                };
+                for (key, value) in map_values {
+                    if matches!(value, Value::Null) {
+                        properties.remove(&key);
+                    } else {
+                        properties.insert(key, value);
+                    }
+                }
+                row = row.with(
+                    var.as_str(),
+                    Value::Node(NodeValue {
+                        id: node_id,
+                        labels,
+                        properties,
+                    }),
+                );
+            }
+            Value::Relationship(mut rel) => {
+                if !append {
+                    rel.properties.clear();
+                }
+                for (key, value) in map_values {
+                    if matches!(value, Value::Null) {
+                        rel.properties.remove(&key);
+                    } else {
+                        rel.properties.insert(key, value);
+                    }
+                }
+                row = row.with(var.as_str(), Value::Relationship(rel));
+            }
+            Value::EdgeKey(edge) => {
+                let rel_type = snapshot
+                    .resolve_rel_type_name(edge.rel)
+                    .unwrap_or_else(|| format!("<{}>", edge.rel));
+                let mut properties: std::collections::BTreeMap<String, Value> = if *append {
+                    snapshot
+                        .edge_properties(edge)
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|(k, v)| (k.clone(), convert_api_property_to_value(v)))
+                        .collect()
+                } else {
+                    std::collections::BTreeMap::new()
+                };
+                for (key, value) in map_values {
+                    if matches!(value, Value::Null) {
+                        properties.remove(&key);
+                    } else {
+                        properties.insert(key, value);
+                    }
+                }
+                row = row.with(
+                    var.as_str(),
+                    Value::Relationship(RelationshipValue {
+                        key: edge,
+                        rel_type,
+                        properties,
+                    }),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    row
 }
 
 pub(super) fn apply_label_overlay_to_rows<S: GraphSnapshot>(

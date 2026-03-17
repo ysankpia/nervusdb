@@ -62,8 +62,9 @@ use write_forwarders::{
 };
 use write_path::{
     apply_label_overlay_to_rows, apply_removed_property_overlay_to_rows,
-    apply_set_map_overlay_to_rows, apply_set_property_overlay_to_rows, execute_remove,
-    execute_remove_labels, execute_set, execute_set_from_maps, execute_set_labels,
+    apply_set_map_overlay_to_row, apply_set_map_overlay_to_rows,
+    apply_set_property_overlay_to_rows, execute_remove, execute_remove_labels, execute_set,
+    execute_set_from_maps, execute_set_labels,
 };
 
 const UNLABELED_LABEL_ID: LabelId = LabelId::MAX;

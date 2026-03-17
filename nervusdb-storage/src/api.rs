@@ -1,7 +1,7 @@
 use crate::engine::GraphEngine;
 use crate::idmap::I2eRecord;
 use crate::index::btree::BTree;
-use crate::index::catalog::IndexCatalog;
+use crate::index::catalog::IndexDef;
 use crate::index::ordered_key::encode_ordered_value;
 use crate::pager::Pager;
 use crate::read_path_api_stats::{edge_count_from_stats, node_count_from_stats};
@@ -13,7 +13,6 @@ use crate::read_path_property_store::{
     extend_edge_properties_from_store, extend_node_properties_from_store,
     read_edge_property_from_store, read_node_property_from_store,
 };
-use crate::read_path_tombstones::collect_tombstoned_nodes;
 use crate::snapshot;
 use nervusdb_api::{
     EdgeKey, ExternalId, GraphSnapshot, GraphStore, InternalNodeId, LabelId, PropertyValue,
@@ -28,7 +27,7 @@ pub struct StorageSnapshot {
     i2e: Arc<Vec<I2eRecord>>,
     tombstoned_nodes: Arc<HashSet<InternalNodeId>>,
     pager: Arc<RwLock<Pager>>,
-    index_catalog: Arc<Mutex<IndexCatalog>>,
+    index_entries: Arc<BTreeMap<String, IndexDef>>,
     stats_cache: Mutex<Option<crate::stats::GraphStatistics>>,
 }
 
@@ -51,13 +50,12 @@ impl GraphStore for GraphEngine {
     fn snapshot(&self) -> Self::Snapshot {
         let i2e = self.get_published_i2e();
         let inner = self.begin_read();
-        let tombstoned_nodes: HashSet<InternalNodeId> = collect_tombstoned_nodes(inner.runs());
         StorageSnapshot {
             inner,
             i2e,
-            tombstoned_nodes: Arc::new(tombstoned_nodes),
+            tombstoned_nodes: self.get_published_tombstoned_nodes(),
             pager: self.get_pager(),
-            index_catalog: self.get_index_catalog(),
+            index_entries: self.get_published_index_entries(),
             stats_cache: Mutex::new(None),
         }
     }
@@ -98,10 +96,7 @@ impl GraphSnapshot for StorageSnapshot {
         // MVP Convention: Index name = "Label.Property"
         let index_name = format!("{}.{}", label, field);
 
-        let def = {
-            let catalog = self.index_catalog.lock().unwrap();
-            catalog.get(&index_name)?.clone()
-        };
+        let def = self.index_entries.get(&index_name)?.clone();
         let tree = BTree::load(def.root);
 
         // Use storage-level PropertyValue for encoding

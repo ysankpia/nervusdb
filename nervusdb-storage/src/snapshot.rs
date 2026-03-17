@@ -31,6 +31,7 @@ use std::sync::Arc;
 pub type RelTypeId = nervusdb_api::RelTypeId;
 pub type EdgeKey = nervusdb_api::EdgeKey;
 pub type PublishedRuns = ImVector<Arc<L0Run>>;
+pub type PublishedSegments = ImVector<Arc<CsrSegment>>;
 
 #[derive(Debug)]
 pub struct L0Run {
@@ -147,7 +148,7 @@ impl L0Run {
 #[derive(Debug, Clone)]
 pub struct Snapshot {
     runs: Arc<PublishedRuns>,
-    segments: Arc<Vec<Arc<CsrSegment>>>,
+    segments: Arc<PublishedSegments>,
     labels: Arc<crate::label_interner::LabelSnapshot>,
     node_labels: Arc<Vec<Vec<crate::idmap::LabelId>>>,
     pub(crate) properties_root: u64,
@@ -157,7 +158,7 @@ pub struct Snapshot {
 impl Snapshot {
     pub fn new(
         runs: Arc<PublishedRuns>,
-        segments: Arc<Vec<Arc<CsrSegment>>>,
+        segments: Arc<PublishedSegments>,
         labels: Arc<crate::label_interner::LabelSnapshot>,
         node_labels: Arc<Vec<Vec<crate::idmap::LabelId>>>,
         properties_root: u64,
@@ -183,10 +184,6 @@ impl Snapshot {
         rel: Option<RelTypeId>,
     ) -> IncomingNeighborsIter {
         IncomingNeighborsIter::new(self.runs.clone(), self.segments.clone(), dst, rel)
-    }
-
-    pub(crate) fn runs(&self) -> &Arc<PublishedRuns> {
-        &self.runs
     }
 
     pub fn get_statistics(

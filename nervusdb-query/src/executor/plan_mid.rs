@@ -212,7 +212,7 @@ pub(super) fn ensure_runtime_expression_compatible<S: GraphSnapshot>(
                 crate::evaluator::evaluate_expression_value(&comp.list, row, snapshot, params);
             if let Value::List(items) = list_value {
                 for item in items {
-                    let scoped_row = row.clone().with(comp.variable.clone(), item);
+                    let scoped_row = row.clone().with(comp.variable.as_str(), item);
                     if let Some(where_expr) = &comp.where_expression {
                         ensure_runtime_expression_compatible(
                             where_expr,
