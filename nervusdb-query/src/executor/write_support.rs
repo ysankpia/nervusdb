@@ -1,5 +1,5 @@
 use super::{
-    Plan, PropertyValue, Row, Value, WriteableGraph, apply_set_map_overlay_to_rows,
+    Plan, PropertyValue, Row, Value, WriteableGraph, apply_set_map_overlay_to_row,
     convert_executor_value_to_property, execute_set_from_maps,
 };
 use crate::ast::Expression;
@@ -67,17 +67,12 @@ pub(super) fn merge_apply_map_items<S: GraphSnapshot>(
 ) -> Result<()> {
     for item in items {
         let single_item = vec![item.clone()];
+        let source_row = std::mem::take(row);
         let input = Plan::Values {
-            rows: vec![row.clone()],
+            rows: vec![source_row.clone()],
         };
         execute_set_from_maps(snapshot, &input, txn, &single_item, params)?;
-        if let Some(updated_row) =
-            apply_set_map_overlay_to_rows(snapshot, vec![row.clone()], &single_item, params)
-                .into_iter()
-                .next()
-        {
-            *row = updated_row;
-        }
+        *row = apply_set_map_overlay_to_row(snapshot, source_row, &single_item, params);
     }
     Ok(())
 }
