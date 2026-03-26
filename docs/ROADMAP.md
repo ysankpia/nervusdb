@@ -1,6 +1,6 @@
 # NervusDB Roadmap
 
-> **Current Status**: SQLite-Beta convergence — TCK 100%, stability window in progress.
+> **Current Status**: SQLite-Beta release line achieved on trunk — TCK 100%, stability 7/7, perf SLO window 7/7.
 
 ## Phase A: Feature Line — COMPLETE
 
@@ -17,7 +17,7 @@
 | Failure clustering and batch fixes | Done |
 | Three-platform binding alignment | Done |
 
-## Phase B: Stability Line — IN PROGRESS
+## Phase B: Stability Line — COMPLETE
 
 **Goal**: 7 consecutive days of stable CI + nightly, no blocking failures.
 
@@ -26,14 +26,14 @@
 | Python exception hierarchy | Done |
 | Node structured error payloads | Done |
 | `storage_format_epoch` enforcement | Done |
-| API freeze (Rust/CLI/Python/Node) | In progress |
-| 7-day stability window | In progress (Day 1 = 2026-02-15) |
+| API freeze (Rust/CLI/Python/Node) | Done |
+| 7-day stability window | Done (7 / 7 reached on 2026-02-22 UTC) |
 
 Stability window rules:
 - Any blocking failure in main CI or nightly resets the counter.
 - Nightly suite includes: TCK Tier-3, benchmark, chaos, soak, fuzz.
 
-## Phase C: Performance Line — IN PROGRESS
+## Phase C: Performance Line — COMPLETE
 
 **Goal**: Large-scale SLO benchmarks pass before Beta release.
 
@@ -45,11 +45,11 @@ Stability window rules:
 
 Any SLO miss blocks Beta release.
 
-Current branch status (`codex/feat/m5-05-hnsw-blob-reuse`):
+Current trunk status:
 - P0 correctness/stability blockers cleared.
-- Current default HNSW params converged to `M=16`, `efConstruction=200`, `efSearch=128`.
-- Branch `perf-slo-nightly` is green with the current gate dataset.
-- Next step is merging to `main` so the 7-day performance window can begin accumulating on trunk.
+- Default HNSW params converged to `M=16`, `efConstruction=200`, `efSearch=128`.
+- `perf-slo-nightly` is green on `main`.
+- `perf_slo_window` reached **7 / 7** on `2026-03-26 (UTC)`.
 
 ## Industrial Quality (Continuous)
 
@@ -65,8 +65,8 @@ Current branch status (`codex/feat/m5-05-hnsw-blob-reuse`):
 All three must be met simultaneously:
 
 1. TCK pass rate >= 95% — **achieved** (100%).
-2. 7 consecutive days stable CI + nightly — **in progress**.
-3. Performance SLOs on large dataset — **in progress**.
+2. 7 consecutive days stable CI + nightly — **achieved**.
+3. Performance SLOs on large dataset — **achieved**.
 
 ## Future (Post-Beta)
 
