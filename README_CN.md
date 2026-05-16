@@ -19,6 +19,18 @@
 - **向量搜索** — 内置 HNSW 索引，支持图 + 向量混合查询。
 - **三端一致性门禁** — `examples-test` 对 Rust/Node/Python 执行硬断言同态校验。
 
+## 发布状态
+
+NervusDB 当前已经在主干达到“图数据库界 SQLite（Beta）”发布线：
+
+- TCK Tier-3 全量：**100%**（3 897 / 3 897）
+- 稳定窗：**7 / 7 天通过**
+- 性能 SLO 窗口：**7 / 7 天通过**
+
+发布门禁说明和日报模板见
+[发布指南](docs/publishing.md) 与
+[Beta 日报模板](docs/beta-daily-template.md)。
+
 ## 快速开始
 
 ### Rust
@@ -110,8 +122,9 @@ cargo clippy --workspace --all-targets -- -W warnings
 bash scripts/workspace_quick_test.sh
 bash scripts/binding_smoke.sh
 bash scripts/tests/stability_window_fixture.sh
+DATE_UTC="$(date -u +%F)"
 GITHUB_TOKEN="$(gh auth token)" \
-  bash scripts/stability_window.sh --mode strict --date 2026-02-16 \
+  bash scripts/stability_window.sh --mode strict --date "${DATE_UTC}" \
   --github-repo LuQing-Studio/nervusdb --github-token-env GITHUB_TOKEN
 ```
 

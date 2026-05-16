@@ -84,15 +84,15 @@
 | M4-11         | [Query] MERGE Regression Hardening                         | High   | Done   | feat/M4-10-merge-core       | Fixed MERGE execution on wrapped plans, rel source indexing, ON CREATE/ON MATCH updates, correlated MATCH binding typing |
 | **M5**        | **Bindings + Docs + Perf 基础设施**                        |        |        |                             |                                                          |
 | M5-01         | [Binding] Python + Node.js 可用性收敛（PyO3 + N-API）      | High   | Done   | feat/M5-01-bindings         | Rust 基线 API 面与 parity 门禁已全量对齐；三端 capability 套件已改为硬断言并全绿；剩余核心缺口 `left/right`、`shortestPath` 已于 2026-02-18 清零。 |
-| M5-02         | [Docs] 用户文档与支持矩阵对齐                             | High   | WIP    | feat/M5-02-user-guide       | 已切换到 Beta 收敛口径；待补 95%/7天稳定窗发布说明与日报模板 |
-| M5-03         | [Benchmark] NervusDB vs Neo4j/Memgraph 对标               | Medium | WIP    | feat/M5-03-benchmark        | 已有流程；待绑定 Beta 发布 SLO 阻断 |
-| M5-04         | [Performance] 并发读热点优化                               | Medium | WIP    | feat/M5-04-concurrency      | 已有基线；待收敛到 Beta P99 门槛 |
-| M5-05         | [AI] HNSW 参数调优与默认策略                              | Low    | WIP    | codex/feat/m5-05-hnsw-blob-reuse | 已完成默认参数收敛：`M=16 / efConstruction=200 / efSearch=128` 在 `nodes=10000, dim=64, queries=100, k=10` 下达到 `recall_at_k=0.951`、`vector_search_p99_ms=12.702`；待主干累计 7 天性能窗。 |
+| M5-02         | [Docs] 用户文档与支持矩阵对齐                             | High   | Done   | feat/M5-02-user-guide       | 已补齐 README/README_CN、`docs/ROADMAP.md`、`docs/publishing.md` 的 Beta 发布口径，并新增 `docs/beta-daily-template.md` 日报模板。 |
+| M5-03         | [Benchmark] NervusDB vs Neo4j/Memgraph 对标               | Medium | Done   | feat/M5-03-benchmark        | `benchmark_compare.sh` 已绑定 `perf_slo_gate` / `perf_slo_window` 证据输出；对标报告现在可直接携带 Beta 发布门禁上下文。 |
+| M5-04         | [Performance] 并发读热点优化                               | Medium | Done   | feat/M5-04-concurrency      | 最新并发读基线（`docs/perf/v2/concurrency-latest.md`）中 `read_query_p99_ms=0.0013`，已被 `BETA-05` 的 7 / 7 性能封板结果覆盖。 |
+| M5-05         | [AI] HNSW 参数调优与默认策略                              | Low    | Done   | codex/feat/m5-05-hnsw-blob-reuse | 已完成默认参数收敛：`M=16 / efConstruction=200 / efSearch=128`；主干 `perf-slo-nightly` 截至 2026-03-26（UTC）已连续 7 天通过，`perf_slo_window` 为 `7/7`。 |
 | M5-06         | [Binding] Rust/Python/Node 三端硬对齐（0 soft gate）      | High   | Done   | codex/feat/p0-align-01-hard-parity | 能力契约落地 + soft-pass 审计阻断 + 三端能力测试硬断言；`binding_parity_gate` 已作为 PR 阻断。 |
 | **Industrial**| **Industrial Quality (Nightly Gates)**                    |        |        |                             |                                                          |
-| I5-01         | [Quality] `cargo-fuzz` 分层接入                            | High   | WIP    | feat/I5-01-fuzz             | 已 nightly；待接入“7天稳定窗”统一统计 |
-| I5-02         | [Quality] Chaos IO 故障注入门禁                            | High   | WIP    | feat/I5-02-chaos            | 已 nightly；待接入“7天稳定窗”统一统计 |
-| I5-03         | [Quality] 24h Soak 稳定性流程                              | High   | WIP    | feat/I5-03-soak             | 已 nightly；待接入“7天稳定窗”统一统计 |
+| I5-01         | [Quality] `cargo-fuzz` 分层接入                            | High   | Done   | feat/I5-01-fuzz             | `fuzz-nightly.yml` 已稳定运行，且 `scripts/stability_window.sh` strict 模式已纳入 `fuzz-nightly.yml` 统一统计。 |
+| I5-02         | [Quality] Chaos IO 故障注入门禁                            | High   | Done   | feat/I5-02-chaos            | `chaos-nightly.yml` 已稳定运行，且 `scripts/stability_window.sh` strict 模式已纳入 `chaos-nightly.yml` 统一统计。 |
+| I5-03         | [Quality] 24h Soak 稳定性流程                              | High   | Done   | feat/I5-03-soak             | `soak-nightly.yml` 已稳定运行，且 `scripts/stability_window.sh` strict 模式已纳入 `soak-nightly.yml` 统一统计。 |
 
 | **Beta Gate** | **SQLite-Beta 必达门槛**                                   |        |        |                             |                                                          |
 | BETA-01       | [Storage] 强制 `storage_format_epoch` 校验                 | High   | Done   | feat/TB1-beta-gate          | `StorageFormatMismatch` + Compatibility 映射已落地 |
@@ -108,7 +108,7 @@
 | BETA-03R13    | [Hardening] `TypeError` 断言收紧（compile-time + any-time + runtime） | High   | Done   | codex/feat/beta-04-r13w2-anytime-hardening | R13-W1/W2/W3 已全部完成：compile-time、any-time、runtime 三类 `TypeError` 断言均切换为严格模式；补齐递归运行期表达式类型守卫（含 list comprehension 作用域）与属性写入非法 list 元素拦截，定向簇与基线门禁全绿。 |
 | BETA-03R14    | [Hardening] runtime 语义一致性收口（WHERE guard + type(rel)） | High   | Done   | codex/feat/beta-04-r14w2-unwind-guard | R14-W1~W13 已完成：`WHERE/UNWIND/SET/MERGE/FOREACH/DELETE/CREATE/CALL/Aggregate/IndexSeek` 入口 runtime guard 全覆盖，`runtime_guard_audit` 热点清零并接入 CI；W13-A 全量证据：core gates 全绿、Tier-3 全量 `3897/3897` 全通过。 |
 | BETA-04       | [Stability] 连续 7 天主 CI + nightly 稳定窗                | High   | Done   | feat/TB1-stability-window   | strict 稳定窗基建已落地（`ci-daily-snapshot` + `stability_window.sh --mode strict` + `beta_release_gate.sh` + release 接线）；截至 2026-02-22（UTC）累计 `consecutive_days=7/7`，`window_passed=true`，发布门禁放行。 |
-| BETA-05       | [Perf] 大规模 SLO 封板（读120/写180/向量220 ms P99）       | High   | WIP    | codex/feat/beta-05-perf-gate | 已落地 `perf_slo_gate` + `perf-slo-nightly` + `perf_slo_window` + release 接线；进入 7 天性能窗累计与超阈值收敛阶段。 |
+| BETA-05       | [Perf] 大规模 SLO 封板（读120/写180/向量220 ms P99）       | High   | Done   | codex/feat/beta-05-perf-gate | `perf_slo_gate` + `perf-slo-nightly` + `perf_slo_window` + release 接线已落地；截至 2026-03-26（UTC）主干性能窗累计 `7/7`，读/写/向量门禁连续通过。 |
 
 ### BETA-03R4 子进展（2026-02-13）
 - W1：引入 `BindingKind::RelationshipList`，varlen 关系变量输出统一为 `List<Relationship>`，0-hop 命中输出 `[]`，OPTIONAL miss 保持 `null`。
@@ -652,6 +652,24 @@
   - 证据：GitHub Actions run `23090012577`。
 - 当前状态：
   - 当前分支上的 `BETA-05` 阻塞问题已清零，下一步为合并到 `main` 并开始累计性能 7 天稳定窗。
+
+### BETA-05 子进展（2026-03-26，主干性能窗 7/7 达标）
+- 主干 `Perf SLO Nightly` 连续 7 天通过（UTC）：
+  - `2026-03-20`：run `23329702032`
+  - `2026-03-21`：run `23372281468`
+  - `2026-03-22`：run `23396102688`
+  - `2026-03-23`：run `23422515863`
+  - `2026-03-24`：run `23473981646`
+  - `2026-03-25`：run `23525791178`
+  - `2026-03-26`：run `23578725440`
+- 本地复算：
+  - `bash scripts/perf_slo_window.sh --date 2026-03-26 --github-repo ysankpia/nervusdb --github-token-env GITHUB_TOKEN`
+  - 结果：`consecutive_days=7`、`window_passed=true`
+- GitHub Actions 收口：
+  - 新增 `scripts/perf_slo_summary.sh`，统一读取当前 `perf_slo_gate` JSON 结构并生成 workflow summary。
+  - `perf-slo-nightly.yml` 的摘要步骤不再依赖已过期的 `overall_status/actual_ms/threshold_ms` 字段名，避免页面上出现误导性的 `n/a`。
+- 阶段结论：
+  - `BETA-05` 由 `WIP` 更新为 `Done`。
 
 ## Archived (v1/Alpha)
 

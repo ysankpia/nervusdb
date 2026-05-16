@@ -27,6 +27,16 @@ cargo run --example bench_v2 -p nervusdb-storage --release -- \
 bash scripts/v2_bench.sh --nodes 50000 --degree 8 --iters 2000
 ```
 
+对标报告可通过以下命令生成：
+
+```bash
+bash scripts/benchmark_compare.sh
+```
+
+该报告会优先绑定最近一次 `perf_slo_gate` / `perf_slo_window` 产物，把
+NervusDB vs Neo4j/Memgraph 的对标上下文和 Beta 发布门禁放到同一份 Markdown
+里，便于发布前审阅。
+
 ## Gate（手动门禁）
 
 当前阶段不在 CI 默认跑重基准；release 前至少跑一次并对比上一份结果：

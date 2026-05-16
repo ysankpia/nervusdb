@@ -17,6 +17,18 @@ No server, no setup, no dependencies.
 - **Vector search** — built-in HNSW index for hybrid graph + vector queries.
 - **Cross-binding parity gate** — `examples-test` hard-asserts Rust/Node/Python isomorphic behavior.
 
+## Release Status
+
+NervusDB has reached the current SQLite-Beta release line on trunk:
+
+- TCK Tier-3 full scope: **100%** (3 897 / 3 897)
+- Stability window: **7 / 7 days passed**
+- Performance SLO window: **7 / 7 days passed**
+
+For release gate details and the daily reporting template, see
+[Publishing Guide](docs/publishing.md) and
+[Beta Daily Template](docs/beta-daily-template.md).
+
 ## Quick Start
 
 ### Rust
@@ -124,8 +136,9 @@ cargo clippy --workspace --all-targets -- -W warnings
 bash scripts/workspace_quick_test.sh
 bash scripts/binding_smoke.sh
 bash scripts/tests/stability_window_fixture.sh
+DATE_UTC="$(date -u +%F)"
 GITHUB_TOKEN="$(gh auth token)" \
-  bash scripts/stability_window.sh --mode strict --date 2026-02-16 \
+  bash scripts/stability_window.sh --mode strict --date "${DATE_UTC}" \
   --github-repo LuQing-Studio/nervusdb --github-token-env GITHUB_TOKEN
 ```
 

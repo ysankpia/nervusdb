@@ -96,28 +96,13 @@ jobs:
           GATE_JSON="artifacts/perf/perf-slo-gate-${DATE_UTC}.json"
           HNSW_LOG="artifacts/perf/hnsw-slo-${DATE_UTC}.log"
 
-          {
-            echo "## Perf SLO Nightly Summary (${DATE_UTC} UTC)"
-            if [[ -f "${GATE_JSON}" ]] && jq -e . "${GATE_JSON}" >/dev/null 2>&1; then
-              echo "- Overall: $(jq -r '.overall_status // \"unknown\"' "${GATE_JSON}")"
-              echo "- Read p99: $(jq -r '.checks.read_query_p99_ms.actual_ms // \"n/a\"' "${GATE_JSON}") ms / threshold $(jq -r '.checks.read_query_p99_ms.threshold_ms // \"n/a\"' "${GATE_JSON}")"
-              echo "- Write p99: $(jq -r '.checks.write_txn_p99_ms.actual_ms // \"n/a\"' "${GATE_JSON}") ms / threshold $(jq -r '.checks.write_txn_p99_ms.threshold_ms // \"n/a\"' "${GATE_JSON}")"
-              echo "- Vector p99: $(jq -r '.checks.vector_search_p99_ms.actual_ms // \"n/a\"' "${GATE_JSON}") ms / threshold $(jq -r '.checks.vector_search_p99_ms.threshold_ms // \"n/a\"' "${GATE_JSON}")"
-              echo "- Recall@k: $(jq -r '.checks.vector_recall_at_k.actual // \"n/a\"' "${GATE_JSON}") / threshold $(jq -r '.checks.vector_recall_at_k.threshold_min // \"n/a\"' "${GATE_JSON}")"
-            else
-              echo "- Overall: failed before gate report generation"
-              echo "- concurrency JSON: $(if [[ -f "${CONCURRENCY_JSON}" ]]; then echo present; else echo missing; fi)"
-              echo "- hnsw JSON: $(if [[ -f "${HNSW_JSON}" ]]; then echo present; else echo missing; fi)"
-              if [[ -f "${HNSW_JSON}" ]] && jq -e . "${HNSW_JSON}" >/dev/null 2>&1; then
-                echo "- hnsw JSON payload: $(jq -c . "${HNSW_JSON}")"
-              fi
-              if [[ -f "${HNSW_LOG}" ]]; then
-                echo ""
-                echo "### hnsw_tune log tail"
-                tail -n 25 "${HNSW_LOG}"
-              fi
-            fi
-          } >> "${GITHUB_STEP_SUMMARY}"
+          bash scripts/perf_slo_summary.sh \
+            --date "${DATE_UTC}" \
+            --gate-json "${GATE_JSON}" \
+            --concurrency-json "${CONCURRENCY_JSON}" \
+            --hnsw-json "${HNSW_JSON}" \
+            --hnsw-log "${HNSW_LOG}" \
+            >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload perf SLO artifacts
         if: always()
