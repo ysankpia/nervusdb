@@ -20,7 +20,7 @@ NervusDB 正在收缩到一个能完成的 0.1 主线：
 - 节点 / 边 / label / 属性持久化
 - label scan 和邻居遍历
 - 小而明确的 Mini-Cypher
-- CLI 用于本地调试、导入 smoke、查询和写入
+- CLI 用于本地调试、文件驱动导入 smoke、查询和写入
 
 完整 Cypher 兼容、多语言 SDK 稳定化、HNSW/向量搜索、跨绑定一致性门禁、
 工业级 nightly gate 都属于历史或实验范围，不是 0.1 成功标准。
@@ -65,7 +65,9 @@ cargo run -p nervusdb-cli -- v2 query \
 ```
 
 写语句必须使用 `prepare(...).execute_write(...)` 或 CLI write 路径。0.1 前的读查询应
-保持在 Mini-Cypher 文档范围内。
+保持在 Mini-Cypher 文档范围内。CLI query 输出是 newline-delimited JSON，CLI
+write 输出类似 `{"count":3}` 的小 JSON 状态对象。0.1 的导入 smoke 使用现有
+`v2 write --file` 输入；0.1 前没有稳定 import 命令。
 
 ## 架构
 

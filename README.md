@@ -20,7 +20,8 @@ NervusDB is being cut back to a finishable 0.1 line:
 - node / edge / label / property persistence
 - label scans and neighbor traversal
 - a small Mini-Cypher surface
-- CLI support for local debug, import smoke, query, and write workflows
+- CLI support for local debug, file-driven import smoke, query, and write
+  workflows
 
 Full Cypher compatibility, multi-language SDK stabilization, HNSW/vector search,
 cross-binding parity gates, and industrial nightly gates are historical or
@@ -67,7 +68,10 @@ cargo run -p nervusdb-cli -- v2 query \
 
 Write statements must use `prepare(...).execute_write(...)` or the CLI write
 path. Read queries should stay within the documented Mini-Cypher surface for
-0.1.
+0.1. CLI query output is newline-delimited JSON. CLI write output is a small
+JSON status object such as `{"count":3}`. Import-style 0.1 smoke tests use
+existing `v2 write --file` inputs; there is no dedicated import subcommand
+before 0.1.
 
 ## Architecture
 
