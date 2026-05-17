@@ -169,3 +169,42 @@ fn core_0_1_basic_create_set_delete_and_explain() -> QueryResult<()> {
 
     Ok(())
 }
+
+#[test]
+fn core_0_1_write_reopen_query_survives() {
+    let dir = tempdir().unwrap();
+
+    {
+        let db = Db::open(dir.path()).unwrap();
+        let mut txn = db.begin_write();
+        let person = txn.get_or_create_label("Person").unwrap();
+        let knows = txn.get_or_create_rel_type("KNOWS").unwrap();
+        let alice = txn.create_node(1, person).unwrap();
+        let bob = txn.create_node(2, person).unwrap();
+        txn.set_node_property(
+            alice,
+            "name".to_string(),
+            PropertyValue::String("Alice".to_string()),
+        )
+        .unwrap();
+        txn.set_node_property(
+            bob,
+            "name".to_string(),
+            PropertyValue::String("Bob".to_string()),
+        )
+        .unwrap();
+        txn.create_edge(alice, knows, bob);
+        txn.commit().unwrap();
+    }
+
+    let db = Db::open(dir.path()).unwrap();
+    let rows = query_collect(
+        &db.snapshot(),
+        "MATCH (a:Person)-[:KNOWS]->(b) WHERE a.name = 'Alice' RETURN b.name LIMIT 10",
+        &Params::new(),
+    )
+    .unwrap();
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].columns()[0].1, Value::String("Bob".to_string()));
+}
