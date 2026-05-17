@@ -1,4 +1,4 @@
-//! # NervusDB 0.1 Core
+//! # NervusDB 0.1 Rust Facade
 //!
 //! Rust-first embedded property graph database: SQLite-style local files,
 //! crash-safe persistence, and a deliberately small graph query surface.
@@ -20,13 +20,15 @@
 //! - [`query`] re-exports the Mini-Cypher query crate for supported 0.1 reads
 //!   and writes.
 //!
-//! ## Experimental Or Frozen APIs
+//! ## Experimental Or Maintenance APIs
 //!
 //! Existing maintenance APIs such as [`Db::create_index`], [`Db::search_vector`],
 //! [`backup`], [`vacuum`], [`bulkload`], [`Db::compact`], and [`Db::checkpoint`]
 //! remain available for compatibility and manual experiments. They are not the
 //! default 0.1 product surface and should not drive new scope before the core
 //! embedded path is credible.
+//!
+//! See `docs/reference/rust-api.md` for the repository-level API contract.
 //!
 //! ## Quickstart
 //!
@@ -96,7 +98,12 @@ pub use nervusdb_storage::backup::{
 pub use nervusdb_storage::bulkload::{BulkEdge, BulkLoader, BulkNode};
 pub use nervusdb_storage::vacuum::VacuumReport;
 
-/// The main database handle for NervusDB v2.
+/// The main Rust facade for the 0.1 embedded database core.
+///
+/// `Db` is the 0.1 entry point for opening local `.ndb` / `.wal` files,
+/// creating write transactions, and taking read snapshots. APIs outside that
+/// path are retained for maintenance or experiments and are called out in their
+/// own docs.
 ///
 /// # Example
 ///
@@ -118,7 +125,7 @@ pub struct Db {
 }
 
 impl Db {
-    /// Opens a database at the given path.
+    /// Opens a local database path.
     ///
     /// The path can be:
     /// - A directory path: files will be created as `<path>.ndb` and `<path>.wal`
@@ -132,6 +139,9 @@ impl Db {
     }
 
     /// Opens a database with explicit paths for the data and WAL files.
+    ///
+    /// This is part of the 0.1 core API for callers that want predictable file
+    /// placement.
     ///
     /// # Example
     ///
@@ -150,12 +160,16 @@ impl Db {
     }
 
     /// Returns the path to the main data file (`.ndb`).
+    ///
+    /// This is part of the 0.1 core API.
     #[inline]
     pub fn ndb_path(&self) -> &Path {
         &self.ndb_path
     }
 
     /// Returns the path to the WAL file (`.wal`).
+    ///
+    /// This is part of the 0.1 core API.
     #[inline]
     pub fn wal_path(&self) -> &Path {
         &self.wal_path
@@ -166,16 +180,18 @@ impl Db {
     /// The returned `ReadTxn` provides a consistent view of the database
     /// at the time of creation. It can be used concurrently with other
     /// read transactions and will not see writes that commit after its creation.
+    /// This is part of the 0.1 core API.
     pub fn begin_read(&self) -> ReadTxn {
         ReadTxn {
             snapshot: self.engine.begin_read(),
         }
     }
 
-    /// Creates a snapshot for query execution.
+    /// Creates a snapshot for query execution and direct graph reads.
     ///
     /// Returns a `DbSnapshot` that implements `GraphSnapshot` trait,
-    /// suitable for use with the query engine.
+    /// suitable for use with the query engine and direct traversal. This is
+    /// part of the 0.1 core API.
     pub fn snapshot(&self) -> DbSnapshot {
         DbSnapshot(self.engine.snapshot())
     }
@@ -184,6 +200,7 @@ impl Db {
     ///
     /// Write transactions are exclusive - only one can exist at a time.
     /// The transaction must be explicitly committed with `commit()`.
+    /// This is part of the 0.1 core API.
     ///
     /// # Panics
     ///
@@ -196,6 +213,8 @@ impl Db {
 
     /// Triggers a compaction operation.
     ///
+    /// Experimental / maintenance API. Not part of the 0.1 core API contract.
+    ///
     /// Compaction merges frozen MemTables into CSR segments and removes
     /// tombstoned entries. This is a potentially expensive operation
     /// that should be done during maintenance windows.
@@ -205,6 +224,8 @@ impl Db {
 
     /// Creates a durability checkpoint.
     ///
+    /// Experimental / maintenance API. Not part of the 0.1 core API contract.
+    ///
     /// In MVP, this is equivalent to `compact()`. Future versions may
     /// implement lightweight checkpoints that don't require full compaction.
     pub fn checkpoint(&self) -> Result<()> {
@@ -212,7 +233,9 @@ impl Db {
         self.engine.compact().map_err(Error::from)
     }
 
-    /// Explicitly closes the DB and performs a best-effort checkpoint-on-close (T106).
+    /// Explicitly closes the DB and performs a best-effort checkpoint-on-close.
+    ///
+    /// Experimental / maintenance API. Not part of the 0.1 core API contract.
     ///
     /// This is intentionally not implemented in `Drop` to avoid hiding expensive IO.
     pub fn close(self) -> Result<()> {
@@ -221,6 +244,8 @@ impl Db {
     }
 
     /// Creates an index on the specified label and property.
+    ///
+    /// Experimental / maintenance API. Not part of the 0.1 core API contract.
     ///
     /// # Example
     /// ```ignore
@@ -234,13 +259,17 @@ impl Db {
 
     /// Searches for nodes with vectors similar to the query vector.
     ///
+    /// Experimental / maintenance API. Not part of the 0.1 core API contract.
+    ///
     /// Returns a list of `(node_id, distance)` tuples.
     pub fn search_vector(&self, query: &[f32], k: usize) -> Result<Vec<(InternalNodeId, f32)>> {
         self.engine.search_vector(query, k).map_err(Error::from)
     }
 }
 
-/// Performs in-place vacuum through the v2 facade.
+/// Performs in-place vacuum through the facade.
+///
+/// Experimental / maintenance API. Not part of the 0.1 core API contract.
 ///
 /// This keeps CLI and other callers on the facade surface instead of coupling
 /// directly to storage internals.
@@ -250,6 +279,8 @@ pub fn vacuum(path: impl AsRef<Path>) -> Result<VacuumReport> {
 }
 
 /// Creates a consistent on-disk backup snapshot.
+///
+/// Experimental / maintenance API. Not part of the 0.1 core API contract.
 ///
 /// The database path accepts either base path, `.ndb`, or `.wal`.
 /// Backup artifacts are written under `backup_dir/<backup-id>/`.
@@ -269,6 +300,8 @@ pub fn backup(path: impl AsRef<Path>, backup_dir: impl AsRef<Path>) -> Result<Ba
 }
 
 /// Bulk loads data into a new database file in offline mode.
+///
+/// Experimental / maintenance API. Not part of the 0.1 core API contract.
 pub fn bulkload(path: impl AsRef<Path>, nodes: Vec<BulkNode>, edges: Vec<BulkEdge>) -> Result<()> {
     let (ndb_path, _) = derive_paths(path.as_ref());
     let mut loader = BulkLoader::new(ndb_path).map_err(Error::from)?;
@@ -281,7 +314,11 @@ pub fn bulkload(path: impl AsRef<Path>, nodes: Vec<BulkNode>, edges: Vec<BulkEdg
     loader.commit().map_err(Error::from)
 }
 
-/// A wrapper around the storage snapshot to hide internal types.
+/// A 0.1 core read snapshot returned by [`Db::snapshot`].
+///
+/// `DbSnapshot` implements [`GraphSnapshot`] so callers can scan nodes, resolve
+/// labels and relationship types, read properties, and traverse neighbors
+/// without coupling to storage internals.
 pub struct DbSnapshot(StorageSnapshot);
 
 impl GraphSnapshot for DbSnapshot {
@@ -369,7 +406,7 @@ impl GraphSnapshot for DbSnapshot {
     }
 }
 
-/// A read-only transaction.
+/// A 0.1 core read-only transaction.
 ///
 /// Created by [`Db::begin_read()`]. Provides consistent snapshot access.
 #[derive(Debug, Clone)]
@@ -382,6 +419,7 @@ impl ReadTxn {
     ///
     /// Returns an iterator over edges. If `rel` is `Some`, only edges
     /// of that relationship type are returned.
+    /// This is part of the 0.1 core API.
     pub fn neighbors(
         &self,
         src: InternalNodeId,
@@ -395,7 +433,7 @@ impl ReadTxn {
     }
 }
 
-/// A write transaction.
+/// A 0.1 core write transaction.
 ///
 /// Created by [`Db::begin_write()`]. All modifications are buffered
 /// until `commit()` is called. The transaction consumes `self` on commit.
@@ -407,6 +445,7 @@ impl<'a> WriteTxn<'a> {
     /// Creates a new node with the given external ID and label.
     ///
     /// Returns the internal node ID for use in subsequent operations.
+    /// This is part of the 0.1 core API.
     pub fn create_node(
         &mut self,
         external_id: ExternalId,
@@ -418,11 +457,15 @@ impl<'a> WriteTxn<'a> {
     }
 
     /// Gets or creates a label ID for the given name.
+    ///
+    /// This is part of the 0.1 core API.
     pub fn get_or_create_label(&mut self, name: &str) -> Result<LabelId> {
         self.inner.get_or_create_label(name).map_err(Error::from)
     }
 
     /// Gets or creates a relationship type ID for the given name.
+    ///
+    /// This is part of the 0.1 core API.
     pub fn get_or_create_rel_type(&mut self, name: &str) -> Result<RelTypeId> {
         self.inner.get_or_create_rel_type(name).map_err(Error::from)
     }
@@ -430,6 +473,7 @@ impl<'a> WriteTxn<'a> {
     /// Creates a directed edge from source to destination.
     ///
     /// The relationship type is identified by `rel`.
+    /// This is part of the 0.1 core API.
     pub fn create_edge(&mut self, src: InternalNodeId, rel: RelTypeId, dst: InternalNodeId) {
         self.inner.create_edge(src, rel, dst);
     }
@@ -438,6 +482,7 @@ impl<'a> WriteTxn<'a> {
     ///
     /// The node becomes invisible to queries but its data is retained
     /// until compaction removes it. Outgoing edges are also hidden.
+    /// This is part of the 0.1 core API.
     pub fn tombstone_node(&mut self, node: InternalNodeId) {
         self.inner.tombstone_node(node);
     }
@@ -445,6 +490,7 @@ impl<'a> WriteTxn<'a> {
     /// Soft-deletes an edge.
     ///
     /// The edge becomes invisible to neighbor queries.
+    /// This is part of the 0.1 core API.
     pub fn tombstone_edge(&mut self, src: InternalNodeId, rel: RelTypeId, dst: InternalNodeId) {
         self.inner.tombstone_edge(src, rel, dst);
     }
@@ -452,6 +498,7 @@ impl<'a> WriteTxn<'a> {
     /// Sets a property on a node.
     ///
     /// If the property already exists, it is overwritten.
+    /// This is part of the 0.1 core API.
     pub fn set_node_property(
         &mut self,
         node: InternalNodeId,
@@ -466,6 +513,7 @@ impl<'a> WriteTxn<'a> {
     /// Sets a property on an edge.
     ///
     /// If the property already exists, it is overwritten.
+    /// This is part of the 0.1 core API.
     pub fn set_edge_property(
         &mut self,
         src: InternalNodeId,
@@ -483,6 +531,7 @@ impl<'a> WriteTxn<'a> {
     /// Removes a property from a node.
     ///
     /// If the property doesn't exist, this is a no-op.
+    /// This is part of the 0.1 core API.
     pub fn remove_node_property(&mut self, node: InternalNodeId, key: &str) -> Result<()> {
         self.inner.remove_node_property(node, key);
         Ok(())
@@ -491,6 +540,7 @@ impl<'a> WriteTxn<'a> {
     /// Removes a property from an edge.
     ///
     /// If the property doesn't exist, this is a no-op.
+    /// This is part of the 0.1 core API.
     pub fn remove_edge_property(
         &mut self,
         src: InternalNodeId,
@@ -505,6 +555,7 @@ impl<'a> WriteTxn<'a> {
     /// Sets the vector embedding for a node.
     ///
     /// This vector can be used for similarity search.
+    /// Experimental / maintenance API. Not part of the 0.1 core API contract.
     pub fn set_vector(&mut self, node: InternalNodeId, vector: Vec<f32>) -> Result<()> {
         self.inner.set_vector(node, vector).map_err(Error::from)
     }
@@ -513,6 +564,7 @@ impl<'a> WriteTxn<'a> {
     ///
     /// All modifications are written to the WAL and made visible
     /// to new read transactions. The transaction is consumed.
+    /// This is part of the 0.1 core API.
     ///
     /// # Returns
     ///
