@@ -8,14 +8,18 @@ conflicts with this map, trust this map first and update the stale document.
 - Product vision: `docs/product/vision.md`
 - 0.1 scope boundary: `docs/product/scope-0.1.md`
 - Architecture overview: `docs/architecture/overview.md`
+- Workspace layers: `docs/architecture/workspace-layers.md`
 - Coding standards: `docs/engineering/coding-standards.md`
 - Testing strategy: `docs/engineering/testing-strategy.md`
 - Branching and PR rules: `docs/engineering/branching-pr.md`
 - Definition of done: `docs/engineering/definition-of-done.md`
 - Local validation runbook: `docs/runbooks/local-validation.md`
 - Scope reset decision: `docs/decisions/0001-reset-scope-to-sqlite-for-graphs.md`
+- Platform freeze decision: `docs/decisions/0002-freeze-platform-expansion-before-0.1.md`
 - Active plans: `docs/plans/active/`
+- Current slimdown plan: `docs/plans/active/002-core-0.1-slimdown.md`
 - Plan template: `docs/plans/template.md`
+- Mini-Cypher reference: `docs/reference/mini-cypher.md`
 - Glossary: `docs/reference/glossary.md`
 - Bug ledger: `docs/bugs/index.md`
 
@@ -26,6 +30,9 @@ conflicts with this map, trust this map first and update the stale document.
 - Query layer: `nervusdb-query/`
 - Storage/API boundary traits: `nervusdb-api/`
 - CLI: `nervusdb-cli/`
+
+The active layer map is `docs/architecture/workspace-layers.md`. It is the
+current source for what is core, experimental, and frozen.
 
 ## Historical Or Experimental References
 
@@ -45,6 +52,9 @@ These documents are useful evidence, but they are not the 0.1 product scope:
 Historical documents may mention full TCK, multi-binding parity, vector search,
 or SQLite-Beta release status. Those are not 0.1 requirements unless a current
 document explicitly re-promotes them.
+
+Default CI and local validation do not run historical or experimental gates.
+Use those scripts manually only when touching their area.
 
 ## Update Rule
 

@@ -1,36 +1,66 @@
-//! # NervusDB v2 (Rust-First Edition)
+//! # NervusDB 0.1 Core
 //!
-//! **The "SQLite" of Graph Databases for Rust.**
+//! Rust-first embedded property graph database: SQLite-style local files,
+//! crash-safe persistence, and a deliberately small graph query surface.
 //!
-//! NervusDB is an embedded graph database designed for local-first applications.
-//! It provides a unified, zero-config experience for managing persistent graph data
-//! with strong consistency and safety guarantees.
+//! The 0.1 line is intentionally narrow. The core path is:
 //!
-//! ## 🚀 Quickstart
+//! ```text
+//! Db::open -> begin_write/commit -> snapshot -> Mini-Cypher/direct traversal
+//! ```
+//!
+//! ## 0.1 Core APIs
+//!
+//! - [`Db::open`] and [`Db::open_paths`] open local `.ndb` and `.wal` files.
+//! - [`Db::snapshot`] creates a read snapshot for query execution.
+//! - [`Db::begin_write`] creates the single-writer transaction path.
+//! - [`ReadTxn`] and [`DbSnapshot`] expose label/property/traversal reads.
+//! - [`WriteTxn`] exposes node, edge, label, relationship type, and property
+//!   persistence.
+//! - [`query`] re-exports the Mini-Cypher query crate for supported 0.1 reads
+//!   and writes.
+//!
+//! ## Experimental Or Frozen APIs
+//!
+//! Existing maintenance APIs such as [`Db::create_index`], [`Db::search_vector`],
+//! [`backup`], [`vacuum`], [`bulkload`], [`Db::compact`], and [`Db::checkpoint`]
+//! remain available for compatibility and manual experiments. They are not the
+//! default 0.1 product surface and should not drive new scope before the core
+//! embedded path is credible.
+//!
+//! ## Quickstart
 //!
 //! Add `nervusdb` to your `Cargo.toml`. Then, you can start building your graph:
 //!
 //! ```rust,no_run
 //! use nervusdb::{Db, Result};
+//! use nervusdb_query::{prepare, query_collect, Params};
 //!
 //! fn main() -> Result<()> {
-//!     // 1. Open the database (creates .ndb and .wal files)
 //!     let db = Db::open("my_graph.ndb")?;
 //!
-//!     // 2. Write Data
+//!     let snapshot = db.snapshot();
+//!     let create = prepare("CREATE (n:Person {name: 'Alice'})")
+//!         .map_err(|e| nervusdb::Error::Other(e.to_string()))?;
 //!     let mut txn = db.begin_write();
-//!     // (APIs for node creation in progress, see examples/tour.rs)
+//!     create
+//!         .execute_write(&snapshot, &mut txn, &Params::new())
+//!         .map_err(|e| nervusdb::Error::Other(e.to_string()))?;
 //!     txn.commit()?;
 //!
-//!     // 3. Query Data (Cypher)
-//!     let snapshot = db.snapshot();
-//!     // snapshot.query("MATCH (n) RETURN n", ...);
+//!     let rows = query_collect(
+//!         &db.snapshot(),
+//!         "MATCH (n:Person) RETURN n.name LIMIT 10",
+//!         &Params::new(),
+//!     )
+//!     .map_err(|e| nervusdb::Error::Other(e.to_string()))?;
+//!     assert_eq!(rows.len(), 1);
 //!
 //!     Ok(())
 //! }
 //! ```
 //!
-//! ## 💡 Core Concepts
+//! ## Core Concepts
 //!
 //! - **[`Db`]**: The entry point. Handles file management, locking, and engine initialization.
 //!   Safe to share across threads (it uses internal locking).

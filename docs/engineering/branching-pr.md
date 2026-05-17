@@ -1,8 +1,10 @@
-# Branching And PR Rules
+# Branching And Integration Rules
 
-- `main` is the protected trunk.
-- Development happens on short-lived branches.
-- Use PRs for integration and squash merge by default.
+- `main` is the trunk.
+- Use short-lived branches and PRs when branch protection is enabled or when the
+  user asks for PR integration.
+- If the user explicitly requests local `main` work, keep commits scoped and
+  push `main` directly only after validation.
 - Keep commits scoped to one product or engineering change.
 - Do not include unrelated local edits.
 - Do not force push or rewrite shared history without explicit instruction.

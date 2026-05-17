@@ -1,6 +1,9 @@
-//! NervusDB v2 Query Engine
+//! NervusDB Mini-Cypher Query Engine
 //!
-//! Provides Cypher query parsing, planning, and execution for NervusDB v2.
+//! Provides parsing, planning, and execution for the query surface used by the
+//! NervusDB 0.1 embedded core. The implementation contains historical support
+//! for broader Cypher work, but only the Mini-Cypher surface documented in
+//! `docs/reference/mini-cypher.md` defines 0.1 readiness.
 //!
 //! # Quick Start
 //!
@@ -14,14 +17,14 @@
 //!     .unwrap();
 //! ```
 //!
-//! # Supported Cypher (v2 M3)
+//! # Mini-Cypher 0.1
 //!
 //! - `RETURN 1` - Constant return
-//! - `MATCH (n)-[:<u32>]->(m) RETURN n, m LIMIT k` - Single-hop pattern match
-//! - `MATCH (n)-[:<u32>]->(m) WHERE n.prop = 'value' RETURN n, m` - With WHERE filter
-//! - `CREATE (n)` / `CREATE (n {k: v})` - Create nodes
-//! - `CREATE (a)-[:1]->(b)` - Create edges
-//! - `MATCH (n)-[:1]->(m) DELETE n` / `DETACH DELETE n` - Delete nodes/edges
+//! - `MATCH (n)` / `MATCH (n:Label)` - Node scans
+//! - `MATCH (a)-[:TYPE]->(b) RETURN a, b LIMIT k` - Single-hop pattern match
+//! - `MATCH (a)-[:TYPE]->(b)-[:TYPE]->(c)` - Two-hop pattern match for 0.1 examples
+//! - Simple property equality in `WHERE`
+//! - `CREATE`, basic `DELETE`, and basic `SET` where already stable
 //! - `EXPLAIN <query>` - Show compiled plan (no execution)
 //!
 //! # Architecture

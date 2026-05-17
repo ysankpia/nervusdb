@@ -1,8 +1,6 @@
 name: TCK Nightly Tier-3
 
 on:
-  schedule:
-    - cron: "15 2 * * *"
   workflow_dispatch:
     inputs:
       run_beta_gate:

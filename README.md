@@ -1,33 +1,30 @@
 # NervusDB
 
-**Rust-native embedded property graph database — SQLite for graphs.**
+**Rust-first embedded property graph database — SQLite for graphs.**
 
-Store nodes, relationships, and properties in a single local file. Query with Cypher.
-No server, no setup, no dependencies.
+Open a local path, write graph data, query nearby relationships, survive a
+crash, and reopen. No server. No network service. No platform ceremony.
 
-[![CI](https://github.com/LuQing-Studio/nervusdb/actions/workflows/ci.yml/badge.svg)](https://github.com/LuQing-Studio/nervusdb/actions/workflows/ci.yml)
+[![CI](https://github.com/ysankpia/nervusdb/actions/workflows/ci.yml/badge.svg)](https://github.com/ysankpia/nervusdb/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
-## Highlights
+> [中文](README_CN.md)
 
-- **Embedded** — open a path, get a graph database. No daemon, no network.
-- **Cypher** — openCypher TCK 100% pass rate (3 897 / 3 897 scenarios).
-- **Crash-safe** — WAL-based storage with single-writer + snapshot-reader transactions.
-- **Multi-platform bindings** — Rust, Python (PyO3), Node.js (N-API), CLI.
-- **Vector search** — built-in HNSW index for hybrid graph + vector queries.
-- **Cross-binding parity gate** — `examples-test` hard-asserts Rust/Node/Python isomorphic behavior.
+## Current Focus
 
-## Release Status
+NervusDB is being cut back to a finishable 0.1 line:
 
-NervusDB has reached the current SQLite-Beta release line on trunk:
+- Rust embedded API
+- local file storage
+- WAL-backed crash recovery
+- node / edge / label / property persistence
+- label scans and neighbor traversal
+- a small Mini-Cypher surface
+- CLI support for local debug, import smoke, query, and write workflows
 
-- TCK Tier-3 full scope: **100%** (3 897 / 3 897)
-- Stability window: **7 / 7 days passed**
-- Performance SLO window: **7 / 7 days passed**
-
-For release gate details and the daily reporting template, see
-[Publishing Guide](docs/publishing.md) and
-[Beta Daily Template](docs/beta-daily-template.md).
+Full Cypher compatibility, multi-language SDK stabilization, HNSW/vector search,
+cross-binding parity gates, and industrial nightly gates are historical or
+experimental. They are not the 0.1 success criteria.
 
 ## Quick Start
 
@@ -35,112 +32,79 @@ For release gate details and the daily reporting template, see
 
 ```rust
 use nervusdb::Db;
+use nervusdb_query::{prepare, query_collect, Params};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let db = Db::open("/tmp/demo")?;
-    db.execute("CREATE (n:Person {name: 'Alice'})", None)?;
-    let rows = db.query("MATCH (n:Person) RETURN n.name", None)?;
-    println!("{} row(s)", rows.len());
+    let db = Db::open("/tmp/nervusdb-demo")?;
+
+    let snapshot = db.snapshot();
+    let create = prepare("CREATE (n:Person {name: 'Alice'})")?;
+    let mut txn = db.begin_write();
+    create.execute_write(&snapshot, &mut txn, &Params::new())?;
+    txn.commit()?;
+
+    let rows = query_collect(
+        &db.snapshot(),
+        "MATCH (n:Person) RETURN n.name LIMIT 10",
+        &Params::new(),
+    )?;
+    println!("{rows:?}");
     Ok(())
 }
-```
-
-### Python
-
-```bash
-pip install maturin
-maturin develop -m nervusdb-pyo3/Cargo.toml
-```
-
-```python
-import nervusdb
-
-db = nervusdb.open("/tmp/demo-py")
-db.execute_write("CREATE (n:Person {name: 'Alice'})")
-for row in db.query_stream("MATCH (n:Person) RETURN n.name"):
-    print(row)
-db.close()
-```
-
-### Node.js
-
-```bash
-cargo build --manifest-path nervusdb-node/Cargo.toml --release
-```
-
-```typescript
-const { Db } = require("./nervusdb-node");
-
-const db = Db.open("/tmp/demo-node");
-db.executeWrite("CREATE (n:Person {name: 'Alice'})");
-const rows = db.query("MATCH (n:Person) RETURN n.name");
-console.log(rows);
-db.close();
 ```
 
 ### CLI
 
 ```bash
 cargo run -p nervusdb-cli -- v2 write \
-  --db /tmp/demo \
+  --db /tmp/nervusdb-demo \
   --cypher "CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})"
 
 cargo run -p nervusdb-cli -- v2 query \
-  --db /tmp/demo \
-  --cypher "MATCH (a)-[:KNOWS]->(b) RETURN a.name, b.name"
+  --db /tmp/nervusdb-demo \
+  --cypher "MATCH (a)-[:KNOWS]->(b) RETURN a.name, b.name LIMIT 10"
 ```
 
-> Write statements (`CREATE`, `MERGE`, `DELETE`, `SET`) must use `execute_write` /
-> `executeWrite` or a write transaction. Calling `query()` with a write statement
-> raises an error.
+Write statements must use `prepare(...).execute_write(...)` or the CLI write
+path. Read queries should stay within the documented Mini-Cypher surface for
+0.1.
 
 ## Architecture
 
-```
-nervusdb          — public API crate (Db::open / query / execute)
-nervusdb-query    — Cypher parser, planner, executor
-nervusdb-storage  — WAL, page store, segments, compaction
-nervusdb-api      — GraphStore / GraphSnapshot traits
-nervusdb-cli      — command-line interface
-nervusdb-pyo3     — Python binding (PyO3)
-nervusdb-node     — Node.js binding (N-API)
+```text
+nervusdb          public Rust facade
+nervusdb-api      storage/query boundary traits
+nervusdb-storage  page store, WAL, snapshots, recovery, indexes
+nervusdb-query    Mini-Cypher parser/planner/executor path plus frozen history
+nervusdb-cli      local debug/import/query/write tool
 ```
 
-Storage layout: `<path>.ndb` (page store) + `<path>.wal` (redo log).
-Transaction model: single writer + concurrent snapshot readers.
-
-## Test Status
-
-| Suite | Tests | Status |
-|-------|-------|--------|
-| openCypher TCK | 3 897 / 3 897 | 100% |
-| Rust unit + integration | 153 | all green |
-| Python (PyO3) | 138 | all green |
-| Node.js (N-API) | 109 | all green |
-| examples-test parity (Rust + Node + Python) | 601 / 601 | all green |
-
-## Documentation
-
-- [User Guide](docs/user-guide.md) — API reference for all platforms
-- [Architecture](docs/architecture.md) — storage, query pipeline, crate structure
-- [Cypher Support](docs/cypher-support.md) — full compliance matrix
-- [Roadmap](docs/ROADMAP.md) — current and planned phases
-- [CLI Reference](docs/cli.md) — command-line usage
-- [Binding Parity](docs/binding-parity.md) — cross-platform API coverage
+Experimental or historical areas remain in the repository but are not the
+default product path: Python, Node.js, C bindings, full openCypher TCK, vector
+search, parity gates, perf/chaos/soak/fuzz matrices, and release windows.
 
 ## Development
 
+Default local check:
+
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -W warnings
-bash scripts/workspace_quick_test.sh
-bash scripts/binding_smoke.sh
-bash scripts/tests/stability_window_fixture.sh
-DATE_UTC="$(date -u +%F)"
-GITHUB_TOKEN="$(gh auth token)" \
-  bash scripts/stability_window.sh --mode strict --date "${DATE_UTC}" \
-  --github-repo LuQing-Studio/nervusdb --github-token-env GITHUB_TOKEN
+bash scripts/check.sh
 ```
+
+This runs formatting, core-crate clippy, and the Mini-Cypher core quick test.
+Full historical tests live behind `bash scripts/workspace_full_test.sh`.
+Area-specific scripts for TCK, bindings, perf, fuzz, chaos, soak, and stability
+are manual signals only.
+
+## Documentation
+
+- [Documentation Index](docs/index.md)
+- [0.1 Technical Constitution](docs/spec.md)
+- [Product Vision](docs/product/vision.md)
+- [0.1 Scope](docs/product/scope-0.1.md)
+- [Architecture Overview](docs/architecture/overview.md)
+- [Mini-Cypher Reference](docs/reference/mini-cypher.md)
+- [Local Validation](docs/runbooks/local-validation.md)
 
 ## License
 

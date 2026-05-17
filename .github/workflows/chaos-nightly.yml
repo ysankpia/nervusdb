@@ -1,8 +1,6 @@
 name: Chaos IO Gate
 
 on:
-  schedule:
-    - cron: "10 3 * * 2"
   workflow_dispatch:
 
 permissions:

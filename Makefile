@@ -1,81 +1,73 @@
-.PHONY: fmt check test quick-test tck-smoke tck-tier0 tck-tier1 tck-tier2 tck-tier3 tck-report pre-commit install-hooks clean
+.PHONY: fmt check quick-test full-test tck-smoke tck-tier0 tck-tier1 tck-tier2 tck-tier3 tck-report pre-commit install-hooks clean help
 
-# Format code
 fmt:
-	@echo "📝 Formatting code..."
+	@echo "format"
 	@cargo fmt --all
 
-# Run clippy linter
 check:
-	@echo "🔍 Running clippy..."
-	@cargo clippy --workspace --all-targets -- -W warnings
+	@echo "core 0.1 check"
+	@bash scripts/check.sh
 
-# Run quick library tests
 quick-test:
-	@echo "⚡ Running quick tests..."
-	@cargo test --lib --workspace --no-fail-fast
+	@echo "core 0.1 quick test"
+	@bash scripts/workspace_quick_test.sh
 
-# Run full test suite
-test:
-	@echo "🧪 Running full test suite..."
-	@cargo test --workspace
+full-test:
+	@echo "full historical workspace verification"
+	@bash scripts/workspace_full_test.sh
 
-# Run legacy TCK smoke gate
+test: full-test
+
 tck-smoke:
-	@echo "🧭 Running TCK smoke gate..."
+	@echo "manual TCK smoke gate"
 	@bash scripts/tck_smoke_gate.sh
 
-# Tiered TCK gates
 tck-tier0:
-	@echo "🧭 Running TCK Tier-0..."
+	@echo "manual TCK Tier-0"
 	@bash scripts/tck_tier_gate.sh tier0
 
 tck-tier1:
-	@echo "🧭 Running TCK Tier-1..."
+	@echo "manual TCK Tier-1"
 	@bash scripts/tck_tier_gate.sh tier1
 
 tck-tier2:
-	@echo "🧭 Running TCK Tier-2..."
+	@echo "manual TCK Tier-2"
 	@bash scripts/tck_tier_gate.sh tier2
 
 tck-tier3:
-	@echo "🧭 Running TCK Tier-3..."
+	@echo "manual TCK Tier-3"
 	@bash scripts/tck_tier_gate.sh tier3
 
 tck-report:
-	@echo "📊 Building TCK failure cluster report..."
+	@echo "TCK failure cluster report"
 	@bash scripts/tck_failure_cluster.sh artifacts/tck/tier3-full.log artifacts/tck/tier3-cluster.md
 
-# Pre-commit check (fmt + clippy + quick tests)
-pre-commit: fmt check quick-test
-	@echo "✅ Pre-commit checks passed"
+pre-commit:
+	@echo "pre-commit core check"
+	@bash scripts/check.sh
 
-# Install git hooks
 install-hooks:
-	@echo "📦 Installing git hooks..."
+	@echo "installing git hooks"
 	@cp scripts/git-hooks/pre-commit .git/hooks/pre-commit
 	@cp scripts/git-hooks/pre-push .git/hooks/pre-push
 	@chmod +x .git/hooks/pre-commit
 	@chmod +x .git/hooks/pre-push
-	@echo "✅ Git hooks installed! Run 'make pre-commit' to test them."
+	@echo "git hooks installed"
 
-# Clean build artifacts
 clean:
-	@echo "🧹 Cleaning build artifacts..."
+	@echo "cleaning build artifacts"
 	@cargo clean
 
-# Show help
 help:
-	@echo "NervusDB Development Commands:"
-	@echo "  make fmt           - Format code with rustfmt"
-	@echo "  make check         - Run clippy linter"
-	@echo "  make quick-test    - Run quick library tests"
-	@echo "  make test          - Run full test suite"
-	@echo "  make tck-tier0     - Run TCK Tier-0 (smoke)"
-	@echo "  make tck-tier1     - Run TCK Tier-1 (clauses whitelist)"
-	@echo "  make tck-tier2     - Run TCK Tier-2 (expressions whitelist)"
-	@echo "  make tck-tier3     - Run TCK Tier-3 (full, may fail)"
-	@echo "  make tck-report    - Build TCK failure cluster report"
-	@echo "  make pre-commit    - Run all pre-commit checks"
-	@echo "  make install-hooks - Install git hooks"
-	@echo "  make clean         - Clean build artifacts"
+	@echo "NervusDB development commands:"
+	@echo "  make check      - Run the default core 0.1 check"
+	@echo "  make quick-test - Run the core 0.1 Mini-Cypher test"
+	@echo "  make full-test  - Run full historical workspace verification manually"
+	@echo "  make test       - Alias for make full-test"
+	@echo "  make tck-tier0  - Manual TCK Tier-0"
+	@echo "  make tck-tier1  - Manual TCK Tier-1"
+	@echo "  make tck-tier2  - Manual TCK Tier-2"
+	@echo "  make tck-tier3  - Manual TCK Tier-3"
+	@echo "  make install-hooks - Install fast core hooks"
+	@echo "  make clean      - Clean build artifacts"
+

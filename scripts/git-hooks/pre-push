@@ -1,15 +1,9 @@
 #!/bin/sh
-# Git pre-push hook for Rust project
+# Fast pre-push hook for the NervusDB 0.1 core loop.
 set -e
 
-echo "🚀 [pre-push] Running final verification..."
+echo "[pre-push] running core check"
+bash scripts/check.sh
 
-# Run full test suite
-echo "🧪 Running full test suite..."
-if ! cargo test --workspace; then
-    echo "❌ Tests failed. Push aborted."
-    exit 1
-fi
+echo "[pre-push] ok"
 
-echo "✅ All checks passed! Pushing to remote..."
-exit 0

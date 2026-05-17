@@ -1,35 +1,29 @@
 # NervusDB
 
-**Rust 原生嵌入式属性图数据库 — 图数据的 SQLite。**
+**Rust-first 嵌入式属性图数据库 — 图数据的 SQLite。**
 
-打开一个路径，即可获得完整的图数据库。支持 Cypher 查询。
-无需服务器、无需配置、无外部依赖。
+打开一个本地路径，写入图数据，查询附近关系，崩溃后恢复并重新打开。
+没有服务器，没有网络服务，没有平台仪式。
 
-[![CI](https://github.com/LuQing-Studio/nervusdb/actions/workflows/ci.yml/badge.svg)](https://github.com/LuQing-Studio/nervusdb/actions/workflows/ci.yml)
+[![CI](https://github.com/ysankpia/nervusdb/actions/workflows/ci.yml/badge.svg)](https://github.com/ysankpia/nervusdb/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
 > [English](README.md)
 
-## 核心特性
+## 当前重点
 
-- **嵌入式** — 打开路径即用，无守护进程，无网络通信。
-- **Cypher** — openCypher TCK 100% 通过率（3 897 / 3 897 场景）。
-- **崩溃安全** — 基于 WAL 的存储，单写者 + 快照读者事务模型。
-- **多平台绑定** — Rust、Python (PyO3)、Node.js (N-API)、CLI。
-- **向量搜索** — 内置 HNSW 索引，支持图 + 向量混合查询。
-- **三端一致性门禁** — `examples-test` 对 Rust/Node/Python 执行硬断言同态校验。
+NervusDB 正在收缩到一个能完成的 0.1 主线：
 
-## 发布状态
+- Rust 嵌入式 API
+- 本地文件存储
+- WAL 崩溃恢复
+- 节点 / 边 / label / 属性持久化
+- label scan 和邻居遍历
+- 小而明确的 Mini-Cypher
+- CLI 用于本地调试、导入 smoke、查询和写入
 
-NervusDB 当前已经在主干达到“图数据库界 SQLite（Beta）”发布线：
-
-- TCK Tier-3 全量：**100%**（3 897 / 3 897）
-- 稳定窗：**7 / 7 天通过**
-- 性能 SLO 窗口：**7 / 7 天通过**
-
-发布门禁说明和日报模板见
-[发布指南](docs/publishing.md) 与
-[Beta 日报模板](docs/beta-daily-template.md)。
+完整 Cypher 兼容、多语言 SDK 稳定化、HNSW/向量搜索、跨绑定一致性门禁、
+工业级 nightly gate 都属于历史或实验范围，不是 0.1 成功标准。
 
 ## 快速开始
 
@@ -37,96 +31,76 @@ NervusDB 当前已经在主干达到“图数据库界 SQLite（Beta）”发布
 
 ```rust
 use nervusdb::Db;
+use nervusdb_query::{prepare, query_collect, Params};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let db = Db::open("/tmp/demo")?;
-    db.execute("CREATE (n:Person {name: 'Alice'})", None)?;
-    let rows = db.query("MATCH (n:Person) RETURN n.name", None)?;
-    println!("{} row(s)", rows.len());
+    let db = Db::open("/tmp/nervusdb-demo")?;
+
+    let snapshot = db.snapshot();
+    let create = prepare("CREATE (n:Person {name: 'Alice'})")?;
+    let mut txn = db.begin_write();
+    create.execute_write(&snapshot, &mut txn, &Params::new())?;
+    txn.commit()?;
+
+    let rows = query_collect(
+        &db.snapshot(),
+        "MATCH (n:Person) RETURN n.name LIMIT 10",
+        &Params::new(),
+    )?;
+    println!("{rows:?}");
     Ok(())
 }
-```
-
-### Python
-
-```bash
-pip install maturin
-maturin develop -m nervusdb-pyo3/Cargo.toml
-```
-
-```python
-import nervusdb
-
-db = nervusdb.open("/tmp/demo-py")
-db.execute_write("CREATE (n:Person {name: 'Alice'})")
-for row in db.query_stream("MATCH (n:Person) RETURN n.name"):
-    print(row)
-db.close()
-```
-
-### Node.js
-
-```bash
-cargo build --manifest-path nervusdb-node/Cargo.toml --release
-```
-
-```typescript
-const { Db } = require("./nervusdb-node");
-
-const db = Db.open("/tmp/demo-node");
-db.executeWrite("CREATE (n:Person {name: 'Alice'})");
-const rows = db.query("MATCH (n:Person) RETURN n.name");
-console.log(rows);
-db.close();
 ```
 
 ### CLI
 
 ```bash
 cargo run -p nervusdb-cli -- v2 write \
-  --db /tmp/demo \
+  --db /tmp/nervusdb-demo \
   --cypher "CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})"
 
 cargo run -p nervusdb-cli -- v2 query \
-  --db /tmp/demo \
-  --cypher "MATCH (a)-[:KNOWS]->(b) RETURN a.name, b.name"
+  --db /tmp/nervusdb-demo \
+  --cypher "MATCH (a)-[:KNOWS]->(b) RETURN a.name, b.name LIMIT 10"
 ```
 
-> 写语句（`CREATE`、`MERGE`、`DELETE`、`SET`）必须使用 `execute_write` /
-> `executeWrite` 或写事务接口。用 `query()` 执行写语句会抛出错误。
+写语句必须使用 `prepare(...).execute_write(...)` 或 CLI write 路径。0.1 前的读查询应
+保持在 Mini-Cypher 文档范围内。
 
-## 测试状态
+## 架构
 
-| 测试套件 | 用例数 | 状态 |
-|----------|--------|------|
-| openCypher TCK | 3 897 / 3 897 | 100% |
-| Rust 单元 + 集成测试 | 153 | 全部通过 |
-| Python (PyO3) | 138 | 全部通过 |
-| Node.js (N-API) | 109 | 全部通过 |
-| examples-test 三端一致性（Rust + Node + Python） | 601 / 601 | 全部通过 |
+```text
+nervusdb          public Rust facade
+nervusdb-api      storage/query boundary traits
+nervusdb-storage  page store, WAL, snapshots, recovery, indexes
+nervusdb-query    Mini-Cypher parser/planner/executor path plus frozen history
+nervusdb-cli      local debug/import/query/write tool
+```
 
-## 文档
-
-- [用户指南](docs/user-guide.md) — 全平台 API 参考
-- [架构设计](docs/architecture.md) — 存储、查询管线、crate 结构
-- [Cypher 支持](docs/cypher-support.md) — 完整合规矩阵
-- [路线图](docs/ROADMAP.md) — 当前与计划阶段
-- [CLI 参考](docs/cli.md) — 命令行用法
-- [绑定对等](docs/binding-parity.md) — 跨平台 API 覆盖
+Python、Node.js、C 绑定、完整 openCypher TCK、向量搜索、一致性门禁、
+perf/chaos/soak/fuzz 矩阵和 release window 仍保留在仓库中，但不属于默认产品路径。
 
 ## 开发
 
+默认本地检查：
+
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -W warnings
-bash scripts/workspace_quick_test.sh
-bash scripts/binding_smoke.sh
-bash scripts/tests/stability_window_fixture.sh
-DATE_UTC="$(date -u +%F)"
-GITHUB_TOKEN="$(gh auth token)" \
-  bash scripts/stability_window.sh --mode strict --date "${DATE_UTC}" \
-  --github-repo LuQing-Studio/nervusdb --github-token-env GITHUB_TOKEN
+bash scripts/check.sh
 ```
+
+它会运行格式化、core crate clippy 和 Mini-Cypher 核心快速测试。完整历史测试放在
+`bash scripts/workspace_full_test.sh` 后面，手动运行。TCK、bindings、perf、fuzz、
+chaos、soak、stability 相关脚本只作为手动信号。
+
+## 文档
+
+- [文档索引](docs/index.md)
+- [0.1 技术宪法](docs/spec.md)
+- [产品愿景](docs/product/vision.md)
+- [0.1 范围](docs/product/scope-0.1.md)
+- [架构总览](docs/architecture/overview.md)
+- [Mini-Cypher 参考](docs/reference/mini-cypher.md)
+- [本地验证](docs/runbooks/local-validation.md)
 
 ## 许可证
 

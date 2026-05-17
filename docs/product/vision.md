@@ -28,6 +28,8 @@ and local-first applications.
 - Prefer Rust API stability over early SDK expansion.
 - Prefer a small explainable query surface over full Cypher compatibility.
 - Prefer deterministic local checks over large scheduled gate matrices.
+- Prefer a finishable embedded 0.1 over proving every historical subsystem still
+  deserves first-class product status.
 
 ## Non-North-Stars
 

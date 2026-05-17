@@ -2,5 +2,12 @@
 set -euo pipefail
 
 cargo fmt --all -- --check
-cargo clippy --workspace --exclude nervusdb-pyo3 --all-targets -- -W warnings
+cargo clippy \
+  -p nervusdb-api \
+  -p nervusdb-storage \
+  -p nervusdb-query \
+  -p nervusdb \
+  -p nervusdb-cli \
+  --lib --bins \
+  -- -W warnings
 bash scripts/workspace_quick_test.sh

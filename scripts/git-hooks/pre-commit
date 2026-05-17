@@ -1,29 +1,9 @@
 #!/bin/sh
-# Git pre-commit hook for Rust project
+# Fast pre-commit hook for the NervusDB 0.1 core loop.
 set -e
 
-echo "🔧 [pre-commit] Running checks..."
+echo "[pre-commit] running core check"
+bash scripts/check.sh
 
-# Format code
-echo "📝 Formatting code..."
-cargo fmt --all
+echo "[pre-commit] ok"
 
-# Run clippy
-echo "🔍 Running clippy..."
-if ! cargo clippy --workspace --all-targets -- -W warnings; then
-    echo "❌ Clippy checks failed. Please fix the issues and try again."
-    exit 1
-fi
-
-# Run quick tests
-echo "⚡ Running quick tests..."
-if ! cargo test --lib --workspace --no-fail-fast; then
-    echo "❌ Tests failed. Please fix the failing tests and try again."
-    exit 1
-fi
-
-# Stage formatted files
-git add -u
-
-echo "✅ Pre-commit checks passed!"
-exit 0

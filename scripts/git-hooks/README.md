@@ -12,8 +12,12 @@ make install-hooks
 
 ## Hooks
 
-- **pre-commit**: Runs `cargo fmt`, `cargo clippy`, and quick tests before allowing commit
-- **pre-push**: Runs full test suite before allowing push
+- **pre-commit**: Runs `bash scripts/check.sh`.
+- **pre-push**: Runs `bash scripts/check.sh`.
+
+The hooks intentionally do not run full historical tests. Use
+`bash scripts/workspace_full_test.sh` manually for release preparation, broad
+refactors, or changes that intentionally touch frozen/experimental surfaces.
 
 ## Manual Testing
 
@@ -23,8 +27,8 @@ You can manually test the hooks without committing/pushing:
 # Test pre-commit checks
 make pre-commit
 
-# Test full test suite
-make test
+# Run full historical workspace verification manually
+bash scripts/workspace_full_test.sh
 ```
 
 ## Customization

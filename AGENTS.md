@@ -34,28 +34,50 @@ Treat old Beta, TCK, binding, vector, and perf documents as historical unless
   comprehension, vector search defaults, or stable non-Rust SDK APIs unless the
   scope document is changed first.
 - Prefer small modules and direct code over speculative abstraction.
-- Do not change `docs/spec.md` without explicit user confirmation, because it is
-  the repository constitution.
+- Treat `docs/spec.md` as the repository constitution. Change it only when the
+  user explicitly authorizes a scope reset or constitutional update.
 
-## Git And PR Rules
+## Git And Integration Rules
 
-- Work on a short-lived branch. Do not commit directly to `main`.
-- Use PRs, keep CI green, and squash merge by default.
+- Prefer short-lived branches and PRs when branch protection is enabled.
+- If the user explicitly requests local `main` work, do not create extra local
+  branches. Keep the commit scoped, validate it, and push `main` directly.
 - Do not include unrelated local edits in a commit.
 - Never rewrite user changes unless the user explicitly asks for that exact
   cleanup.
 
 ## Validation
 
-Use `scripts/check.sh` for the normal 0.1 development loop:
+Use `scripts/check.sh` for the normal 0.1 development loop. It must stay a
+short core gate, not a hidden full-suite runner:
 
 ```bash
 bash scripts/check.sh
 ```
 
-Run narrower tests first when iterating, but the final result must include the
-checks relevant to the touched subsystem. See `docs/engineering/testing-strategy.md`
-and `docs/runbooks/local-validation.md`.
+Default validation covers only the 0.1 core path:
+
+- `cargo fmt --all -- --check`
+- clippy for core crates (`nervusdb-api`, `nervusdb-storage`, `nervusdb-query`,
+  `nervusdb`, `nervusdb-cli`) on lib/bin targets
+- `bash scripts/workspace_quick_test.sh`
+
+Do not run full workspace tests by reflex. Pick the smallest check that proves
+the touched boundary:
+
+- Docs-only changes: use shell syntax checks, link/grep checks, and no Rust test
+  unless code examples changed.
+- CI/script changes: use `bash -n` plus targeted grep or dry-run checks.
+- Mini-Cypher changes: run `bash scripts/workspace_quick_test.sh` plus the
+  narrow affected query tests.
+- Storage/WAL changes: run targeted storage tests and
+  `bash scripts/core_crash_recovery.sh`.
+- Broad refactors or release preparation: run `bash scripts/workspace_full_test.sh`
+  manually and expect it to be slow.
+
+Never hide full test fan-out behind names like `quick`, `check`, `pre-commit`,
+or `pre-push`. If a command is slow, name it as full/manual. See
+`docs/engineering/testing-strategy.md` and `docs/runbooks/local-validation.md`.
 
 ## Definition Of Done
 

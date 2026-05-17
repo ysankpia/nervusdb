@@ -1,18 +1,7 @@
 name: Crash Gate v2
 
 on:
-  pull_request:
-    paths:
-      - "nervusdb-*/**"
-      - ".github/workflows/crash-gate-v2.yml"
-      - "Cargo.toml"
-      - "Cargo.lock"
-  schedule:
-    - cron: "30 3 * * *"
   workflow_dispatch:
-  push:
-    tags:
-      - "v*"
 
 permissions:
   contents: read

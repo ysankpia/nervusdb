@@ -3,6 +3,13 @@
 This file is the working scope boundary for the 0.1 line. Anything outside this
 scope is frozen unless this document changes first.
 
+## 30-Day Stop Rule
+
+Until the active slimdown plan is closed or superseded, do not add new full
+Cypher features, non-Rust stable APIs, vector/HNSW default-path behavior,
+optimizer breadth, or release/nightly gate pressure. Build fixes and security
+fixes in frozen areas are allowed.
+
 ## In Scope Before 0.1
 
 - Rust embedded API for opening a local database path.
@@ -11,6 +18,7 @@ scope is frozen unless this document changes first.
 - Node, relationship, label, and property persistence.
 - Single-writer write transactions and snapshot-style reads.
 - Label scans and neighbor traversal by relationship type.
+- One-hop and two-hop traversal examples.
 - Basic property filtering needed by common local graph queries.
 - A small Mini-Cypher subset for simple `MATCH`, `WHERE`, `RETURN`, `LIMIT`,
   and basic write statements already on the core path.
@@ -41,4 +49,12 @@ capability work in frozen areas requires a decision record.
 - Crash recovery tests cover the WAL path.
 - One-hop and two-hop query examples are documented and tested.
 - Query results for the Mini-Cypher surface are deterministic.
-- `bash scripts/check.sh` passes locally and in CI-equivalent environments.
+- A documented large smoke/benchmark can create 1,000,000 nodes and 5,000,000
+  edges without corruption on documented hardware.
+- One-hop and two-hop benchmark output includes reproducible P50/P95/P99
+  numbers.
+- Rust API docs are clear enough for a user to open a local database without a
+  server or non-Rust SDK.
+- Ten realistic examples are documented and runnable.
+- `bash scripts/check.sh` passes locally and in CI-equivalent environments
+  without running historical full-test fan-out by default.

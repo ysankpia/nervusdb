@@ -1,370 +1,189 @@
-# NervusDB User Guide
+# NervusDB 0.1 User Guide
 
-## Table of Contents
+This guide documents the current 0.1 path: Rust-first embedded use, local files,
+WAL-backed persistence, Mini-Cypher, and CLI smoke workflows. It intentionally
+does not treat Python, Node.js, C, vector search, full TCK compatibility, or
+release-window gates as the main product surface.
 
-1. [Installation](#installation)
-2. [Database Lifecycle](#database-lifecycle)
-3. [Querying with Cypher](#querying-with-cypher)
-4. [Write Operations](#write-operations)
-5. [Transactions](#transactions)
-6. [Streaming Queries](#streaming-queries)
-7. [Indexes](#indexes)
-8. [Vector Search](#vector-search)
-9. [Backup and Maintenance](#backup-and-maintenance)
-10. [Error Handling](#error-handling)
+## Install
 
----
-
-## Installation
-
-### Rust
-
-Add to `Cargo.toml`:
+For local development, use the workspace crate directly:
 
 ```toml
 [dependencies]
-nervusdb = "0.0.1"
-nervusdb-query = "0.0.1"
+nervusdb = { path = "nervusdb" }
+nervusdb-query = { path = "nervusdb-query" }
 ```
 
-### Python
+Published package instructions should be updated only when the 0.1 release line
+is cut.
 
-```bash
-pip install maturin
-maturin develop -m nervusdb-pyo3/Cargo.toml
-```
+## Open A Local Database
 
-### Node.js
+NervusDB derives two files from the path:
 
-```bash
-cargo build --manifest-path nervusdb-node/Cargo.toml --release
-```
-
-### CLI
-
-```bash
-cargo install --path nervusdb-cli
-```
-
----
-
-## Database Lifecycle
-
-### Opening a Database
-
-All platforms use a single path. NervusDB creates two files:
-`<path>.ndb` (page store) and `<path>.wal` (write-ahead log).
-
-**Rust:**
+- `<path>.ndb`: page store
+- `<path>.wal`: write-ahead log
 
 ```rust
 use nervusdb::Db;
 
-let db = Db::open("/tmp/mydb")?;
-// Or with explicit paths:
-let db = Db::open_paths("/tmp/mydb.ndb", "/tmp/mydb.wal")?;
+let db = Db::open("/tmp/nervusdb-demo")?;
+let db = Db::open_paths("/tmp/nervusdb-demo.ndb", "/tmp/nervusdb-demo.wal")?;
 ```
 
-**Python:**
+Use `Db::snapshot()` for reads and `Db::begin_write()` for writes. There is one
+writer at a time, with snapshot-style reads.
 
-```python
-import nervusdb
+## Write Data
 
-db = nervusdb.open("/tmp/mydb")
-# Or with explicit paths:
-db = nervusdb.open_paths("/tmp/mydb.ndb", "/tmp/mydb.wal")
-```
-
-**Node.js:**
-
-```typescript
-const { Db } = require("./nervusdb-node");
-
-const db = Db.open("/tmp/mydb");
-// Or with explicit paths:
-const db = Db.openPaths("/tmp/mydb.ndb", "/tmp/mydb.wal");
-```
-
-### Closing a Database
-
-Always close the database when done to flush pending writes.
-
-```rust
-db.close()?;           // Rust
-```
-```python
-db.close()             # Python
-```
-```typescript
-db.close();            // Node.js
-```
-
----
-
-## Querying with Cypher
-
-Read queries use `query` (returns all rows) or `query_stream` (Python, returns iterator).
-
-**Rust** — uses `nervusdb_query::query_collect` or the `QueryExt` trait:
-
-```rust
-use nervusdb::{Db, GraphSnapshot};
-use nervusdb_query::{query_collect, Params};
-
-let db = Db::open("/tmp/mydb")?;
-let snapshot = db.snapshot();
-let rows = query_collect(&snapshot, "MATCH (n:Person) RETURN n.name", &Params::new())?;
-for row in &rows {
-    println!("{:?}", row);
-}
-```
-
-**Python:**
-
-```python
-rows = db.query("MATCH (n:Person) RETURN n.name")
-for row in rows:
-    print(row)
-```
-
-**Node.js:**
-
-```typescript
-const rows = db.query("MATCH (n:Person) RETURN n.name");
-console.log(rows);
-```
-
-### Parameterized Queries
-
-Pass parameters to avoid Cypher injection and improve readability.
-
-**Python:**
-
-```python
-rows = db.query("MATCH (n:Person) WHERE n.name = $name RETURN n", {"name": "Alice"})
-```
-
-**Node.js:**
-
-```typescript
-const rows = db.query("MATCH (n:Person) WHERE n.name = $name RETURN n", { name: "Alice" });
-```
-
----
-
-## Write Operations
-
-Write statements (`CREATE`, `MERGE`, `DELETE`, `SET`, `REMOVE`) must use the
-write API. Calling `query()` with a write statement raises an error.
-
-**Rust** — use `prepare` + `execute_write` with a write transaction:
+The stable 0.1 path is explicit: prepare a write statement, execute it against a
+write transaction, then commit.
 
 ```rust
 use nervusdb::Db;
 use nervusdb_query::{prepare, Params};
 
-let db = Db::open("/tmp/mydb")?;
+let db = Db::open("/tmp/nervusdb-demo")?;
 let snapshot = db.snapshot();
-let stmt = prepare("CREATE (n:Person {name: 'Alice'})")?;
+let create = prepare("CREATE (n:Person {name: 'Alice'})")?;
+
 let mut txn = db.begin_write();
-let count = stmt.execute_write(&snapshot, &mut txn, &Params::new())?;
+let count = create.execute_write(&snapshot, &mut txn, &Params::new())?;
 txn.commit()?;
-println!("Created {} node(s)", count);
+
+assert_eq!(count, 1);
 ```
 
-**Python:**
-
-```python
-count = db.execute_write("CREATE (n:Person {name: 'Alice'})")
-```
-
-**Node.js:**
-
-```typescript
-const count = db.executeWrite("CREATE (n:Person {name: 'Alice'})");
-```
-
----
-
-## Transactions
-
-### Write Transactions
-
-Group multiple writes into a single atomic transaction.
-
-**Python:**
-
-```python
-txn = db.begin_write()
-txn.query("CREATE (a:Person {name: 'Alice'})")
-txn.query("CREATE (b:Person {name: 'Bob'})")
-txn.query("CREATE (a)-[:KNOWS]->(b)")
-txn.commit()
-```
-
-**Node.js:**
-
-```typescript
-const txn = db.beginWrite();
-txn.query("CREATE (a:Person {name: 'Alice'})");
-txn.query("CREATE (b:Person {name: 'Bob'})");
-txn.commit();
-```
-
-**Rust:**
+For lower-level setup and tests, use `WriteTxn` directly:
 
 ```rust
-let snapshot = db.snapshot();
+use nervusdb::{Db, PropertyValue};
+
+let db = Db::open("/tmp/nervusdb-demo")?;
 let mut txn = db.begin_write();
-let stmt1 = prepare("CREATE (n:Person {name: 'Alice'})")?;
-let stmt2 = prepare("CREATE (n:Person {name: 'Bob'})")?;
-stmt1.execute_write(&snapshot, &mut txn, &Params::new())?;
-stmt2.execute_write(&snapshot, &mut txn, &Params::new())?;
+let person = txn.get_or_create_label("Person")?;
+let alice = txn.create_node(1, person)?;
+txn.set_node_property(
+    alice,
+    "name".to_string(),
+    PropertyValue::String("Alice".to_string()),
+)?;
 txn.commit()?;
 ```
 
-### Read Snapshots
+## Query Data
 
-Snapshots provide a consistent point-in-time view for reads.
-
-```rust
-let snapshot = db.snapshot();
-// All queries on this snapshot see the same data,
-// even if writes happen concurrently.
-let rows = query_collect(&snapshot, "MATCH (n) RETURN n", &Params::new())?;
-```
-
----
-
-## Streaming Queries
-
-Python supports streaming results for memory-efficient processing:
-
-```python
-for row in db.query_stream("MATCH (n:Person) RETURN n.name"):
-    print(row)
-```
-
----
-
-## Indexes
-
-Create property indexes to speed up lookups.
+Use `query_collect` for simple read queries:
 
 ```rust
-db.create_index("Person", "name")?;   // Rust
-```
-```python
-db.create_index("Person", "name")     # Python
-```
-```typescript
-db.createIndex("Person", "name");     // Node.js
-```
+use nervusdb::Db;
+use nervusdb_query::{query_collect, Params};
 
----
+let db = Db::open("/tmp/nervusdb-demo")?;
+let rows = query_collect(
+    &db.snapshot(),
+    "MATCH (n:Person) RETURN n.name LIMIT 10",
+    &Params::new(),
+)?;
 
-## Vector Search
-
-NervusDB includes a built-in HNSW vector index for similarity search.
-
-```rust
-let hits = db.search_vector(&[0.1, 0.2, 0.3], 10)?;  // Rust
-```
-```python
-hits = db.search_vector([0.1, 0.2, 0.3], 10)          # Python
-```
-```typescript
-const hits = db.searchVector([0.1, 0.2, 0.3], 10);    // Node.js
-```
-
-Each hit returns `(node_id, distance)`.
-
----
-
-## Backup and Maintenance
-
-### Backup
-
-```python
-nervusdb.backup("/tmp/mydb", "/tmp/backup-dir")   # Python
-```
-```typescript
-const { backup } = require("./nervusdb-node");
-backup("/tmp/mydb", "/tmp/backup-dir");            // Node.js
-```
-
-### Vacuum (Reclaim Space)
-
-```python
-nervusdb.vacuum("/tmp/mydb")                       # Python
-```
-```typescript
-const { vacuum } = require("./nervusdb-node");
-vacuum("/tmp/mydb");                               // Node.js
-```
-
-### Compaction and Checkpoint
-
-```python
-db.compact()      # Merge segments
-db.checkpoint()   # Flush WAL to page store
-```
-
----
-
-## Error Handling
-
-NervusDB uses four error categories across all platforms:
-
-| Category | Meaning |
-|----------|---------|
-| `Syntax` | Invalid Cypher query |
-| `Execution` | Runtime error (e.g., write in read context) |
-| `Storage` | I/O or corruption error |
-| `Compatibility` | Storage format epoch mismatch |
-
-**Python** — typed exceptions:
-
-```python
-from nervusdb import SyntaxError, ExecutionError, StorageError, CompatibilityError
-
-try:
-    db.query("INVALID CYPHER")
-except SyntaxError as e:
-    print(f"Bad query: {e}")
-```
-
-**Node.js** — structured error payload:
-
-```typescript
-try {
-    db.query("INVALID CYPHER");
-} catch (e) {
-    // e has: { code, category, message }
-    console.error(e.category, e.message);
+for row in rows {
+    println!("{:?}", row.columns());
 }
 ```
 
----
+Keep 0.1 queries inside `docs/reference/mini-cypher.md`.
 
-## CLI Quick Reference
+## Mini-Cypher 0.1
+
+The supported 0.1 surface is deliberately small:
+
+- `RETURN 1`
+- `MATCH (n)`
+- `MATCH (n:Label)`
+- `MATCH (a)-[:TYPE]->(b)`
+- simple property equality in `WHERE`
+- `RETURN`
+- `LIMIT`
+- basic `CREATE`
+- basic `DELETE`
+- basic `SET` where already stable
+- `EXPLAIN` for supported plans
+
+These are frozen before 0.1: `OPTIONAL MATCH`, `WITH`, `UNION`, `UNWIND`,
+aggregation, subqueries, procedures, pattern comprehension, broad
+temporal/duration semantics, and full openCypher edge compatibility.
+
+## CLI
+
+The CLI is a local smoke/debug/import tool, not a separate platform surface.
 
 ```bash
-# Write
-cargo run -p nervusdb-cli -- v2 write --db /tmp/demo \
-  --cypher "CREATE (n:Person {name: 'Alice'})"
+cargo run -p nervusdb-cli -- v2 write \
+  --db /tmp/nervusdb-demo \
+  --cypher "CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})"
 
-# Query (NDJSON output)
-cargo run -p nervusdb-cli -- v2 query --db /tmp/demo \
-  --cypher "MATCH (n:Person) RETURN n.name"
+cargo run -p nervusdb-cli -- v2 query \
+  --db /tmp/nervusdb-demo \
+  --cypher "MATCH (a)-[:KNOWS]->(b) RETURN a.name, b.name LIMIT 10"
 ```
 
-See [CLI Reference](cli.md) for full details.
+The CLI emits NDJSON for query rows and JSON for write counts.
 
----
+## Ten 0.1 Examples
 
-## Next Steps
+These are the examples that should stay runnable before 0.1:
 
-- [Cypher Support Matrix](cypher-support.md) — full list of supported clauses
-- [Architecture](architecture.md) — storage and query internals
-- [Binding Parity](binding-parity.md) — cross-platform API coverage
+| Example | Core graph shape | Query to prove |
+|---------|------------------|----------------|
+| Social graph | people and `KNOWS` edges | one-hop friend lookup |
+| Dependency graph | packages and `DEPENDS_ON` edges | direct dependency lookup |
+| File/module graph | files and `IMPORTS` edges | module fan-out |
+| Tag graph | items and `TAGGED_AS` edges | label/property filter |
+| Local knowledge graph | notes and `LINKS_TO` edges | nearby note traversal |
+| Parent-child hierarchy | nodes and `PARENT_OF` edges | children lookup |
+| Package relationship graph | crates and `USES` edges | dependency smoke |
+| Ownership graph | owners and `OWNS` edges | asset lookup |
+| Small recommendation traversal | user/item/category edges | two-hop candidate lookup |
+| Import then query smoke | imported nodes/edges | write then read back |
+
+The script entry points are:
+
+```bash
+bash scripts/core_smoke.sh
+bash scripts/core_crash_recovery.sh
+bash scripts/core_bench.sh --small
+```
+
+Large acceptance runs are manual:
+
+```bash
+bash scripts/core_bench.sh --large
+```
+
+Record hardware, command, data scale, and P50/P95/P99 output for large runs.
+
+## Experimental And Maintenance Areas
+
+These remain in the repository but are not the 0.1 quick path:
+
+- Python, Node.js, and C bindings
+- HNSW/vector search
+- full openCypher TCK
+- binding parity and examples-test gates
+- backup/vacuum/compact/checkpoint APIs outside the embedded smoke loop
+- fuzz, chaos, soak, performance, and release-window scripts
+
+Run those checks manually only when touching their area.
+
+## Validation
+
+Default local validation is:
+
+```bash
+bash scripts/check.sh
+```
+
+This runs formatting, clippy, and workspace quick tests. See
+`docs/runbooks/local-validation.md` for manual area-specific commands.
+

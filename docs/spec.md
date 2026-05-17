@@ -1,88 +1,143 @@
-# NervusDB v2 — Technical Specification (v2.3, SQLite-Beta Convergence)
+# NervusDB 0.1 Technical Constitution
 
-> This spec is the engineering constitution for NervusDB v2.
-> The goal is not "looks done" — it is reaching the Beta release line through
-> repeatable, evidence-based quality gates.
+This specification is the current engineering constitution for NervusDB.
 
-## 1. Project Positioning
+NervusDB 0.1 is not a full Cypher platform, multi-language SDK platform, vector
+database, or release-gate demonstration project. It is a Rust-first embedded
+property graph database: SQLite-style local files, crash-safe persistence, and a
+small graph query surface.
 
-- **Mission**: A pure-Rust embedded property graph database with SQLite-style
-  "open a path and go" ergonomics.
-- **Core path**: open DB -> write -> query (including streaming) -> crash recovery
-  -> consistent cross-language behavior.
+## 1. Mission
 
-## 2. Scope and Release Strategy (Locked)
+Build SQLite for property graphs:
 
-- Scope: single-machine embedded only (Rust + CLI + Python + Node.js).
-- Out of scope: remote server, distributed mode, migration compatibility promises.
-- Allowed: breaking changes during Beta convergence, but storage format epoch must
-  be explicitly versioned.
+```text
+open(path) -> write graph data -> query one/two-hop relationships -> survive crash -> reopen
+```
 
-## 3. Beta Hard Gates (All Must Be Met Simultaneously)
+The project is successful when a Rust application can embed NervusDB, persist
+graph data locally, recover safely after process failure, and get trustworthy
+results for the 0.1 query surface.
 
-1. Official openCypher TCK full pass rate **>=95%** (Tier-3 full scope).
-   Current status: **100% (3 897 / 3 897)** — achieved.
-2. Warnings treated as blocking (`fmt` / `clippy` / `tests` / `bindings` chain).
-3. Freeze phase: **7 consecutive days** of stable main CI + nightly.
-   Current status: stability window in progress (Day 1 = 2025-02-15).
+## 2. In Scope Before 0.1
 
-> If any gate is not met, the project is considered "not yet at SQLite-for-graphs
-> (Beta) level".
+- Rust embedded API for opening a local database path.
+- Local file storage with explicit file format versioning.
+- WAL-backed crash recovery and reopen correctness.
+- Node, relationship, label, and property persistence.
+- Single-writer transactions and snapshot-style reads.
+- Label scans and neighbor traversal by relationship type.
+- Basic property filtering for local graph queries.
+- Mini-Cypher for simple reads/writes:
+  - `RETURN 1`
+  - `MATCH (n)`
+  - `MATCH (a)-[:TYPE]->(b)`
+  - two-hop traversal such as `MATCH (a)-[:TYPE]->(b)-[:TYPE]->(c)`
+  - label match such as `(n:Label)`
+  - simple property equality in `WHERE`
+  - `RETURN`
+  - `LIMIT`
+  - basic `CREATE`
+  - basic `DELETE`
+  - basic `SET` where already stable
+  - `EXPLAIN` for supported plans
+- CLI support for debugging, import smoke, and local query/write workflows.
 
-## 4. Storage Compatibility and Error Model
+## 3. Frozen Before 0.1
 
-- `storage_format_epoch` is introduced and enforced.
-- Epoch mismatch returns `StorageFormatMismatch` (Compatibility semantics).
-- Unified error categories: `Syntax / Execution / Storage / Compatibility`.
+These areas remain in the repository as historical or experimental work, but
+they do not define product success before 0.1:
 
-Cross-language error mapping:
+- Full openCypher compatibility.
+- Procedures, subqueries, pattern comprehension, and complex clause interaction.
+- Full openCypher TCK pass rate as a blocking product goal.
+- Python, Node.js, or C API stabilization beyond maintenance.
+- HNSW/vector search as a default feature.
+- Advanced cost-based optimizer work not needed by Mini-Cypher.
+- Cross-language parity gates.
+- Nightly chaos, soak, fuzz, TCK, perf, stability, and release-window gates as
+  default development pressure.
 
-| Platform | Error Types |
-|----------|-------------|
-| Python | `NervusError`, `SyntaxError`, `ExecutionError`, `StorageError`, `CompatibilityError` |
-| Node.js | Structured error payload: `{ code, category, message }` |
+Frozen code can receive build fixes, security fixes, or narrow compatibility
+patches. New capability work in these areas requires a decision record first.
 
-## 5. Quality Gate Matrix
+## 4. Architecture Boundaries
 
-### 5.1 PR-Blocking Gates
+Core:
+
+- `nervusdb`
+- `nervusdb-api`
+- `nervusdb-storage`
+- the Mini-Cypher path in `nervusdb-query`
+- the CLI subset needed for local smoke/debug/import workflows
+
+Experimental:
+
+- `nervusdb-pyo3`
+- `nervusdb-node`
+- `nervusdb-capi`
+- `examples-test/`
+- HNSW/vector search
+- optimizer work outside the Mini-Cypher core path
+- backup/vacuum APIs not needed for the embedded 0.1 loop
+- TCK harness, fuzz targets, perf/chaos/soak scripts
+
+Graveyard / frozen:
+
+- full openCypher semantics
+- procedures
+- subqueries
+- pattern comprehension
+- temporal/duration breadth
+- complex aggregation
+- cross-binding parity release gates
+- release/stability windows
+
+## 5. Storage Compatibility And Error Model
+
+- File format changes must be explicit and versioned.
+- `storage_format_epoch` mismatch must fail fast with `StorageFormatMismatch`.
+- WAL/recovery changes require tests that prove committed data survives reopen
+  and uncommitted data does not leak after failure.
+- Error categories remain: `Syntax`, `Execution`, `Storage`, `Compatibility`.
+
+## 6. Default Validation
+
+The default local and CI-equivalent gate is:
+
+```bash
+bash scripts/check.sh
+```
+
+That means:
 
 1. `cargo fmt --all -- --check`
-2. `cargo clippy --workspace --exclude nervusdb-pyo3 --all-targets -- -W warnings`
+2. core-crate clippy for `nervusdb-api`, `nervusdb-storage`,
+   `nervusdb-query`, `nervusdb`, and `nervusdb-cli`
 3. `bash scripts/workspace_quick_test.sh`
-4. `bash scripts/tck_tier_gate.sh tier0|tier1|tier2`
-5. `bash scripts/binding_smoke.sh && bash scripts/contract_smoke.sh`
 
-### 5.2 Nightly / Manual Gates
+Area-specific scripts for TCK, bindings, perf, fuzz, chaos, soak, and stability
+remain available manually, but they are not the default definition of progress.
 
-1. Tier-3 full run + failure clustering + pass-rate report (`scripts/tck_full_rate.sh`)
-2. Beta threshold gate (`scripts/beta_gate.sh`, default 95%)
-3. Benchmark / chaos / soak / fuzz
+`scripts/workspace_quick_test.sh` must remain small. Full historical integration
+fan-out belongs in `scripts/workspace_full_test.sh` and is manual unless the
+change is broad enough to justify the cost.
 
-## 6. Test Coverage Requirements
+## 7. 0.1 Acceptance Criteria
 
-| Suite | Tests | Target | Current |
-|-------|-------|--------|---------|
-| openCypher TCK | 3 897 | >=95% | 100% |
-| Rust unit + integration | 153 | all green | all green |
-| Python (PyO3) | 138 | all green | all green |
-| Node.js (N-API) | 109 | all green | all green |
+0.1 is ready when all of these are true:
 
-## 7. Execution Cadence
+- A Rust program can create and reopen a local graph database.
+- Nodes, relationships, labels, and properties persist through restart.
+- Kill/reopen recovery tests prove committed data is kept and partial writes are
+  not exposed.
+- One-hop and two-hop query examples are documented and tested.
+- Query results for Mini-Cypher are deterministic.
+- A 1,000,000 node / 5,000,000 edge smoke or benchmark run completes without
+  corruption or crash on documented hardware.
+- One-hop and two-hop benchmarks report reproducible P50/P95/P99 numbers.
+- Rust API documentation is clear enough for an embedded user to start without a
+  server or SDK.
+- Ten real examples run end to end.
 
-- **Phase A**: TCK feature line (reach 95%) — **COMPLETE** (100% achieved).
-- **Phase B**: Stability freeze (7-day stability window) — **IN PROGRESS**.
-- **Phase C**: Performance seal (large-scale SLO) — PLANNED.
-
-## 8. Single Source of Truth
-
-| Document | Path | Purpose |
-|----------|------|---------|
-| Specification | `docs/spec.md` | Engineering constitution (this file) |
-| Tasks | `docs/tasks.md` | Progress tracking |
-| Roadmap | `docs/ROADMAP.md` | Phase planning |
-| Architecture | `docs/architecture.md` | System design |
-| Cypher Support | `docs/cypher-support.md` | Compliance matrix |
-| User Guide | `docs/user-guide.md` | API reference |
-
-If documents conflict, **code + CI/nightly gate results + current task status**
-take precedence. Fix the document immediately.
+Anything else is secondary.

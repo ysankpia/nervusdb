@@ -14,6 +14,9 @@ NervusDB is a Rust workspace organized around an embedded database kernel.
 - `nervusdb-pyo3`, `nervusdb-node`, `nervusdb-capi`: existing bindings kept out
   of the 0.1 growth path.
 
+See `docs/architecture/workspace-layers.md` for the current core,
+experimental, and frozen classification.
+
 ## 0.1 Architecture Direction
 
 The core path is:
@@ -38,3 +41,5 @@ query language breadth expands.
 - Bindings should not drive core design before the Rust API is settled.
 - Experimental vector and full-Cypher work must not become required for the
   default local embedded path.
+- CI must not make experimental or frozen areas required for ordinary 0.1
+  development.

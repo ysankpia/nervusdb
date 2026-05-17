@@ -1,8 +1,6 @@
 name: CI Daily Snapshot
 
 on:
-  schedule:
-    - cron: "50 1 * * *"
   workflow_dispatch:
 
 permissions:
