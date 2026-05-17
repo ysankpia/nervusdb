@@ -7,9 +7,10 @@ window.
 
 - `bash scripts/check.sh` passes.
 - `bash scripts/core_smoke.sh` passes.
+- `bash scripts/core_examples.sh` passes.
 - Crash recovery evidence exists for the current storage model.
 - `docs/reference/mini-cypher.md` matches the core acceptance tests.
-- Ten realistic examples are documented or runnable.
+- Ten realistic examples are documented in `docs/reference/examples-0.1.md`.
 - Storage format and compatibility expectations are documented.
 - Manual benchmark evidence exists for the chosen release candidate.
 

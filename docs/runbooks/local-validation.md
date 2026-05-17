@@ -37,6 +37,7 @@ behavior or examples.
 - Performance: `bash scripts/perf_slo_gate.sh`
 - Stability window evidence: `bash scripts/stability_window.sh`
 - Core smoke: `bash scripts/core_smoke.sh`
+- Core examples: `bash scripts/core_examples.sh`
 - Core crash recovery: `bash scripts/core_crash_recovery.sh`
 - Core benchmark: `bash scripts/core_bench.sh --small`
 - Full historical workspace test: `bash scripts/workspace_full_test.sh`
@@ -54,3 +55,6 @@ P50/P95/P99 output when running them:
 ```bash
 bash scripts/core_bench.sh --large
 ```
+
+Large runs are release-candidate evidence. Do not add them to `check`, `quick`,
+pre-commit, or pre-push paths.
