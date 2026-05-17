@@ -37,6 +37,7 @@ not linked here or under the archive index, do not use it to infer current scope
 - Release readiness: `docs/runbooks/release-readiness.md`
 - Mini-Cypher: `docs/reference/mini-cypher.md`
 - Rust API: `docs/reference/rust-api.md`
+- 0.1 examples: `docs/reference/examples-0.1.md`
 - Storage format: `docs/reference/storage-format.md`
 - CLI: `docs/reference/cli.md`
 - Glossary: `docs/reference/glossary.md`
