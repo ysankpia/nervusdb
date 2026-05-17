@@ -3,7 +3,7 @@
 The 0.1 test strategy protects embedded database correctness, not feature
 expansion.
 
-## PR-Blocking Local Checks
+## Default Local Checks
 
 Use:
 
@@ -67,10 +67,10 @@ The goal is evidence, not ritual.
 
 ## Non-Blocking Historical Gates
 
-The repository still contains openCypher TCK, binding parity, vector, chaos,
-soak, fuzz, and performance scripts. They are valuable manual signals, but they
-are not scheduled pressure and are not the default 0.1 development loop unless
-the touched area specifically requires them.
+The repository still contains TCK, binding parity, vector, chaos, soak, fuzz,
+and performance scripts. They are valuable manual signals, but they are not
+scheduled pressure and are not the default 0.1 development loop unless the
+touched area specifically requires them.
 
 ## When To Run More
 

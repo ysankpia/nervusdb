@@ -1,88 +1,68 @@
 # NervusDB Agent Guide
 
-NervusDB is a Rust-first embedded property graph database: SQLite-style local
-files, crash-safe storage, and a deliberately small graph query surface.
+NervusDB is being refactored into SQLite for property graphs: a Rust-first
+embedded graph database with local files, WAL recovery, persistent graph data,
+and a small query surface.
 
 ## Read Order
 
 1. `docs/index.md`
-2. `docs/product/vision.md`
-3. `docs/product/scope-0.1.md`
-4. `docs/architecture/overview.md`
-5. The relevant engineering rule under `docs/engineering/`
-6. The active plan or design note for the task, if one exists
+2. `docs/product/scope-0.1.md`
+3. `docs/architecture/overview.md`
+4. `docs/engineering/validation-policy.md`
+5. The relevant active plan under `docs/plans/active/`
 
-Treat old Beta, TCK, binding, vector, and perf documents as historical unless
-`docs/index.md` marks them as current.
+Archived platform-era documents are evidence only. Do not use them to infer
+current scope unless a current ADR promotes that material.
 
-## Task Routing
+## Core Rule
 
-- Product scope, roadmap, or public behavior changes require a plan under
-  `docs/plans/active/` or a design note under `docs/design/`.
-- Storage, WAL, recovery, file format, public API, and query semantics changes
-  require tests before implementation and explicit validation evidence.
-- Bug fixes require a regression guard. If a deterministic test is not possible,
-  document the guard and the reason in `docs/bugs/`.
-- Pure docs updates may skip code tests, but must keep links and status language
-  consistent with `docs/index.md`.
+Every change must either move the 0.1 embedded graph core forward or cleanly
+isolate non-core work.
 
-## Implementation Constraints
+0.1 core means Rust embedded API, local file storage, WAL/crash recovery,
+node/edge/label/property persistence, label scans, neighbor traversal,
+Mini-Cypher, and CLI smoke/debug/import workflows.
 
-- Keep the 0.1 line focused on Rust embedded usage, local storage, crash safety,
-  basic graph persistence, label scans, neighbor traversal, and Mini-Cypher.
-- Do not expand full openCypher compatibility, procedures, subqueries, pattern
-  comprehension, vector search defaults, or stable non-Rust SDK APIs unless the
-  scope document is changed first.
-- Prefer small modules and direct code over speculative abstraction.
-- Treat `docs/spec.md` as the repository constitution. Change it only when the
-  user explicitly authorizes a scope reset or constitutional update.
+## Frozen Before 0.1
 
-## Git And Integration Rules
+Do not expand full openCypher, procedures, subqueries, pattern comprehension,
+stable Python/Node/C APIs, vector/HNSW defaults, advanced optimizer work, or
+TCK/perf/fuzz/chaos/soak/release gates as default requirements.
 
-- Prefer short-lived branches and PRs when branch protection is enabled.
-- If the user explicitly requests local `main` work, do not create extra local
-  branches. Keep the commit scoped, validate it, and push `main` directly.
-- Do not include unrelated local edits in a commit.
-- Never rewrite user changes unless the user explicitly asks for that exact
-  cleanup.
+## Refactor Workflow
+
+For non-trivial refactors:
+
+1. Read the relevant active plan.
+2. Identify the touched layer: storage, query, API, CLI, docs, or CI.
+3. Make the smallest coherent change.
+4. Update architecture, reference, engineering, or plan docs in the same change.
+5. Run the smallest validation that proves the touched boundary.
 
 ## Validation
 
-Use `scripts/check.sh` for the normal 0.1 development loop. It must stay a
-short core gate, not a hidden full-suite runner:
+Default:
 
 ```bash
 bash scripts/check.sh
 ```
 
-Default validation covers only the 0.1 core path:
+Docs-only changes do not need Rust tests unless code examples changed. Full
+workspace verification is manual:
 
-- `cargo fmt --all -- --check`
-- clippy for core crates (`nervusdb-api`, `nervusdb-storage`, `nervusdb-query`,
-  `nervusdb`, `nervusdb-cli`) on lib/bin targets
-- `bash scripts/workspace_quick_test.sh`
+```bash
+bash scripts/workspace_full_test.sh
+```
 
-Do not run full workspace tests by reflex. Pick the smallest check that proves
-the touched boundary:
+Never hide full test fan-out behind `quick`, `check`, `pre-commit`, or
+`pre-push`.
 
-- Docs-only changes: use shell syntax checks, link/grep checks, and no Rust test
-  unless code examples changed.
-- CI/script changes: use `bash -n` plus targeted grep or dry-run checks.
-- Mini-Cypher changes: run `bash scripts/workspace_quick_test.sh` plus the
-  narrow affected query tests.
-- Storage/WAL changes: run targeted storage tests and
-  `bash scripts/core_crash_recovery.sh`.
-- Broad refactors or release preparation: run `bash scripts/workspace_full_test.sh`
-  manually and expect it to be slow.
+## Done
 
-Never hide full test fan-out behind names like `quick`, `check`, `pre-commit`,
-or `pre-push`. If a command is slow, name it as full/manual. See
-`docs/engineering/testing-strategy.md` and `docs/runbooks/local-validation.md`.
-
-## Definition Of Done
-
-- Code or docs match the 0.1 scope.
-- Tests or explicit regression guards cover behavior changes.
-- Public API, storage format, build, release, or operational changes update docs.
-- `git status --short` contains only intentional changes.
-- Validation commands and results are recorded in the final report.
+- The change matches `docs/product/scope-0.1.md`.
+- The relevant focused validation passed or the skip is documented.
+- Public behavior, API, storage format, validation, or architecture docs were
+  updated when affected.
+- No archived platform-era material was promoted without a new ADR.
+- `git status --short` contains only intentional changes before commit.

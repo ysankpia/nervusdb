@@ -1,4 +1,4 @@
-.PHONY: fmt check quick-test full-test tck-smoke tck-tier0 tck-tier1 tck-tier2 tck-tier3 tck-report pre-commit install-hooks clean help
+.PHONY: fmt check quick-test full-test tck-smoke tck-tier0 tck-tier1 tck-tier2 tck-tier3 tck-report pre-commit pre-push install-hooks clean help
 
 fmt:
 	@echo "format"
@@ -46,6 +46,10 @@ pre-commit:
 	@echo "pre-commit core check"
 	@bash scripts/check.sh
 
+pre-push:
+	@echo "pre-push core check"
+	@bash scripts/check.sh
+
 install-hooks:
 	@echo "installing git hooks"
 	@cp scripts/git-hooks/pre-commit .git/hooks/pre-commit
@@ -64,10 +68,11 @@ help:
 	@echo "  make quick-test - Run the core 0.1 Mini-Cypher test"
 	@echo "  make full-test  - Run full historical workspace verification manually"
 	@echo "  make test       - Alias for make full-test"
+	@echo "  make pre-commit - Run the fast core pre-commit check"
+	@echo "  make pre-push   - Run the fast core pre-push check"
 	@echo "  make tck-tier0  - Manual TCK Tier-0"
 	@echo "  make tck-tier1  - Manual TCK Tier-1"
 	@echo "  make tck-tier2  - Manual TCK Tier-2"
 	@echo "  make tck-tier3  - Manual TCK Tier-3"
 	@echo "  make install-hooks - Install fast core hooks"
 	@echo "  make clean      - Clean build artifacts"
-

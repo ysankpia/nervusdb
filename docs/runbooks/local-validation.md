@@ -23,7 +23,7 @@ For docs-only or CI-only edits, do not run full Rust tests by reflex. Use:
 ```bash
 bash -n scripts/check.sh
 bash -n scripts/workspace_quick_test.sh
-rg "schedule:" .github/workflows
+rg "schedule:|cron:" .github/workflows
 ```
 
 Then run the smallest targeted Rust test only if the changed files affect Rust

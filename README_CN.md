@@ -95,10 +95,10 @@ chaos、soak、stability 相关脚本只作为手动信号。
 ## 文档
 
 - [文档索引](docs/index.md)
-- [0.1 技术宪法](docs/spec.md)
 - [产品愿景](docs/product/vision.md)
 - [0.1 范围](docs/product/scope-0.1.md)
 - [架构总览](docs/architecture/overview.md)
+- [测试策略](docs/engineering/testing-strategy.md)
 - [Mini-Cypher 参考](docs/reference/mini-cypher.md)
 - [本地验证](docs/runbooks/local-validation.md)
 

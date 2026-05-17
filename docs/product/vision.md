@@ -1,37 +1,27 @@
 # Product Vision
 
-NervusDB is SQLite for property graphs: a Rust-native embedded graph database
-that opens a local path, stores graph data durably, and answers small graph
-queries without running a server.
+NervusDB is SQLite for property graphs.
 
-## North Star
-
-Make the common local graph workflow boring:
-
-```text
-open(path) -> write graph data -> query nearby relationships -> survive crash -> reopen
-```
-
-The product wins when a Rust user can embed it the way they embed SQLite: no
-daemon, no network dependency, predictable files, reliable recovery, and results
-that are easy to validate.
+The product should let a Rust application open a local path, write graph data,
+query nearby relationships, survive process failure, and reopen without running
+a server.
 
 ## Primary User
 
-The 0.1 user is a Rust application developer who needs local graph persistence:
-developer tools, knowledge graphs, dependency graphs, lightweight graph analysis,
-and local-first applications.
+The 0.1 user is a Rust application developer who needs embedded graph
+persistence for local-first tools, dependency analysis, knowledge graphs,
+ownership graphs, module graphs, or small relationship-heavy features.
+
+## North Star Workflow
+
+```text
+open(path) -> write graph data -> query one-hop/two-hop relationships -> crash/reopen -> trust results
+```
 
 ## Product Bias
 
-- Prefer correctness and recovery over language breadth.
-- Prefer Rust API stability over early SDK expansion.
-- Prefer a small explainable query surface over full Cypher compatibility.
-- Prefer deterministic local checks over large scheduled gate matrices.
-- Prefer a finishable embedded 0.1 over proving every historical subsystem still
-  deserves first-class product status.
-
-## Non-North-Stars
-
-NervusDB 0.1 is not a Neo4j replacement, a full Cypher standard implementation,
-a vector database, a distributed service, or a multi-language SDK platform.
+- Correctness before language breadth.
+- Rust API before SDK expansion.
+- WAL/recovery proof before feature count.
+- Mini-Cypher before full Cypher.
+- Fast focused validation before historical gate matrices.

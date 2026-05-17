@@ -1,62 +1,55 @@
 # NervusDB Documentation Index
 
-This is the navigation root for current project knowledge. If another document
-conflicts with this map, trust this map first and update the stale document.
+This is the current map for the SQLite-for-graphs 0.1 refactor. If a document is
+not linked here or under the archive index, do not use it to infer current scope.
 
-## Current 0.1 Line
+## Product
 
-- Product vision: `docs/product/vision.md`
-- 0.1 scope boundary: `docs/product/scope-0.1.md`
-- Architecture overview: `docs/architecture/overview.md`
+- Vision: `docs/product/vision.md`
+- 0.1 scope: `docs/product/scope-0.1.md`
+- 0.1 user stories: `docs/product/user-stories-0.1.md`
+- Non-goals: `docs/product/non-goals.md`
+
+## Architecture
+
+- Overview: `docs/architecture/overview.md`
+- Crate boundaries: `docs/architecture/crate-boundaries.md`
+- Storage model: `docs/architecture/storage-model.md`
+- Query model: `docs/architecture/query-model.md`
+- API surface: `docs/architecture/api-surface.md`
 - Workspace layers: `docs/architecture/workspace-layers.md`
+
+## Engineering
+
 - Coding standards: `docs/engineering/coding-standards.md`
 - Testing strategy: `docs/engineering/testing-strategy.md`
-- Branching and PR rules: `docs/engineering/branching-pr.md`
+- Validation policy: `docs/engineering/validation-policy.md`
+- Refactor policy: `docs/engineering/refactor-policy.md`
+- Documentation policy: `docs/engineering/documentation-policy.md`
+- Branching and integration: `docs/engineering/branching-pr.md`
 - Definition of done: `docs/engineering/definition-of-done.md`
-- Local validation runbook: `docs/runbooks/local-validation.md`
-- Scope reset decision: `docs/decisions/0001-reset-scope-to-sqlite-for-graphs.md`
-- Platform freeze decision: `docs/decisions/0002-freeze-platform-expansion-before-0.1.md`
-- Active plans: `docs/plans/active/`
-- Current slimdown plan: `docs/plans/active/002-core-0.1-slimdown.md`
-- Plan template: `docs/plans/template.md`
-- Mini-Cypher reference: `docs/reference/mini-cypher.md`
+
+## Runbooks And Reference
+
+- Local validation: `docs/runbooks/local-validation.md`
+- Crash recovery validation: `docs/runbooks/crash-recovery-validation.md`
+- Benchmark validation: `docs/runbooks/benchmark-validation.md`
+- Release readiness: `docs/runbooks/release-readiness.md`
+- Mini-Cypher: `docs/reference/mini-cypher.md`
+- Storage format: `docs/reference/storage-format.md`
+- CLI: `docs/reference/cli.md`
 - Glossary: `docs/reference/glossary.md`
+
+## Execution State
+
+- Active plans: `docs/plans/active/`
+- Completed plans: `docs/plans/completed/`
+- Decision records: `docs/decisions/`
 - Bug ledger: `docs/bugs/index.md`
 
-## Current Code References
+## Archive
 
-- Public Rust API: `nervusdb/`
-- Storage engine: `nervusdb-storage/`
-- Query layer: `nervusdb-query/`
-- Storage/API boundary traits: `nervusdb-api/`
-- CLI: `nervusdb-cli/`
+- Platform-era archive: `docs/archive/legacy-platform-era/INDEX.md`
 
-The active layer map is `docs/architecture/workspace-layers.md`. It is the
-current source for what is core, experimental, and frozen.
-
-## Historical Or Experimental References
-
-These documents are useful evidence, but they are not the 0.1 product scope:
-
-- Full openCypher and procedures: `docs/design/T300-cypher-full.md`,
-  `docs/design/T320-procedures.md`, `docs/cypher-support.md`
-- HNSW/vector work: `docs/design/T203-hnsw-index.md`,
-  `docs/perf/v2/hnsw-default-recommendation.md`
-- Multi-language binding parity: `docs/binding-parity.md`,
-  `examples-test/capability-contract.yaml`
-- Beta and industrial gates: `docs/ROADMAP.md`, `docs/tasks.md`,
-  `docs/publishing.md`, `docs/beta-daily-template.md`
-- Older architecture and planning material: `docs/archive/`, `docs/refactor/`,
-  `docs/hypothetical-architecture/`
-
-Historical documents may mention full TCK, multi-binding parity, vector search,
-or SQLite-Beta release status. Those are not 0.1 requirements unless a current
-document explicitly re-promotes them.
-
-Default CI and local validation do not run historical or experimental gates.
-Use those scripts manually only when touching their area.
-
-## Update Rule
-
-When behavior, API, data format, build, release, validation, or project scope
-changes, update the relevant current document in the same PR.
+Archived docs are not current 0.1 scope. Reviving archived material requires a
+new ADR that updates product, architecture, validation, and plan docs.

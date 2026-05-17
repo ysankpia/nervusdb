@@ -99,10 +99,10 @@ are manual signals only.
 ## Documentation
 
 - [Documentation Index](docs/index.md)
-- [0.1 Technical Constitution](docs/spec.md)
 - [Product Vision](docs/product/vision.md)
 - [0.1 Scope](docs/product/scope-0.1.md)
 - [Architecture Overview](docs/architecture/overview.md)
+- [Testing Strategy](docs/engineering/testing-strategy.md)
 - [Mini-Cypher Reference](docs/reference/mini-cypher.md)
 - [Local Validation](docs/runbooks/local-validation.md)
 
