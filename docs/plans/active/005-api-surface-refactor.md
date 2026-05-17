@@ -2,7 +2,7 @@
 
 ## Status
 
-Planned
+In progress
 
 ## Goal
 
@@ -25,6 +25,19 @@ breaking or deleting historical public functions.
 - Stable Python, Node.js, or C API expansion.
 - API additions that only serve vector, optimizer, or full-Cypher ambitions.
 
+## Current Audit
+
+| API area | Public items | 0.1 status | Evidence / action |
+|---|---|---|---|
+| Open local database | `Db::open`, `Db::open_paths`, `Db::ndb_path`, `Db::wal_path` | Core | Add facade baseline test for path derivation |
+| Read snapshots | `Db::snapshot`, `DbSnapshot`, `GraphSnapshot` methods | Core | Add facade baseline test for labels, properties, traversal |
+| Read transactions | `Db::begin_read`, `ReadTxn::neighbors` | Core | Add facade baseline test for neighbor traversal |
+| Write transactions | `Db::begin_write`, `WriteTxn::*` graph persistence methods, `commit` | Core | Add facade baseline test for node, edge, label, property persistence |
+| Mini-Cypher execution | `nervusdb::query`, `nervusdb_query` prepare/execute helpers | Core | Already covered by Phase 004 query baseline |
+| Maintenance IO | `Db::compact`, `Db::checkpoint`, `Db::close`, `vacuum`, `backup`, `bulkload` | Experimental / maintenance | Classify in docs; no removal |
+| Index/vector | `Db::create_index`, `Db::search_vector`, `WriteTxn::set_vector` | Experimental / maintenance | Classify in docs; no 0.1 stability promise |
+| Bindings compatibility | binding-facing wrappers and exported support types | Experimental / maintenance | Keep out of root 0.1 story |
+
 ## Steps
 
 1. Audit root facade docs and public examples.
@@ -42,10 +55,16 @@ breaking or deleting historical public functions.
 ## Docs To Update
 
 - `docs/architecture/api-surface.md`
+- `docs/reference/rust-api.md`
 - `docs/product/scope-0.1.md` if public scope changes.
 - `README.md` and `README_CN.md` if quick start changes.
 
 ## Completion Evidence
 
-Record generated-doc command, examples/tests, and any APIs left classified as
-experimental.
+- `docs/reference/rust-api.md` lists 0.1 core and experimental/maintenance APIs.
+- `nervusdb/src/lib.rs` rustdoc classifies public facade methods without
+  signature changes.
+- `nervusdb/tests/core_0_1_rust_api.rs` proves the Rust facade path.
+- `cargo doc -p nervusdb --no-deps` and `bash scripts/check.sh` pass.
+- Experimental/maintenance APIs remain callable but are not 0.1 stability
+  promises.

@@ -36,6 +36,7 @@ not linked here or under the archive index, do not use it to infer current scope
 - Benchmark validation: `docs/runbooks/benchmark-validation.md`
 - Release readiness: `docs/runbooks/release-readiness.md`
 - Mini-Cypher: `docs/reference/mini-cypher.md`
+- Rust API: `docs/reference/rust-api.md`
 - Storage format: `docs/reference/storage-format.md`
 - CLI: `docs/reference/cli.md`
 - Glossary: `docs/reference/glossary.md`
