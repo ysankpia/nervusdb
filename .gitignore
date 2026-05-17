@@ -23,11 +23,15 @@ bindings/python/nervusdb-py/target/
 **/.venv/
 **/.pytest_cache/
 
-# OS
+# OS / filesystem noise
 .DS_Store
+**/.DS_Store
 Thumbs.db
-.agents/rules/base.md
 
+# Local agent and task-runner state
+.agents/
+.beads/
+.claude/
 
 # IDE
 .vscode/
@@ -42,6 +46,12 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Root-level generated reports and scratch logs
+/tck_*.log
+/tck_*.txt
+/tck_results.*
+/repomix-output.*
+
 # Temporary files
 *.tmp
 *.temp
@@ -54,13 +64,8 @@ yarn-error.log*
 *.redb
 bindings/node/temp_verification_db
 bindings/node/temp_verification_db.redb
-repomix-output.xml
-repomix-output.md
 bindings/node/*.tgz
 .husky/
-
-# Test results
-tck_results.txt
 
 # Local generated artifacts
 artifacts/
