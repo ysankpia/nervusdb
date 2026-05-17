@@ -72,6 +72,12 @@ and performance scripts. They are valuable manual signals, but they are not
 scheduled pressure and are not the default 0.1 development loop unless the
 touched area specifically requires them.
 
+Advanced query tests, including optional match, `WITH`, `UNION`, `UNWIND`,
+aggregation, procedures, subqueries, pattern comprehension, and openCypher TCK
+material, are compatibility evidence. They are not the Mini-Cypher 0.1
+acceptance suite and must not be added to `scripts/check.sh` or
+`scripts/workspace_quick_test.sh`.
+
 ## When To Run More
 
 - Run TCK-related scripts only for query compatibility changes.
