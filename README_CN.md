@@ -6,6 +6,8 @@
 没有服务器，没有网络服务，没有平台仪式。
 
 [![CI](https://github.com/ysankpia/nervusdb/actions/workflows/ci.yml/badge.svg)](https://github.com/ysankpia/nervusdb/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/nervusdb.svg)](https://crates.io/crates/nervusdb)
+[![Downloads](https://img.shields.io/crates/d/nervusdb.svg)](https://crates.io/crates/nervusdb)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
 > [English](README.md)

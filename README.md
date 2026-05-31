@@ -6,6 +6,8 @@ Open a local path, write graph data, query nearby relationships, survive a
 crash, and reopen. No server. No network service. No platform ceremony.
 
 [![CI](https://github.com/ysankpia/nervusdb/actions/workflows/ci.yml/badge.svg)](https://github.com/ysankpia/nervusdb/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/nervusdb.svg)](https://crates.io/crates/nervusdb)
+[![Downloads](https://img.shields.io/crates/d/nervusdb.svg)](https://crates.io/crates/nervusdb)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
 > [中文](README_CN.md)
