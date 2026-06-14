@@ -1,7 +1,5 @@
 pub mod api;
-pub mod backup;
 pub mod blob_store;
-pub mod bulkload;
 pub mod csr;
 pub mod engine;
 mod error;
@@ -34,7 +32,6 @@ mod read_path_symbols;
 mod read_path_tombstones;
 pub mod snapshot;
 pub mod stats;
-pub mod vacuum;
 pub mod wal;
 
 pub use crate::error::{Error, Result};
