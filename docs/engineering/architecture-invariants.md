@@ -72,10 +72,5 @@ docs.
 
 ## Known Exceptions
 
-- HNSW/vector index code lives inside `nervusdb-storage` (boundary invariant 1
-  exception — storage owns it but the vector path is experimental, not core).
-- `nervusdb-capi` wraps `nervusdb` for C ABI; it is not a separate SDK crate
-  but exists for binding compatibility.
-- `nervusdb-pyo3` and `nervusdb-node` directly depend on `nervusdb-capi` rather
-  than `nervusdb` — this bypasses the Rust facade and is accepted before 0.1
-  for maintenance only.
+- `backup.rs`, `bulkload.rs`, `vacuum.rs` remain compiled in `nervusdb-storage`
+  but are not exposed through the `nervusdb` facade — dead code awaiting removal.

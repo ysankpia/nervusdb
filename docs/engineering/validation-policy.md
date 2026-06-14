@@ -11,7 +11,7 @@ full historical fan-out is manual.
 | Rust API facade | Focused facade test, example, or doctest proving the public path. |
 | Storage or WAL | Targeted storage test plus `bash scripts/core_crash_recovery.sh` when recovery can be affected. |
 | CLI | `bash scripts/core_smoke.sh` or a targeted CLI command against a temp database. |
-| Broad refactor | `bash scripts/check.sh`; run `bash scripts/workspace_full_test.sh` only when the touched surface justifies it. |
+| Broad refactor | `bash scripts/check.sh`; run the full test suite manually when the touched surface justifies it. |
 | Release readiness | Core check, core smoke, crash recovery evidence, small benchmark, and documented manual checks. |
 
 ## Default Commands
@@ -27,12 +27,3 @@ Quick query acceptance:
 ```bash
 bash scripts/workspace_quick_test.sh
 ```
-
-Manual full verification:
-
-```bash
-bash scripts/workspace_full_test.sh
-```
-
-Do not hide `workspace_full_test.sh` behind `check`, `quick`, `pre-commit`, or
-`pre-push`.
