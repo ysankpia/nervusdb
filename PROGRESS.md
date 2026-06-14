@@ -2,44 +2,45 @@
 
 ## Current Objective
 
-Codebase analysis: use CodeGraph to produce a comprehensive
-`docs/reference/codebase-analysis.md` covering workspace structure, crate
-boundaries, test/script/CI landscape, pain points, and recommended next steps.
+Decisive slimming: delete all non-0.1-core code — HNSW, bindings, full openCypher,
+historical tests, CI noise, scripts noise, experimental APIs — to make the
+project finishable.
 
 ## Active Plan
 
-008-codebase-analysis
+009-slim-to-0.1
 
 ## Current Phase
 
-Analysis — document created.
+Planning — slimming plan created, direction contract updated.
 
 ## Now
 
-Review the analysis and decide which phase (A/B/C/D) to execute next.
+Execute the slimming plan (see `docs/plans/slimming-plan.md`).
 
 ## Done
 
-- 001-harness-normalization — Agents.md, docs/index.md, product/architecture/engineering/runbook/reference/plan/ADR/bug docs rewritten for 0.1, legacy material archived.
-- 002-core-0.1-slimdown — Core/experimental/frozen classification, CI focused on core, quick test separated from full fan-out.
-- 003-storage-core-refactor — Storage invariant baseline, crash recovery tests, storage model documentation.
-- 004-query-core-refactor — Mini-Cypher acceptance, query model documentation, advanced tests classified as compatibility evidence.
-- 005-api-surface-refactor — Core API classification, Rust API reference, facade tests.
-- 006-cli-examples-validation — CLI reference, ten runnable examples, smoke/crash/bench scripts.
-- 007-harness-doc-backfill — All 11 missing harness docs created, 6 existing docs updated.
-- 008-codebase-analysis — `docs/reference/codebase-analysis.md` created with CodeGraph exploration across all crates, tests, scripts, and CI.
+- 001 to 008 — Harness normalization, core classification, refactors, examples,
+  doc backfill, codebase analysis.
+- Direction contract updated with explicit "Deleted" section.
+- Slimming plan written with `git rm` commands for every file to delete.
 
 ## Next
 
-Per analysis recommendation:
-- Phase A: Feature isolation (HNSW gate, openCypher gate)
-- Phase B: Test cleanup (core vs historical separation, missing tests)
-- Phase C: Engineering cleanup (scripts, workspace, parser refactor)
-- Phase D: 0.1 hardening (storage, crash recovery, release)
+1. Delete HNSW/vector (`nervusdb-storage/src/index/hnsw/`, engine.rs cleanup)
+2. Delete bindings (nervusdb-pyo3, nervusdb-capi, nervusdb-node, examples-test)
+3. Delete historical tests (~35 files)
+4. Delete CI workflows (10 files)
+5. Delete historical scripts (31 files)
+6. Strip non-Mini-Cypher query code (AST variants, executor files)
+7. Clean facade exports (backup/bulkload/vacuum)
+8. Clean examples (py-local, ts-local)
+9. Clean杂物 (fuzz, Makefile, lefthook)
+10. Validate + commit
 
 ## Blockers
 
-None.
+None. Decision is made — execute.
 
 ## Validation Log
 
@@ -48,7 +49,9 @@ None.
 | 2026-06-14 | `bash scripts/check.sh` | 9/9 core tests passed, fmt + clippy clean |
 | 2026-06-14 | `git status --short` | 19 files staged, clean working tree after commit |
 | 2026-06-14 | CodeGraph exploration | 10 calls across 200+ files, all data extracted |
+| 2026-06-14 | Slimming plan created | `docs/plans/slimming-plan.md` |
 
 ## Last Checkpoint
 
-2026-06-14: Codebase analysis document created at `docs/reference/codebase-analysis.md`.
+2026-06-14: Direction contract updated with "Explicitly Deleted" section.
+Slimming plan written with per-file `git rm` commands.

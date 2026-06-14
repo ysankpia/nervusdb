@@ -57,6 +57,7 @@ not linked here or under the archive index, do not use it to infer current scope
 
 ## Plans
 
+- Slimming plan (current): `docs/plans/slimming-plan.md`
 - Active plans: `docs/plans/active/`
 - Completed plans: `docs/plans/completed/`
 - Technical debt: `docs/plans/tech-debt.md`
