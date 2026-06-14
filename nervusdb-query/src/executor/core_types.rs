@@ -4,6 +4,11 @@ use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
+/// A graph node with its labels and properties.
+///
+/// Returned from queries when a node variable is projected (e.g. `RETURN n`).
+/// The `id` field is the internal node ID, `labels` lists all labels, and
+/// `properties` maps property names to values.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Hash)]
 pub struct NodeValue {
     pub id: InternalNodeId,
@@ -11,6 +16,10 @@ pub struct NodeValue {
     pub properties: std::collections::BTreeMap<String, Value>,
 }
 
+/// A directed edge with its relationship type and properties.
+///
+/// Returned from queries when an edge variable is projected. The `key` encodes
+/// the source node ID, relationship type ID, and destination node ID.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Hash)]
 pub struct RelationshipValue {
     pub key: EdgeKey,
@@ -18,12 +27,20 @@ pub struct RelationshipValue {
     pub properties: std::collections::BTreeMap<String, Value>,
 }
 
+/// A variable-length path stored as raw node and edge IDs.
+///
+/// See [`ReifiedPathValue`] for the reified variant with resolved labels
+/// and properties.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Hash)]
 pub struct PathValue {
     pub nodes: Vec<InternalNodeId>,
     pub edges: Vec<EdgeKey>,
 }
 
+/// A variable-length path with fully resolved node and relationship data.
+///
+/// Unlike [`PathValue`], this variant carries labels, relationship types,
+/// and properties for every element in the path.
 #[derive(Debug, Clone, PartialEq, PartialOrd, Hash)]
 pub struct ReifiedPathValue {
     pub nodes: Vec<NodeValue>,
@@ -81,23 +98,47 @@ impl serde::Serialize for ReifiedPathValue {
     }
 }
 
+/// A typed value in the NervusDB query engine.
+///
+/// Values appear as column entries in query result rows. The enum captures
+/// Cypher-compatible types: primitives, graph elements (nodes, edges, paths),
+/// and containers (lists, maps).
+///
+/// Use helper methods like [`as_string`](Value::as_string) or match directly
+/// on variants when you need to extract a specific type.
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum Value {
+    /// An internal node identifier.
     NodeId(InternalNodeId),
+    /// An external (user-assigned) node identifier.
     ExternalId(ExternalId),
+    /// An edge key encoding the source, relationship type, and destination.
     EdgeKey(EdgeKey),
+    /// A 64-bit signed integer.
     Int(i64),
+    /// A 64-bit floating point number.
     Float(f64),
+    /// A UTF-8 string.
     String(String),
+    /// A boolean.
     Bool(bool),
+    /// The Cypher null value.
     Null,
+    /// A list of values (heterogeneous).
     List(Vec<Value>),
+    /// A datetime value stored as epoch milliseconds.
     DateTime(i64),
+    /// Raw binary data.
     Blob(Vec<u8>),
+    /// A map / dictionary of named values.
     Map(std::collections::BTreeMap<String, Value>),
+    /// A variable-length path (raw IDs only).
     Path(PathValue),
+    /// A graph node with labels and properties.
     Node(NodeValue),
+    /// A directed edge with type and properties.
     Relationship(RelationshipValue),
+    /// A variable-length path with resolved element data.
     ReifiedPath(ReifiedPathValue),
 }
 
@@ -192,6 +233,7 @@ impl serde::Serialize for Value {
 }
 
 impl Value {
+    /// Returns the string value if this is a `Value::String`, else `None`.
     pub fn as_string(&self) -> Option<&str> {
         match self {
             Value::String(s) => Some(s),
@@ -229,6 +271,21 @@ impl Hash for Value {
 
 impl Eq for Value {}
 
+/// A single row of query results.
+///
+/// Each row is an ordered list of named columns `(name, value)`. Columns
+/// can be accessed by name using [`get`](Row::get) or iterated via
+/// [`columns`](Row::columns).
+///
+/// # Example
+///
+/// ```ignore
+/// for row in &rows {
+///     if let Some(Value::String(name)) = row.get("n.name") {
+///         println!("{name}");
+///     }
+/// }
+/// ```
 #[derive(Debug)]
 pub struct Row {
     pub(crate) cols: SmallVec<[(String, Value); 8]>,
@@ -260,6 +317,7 @@ impl PartialEq for Row {
 }
 
 impl Row {
+    /// Creates a new row from a vector of `(column_name, value)` pairs.
     pub fn new(cols: Vec<(String, Value)>) -> Self {
         let mut row = Self {
             cols: SmallVec::from_vec(cols),
@@ -269,6 +327,8 @@ impl Row {
         row
     }
 
+    /// Returns the value for a named column, or `None` if the column
+    /// does not exist in this row.
     pub fn get(&self, name: &str) -> Option<&Value> {
         if let Some(index) = &self.index
             && let Some(idx) = index.get(name)
@@ -330,6 +390,7 @@ impl Row {
         out
     }
 
+    /// Returns all columns as a slice of `(name, value)` pairs.
     pub fn columns(&self) -> &[(String, Value)] {
         self.cols.as_slice()
     }
