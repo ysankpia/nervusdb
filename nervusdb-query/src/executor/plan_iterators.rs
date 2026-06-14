@@ -122,21 +122,6 @@ impl<'a, S: GraphSnapshot> Iterator for UnionDistinctIter<'a, S> {
     }
 }
 
-pub struct IndexSeekIter {
-    pub(super) alias: String,
-    pub(super) node_ids: std::vec::IntoIter<InternalNodeId>,
-}
-
-impl Iterator for IndexSeekIter {
-    type Item = Result<Row>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.node_ids
-            .next()
-            .map(|iid| Ok(Row::default().with(self.alias.clone(), Value::NodeId(iid))))
-    }
-}
-
 pub struct SkipIter<'a, S: GraphSnapshot> {
     pub(super) input: Box<PlanIterator<'a, S>>,
     pub(super) remaining: usize,

@@ -14,7 +14,6 @@ impl PreparedQuery {
                 | crate::executor::Plan::SetLabels { .. }
                 | crate::executor::Plan::RemoveProperty { .. }
                 | crate::executor::Plan::RemoveLabels { .. }
-                | crate::executor::Plan::Foreach { .. }
         )
     }
 

@@ -1,9 +1,6 @@
+use crate::csr::CsrSegment;
 use crate::idmap::InternalNodeId;
-use crate::read_path_neighbors::{
-    edge_blocked_incoming, edge_blocked_outgoing, load_incoming_run_edges,
-    load_incoming_segment_edges, load_outgoing_run_edges, load_outgoing_segment_edges,
-};
-use crate::snapshot::{EdgeKey, PublishedRuns, PublishedSegments, RelTypeId};
+use crate::snapshot::{EdgeKey, L0Run, PublishedRuns, PublishedSegments, RelTypeId};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -403,4 +400,82 @@ mod tests {
         let got: Vec<EdgeKey> = IncomingNeighborsIter::new(runs, segments, 4, Some(9)).collect();
         assert_eq!(got, vec![edge]);
     }
+}
+
+pub struct ApiNeighborsIter<'a> {
+    inner: Box<dyn Iterator<Item = EdgeKey> + 'a>,
+}
+
+impl<'a> ApiNeighborsIter<'a> {
+    pub(crate) fn new(inner: Box<dyn Iterator<Item = EdgeKey> + 'a>) -> Self {
+        Self { inner }
+    }
+}
+
+impl<'a> Iterator for ApiNeighborsIter<'a> {
+    type Item = nervusdb_api::EdgeKey;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn apply_run_tombstones(
+    run: &L0Run,
+    blocked_nodes: &mut HashSet<InternalNodeId>,
+    blocked_edges: &mut HashSet<EdgeKey>,
+) {
+    blocked_nodes.extend(run.iter_tombstoned_nodes());
+    blocked_edges.extend(run.iter_tombstoned_edges());
+}
+
+pub(crate) fn load_outgoing_run_edges(
+    run: &L0Run,
+    src: InternalNodeId,
+    current_edges: &mut Vec<EdgeKey>,
+) {
+    current_edges.extend_from_slice(run.edges_for_src(src));
+}
+
+pub(crate) fn load_incoming_run_edges(
+    run: &L0Run,
+    dst: InternalNodeId,
+    current_edges: &mut Vec<EdgeKey>,
+) {
+    current_edges.extend_from_slice(run.edges_for_dst(dst));
+}
+
+pub(crate) fn load_outgoing_segment_edges(
+    seg: &CsrSegment,
+    src: InternalNodeId,
+    rel: Option<RelTypeId>,
+    current_segment_edges: &mut Vec<EdgeKey>,
+) {
+    current_segment_edges.extend(seg.neighbors(src, rel));
+}
+
+pub(crate) fn load_incoming_segment_edges(
+    seg: &CsrSegment,
+    dst: InternalNodeId,
+    rel: Option<RelTypeId>,
+    current_segment_edges: &mut Vec<EdgeKey>,
+) {
+    current_segment_edges.extend(seg.incoming_neighbors(dst, rel));
+}
+
+pub(crate) fn edge_blocked_outgoing(
+    edge: EdgeKey,
+    blocked_nodes: &HashSet<InternalNodeId>,
+    blocked_edges: &HashSet<EdgeKey>,
+) -> bool {
+    blocked_nodes.contains(&edge.dst) || blocked_edges.contains(&edge)
+}
+
+pub(crate) fn edge_blocked_incoming(
+    edge: EdgeKey,
+    blocked_nodes: &HashSet<InternalNodeId>,
+    blocked_edges: &HashSet<EdgeKey>,
+) -> bool {
+    blocked_nodes.contains(&edge.src) || blocked_edges.contains(&edge)
 }

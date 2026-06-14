@@ -39,7 +39,6 @@ use binding_analysis::{
 };
 use compile_core::compile_m3_plan;
 use explain::strip_explain_prefix;
-use foreach_compile::compile_foreach_plan;
 use internal_alias::{alloc_internal_path_alias, is_internal_path_alias};
 use match_anchor::{
     build_optional_unbind_aliases, first_relationship_is_bound, maybe_reanchor_pattern,

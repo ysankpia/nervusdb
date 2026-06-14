@@ -1,7 +1,4 @@
 use crate::idmap::InternalNodeId;
-use crate::read_path_convert::{
-    api_edge_to_internal, convert_property_map_to_api, convert_property_to_api,
-};
 use crate::snapshot::Snapshot;
 use std::collections::BTreeMap;
 
@@ -10,9 +7,7 @@ pub(crate) fn node_property_as_api(
     iid: InternalNodeId,
     key: &str,
 ) -> Option<nervusdb_api::PropertyValue> {
-    snapshot
-        .node_property(iid, key)
-        .map(convert_property_to_api)
+    snapshot.node_property(iid, key)
 }
 
 pub(crate) fn edge_property_as_api(
@@ -20,29 +15,21 @@ pub(crate) fn edge_property_as_api(
     edge: nervusdb_api::EdgeKey,
     key: &str,
 ) -> Option<nervusdb_api::PropertyValue> {
-    let internal_edge = api_edge_to_internal(edge);
-    snapshot
-        .edge_property(internal_edge, key)
-        .map(convert_property_to_api)
+    snapshot.edge_property(edge, key)
 }
 
 pub(crate) fn node_properties_as_api(
     snapshot: &Snapshot,
     iid: InternalNodeId,
 ) -> Option<BTreeMap<String, nervusdb_api::PropertyValue>> {
-    snapshot
-        .node_properties(iid)
-        .map(convert_property_map_to_api)
+    snapshot.node_properties(iid)
 }
 
 pub(crate) fn edge_properties_as_api(
     snapshot: &Snapshot,
     edge: nervusdb_api::EdgeKey,
 ) -> Option<BTreeMap<String, nervusdb_api::PropertyValue>> {
-    let internal_edge = api_edge_to_internal(edge);
-    snapshot
-        .edge_properties(internal_edge)
-        .map(convert_property_map_to_api)
+    snapshot.edge_properties(edge)
 }
 
 #[cfg(test)]

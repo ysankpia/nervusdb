@@ -26,8 +26,8 @@ use match_out_plan::FilteredMatchOutIter;
 pub use nervusdb_api::LabelId;
 use nervusdb_api::{EdgeKey, ExternalId, GraphSnapshot, InternalNodeId, RelTypeId};
 use plan_iterators::{
-    CartesianProductIter, ChainIter, DistinctIter, FilterIter, IndexSeekIter, LimitIter,
-    NodeScanIter, ProjectIter, ResultRowsIter, SkipIter, UnionDistinctIter, UnwindIter, ValuesIter,
+    CartesianProductIter, ChainIter, DistinctIter, FilterIter, LimitIter, NodeScanIter,
+    ProjectIter, ResultRowsIter, SkipIter, UnionDistinctIter, UnwindIter, ValuesIter,
 };
 use property_bridge::api_property_map_to_storage;
 use read_path::{ExpandIter, MatchOutVarLenIter};

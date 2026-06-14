@@ -201,22 +201,6 @@ pub(super) fn extract_output_var_kinds(plan: &Plan, vars: &mut BTreeMap<String, 
             path_alias,
             input,
             ..
-        }
-        | Plan::MatchIn {
-            src_alias,
-            dst_alias,
-            edge_alias,
-            path_alias,
-            input,
-            ..
-        }
-        | Plan::MatchUndirected {
-            src_alias,
-            dst_alias,
-            edge_alias,
-            path_alias,
-            input,
-            ..
         } => {
             if let Some(p) = input {
                 extract_output_var_kinds(p, vars);
@@ -330,39 +314,6 @@ pub(super) fn extract_output_var_kinds(plan: &Plan, vars: &mut BTreeMap<String, 
             extract_output_var_kinds(left, vars);
             extract_output_var_kinds(right, vars);
         }
-        Plan::Apply {
-            input,
-            subquery,
-            alias: _,
-        } => {
-            extract_output_var_kinds(input, vars);
-            let mut subquery_vars = BTreeMap::new();
-            extract_output_var_kinds(subquery, &mut subquery_vars);
-            for (name, kind) in subquery_vars {
-                merge_binding_kind(vars, name, kind);
-            }
-        }
-        Plan::ProcedureCall {
-            input,
-            name: _,
-            args: _,
-            yields,
-        } => {
-            extract_output_var_kinds(input, vars);
-            for (name, alias) in yields {
-                vars.insert(
-                    alias.clone().unwrap_or_else(|| name.clone()),
-                    BindingKind::Unknown,
-                );
-            }
-        }
-        Plan::IndexSeek {
-            alias, fallback, ..
-        } => {
-            extract_output_var_kinds(fallback, vars);
-            merge_binding_kind(vars, alias.to_string(), BindingKind::Node);
-        }
-        Plan::Foreach { input, .. } => extract_output_var_kinds(input, vars),
         Plan::Values { rows } => {
             for row in rows {
                 for (name, value) in row.columns() {
@@ -441,29 +392,5 @@ mod tests {
         extract_output_var_kinds(&plan, &mut vars);
         assert_eq!(vars.get("a"), Some(&BindingKind::Node));
         assert_eq!(vars.get("b"), Some(&BindingKind::Node));
-    }
-
-    #[test]
-    fn extract_output_var_kinds_apply_preserves_input_aliases() {
-        let input = Plan::NodeScan {
-            alias: "p".to_string().into(),
-            label: Some("Person".to_string()),
-            optional: false,
-        };
-        let subquery = Plan::Project {
-            input: Box::new(Plan::ReturnOne),
-            projections: vec![("deg".to_string(), Expression::Literal(Literal::Integer(1)))],
-        };
-        let plan = Plan::Apply {
-            input: Box::new(input),
-            subquery: Box::new(subquery),
-            alias: None,
-        };
-
-        let mut vars = BTreeMap::new();
-        extract_output_var_kinds(&plan, &mut vars);
-
-        assert_eq!(vars.get("p"), Some(&BindingKind::Node));
-        assert_eq!(vars.get("deg"), Some(&BindingKind::Scalar));
     }
 }

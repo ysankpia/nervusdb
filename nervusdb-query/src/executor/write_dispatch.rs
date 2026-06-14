@@ -36,17 +36,12 @@ pub(super) fn execute_write<S: GraphSnapshot>(
         | Plan::OrderBy { input, .. }
         | Plan::Distinct { input }
         | Plan::Unwind { input, .. }
-        | Plan::Aggregate { input, .. }
-        | Plan::ProcedureCall { input, .. } => execute_write(input, snapshot, txn, params),
+        | Plan::Aggregate { input, .. } => execute_write(input, snapshot, txn, params),
         Plan::OptionalWhereFixup {
             outer, filtered, ..
         } => execute_write(outer, snapshot, txn, params)
             .or_else(|_| execute_write(filtered, snapshot, txn, params)),
-        Plan::IndexSeek { fallback, .. } => execute_write(fallback, snapshot, txn, params),
-        Plan::MatchOut { input, .. }
-        | Plan::MatchIn { input, .. }
-        | Plan::MatchUndirected { input, .. }
-        | Plan::MatchOutVarLen { input, .. } => {
+        Plan::MatchOut { input, .. } | Plan::MatchOutVarLen { input, .. } => {
             if let Some(inner) = input.as_deref() {
                 execute_write(inner, snapshot, txn, params)
             } else {
@@ -56,17 +51,12 @@ pub(super) fn execute_write<S: GraphSnapshot>(
             }
         }
         Plan::MatchBoundRel { input, .. } => execute_write(input, snapshot, txn, params),
-        Plan::Apply {
-            input, subquery, ..
-        } => execute_write(input, snapshot, txn, params)
-            .or_else(|_| execute_write(subquery, snapshot, txn, params)),
         Plan::CartesianProduct { left, right } | Plan::Union { left, right, .. } => {
             execute_write(left, snapshot, txn, params)
                 .or_else(|_| execute_write(right, snapshot, txn, params))
         }
         _ => Err(Error::Other(
-            "Only CREATE, DELETE, SET, REMOVE and FOREACH plans can be executed with execute_write"
-                .into(),
+            "Only CREATE, DELETE, SET, and REMOVE plans can be executed with execute_write".into(),
         )),
     }
 }

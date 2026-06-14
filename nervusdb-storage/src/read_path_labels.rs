@@ -1,5 +1,6 @@
 use crate::idmap::{InternalNodeId, LabelId};
 use crate::label_interner::LabelSnapshot;
+use std::sync::Arc;
 
 pub(crate) fn node_primary_label(
     node_labels: &[Vec<LabelId>],
@@ -64,4 +65,12 @@ mod tests {
         );
         assert_eq!(resolve_label_name(&snapshot, 99), None);
     }
+}
+
+pub(crate) fn resolve_symbol_id(labels: &Arc<LabelSnapshot>, name: &str) -> Option<LabelId> {
+    resolve_label_id(labels, name)
+}
+
+pub(crate) fn resolve_symbol_name(labels: &Arc<LabelSnapshot>, id: LabelId) -> Option<String> {
+    resolve_label_name(labels, id)
 }

@@ -5,10 +5,6 @@ use crate::index::catalog::IndexDef;
 use crate::index::ordered_key::encode_ordered_value;
 use crate::pager::Pager;
 use crate::read_path_api_stats::{edge_count_from_stats, node_count_from_stats};
-use crate::read_path_convert::{
-    api_edge_to_internal, convert_property_map_to_api, convert_property_to_api,
-    convert_property_to_storage, internal_edge_to_api,
-};
 use crate::read_path_property_store::{
     extend_edge_properties_from_store, extend_node_properties_from_store,
     read_edge_property_from_store, read_node_property_from_store,
@@ -68,11 +64,7 @@ impl GraphSnapshot for StorageSnapshot {
         Self: 'a;
 
     fn neighbors(&self, src: InternalNodeId, rel: Option<RelTypeId>) -> Self::Neighbors<'_> {
-        Box::new(
-            self.inner
-                .neighbors(src, rel)
-                .map(internal_edge_to_api as fn(snapshot::EdgeKey) -> EdgeKey),
-        )
+        Box::new(self.inner.neighbors(src, rel))
     }
 
     fn incoming_neighbors(
@@ -80,11 +72,7 @@ impl GraphSnapshot for StorageSnapshot {
         dst: InternalNodeId,
         rel: Option<RelTypeId>,
     ) -> Self::Neighbors<'_> {
-        Box::new(
-            self.inner
-                .incoming_neighbors(dst, rel)
-                .map(internal_edge_to_api as fn(snapshot::EdgeKey) -> EdgeKey),
-        )
+        Box::new(self.inner.incoming_neighbors(dst, rel))
     }
 
     fn lookup_index(
@@ -99,13 +87,10 @@ impl GraphSnapshot for StorageSnapshot {
         let def = self.index_entries.get(&index_name)?.clone();
         let tree = BTree::load(def.root);
 
-        // Use storage-level PropertyValue for encoding
-        let storage_value = convert_property_to_storage(value.clone());
-
         // Construct prefix: [index_id (4B)] [encoded_value]
         let mut prefix = Vec::new();
         prefix.extend_from_slice(&def.id.to_be_bytes());
-        prefix.extend_from_slice(&encode_ordered_value(&storage_value));
+        prefix.extend_from_slice(&encode_ordered_value(value));
 
         let pager = self.pager.read().unwrap();
         let mut cursor = tree.cursor_lower_bound(&pager, &prefix).ok()?;
@@ -169,7 +154,7 @@ impl GraphSnapshot for StorageSnapshot {
 
     fn node_property(&self, iid: InternalNodeId, key: &str) -> Option<PropertyValue> {
         if let Some(v) = self.inner.node_property(iid, key) {
-            return Some(convert_property_to_api(v));
+            return Some(v);
         }
 
         if self.inner.properties_root == 0 {
@@ -177,15 +162,12 @@ impl GraphSnapshot for StorageSnapshot {
         }
 
         let pager = self.pager.read().unwrap();
-        let storage_val =
-            read_node_property_from_store(&pager, self.inner.properties_root, iid, key)?;
-        Some(convert_property_to_api(storage_val))
+        read_node_property_from_store(&pager, self.inner.properties_root, iid, key)
     }
 
     fn edge_property(&self, edge: EdgeKey, key: &str) -> Option<PropertyValue> {
-        let snapshot_edge = api_edge_to_internal(edge);
-        if let Some(v) = self.inner.edge_property(snapshot_edge, key) {
-            return Some(convert_property_to_api(v));
+        if let Some(v) = self.inner.edge_property(edge, key) {
+            return Some(v);
         }
 
         if self.inner.properties_root == 0 {
@@ -193,9 +175,7 @@ impl GraphSnapshot for StorageSnapshot {
         }
 
         let pager = self.pager.read().unwrap();
-        let storage_val =
-            read_edge_property_from_store(&pager, self.inner.properties_root, edge, key)?;
-        Some(convert_property_to_api(storage_val))
+        read_edge_property_from_store(&pager, self.inner.properties_root, edge, key)
     }
 
     fn node_properties(&self, iid: InternalNodeId) -> Option<BTreeMap<String, PropertyValue>> {
@@ -206,19 +186,11 @@ impl GraphSnapshot for StorageSnapshot {
             extend_node_properties_from_store(&pager, self.inner.properties_root, iid, &mut props)?;
         }
 
-        if props.is_empty() {
-            None
-        } else {
-            Some(convert_property_map_to_api(props))
-        }
+        if props.is_empty() { None } else { Some(props) }
     }
 
     fn edge_properties(&self, edge: EdgeKey) -> Option<BTreeMap<String, PropertyValue>> {
-        let snapshot_edge = api_edge_to_internal(edge);
-        let mut props = self
-            .inner
-            .edge_properties(snapshot_edge)
-            .unwrap_or_default();
+        let mut props = self.inner.edge_properties(edge).unwrap_or_default();
 
         if self.inner.properties_root != 0 {
             let pager = self.pager.read().unwrap();
@@ -230,11 +202,7 @@ impl GraphSnapshot for StorageSnapshot {
             )?;
         }
 
-        if props.is_empty() {
-            None
-        } else {
-            Some(convert_property_map_to_api(props))
-        }
+        if props.is_empty() { None } else { Some(props) }
     }
 
     fn resolve_label_id(&self, name: &str) -> Option<LabelId> {

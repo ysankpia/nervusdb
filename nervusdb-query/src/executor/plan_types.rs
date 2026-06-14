@@ -1,9 +1,8 @@
 use super::{
     AggregateFunction, CartesianProductIter, ChainIter, Direction, DistinctIter, ExpandIter,
-    Expression, FilterIter, FilteredMatchOutIter, GraphSnapshot, IndexSeekIter, LimitIter,
-    MatchBoundRelIter, MatchOutVarLenIter, NodeScanIter, Pattern, ProjectIter,
-    RelationshipDirection, Result, ResultRowsIter, Row, SkipIter, UnionDistinctIter, UnwindIter,
-    ValuesIter,
+    Expression, FilterIter, FilteredMatchOutIter, GraphSnapshot, LimitIter, MatchBoundRelIter,
+    MatchOutVarLenIter, NodeScanIter, Pattern, ProjectIter, RelationshipDirection, Result,
+    ResultRowsIter, Row, SkipIter, UnionDistinctIter, UnwindIter, ValuesIter,
 };
 use std::sync::Arc;
 
@@ -50,32 +49,6 @@ pub enum Plan {
         limit: Option<u32>,
         project: Vec<String>,
         project_external: bool,
-        optional: bool,
-        optional_unbind: Vec<String>,
-        path_alias: Option<Arc<str>>,
-    },
-    MatchIn {
-        input: Option<Box<Plan>>,
-        src_alias: Arc<str>,
-        rels: Vec<String>,
-        edge_alias: Option<Arc<str>>,
-        dst_alias: Arc<str>,
-        dst_labels: Vec<String>,
-        src_prebound: bool,
-        limit: Option<u32>,
-        optional: bool,
-        optional_unbind: Vec<String>,
-        path_alias: Option<Arc<str>>,
-    },
-    MatchUndirected {
-        input: Option<Box<Plan>>,
-        src_alias: Arc<str>,
-        rels: Vec<String>,
-        edge_alias: Option<Arc<str>>,
-        dst_alias: Arc<str>,
-        dst_labels: Vec<String>,
-        src_prebound: bool,
-        limit: Option<u32>,
         optional: bool,
         optional_unbind: Vec<String>,
         path_alias: Option<Arc<str>>,
@@ -178,37 +151,10 @@ pub enum Plan {
         input: Box<Plan>,
         items: Vec<(String, Vec<String>)>, // (variable, labels)
     },
-    /// `IndexSeek` - optimize scan using index if available, else fallback
-    IndexSeek {
-        alias: Arc<str>,
-        label: String,
-        field: String,
-        value_expr: Expression,
-        fallback: Box<Plan>,
-    },
     /// `CartesianProduct` - multiply two plans (join without shared variables)
     CartesianProduct {
         left: Box<Plan>,
         right: Box<Plan>,
-    },
-    /// `Apply` - execute subquery for each row (Correlated Subquery)
-    Apply {
-        input: Box<Plan>,
-        subquery: Box<Plan>,
-        alias: Option<Arc<str>>, // Optional alias for subquery result? usually subquery projects...
-    },
-    /// `CALL namespace.name(args) YIELD x, y`
-    ProcedureCall {
-        input: Box<Plan>,
-        name: Vec<String>,
-        args: Vec<Expression>,
-        yields: Vec<(String, Option<String>)>, // (field_name, alias)
-    },
-    Foreach {
-        input: Box<Plan>,
-        variable: Arc<str>,
-        list: Expression,
-        sub_plan: Box<Plan>,
     },
     // Injects specific rows into the pipeline (used for FOREACH context and constructing literal rows)
     Values {
@@ -229,7 +175,6 @@ pub enum PlanIterator<'a, S: GraphSnapshot> {
     Project(Box<ProjectIter<'a, S>>),
     Distinct(Box<DistinctIter<'a, S>>),
     UnionDistinct(Box<UnionDistinctIter<'a, S>>),
-    IndexSeek(Box<IndexSeekIter>),
     Skip(Box<SkipIter<'a, S>>),
     Limit(Box<LimitIter<'a, S>>),
     Unwind(Box<UnwindIter<'a, S>>),
@@ -254,7 +199,6 @@ impl<'a, S: GraphSnapshot> Iterator for PlanIterator<'a, S> {
             PlanIterator::Project(iter) => iter.next(),
             PlanIterator::Distinct(iter) => iter.next(),
             PlanIterator::UnionDistinct(iter) => iter.next(),
-            PlanIterator::IndexSeek(iter) => iter.next(),
             PlanIterator::Skip(iter) => iter.next(),
             PlanIterator::Limit(iter) => iter.next(),
             PlanIterator::Unwind(iter) => iter.next(),

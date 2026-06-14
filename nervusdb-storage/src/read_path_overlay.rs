@@ -1,8 +1,85 @@
 use crate::idmap::InternalNodeId;
 use crate::property::PropertyValue;
-use crate::snapshot::{EdgeKey, PublishedRuns};
+use crate::snapshot::{EdgeKey, L0Run, PublishedRuns};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+
+pub(crate) fn node_property_in_run<'a>(
+    run: &'a L0Run,
+    node: InternalNodeId,
+    key: &str,
+) -> Option<&'a PropertyValue> {
+    if let Some(deleted) = run.tombstoned_node_properties.get(&node)
+        && deleted.contains(key)
+    {
+        return None;
+    }
+    run.node_properties
+        .get(&node)
+        .and_then(|props| props.get(key))
+}
+
+pub(crate) fn edge_property_in_run<'a>(
+    run: &'a L0Run,
+    edge: EdgeKey,
+    key: &str,
+) -> Option<&'a PropertyValue> {
+    if let Some(deleted) = run.tombstoned_edge_properties.get(&edge)
+        && deleted.contains(key)
+    {
+        return None;
+    }
+    run.edge_properties
+        .get(&edge)
+        .and_then(|props| props.get(key))
+}
+
+pub(crate) fn node_properties_in_run(
+    node_properties: &BTreeMap<InternalNodeId, BTreeMap<String, PropertyValue>>,
+    node: InternalNodeId,
+) -> Option<&BTreeMap<String, PropertyValue>> {
+    node_properties.get(&node)
+}
+
+pub(crate) fn edge_properties_in_run(
+    edge_properties: &BTreeMap<EdgeKey, BTreeMap<String, PropertyValue>>,
+    edge: EdgeKey,
+) -> Option<&BTreeMap<String, PropertyValue>> {
+    edge_properties.get(&edge)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_is_empty(
+    edges_by_src: &BTreeMap<InternalNodeId, Vec<EdgeKey>>,
+    edges_by_dst: &BTreeMap<InternalNodeId, Vec<EdgeKey>>,
+    tombstoned_nodes: &BTreeSet<InternalNodeId>,
+    tombstoned_edges: &BTreeSet<EdgeKey>,
+    node_properties: &BTreeMap<InternalNodeId, BTreeMap<String, PropertyValue>>,
+    edge_properties: &BTreeMap<EdgeKey, BTreeMap<String, PropertyValue>>,
+    tombstoned_node_properties: &BTreeMap<InternalNodeId, BTreeSet<String>>,
+    tombstoned_edge_properties: &BTreeMap<EdgeKey, BTreeSet<String>>,
+) -> bool {
+    edges_by_src.is_empty()
+        && edges_by_dst.is_empty()
+        && tombstoned_nodes.is_empty()
+        && tombstoned_edges.is_empty()
+        && node_properties.is_empty()
+        && edge_properties.is_empty()
+        && tombstoned_node_properties.is_empty()
+        && tombstoned_edge_properties.is_empty()
+}
+
+pub(crate) fn run_has_properties(
+    node_properties: &BTreeMap<InternalNodeId, BTreeMap<String, PropertyValue>>,
+    edge_properties: &BTreeMap<EdgeKey, BTreeMap<String, PropertyValue>>,
+    tombstoned_node_properties: &BTreeMap<InternalNodeId, BTreeSet<String>>,
+    tombstoned_edge_properties: &BTreeMap<EdgeKey, BTreeSet<String>>,
+) -> bool {
+    !node_properties.is_empty()
+        || !edge_properties.is_empty()
+        || !tombstoned_node_properties.is_empty()
+        || !tombstoned_edge_properties.is_empty()
+}
 
 pub(crate) fn node_property_from_runs(
     runs: &Arc<PublishedRuns>,

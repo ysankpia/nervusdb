@@ -13,16 +13,6 @@ pub(super) fn execute_plan<'a, S: GraphSnapshot + 'a>(
         Plan::CartesianProduct { left, right } => {
             plan_head::execute_cartesian_product(snapshot, left, right, params)
         }
-        Plan::Apply { .. }
-        | Plan::ProcedureCall { .. }
-        | Plan::Foreach { .. }
-        | Plan::MatchIn { .. }
-        | Plan::MatchUndirected { .. }
-        | Plan::IndexSeek { .. } => {
-            return PlanIterator::ReturnOne(std::iter::once(Err(Error::Other(
-                "plan variant not yet supported in 0.1 slim build".into(),
-            ))));
-        }
         Plan::NodeScan {
             alias,
             label,

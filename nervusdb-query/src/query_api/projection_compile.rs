@@ -108,7 +108,6 @@ fn resolve_projection_source_expr<'a>(plan: &'a Plan, variable: &str) -> Option<
         | Plan::SetLabels { input, .. }
         | Plan::RemoveProperty { input, .. }
         | Plan::RemoveLabels { input, .. }
-        | Plan::Foreach { input, .. }
         | Plan::Create { input, .. } => resolve_projection_source_expr(input, variable),
         Plan::Aggregate { input, .. } => resolve_projection_source_expr(input, variable),
         Plan::Unwind {
@@ -122,23 +121,13 @@ fn resolve_projection_source_expr<'a>(plan: &'a Plan, variable: &str) -> Option<
                 resolve_projection_source_expr(input, variable)
             }
         }
-        Plan::IndexSeek { fallback, .. } => resolve_projection_source_expr(fallback, variable),
-        Plan::Apply {
-            input, subquery, ..
-        } => resolve_projection_source_expr(subquery, variable)
-            .or_else(|| resolve_projection_source_expr(input, variable)),
         Plan::CartesianProduct { left, right } | Plan::Union { left, right, .. } => {
             resolve_projection_source_expr(right, variable)
                 .or_else(|| resolve_projection_source_expr(left, variable))
         }
-        Plan::ProcedureCall { input, .. } | Plan::MatchBoundRel { input, .. } => {
-            resolve_projection_source_expr(input, variable)
-        }
+        Plan::MatchBoundRel { input, .. } => resolve_projection_source_expr(input, variable),
         Plan::Values { .. } => None,
-        Plan::MatchOut { input, .. }
-        | Plan::MatchOutVarLen { input, .. }
-        | Plan::MatchIn { input, .. }
-        | Plan::MatchUndirected { input, .. } => input
+        Plan::MatchOut { input, .. } | Plan::MatchOutVarLen { input, .. } => input
             .as_deref()
             .and_then(|inner| resolve_projection_source_expr(inner, variable)),
         Plan::NodeScan { .. } | Plan::ReturnOne => None,

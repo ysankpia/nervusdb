@@ -1,18 +1,20 @@
+mod write_txn;
+pub use write_txn::WriteTxn;
+
 use crate::csr::{CsrSegment, EdgeRecord, SegmentId};
 use crate::idmap::{ExternalId, I2eRecord, IdMap, InternalNodeId, LabelId};
 use crate::index::btree::BTree;
 use crate::index::catalog::{IndexCatalog, IndexDef};
-use crate::index::ordered_key::encode_ordered_value;
 use crate::label_interner::{LabelInterner, LabelSnapshot};
-use crate::memtable::{MemTable, WalPropertyOp};
+use crate::memtable::MemTable;
 use crate::pager::{PageId, Pager};
+use crate::published_state::PublishedState;
 use crate::read_path_engine_idmap::{lookup_internal_node_id, read_i2e_arc, read_i2l_arc};
-use crate::read_path_engine_labels::published_label_snapshot;
 use crate::read_path_engine_view::{
     build_snapshot_from_published, load_properties_and_stats_roots,
 };
-use crate::read_path_tombstones::collect_tombstoned_nodes;
-use crate::snapshot::{L0Run, PublishedRuns, PublishedSegments, RelTypeId, Snapshot};
+use crate::read_path_nodes::collect_tombstoned_nodes;
+use crate::snapshot::{L0Run, PublishedRuns, PublishedSegments, Snapshot};
 use crate::wal::{CommittedTx, SegmentPointer, Wal, WalRecord};
 use crate::{Error, Result};
 use arc_swap::ArcSwap;
@@ -26,21 +28,15 @@ pub struct GraphEngine {
     ndb_path: PathBuf,
     wal_path: PathBuf,
 
-    pager: Arc<RwLock<Pager>>,
-    wal: Mutex<Wal>,
-    idmap: Mutex<IdMap>,
+    pub(super) pager: Arc<RwLock<Pager>>,
+    pub(super) wal: Mutex<Wal>,
+    pub(super) idmap: Mutex<IdMap>,
     label_interner: Mutex<LabelInterner>,
     index_catalog: Arc<Mutex<IndexCatalog>>,
 
-    published_runs: ArcSwap<PublishedRuns>,
-    published_segments: ArcSwap<PublishedSegments>,
-    published_labels: ArcSwap<LabelSnapshot>,
-    published_node_labels: ArcSwap<Vec<Vec<LabelId>>>,
-    published_i2e: ArcSwap<Vec<I2eRecord>>,
-    published_index_entries: ArcSwap<BTreeMap<String, IndexDef>>,
-    published_tombstoned_nodes: ArcSwap<std::collections::HashSet<InternalNodeId>>,
+    pub(super) published_state: ArcSwap<PublishedState>,
     write_lock: Mutex<()>,
-    next_txid: AtomicU64,
+    pub(super) next_txid: AtomicU64,
     next_segment_id: AtomicU64,
     manifest_epoch: AtomicU64,
     checkpoint_txid: AtomicU64,
@@ -49,7 +45,7 @@ pub struct GraphEngine {
 }
 
 impl GraphEngine {
-    fn with_catalog_pager<T>(
+    pub(super) fn with_catalog_pager<T>(
         &self,
         f: impl FnOnce(&mut IndexCatalog, &mut Pager) -> Result<T>,
     ) -> Result<T> {
@@ -58,9 +54,11 @@ impl GraphEngine {
         f(&mut catalog, &mut pager)
     }
 
-    fn publish_index_entries_snapshot(&self, catalog: &IndexCatalog) {
-        self.published_index_entries
-            .store(Arc::new(catalog.entries.clone()));
+    pub(super) fn publish_index_entries_snapshot(&self, catalog: &IndexCatalog) {
+        let current = self.published_state.load_full();
+        let mut next = (*current).clone();
+        next.index_entries = Arc::new(catalog.entries.clone());
+        self.published_state.store(Arc::new(next));
     }
 
     pub fn open(ndb_path: impl AsRef<Path>, wal_path: impl AsRef<Path>) -> Result<Self> {
@@ -117,13 +115,15 @@ impl GraphEngine {
             idmap: Mutex::new(idmap),
             label_interner: Mutex::new(label_interner),
             index_catalog: Arc::new(Mutex::new(index_catalog)),
-            published_runs: ArcSwap::from_pointee(PublishedRuns::from(runs)),
-            published_segments: ArcSwap::from_pointee(segments),
-            published_labels: ArcSwap::from(Arc::new(label_snapshot)),
-            published_node_labels: ArcSwap::from(node_labels_snapshot),
-            published_i2e: ArcSwap::from(i2e_snapshot),
-            published_index_entries: ArcSwap::from_pointee(index_entries_snapshot),
-            published_tombstoned_nodes: ArcSwap::from_pointee(tombstoned_nodes_snapshot),
+            published_state: ArcSwap::from(Arc::new(PublishedState::new(
+                Arc::new(PublishedRuns::from(runs)),
+                Arc::new(segments),
+                Arc::new(label_snapshot),
+                node_labels_snapshot,
+                i2e_snapshot,
+                Arc::new(index_entries_snapshot),
+                tombstoned_nodes_snapshot.into(),
+            ))),
             write_lock: Mutex::new(()),
             next_txid: AtomicU64::new(state.max_txid.saturating_add(1).max(1)),
             next_segment_id: AtomicU64::new(max_seg_id.saturating_add(1).max(1)),
@@ -149,17 +149,17 @@ impl GraphEngine {
     }
 
     pub(crate) fn get_published_index_entries(&self) -> Arc<BTreeMap<String, IndexDef>> {
-        self.published_index_entries.load_full()
+        self.published_state.load_full().index_entries.clone()
     }
 
     pub(crate) fn get_published_tombstoned_nodes(
         &self,
     ) -> Arc<std::collections::HashSet<InternalNodeId>> {
-        self.published_tombstoned_nodes.load_full()
+        self.published_state.load_full().tombstoned_nodes.clone()
     }
 
     pub(crate) fn get_published_i2e(&self) -> Arc<Vec<I2eRecord>> {
-        self.published_i2e.load_full()
+        self.published_state.load_full().i2e.clone()
     }
 
     /// Creates a B-Tree index for the given label and property.
@@ -182,17 +182,14 @@ impl GraphEngine {
     }
 
     pub fn begin_read(&self) -> Snapshot {
-        let runs = self.published_runs.load_full();
-        let segments = self.published_segments.load_full();
-        let labels = self.published_labels.load_full();
-        let node_labels = self.published_node_labels.load_full();
+        let state = self.published_state.load_full();
         let (properties_root, stats_root) =
             load_properties_and_stats_roots(&self.properties_root, &self.stats_root);
         build_snapshot_from_published(
-            runs,
-            segments,
-            labels,
-            node_labels,
+            state.runs.clone(),
+            state.segments.clone(),
+            state.labels.clone(),
+            state.node_labels.clone(),
             properties_root,
             stats_root,
         )
@@ -221,7 +218,7 @@ impl GraphEngine {
     ///
     /// This is a write operation and must be called within a write transaction.
     pub fn get_or_create_label(&self, name: &str) -> Result<LabelId> {
-        if let Some(id) = self.published_labels.load_full().get_id(name) {
+        if let Some(id) = self.published_state.load_full().labels.get_id(name) {
             return Ok(id);
         }
 
@@ -245,34 +242,41 @@ impl GraphEngine {
         }
 
         let snapshot = interner.snapshot();
-        self.published_labels.store(Arc::new(snapshot));
+        let current = self.published_state.load_full();
+        let mut next = (*current).clone();
+        next.labels = Arc::new(snapshot);
+        self.published_state.store(Arc::new(next));
 
         Ok(returned_id)
     }
 
     /// Update published node labels from IdMap.
     /// Should be called after write transactions that create nodes.
-    fn update_published_idmap_snapshots(&self) {
+    pub(super) fn update_published_idmap_snapshots(&self) {
         let labels = read_i2l_arc(&self.idmap);
         let i2e = read_i2e_arc(&self.idmap);
-        self.published_node_labels.store(labels);
-        self.published_i2e.store(i2e);
+        let current = self.published_state.load_full();
+        let mut next = (*current).clone();
+        next.node_labels = labels;
+        next.i2e = i2e;
+        self.published_state.store(Arc::new(next));
     }
 
     /// Get a snapshot of the current label state for reading.
     pub fn label_snapshot(&self) -> Arc<LabelSnapshot> {
-        published_label_snapshot(&self.published_labels)
+        self.published_state.load_full().labels.clone()
     }
 
     /// Get label ID by name, returns None if not found.
     pub fn get_label_id(&self, name: &str) -> Option<LabelId> {
-        self.published_labels.load_full().get_id(name)
+        self.published_state.load_full().labels.get_id(name)
     }
 
     /// Get label name by ID, returns None if not found.
     pub fn get_label_name(&self, id: LabelId) -> Option<String> {
-        self.published_labels
+        self.published_state
             .load_full()
+            .labels
             .get_name(id)
             .map(ToOwned::to_owned)
     }
@@ -280,21 +284,21 @@ impl GraphEngine {
     /// Compatibility helper for callers that explicitly need an owned snapshot copy.
     /// Hot read paths should prefer the published Arc snapshot instead.
     pub fn scan_i2e_records(&self) -> Vec<I2eRecord> {
-        self.published_i2e.load_full().as_ref().clone()
+        self.published_state.load_full().i2e.as_ref().clone()
     }
 
-    fn publish_run(&self, run: Arc<L0Run>) {
-        let tombstoned_nodes = {
-            let current = self.published_tombstoned_nodes.load_full();
-            let mut next = current.as_ref().clone();
-            next.extend(run.iter_tombstoned_nodes());
-            Arc::new(next)
+    pub(super) fn publish_run(&self, run: Arc<L0Run>) {
+        let current = self.published_state.load_full();
+        let mut next = (*current).clone();
+        next.tombstoned_nodes = {
+            let mut nodes = (*next.tombstoned_nodes).clone();
+            nodes.extend(run.iter_tombstoned_nodes());
+            Arc::new(nodes)
         };
-        let current = self.published_runs.load_full();
-        let mut next = current.as_ref().clone();
-        next.push_front(run);
-        self.published_runs.store(Arc::new(next));
-        self.published_tombstoned_nodes.store(tombstoned_nodes);
+        let mut next_runs = (*next.runs).clone();
+        next_runs.push_front(run);
+        next.runs = Arc::new(next_runs);
+        self.published_state.store(Arc::new(next));
     }
 
     /// M2/T45: Explicit compaction.
@@ -305,7 +309,8 @@ impl GraphEngine {
     pub fn compact(&self) -> Result<()> {
         let _guard = self.write_lock.lock().unwrap();
 
-        let runs = self.published_runs.load_full();
+        let state = self.published_state.load_full();
+        let runs = state.runs.clone();
 
         if runs.is_empty() {
             return Ok(());
@@ -326,8 +331,7 @@ impl GraphEngine {
         let epoch = self.manifest_epoch.load(Ordering::Relaxed) + 1;
 
         let new_segments = {
-            let current = self.published_segments.load_full();
-            let mut next = current.as_ref().clone();
+            let mut next = (*state.segments).clone();
             next.push_front(Arc::new(seg));
             Arc::new(next)
         };
@@ -395,7 +399,7 @@ impl GraphEngine {
         // Statistics Collection - read from published label snapshots to avoid cloning IdMap state.
         let mut stats = crate::stats::GraphStatistics::default();
         {
-            let node_labels = self.published_node_labels.load_full();
+            let node_labels = state.node_labels.clone();
 
             // Count nodes per label (node_labels[iid] = vec of label_ids for that node)
             stats.total_nodes = node_labels.len() as u64;
@@ -454,10 +458,12 @@ impl GraphEngine {
         self.properties_root.store(current_root, Ordering::SeqCst);
         self.stats_root.store(stats_root, Ordering::SeqCst);
         {
-            self.published_runs.store(Arc::new(PublishedRuns::new()));
-            self.published_segments.store(new_segments);
-            self.published_tombstoned_nodes
-                .store(Arc::new(std::collections::HashSet::new()));
+            let current = self.published_state.load_full();
+            let mut next = (*current).clone();
+            next.runs = Arc::new(PublishedRuns::new());
+            next.segments = new_segments;
+            next.tombstoned_nodes = Arc::new(std::collections::HashSet::new());
+            self.published_state.store(Arc::new(next));
         }
 
         self.manifest_epoch.store(epoch, Ordering::Relaxed);
@@ -479,7 +485,8 @@ impl GraphEngine {
     pub fn checkpoint_on_close(&self) -> Result<()> {
         let _guard = self.write_lock.lock().unwrap();
 
-        let runs = self.published_runs.load_full();
+        let state = self.published_state.load_full();
+        let runs = state.runs.clone();
         if !runs.is_empty() {
             // Cannot compact WAL safely while L0 runs (esp. properties) are WAL-only.
             // Best-effort durability: flush NDB + WAL.
@@ -500,10 +507,10 @@ impl GraphEngine {
             pager.sync()?;
         }
 
-        let labels = self.published_labels.load_full();
+        let state = self.published_state.load_full();
 
-        let segments = self.published_segments.load_full();
-        let pointers: Vec<SegmentPointer> = segments
+        let pointers: Vec<SegmentPointer> = state
+            .segments
             .iter()
             .map(|s| SegmentPointer {
                 id: s.id.0,
@@ -516,8 +523,8 @@ impl GraphEngine {
         let system_txid = self.next_txid.fetch_add(1, Ordering::Relaxed);
 
         let mut ops: Vec<WalRecord> = Vec::new();
-        for id in labels.iter_ids() {
-            if let Some(name) = labels.get_name(id) {
+        for id in state.labels.iter_ids() {
+            if let Some(name) = state.labels.get_name(id) {
                 ops.push(WalRecord::CreateLabel {
                     name: name.to_string(),
                     label_id: id,
@@ -628,402 +635,6 @@ fn build_segment_from_runs(seg_id: SegmentId, runs: &Arc<PublishedRuns>) -> CsrS
         edges: edge_vec,
         in_offsets: Vec::new(),
         in_edges: Vec::new(),
-    }
-}
-
-pub struct WriteTxn<'a> {
-    engine: &'a GraphEngine,
-    _guard: std::sync::MutexGuard<'a, ()>,
-    txid: u64,
-    created_nodes: Vec<(ExternalId, LabelId, InternalNodeId)>,
-    pending_label_additions: Vec<(InternalNodeId, LabelId)>,
-    pending_label_removals: Vec<(InternalNodeId, LabelId)>,
-    created_external_ids: std::collections::HashSet<ExternalId>,
-    memtable: MemTable,
-}
-
-impl<'a> WriteTxn<'a> {
-    pub fn create_node(
-        &mut self,
-        external_id: ExternalId,
-        label_id: LabelId,
-    ) -> Result<InternalNodeId> {
-        if self.engine.lookup_internal_id(external_id).is_some() {
-            return Err(Error::WalProtocol("external id already exists"));
-        }
-
-        if !self.created_external_ids.insert(external_id) {
-            return Err(Error::WalProtocol("duplicate external id in same tx"));
-        }
-
-        let base_next = {
-            let idmap = self.engine.idmap.lock().unwrap();
-            idmap.next_internal_id()
-        };
-        let internal_id = base_next + self.created_nodes.len() as u32;
-
-        self.created_nodes
-            .push((external_id, label_id, internal_id));
-        Ok(internal_id)
-    }
-
-    pub fn add_node_label(&mut self, node: InternalNodeId, label_id: LabelId) -> Result<()> {
-        self.pending_label_additions.push((node, label_id));
-        Ok(())
-    }
-
-    pub fn remove_node_label(&mut self, node: InternalNodeId, label_id: LabelId) -> Result<()> {
-        self.pending_label_removals.push((node, label_id));
-        Ok(())
-    }
-
-    pub fn create_edge(&mut self, src: InternalNodeId, rel: RelTypeId, dst: InternalNodeId) {
-        self.memtable.create_edge(src, rel, dst);
-    }
-
-    pub fn get_or_create_label(&self, name: &str) -> Result<LabelId> {
-        self.engine.get_or_create_label(name)
-    }
-
-    pub fn get_or_create_rel_type(&self, name: &str) -> Result<RelTypeId> {
-        // Reuse label interner for relationship types for now
-        self.engine.get_or_create_label(name)
-    }
-
-    pub fn tombstone_node(&mut self, node: InternalNodeId) {
-        self.memtable.tombstone_node(node);
-    }
-
-    pub fn tombstone_edge(&mut self, src: InternalNodeId, rel: RelTypeId, dst: InternalNodeId) {
-        self.memtable.tombstone_edge(src, rel, dst);
-    }
-
-    pub fn set_node_property(
-        &mut self,
-        node: InternalNodeId,
-        key: String,
-        value: crate::property::PropertyValue,
-    ) {
-        self.memtable.set_node_property(node, key, value);
-    }
-
-    pub fn set_edge_property(
-        &mut self,
-        src: InternalNodeId,
-        rel: RelTypeId,
-        dst: InternalNodeId,
-        key: String,
-        value: crate::property::PropertyValue,
-    ) {
-        self.memtable.set_edge_property(src, rel, dst, key, value);
-    }
-
-    pub fn remove_node_property(&mut self, node: InternalNodeId, key: &str) {
-        self.memtable.remove_node_property(node, key);
-    }
-
-    pub fn remove_edge_property(
-        &mut self,
-        src: InternalNodeId,
-        rel: RelTypeId,
-        dst: InternalNodeId,
-        key: &str,
-    ) {
-        self.memtable.remove_edge_property(src, rel, dst, key);
-    }
-
-    pub fn staged_created_nodes_with_labels(&self) -> Vec<(InternalNodeId, Vec<String>)> {
-        let mut labels_by_node: BTreeMap<InternalNodeId, std::collections::BTreeSet<LabelId>> =
-            BTreeMap::new();
-
-        for (_, label_id, node_id) in &self.created_nodes {
-            if *label_id != LabelId::MAX {
-                labels_by_node
-                    .entry(*node_id)
-                    .or_default()
-                    .insert(*label_id);
-            } else {
-                labels_by_node.entry(*node_id).or_default();
-            }
-        }
-
-        for (node_id, label_id) in &self.pending_label_additions {
-            labels_by_node
-                .entry(*node_id)
-                .or_default()
-                .insert(*label_id);
-        }
-
-        for (node_id, label_id) in &self.pending_label_removals {
-            if let Some(labels) = labels_by_node.get_mut(node_id) {
-                labels.remove(label_id);
-            }
-        }
-
-        let labels = self.engine.published_labels.load_full();
-        self.created_nodes
-            .iter()
-            .map(|(_, _, node_id)| {
-                let labels = labels_by_node
-                    .get(node_id)
-                    .cloned()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter_map(|label_id| labels.get_name(label_id).map(ToOwned::to_owned))
-                    .collect::<Vec<_>>();
-                (*node_id, labels)
-            })
-            .collect()
-    }
-
-    pub fn commit(self) -> Result<()> {
-        enum IndexOp {
-            Insert(String, crate::property::PropertyValue),
-            Update(
-                String,
-                Option<crate::property::PropertyValue>,
-                crate::property::PropertyValue,
-            ),
-            Remove(String, Option<crate::property::PropertyValue>),
-        }
-        let mut index_ops = Vec::new();
-        let label_snapshot = self.engine.published_labels.load_full();
-        let index_defs = self.engine.published_index_entries.load_full();
-        let created_node_labels: std::collections::HashMap<InternalNodeId, LabelId> = self
-            .created_nodes
-            .iter()
-            .map(|(_, label_id, internal_id)| (*internal_id, *label_id))
-            .collect();
-        let read_snapshot = self.engine.begin_read();
-        // 1) Append WAL and fsync (durability Full by default).
-        let run = {
-            let mut wal = self.engine.wal.lock().unwrap();
-            wal.append(&WalRecord::BeginTx { txid: self.txid })?;
-
-            for (external_id, label_id, internal_id) in &self.created_nodes {
-                wal.append(&WalRecord::CreateNode {
-                    external_id: *external_id,
-                    label_id: *label_id,
-                    internal_id: *internal_id,
-                })?;
-            }
-            for (node, label_id) in &self.pending_label_additions {
-                wal.append(&WalRecord::AddNodeLabel {
-                    node: *node,
-                    label_id: *label_id,
-                })?;
-            }
-            for (node, label_id) in &self.pending_label_removals {
-                wal.append(&WalRecord::RemoveNodeLabel {
-                    node: *node,
-                    label_id: *label_id,
-                })?;
-            }
-
-            self.memtable.try_for_each_wal_property_op(|op| match op {
-                WalPropertyOp::SetNode { node, key, value } => wal
-                    .append(&WalRecord::SetNodeProperty {
-                        node,
-                        key: key.to_string(),
-                        value: value.clone(),
-                    })
-                    .map(|_| ()),
-                WalPropertyOp::RemoveNode { node, key } => wal
-                    .append(&WalRecord::RemoveNodeProperty {
-                        node,
-                        key: key.to_string(),
-                    })
-                    .map(|_| ()),
-                WalPropertyOp::SetEdge { edge, key, value } => wal
-                    .append(&WalRecord::SetEdgeProperty {
-                        src: edge.src,
-                        rel: edge.rel,
-                        dst: edge.dst,
-                        key: key.to_string(),
-                        value: value.clone(),
-                    })
-                    .map(|_| ()),
-                WalPropertyOp::RemoveEdge { edge, key } => wal
-                    .append(&WalRecord::RemoveEdgeProperty {
-                        src: edge.src,
-                        rel: edge.rel,
-                        dst: edge.dst,
-                        key: key.to_string(),
-                    })
-                    .map(|_| ()),
-            })?;
-
-            // Helper to convert API PropertyValue to Storage PropertyValue
-            use crate::read_path_convert::convert_property_to_storage as to_storage;
-
-            self.memtable.for_each_node_property(|node, key, value| {
-                let label_id = created_node_labels
-                    .get(&node)
-                    .copied()
-                    .or_else(|| read_snapshot.node_label(node));
-                let is_new = created_node_labels.contains_key(&node);
-
-                if let Some(lid) = label_id
-                    && let Some(label_name) = label_snapshot.get_name(lid)
-                {
-                    let index_name = format!("{}.{}", label_name, key);
-                    if index_defs.contains_key(&index_name) {
-                        if is_new {
-                            index_ops.push((IndexOp::Insert(index_name, value.clone()), node));
-                        } else {
-                            let old_value = read_snapshot.node_property(node, key).map(to_storage);
-                            index_ops.push((
-                                IndexOp::Update(index_name, old_value, value.clone()),
-                                node,
-                            ));
-                        }
-                    }
-                }
-            });
-
-            // Removed properties index updates
-            self.memtable.for_each_removed_node_property(|node, key| {
-                // If it was created in this tx, it won't be in index yet, so removing it is no-op for index
-                // (except if we added then removed in same tx, MemTable handles that by removing from node_properties)
-                // So we only care about existing nodes.
-                let is_new = created_node_labels.contains_key(&node);
-                if is_new {
-                    return;
-                }
-
-                let label_id = read_snapshot.node_label(node);
-                if let Some(lid) = label_id
-                    && let Some(label_name) = label_snapshot.get_name(lid)
-                {
-                    let index_name = format!("{}.{}", label_name, key);
-                    if index_defs.contains_key(&index_name) {
-                        let old_value = read_snapshot.node_property(node, key).map(to_storage);
-                        index_ops.push((IndexOp::Remove(index_name, old_value), node));
-                    }
-                }
-            });
-
-            let run = self.memtable.freeze_into_run(self.txid);
-
-            for edge in run.iter_edges() {
-                wal.append(&WalRecord::CreateEdge {
-                    src: edge.src,
-                    rel: edge.rel,
-                    dst: edge.dst,
-                })?;
-            }
-            for node in run.iter_tombstoned_nodes() {
-                wal.append(&WalRecord::TombstoneNode { node })?;
-            }
-            for edge in run.iter_tombstoned_edges() {
-                wal.append(&WalRecord::TombstoneEdge {
-                    src: edge.src,
-                    rel: edge.rel,
-                    dst: edge.dst,
-                })?;
-            }
-
-            // Flush WAL
-            // wal.append calls flush internally, we just need fsync at end of commit
-            wal.append(&WalRecord::CommitTx { txid: self.txid })?;
-            wal.fsync()?;
-            run
-        };
-
-        let has_new_nodes = !self.created_nodes.is_empty();
-        let has_label_additions = !self.pending_label_additions.is_empty();
-        let has_label_removals = !self.pending_label_removals.is_empty();
-
-        // 3. Apply index updates under the same catalog->pager lock order as read-side lookup_index.
-        {
-            if !index_ops.is_empty() {
-                self.engine.with_catalog_pager(|catalog, pager| {
-                    let index_ops = index_ops;
-                    for (op, node_id) in index_ops {
-                        match op {
-                            IndexOp::Insert(name, val) => {
-                                if let Some(re) = catalog.entries.get_mut(&name) {
-                                    let mut tree = crate::index::btree::BTree::load(re.root);
-
-                                    let mut key = Vec::new();
-                                    key.extend_from_slice(&re.id.to_be_bytes());
-                                    key.extend_from_slice(&encode_ordered_value(&val));
-
-                                    let _ = tree.insert(pager, &key, node_id as u64);
-                                    re.root = tree.root();
-                                }
-                            }
-                            IndexOp::Update(name, old_val_opt, new_val) => {
-                                if let Some(re) = catalog.entries.get_mut(&name) {
-                                    let mut tree = crate::index::btree::BTree::load(re.root);
-
-                                    if let Some(old_val) = old_val_opt {
-                                        let mut old_key = Vec::new();
-                                        old_key.extend_from_slice(&re.id.to_be_bytes());
-                                        old_key.extend_from_slice(&encode_ordered_value(&old_val));
-                                        let _ = tree.delete(pager, &old_key, node_id as u64);
-                                    }
-
-                                    let mut new_key = Vec::new();
-                                    new_key.extend_from_slice(&re.id.to_be_bytes());
-                                    new_key.extend_from_slice(&encode_ordered_value(&new_val));
-
-                                    let _ = tree.insert(pager, &new_key, node_id as u64);
-                                    re.root = tree.root();
-                                }
-                            }
-                            IndexOp::Remove(name, old_val_opt) => {
-                                if let Some(re) = catalog.entries.get_mut(&name)
-                                    && let Some(old_val) = old_val_opt
-                                {
-                                    let mut tree = crate::index::btree::BTree::load(re.root);
-                                    let mut old_key = Vec::new();
-                                    old_key.extend_from_slice(&re.id.to_be_bytes());
-                                    old_key.extend_from_slice(&encode_ordered_value(&old_val));
-                                    let _ = tree.delete(pager, &old_key, node_id as u64);
-                                    re.root = tree.root();
-                                }
-                            }
-                        }
-                    }
-                    catalog.flush(pager)?;
-                    self.engine.publish_index_entries_snapshot(catalog);
-                    Ok(())
-                })?;
-            }
-        }
-
-        // 4. Apply IdMap updates and finalize pager durability.
-        {
-            let mut pager = self.engine.pager.write().unwrap();
-            {
-                let mut idmap = self.engine.idmap.lock().unwrap();
-                for (external_id, label_id, internal_id) in self.created_nodes {
-                    idmap.apply_create_node(&mut pager, external_id, label_id, internal_id)?;
-                }
-                for (node, label_id) in self.pending_label_additions {
-                    idmap.apply_add_label(&mut pager, node, label_id)?;
-                }
-                for (node, label_id) in self.pending_label_removals {
-                    idmap.apply_remove_label(&mut pager, node, label_id)?;
-                }
-            }
-
-            pager.sync()?;
-        }
-
-        let has_label_mutations = has_new_nodes || has_label_additions || has_label_removals;
-        if has_label_mutations {
-            self.engine.update_published_idmap_snapshots();
-        }
-
-        if !run.is_empty() {
-            self.engine.publish_run(Arc::new(run));
-        }
-
-        self.engine.next_txid.fetch_add(1, Ordering::Relaxed);
-
-        Ok(())
     }
 }
 
@@ -1217,13 +828,13 @@ mod tests {
             }
 
             engine.compact().unwrap();
-            assert_eq!(engine.published_runs.load_full().len(), 0);
-            assert_eq!(engine.published_segments.load_full().len(), 1);
+            assert_eq!(engine.published_state.load_full().runs.len(), 0);
+            assert_eq!(engine.published_state.load_full().segments.len(), 1);
         }
 
         let engine = GraphEngine::open(&ndb, &wal).unwrap();
-        assert_eq!(engine.published_runs.load_full().len(), 0);
-        assert_eq!(engine.published_segments.load_full().len(), 1);
+        assert_eq!(engine.published_state.load_full().runs.len(), 0);
+        assert_eq!(engine.published_state.load_full().segments.len(), 1);
 
         let snap = engine.begin_read();
         let a = engine.lookup_internal_id(10).unwrap();
@@ -1254,7 +865,7 @@ mod tests {
 
             engine.compact().unwrap();
             // Runs MUST BE cleared because properties are now persisted.
-            assert!(engine.published_runs.load_full().is_empty());
+            assert!(engine.published_state.load_full().runs.is_empty());
         }
 
         let engine = GraphEngine::open(&ndb, &wal).unwrap();
@@ -1263,6 +874,6 @@ mod tests {
         let age = snap.node_property(internal_id, "age").unwrap();
         assert_eq!(age, nervusdb_api::PropertyValue::Int(30));
         // And we must have NO runs after restart, because they were checkpointed.
-        assert!(engine.published_runs.load_full().is_empty());
+        assert!(engine.published_state.load_full().runs.is_empty());
     }
 }

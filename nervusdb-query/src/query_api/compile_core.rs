@@ -1,10 +1,10 @@
 use super::{
     BTreeMap, BTreeSet, BindingKind, CallClause, Clause, Error, Expression, Plan, Query, Result,
-    VecDeque, WriteSemantics, compile_create_plan, compile_delete_plan_v2, compile_foreach_plan,
-    compile_match_plan, compile_merge_plan, compile_merge_set_items, compile_remove_plan_v2,
-    compile_return_plan, compile_set_plan_v2, compile_unwind_plan, compile_with_plan,
-    contains_aggregate_expression, extract_merge_pattern_vars, extract_output_var_kinds,
-    extract_predicates, validate_expression_types, validate_where_expression_bindings,
+    VecDeque, WriteSemantics, compile_create_plan, compile_delete_plan_v2, compile_match_plan,
+    compile_merge_plan, compile_merge_set_items, compile_remove_plan_v2, compile_return_plan,
+    compile_set_plan_v2, compile_unwind_plan, compile_with_plan, extract_merge_pattern_vars,
+    extract_output_var_kinds, extract_predicates, validate_expression_types,
+    validate_where_expression_bindings,
 };
 
 pub(crate) struct CompiledQuery {
@@ -133,84 +133,15 @@ pub(crate) fn compile_m3_plan(
                 }
             }
             Clause::Call(c) => match c {
-                CallClause::Subquery(sub_query) => {
-                    let input = plan.unwrap_or(Plan::ReturnOne);
-                    let subquery_seed_input =
-                        if matches!(sub_query.clauses.first(), Some(Clause::With(_))) {
-                            let mut outer_bindings: BTreeMap<String, BindingKind> = BTreeMap::new();
-                            extract_output_var_kinds(&input, &mut outer_bindings);
-                            if outer_bindings.is_empty() {
-                                None
-                            } else {
-                                Some(Plan::Project {
-                                    input: Box::new(Plan::ReturnOne),
-                                    projections: outer_bindings
-                                        .keys()
-                                        .cloned()
-                                        .map(|name| (name.clone(), Expression::Variable(name)))
-                                        .collect(),
-                                })
-                            }
-                        } else {
-                            None
-                        };
-                    let sub_query_compiled =
-                        compile_m3_plan(sub_query.clone(), merge_subclauses, subquery_seed_input)?;
-                    plan = Some(Plan::Apply {
-                        input: Box::new(input),
-                        subquery: Box::new(sub_query_compiled.plan),
-                        alias: None,
-                    });
+                CallClause::Subquery(_) => {
+                    return Err(Error::Other(
+                        "syntax error: SubqueryCall not yet supported".to_string(),
+                    ));
                 }
-                CallClause::Procedure(proc_call) => {
-                    let input = plan.unwrap_or(Plan::ReturnOne);
-                    let mut bound_vars: BTreeMap<String, BindingKind> = BTreeMap::new();
-                    extract_output_var_kinds(&input, &mut bound_vars);
-
-                    if proc_call
-                        .arguments
-                        .iter()
-                        .any(contains_aggregate_expression)
-                    {
-                        return Err(Error::Other("syntax error: InvalidAggregation".to_string()));
-                    }
-
-                    let mut yields = Vec::new();
-                    let mut yield_all = false;
-                    let mut yielded_names = BTreeSet::new();
-                    if let Some(items) = &proc_call.yields {
-                        for item in items {
-                            if item.name == "*" {
-                                yield_all = true;
-                            } else {
-                                let output_name =
-                                    item.alias.clone().unwrap_or_else(|| item.name.clone());
-                                if bound_vars.contains_key(&output_name)
-                                    || !yielded_names.insert(output_name.clone())
-                                {
-                                    return Err(Error::Other(
-                                        "syntax error: VariableAlreadyBound".to_string(),
-                                    ));
-                                }
-                                yields.push((item.name.clone(), item.alias.clone()));
-                            }
-                        }
-                    }
-
-                    if yield_all {
-                        // openCypher allows `YIELD *` only for standalone CALL.
-                        if clauses.peek().is_some() {
-                            return Err(Error::Other("syntax error: UnexpectedSyntax".to_string()));
-                        }
-                        yields.clear();
-                    }
-
-                    plan = Some(Plan::ProcedureCall {
-                        input: Box::new(input),
-                        name: proc_call.name.clone(),
-                        args: proc_call.arguments.clone(),
-                        yields,
-                    });
+                CallClause::Procedure(_) => {
+                    return Err(Error::Other(
+                        "syntax error: ProcedureCall not yet supported".to_string(),
+                    ));
                 }
             },
             Clause::With(w) => {
@@ -307,9 +238,10 @@ pub(crate) fn compile_m3_plan(
                     all: u.all,
                 });
             }
-            Clause::Foreach(f) => {
-                let input = plan.unwrap_or(Plan::ReturnOne);
-                plan = Some(compile_foreach_plan(input, f.clone(), merge_subclauses)?);
+            Clause::Foreach(_) => {
+                return Err(Error::Other(
+                    "syntax error: FOREACH not yet supported".to_string(),
+                ));
             }
         }
     }

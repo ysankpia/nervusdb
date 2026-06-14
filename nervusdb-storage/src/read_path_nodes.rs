@@ -1,5 +1,6 @@
 use crate::idmap::InternalNodeId;
-use crate::snapshot::PublishedRuns;
+use crate::snapshot::{EdgeKey, PublishedRuns};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
 pub(crate) fn is_tombstoned_node_in_runs(runs: &Arc<PublishedRuns>, iid: InternalNodeId) -> bool {
@@ -65,4 +66,50 @@ mod tests {
         let live: Vec<u32> = live_node_ids(5, &runs).collect();
         assert_eq!(live, vec![0, 2, 4]);
     }
+}
+
+pub(crate) fn edges_for_src(
+    edges_by_src: &BTreeMap<InternalNodeId, Vec<EdgeKey>>,
+    src: InternalNodeId,
+) -> &[EdgeKey] {
+    edges_by_src
+        .get(&src)
+        .map(|edges| edges.as_slice())
+        .unwrap_or(&[])
+}
+
+pub(crate) fn edges_for_dst(
+    edges_by_dst: &BTreeMap<InternalNodeId, Vec<EdgeKey>>,
+    dst: InternalNodeId,
+) -> &[EdgeKey] {
+    edges_by_dst
+        .get(&dst)
+        .map(|edges| edges.as_slice())
+        .unwrap_or(&[])
+}
+
+pub(crate) fn iter_edges(
+    edges_by_src: &BTreeMap<InternalNodeId, Vec<EdgeKey>>,
+) -> impl Iterator<Item = EdgeKey> + '_ {
+    edges_by_src
+        .values()
+        .flat_map(|edges| edges.iter().copied())
+}
+
+pub(crate) fn iter_tombstoned_nodes(
+    tombstoned_nodes: &BTreeSet<InternalNodeId>,
+) -> impl Iterator<Item = InternalNodeId> + '_ {
+    tombstoned_nodes.iter().copied()
+}
+
+pub(crate) fn iter_tombstoned_edges(
+    tombstoned_edges: &BTreeSet<EdgeKey>,
+) -> impl Iterator<Item = EdgeKey> + '_ {
+    tombstoned_edges.iter().copied()
+}
+
+pub(crate) fn collect_tombstoned_nodes(runs: &Arc<PublishedRuns>) -> HashSet<InternalNodeId> {
+    runs.iter()
+        .flat_map(|run| run.iter_tombstoned_nodes())
+        .collect()
 }

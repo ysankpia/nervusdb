@@ -23,18 +23,6 @@ pub(super) fn render_plan(plan: &Plan) -> String {
                 let _ = writeln!(out, "{pad}Create(merge={merge}, pattern={pattern:?})");
                 go(out, input, depth + 1);
             }
-            Plan::Foreach {
-                input,
-                variable,
-                list,
-                sub_plan,
-            } => {
-                let _ = writeln!(out, "{pad}Foreach(var={variable}, list={list:?})");
-                go(out, input, depth + 1);
-                let _ = writeln!(out, "{pad}  SubPlan:");
-                go(out, sub_plan, depth + 2);
-            }
-
             Plan::NodeScan {
                 alias,
                 label,
@@ -97,60 +85,6 @@ pub(super) fn render_plan(plan: &Plan) -> String {
                     out,
                     "{pad}MatchOutVarLen{opt_str}(src={src_alias}, rels={rels:?}, edge={edge_alias:?}, dst={dst_alias}, dir={direction:?}, min={min_hops}, max={max_hops:?}, limit={limit:?}{path_str})"
                 );
-            }
-            Plan::MatchIn {
-                input,
-                src_alias,
-                rels,
-                edge_alias,
-                dst_alias,
-                dst_labels: _,
-                src_prebound: _,
-                limit,
-                optional,
-                optional_unbind: _,
-                path_alias,
-            } => {
-                let opt_str = if *optional { " OPTIONAL" } else { "" };
-                let path_str = if let Some(p) = path_alias {
-                    format!(" path={p}")
-                } else {
-                    "".to_string()
-                };
-                let _ = writeln!(
-                    out,
-                    "{pad}MatchIn{opt_str}(src={src_alias}, rels={rels:?}, edge={edge_alias:?}, dst={dst_alias}, limit={limit:?}{path_str})"
-                );
-                if let Some(p) = input {
-                    go(out, p, depth + 1);
-                }
-            }
-            Plan::MatchUndirected {
-                input,
-                src_alias,
-                rels,
-                edge_alias,
-                dst_alias,
-                dst_labels: _,
-                src_prebound: _,
-                limit,
-                optional,
-                optional_unbind: _,
-                path_alias,
-            } => {
-                let opt_str = if *optional { " OPTIONAL" } else { "" };
-                let path_str = if let Some(p) = path_alias {
-                    format!(" path={p}")
-                } else {
-                    "".to_string()
-                };
-                let _ = writeln!(
-                    out,
-                    "{pad}MatchUndirected{opt_str}(src={src_alias}, rels={rels:?}, edge={edge_alias:?}, dst={dst_alias}, limit={limit:?}{path_str})"
-                );
-                if let Some(p) = input {
-                    go(out, p, depth + 1);
-                }
             }
             Plan::MatchBoundRel {
                 input,
@@ -227,42 +161,6 @@ pub(super) fn render_plan(plan: &Plan) -> String {
                 go(out, left, depth + 1);
                 go(out, right, depth + 1);
             }
-            Plan::Apply {
-                input,
-                subquery,
-                alias,
-            } => {
-                let _ = writeln!(out, "{pad}Apply(alias={alias:?})");
-                go(out, input, depth + 1);
-                let _ = writeln!(out, "{pad}  Subquery:");
-                go(out, subquery, depth + 2);
-            }
-            Plan::ProcedureCall {
-                input,
-                name,
-                args: _,
-                yields,
-            } => {
-                let yields_str = yields
-                    .iter()
-                    .map(|(n, a)| {
-                        format!(
-                            "{n}{}",
-                            a.as_ref()
-                                .map(|ali| format!(" AS {ali}"))
-                                .unwrap_or_default()
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let _ = writeln!(
-                    out,
-                    "{pad}ProcedureCall(name={}, yields=[{}])",
-                    name.join("."),
-                    yields_str
-                );
-                go(out, input, depth + 1);
-            }
             Plan::Distinct { input } => {
                 let _ = writeln!(out, "{pad}Distinct");
                 go(out, input, depth + 1);
@@ -311,19 +209,6 @@ pub(super) fn render_plan(plan: &Plan) -> String {
             Plan::RemoveLabels { input, items } => {
                 let _ = writeln!(out, "{pad}RemoveLabels(items={items:?})");
                 go(out, input, depth + 1);
-            }
-            Plan::IndexSeek {
-                alias,
-                label,
-                field,
-                value_expr,
-                fallback: _fallback,
-            } => {
-                let _ = writeln!(
-                    out,
-                    "{pad}IndexSeek(alias={alias}, label={label}, field={field}, value={value_expr:?})"
-                );
-                // We don't render fallback to avoid noise, as it's just the unoptimized plan
             }
         }
     }
