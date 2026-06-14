@@ -49,8 +49,9 @@ None.
 
 | Date | Check | Result |
 |---|---|---|
-| — | — | — |
+| 2026-06-14 | `bash scripts/check.sh` | 9/9 core tests passed, fmt + clippy clean |
+| 2026-06-14 | `git status --short` | 19 files staged, clean working tree after commit |
 
 ## Last Checkpoint
 
-2026-06-14: Started harness doc backfill with CodeGraph exploration.
+2026-06-14: Harness doc backfill completed and committed. All 11 missing docs created, 6 existing docs updated. Working tree clean.
