@@ -122,11 +122,11 @@ pub(super) fn execute_plan<'a, S: GraphSnapshot + 'a>(
         Plan::Project { input, projections } => {
             plan_mid::execute_project(snapshot, input, projections, params)
         }
-        Plan::Aggregate { .. } => {
-            return PlanIterator::ReturnOne(std::iter::once(Err(Error::Other(
-                "aggregate not yet supported in 0.1 slim build".into(),
-            ))));
-        }
+        Plan::Aggregate {
+            input,
+            group_by,
+            aggregates,
+        } => plan_mid::execute_aggregate(snapshot, input, group_by, aggregates, params),
         Plan::OrderBy { input, items } => {
             plan_mid::execute_order_by(snapshot, input, items, params)
         }

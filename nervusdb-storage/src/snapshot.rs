@@ -240,6 +240,11 @@ impl Snapshot {
         resolve_symbol_name(&self.labels, id)
     }
 
+    /// Low-level access to the full node-labels vector for bulk scans.
+    pub(crate) fn all_node_labels(&self) -> &Arc<Vec<Vec<crate::idmap::LabelId>>> {
+        &self.node_labels
+    }
+
     /// Iterate over all non-tombstoned nodes.
     /// This implementation assumes nodes occupy a dense ID space up to the max size of `node_labels`.
     /// Nodes that are tombstoned are skipped.

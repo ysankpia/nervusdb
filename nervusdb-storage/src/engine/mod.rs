@@ -5,6 +5,7 @@ use crate::csr::{CsrSegment, EdgeRecord, SegmentId};
 use crate::idmap::{ExternalId, I2eRecord, IdMap, InternalNodeId, LabelId};
 use crate::index::btree::BTree;
 use crate::index::catalog::{IndexCatalog, IndexDef};
+use crate::index::ordered_key::encode_ordered_value;
 use crate::label_interner::{LabelInterner, LabelSnapshot};
 use crate::memtable::MemTable;
 use crate::pager::{PageId, Pager};
@@ -165,20 +166,69 @@ impl GraphEngine {
     /// Creates a B-Tree index for the given label and property.
     ///
     /// If the index already exists, this is a no-op.
-    /// Note: This MVP does not backfill existing data. The index will only track
-    /// valid data inserted *after* index creation.
+    /// Existing data with the matching label and property is backfilled
+    /// into the index automatically.
     pub fn create_index(&self, label: &str, field: &str) -> Result<()> {
         let name = format!("{}.{}", label, field);
-        self.with_catalog_pager(|catalog, pager| {
-            if catalog.get(&name).is_some() {
-                return Ok(());
-            }
 
+        let label_id = {
+            let state = self.published_state.load_full();
+            state.labels.get_id(label)
+        };
+
+        let lid = match label_id {
+            Some(id) => id,
+            None => return Ok(()),
+        };
+
+        let already_exists = {
+            let state = self.published_state.load_full();
+            state.index_entries.contains_key(&name)
+        };
+
+        if already_exists {
+            return Ok(());
+        }
+
+        self.with_catalog_pager(|catalog, pager| {
             catalog.get_or_create(pager, &name)?;
             catalog.flush(pager)?;
             self.publish_index_entries_snapshot(catalog);
             Ok(())
-        })
+        })?;
+
+        let to_insert: Vec<(u32, crate::property::PropertyValue)> = {
+            let snapshot = self.begin_read();
+            let all_labels = snapshot.all_node_labels();
+            let mut pairs = Vec::new();
+            for (iid_usize, labels) in all_labels.iter().enumerate() {
+                if labels.contains(&lid) {
+                    let iid = iid_usize as u32;
+                    if let Some(value) = snapshot.node_property(iid, field) {
+                        pairs.push((iid, value));
+                    }
+                }
+            }
+            pairs
+        };
+
+        if !to_insert.is_empty() {
+            self.with_catalog_pager(|catalog, pager| {
+                if let Some(re) = catalog.entries.get_mut(&name) {
+                    let mut tree = BTree::load(re.root);
+                    for (iid, value) in &to_insert {
+                        let mut key = Vec::with_capacity(4 + 64);
+                        key.extend_from_slice(&re.id.to_be_bytes());
+                        key.extend_from_slice(&encode_ordered_value(value));
+                        let _ = tree.insert(pager, &key, *iid as u64);
+                    }
+                    re.root = tree.root();
+                }
+                Ok(())
+            })?;
+        }
+
+        Ok(())
     }
 
     pub fn begin_read(&self) -> Snapshot {

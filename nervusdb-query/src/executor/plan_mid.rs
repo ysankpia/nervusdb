@@ -440,3 +440,203 @@ pub(super) fn execute_order_by<'a, S: GraphSnapshot + 'a>(
         rows: rows.into_iter(),
     }))
 }
+
+pub(super) fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
+    snapshot: &'a S,
+    input: &'a Plan,
+    group_by: &[String],
+    aggregates: &[(crate::ast::AggregateFunction, String)],
+    params: &'a crate::query_api::Params,
+) -> PlanIterator<'a, S> {
+    let input_iter = execute_plan(snapshot, input, params);
+    let mut input_rows: Vec<Row> = Vec::new();
+    for item in input_iter {
+        if let Err(err) = params.check_timeout("Aggregate.collect") {
+            return PlanIterator::ReturnOne(std::iter::once(Err(err)));
+        }
+        match item {
+            Ok(row) => input_rows.push(row),
+            Err(err) => return PlanIterator::ReturnOne(std::iter::once(Err(err))),
+        }
+        if let Err(err) = params.check_collection_size("Aggregate.input", input_rows.len()) {
+            return PlanIterator::ReturnOne(std::iter::once(Err(err)));
+        }
+    }
+
+    if input_rows.is_empty() && group_by.is_empty() && aggregates.is_empty() {
+        return PlanIterator::ResultRows(Box::new(ResultRowsIter {
+            rows: vec![].into_iter(),
+        }));
+    }
+
+    let mut groups: std::collections::HashMap<Vec<Value>, Vec<Row>> =
+        std::collections::HashMap::new();
+    for row in input_rows {
+        let key: Vec<Value> = group_by
+            .iter()
+            .map(|col| row.get(col).cloned().unwrap_or(Value::Null))
+            .collect();
+        groups.entry(key).or_default().push(row);
+    }
+
+    let mut result_rows: Vec<Row> = Vec::new();
+    if groups.is_empty() {
+        if !aggregates.is_empty() {
+            let mut out = Row::default();
+            for (func, alias) in aggregates {
+                out = out.with(
+                    alias.clone(),
+                    compute_aggregate(func, &[], snapshot, params),
+                );
+            }
+            result_rows.push(out);
+        }
+    } else {
+        for (group_key, group_rows) in &groups {
+            let mut out = Row::default();
+            for (i, col) in group_by.iter().enumerate() {
+                out = out.with(col.clone(), group_key[i].clone());
+            }
+            for (func, alias) in aggregates {
+                out = out.with(
+                    alias.clone(),
+                    compute_aggregate(func, group_rows, snapshot, params),
+                );
+            }
+            result_rows.push(out);
+        }
+    }
+
+    PlanIterator::ResultRows(Box::new(ResultRowsIter {
+        rows: result_rows
+            .into_iter()
+            .map(Ok)
+            .collect::<Vec<_>>()
+            .into_iter(),
+    }))
+}
+
+fn compute_aggregate<S: GraphSnapshot>(
+    func: &crate::ast::AggregateFunction,
+    rows: &[Row],
+    snapshot: &S,
+    params: &crate::query_api::Params,
+) -> Value {
+    use crate::ast::AggregateFunction;
+    match func {
+        AggregateFunction::Count(None) => Value::Int(rows.len() as i64),
+        AggregateFunction::Count(Some(expr)) => {
+            let count = rows
+                .iter()
+                .filter(|r| {
+                    let val =
+                        crate::evaluator::evaluate_expression_value(expr, r, snapshot, params);
+                    !matches!(val, Value::Null)
+                })
+                .count();
+            Value::Int(count as i64)
+        }
+        AggregateFunction::Sum(expr) => {
+            let mut sum: i64 = 0;
+            let mut has_value = false;
+            for row in rows {
+                let val = crate::evaluator::evaluate_expression_value(expr, row, snapshot, params);
+                if let Value::Int(n) = val {
+                    sum = sum.saturating_add(n);
+                    has_value = true;
+                } else if let Value::Float(f) = val {
+                    return compute_aggregate_float_sum(expr, rows, snapshot, params);
+                }
+            }
+            if has_value {
+                Value::Int(sum)
+            } else {
+                Value::Null
+            }
+        }
+        AggregateFunction::Avg(expr) => {
+            let mut sum: f64 = 0.0;
+            let mut count: i64 = 0;
+            for row in rows {
+                let val = crate::evaluator::evaluate_expression_value(expr, row, snapshot, params);
+                match val {
+                    Value::Int(n) => {
+                        sum += n as f64;
+                        count += 1;
+                    }
+                    Value::Float(f) => {
+                        sum += f;
+                        count += 1;
+                    }
+                    _ => {}
+                }
+            }
+            if count > 0 {
+                Value::Float(sum / count as f64)
+            } else {
+                Value::Null
+            }
+        }
+        AggregateFunction::Min(expr) => {
+            let mut best: Option<Value> = None;
+            for row in rows {
+                let val = crate::evaluator::evaluate_expression_value(expr, row, snapshot, params);
+                if !matches!(val, Value::Null)
+                    && best.as_ref().is_none_or(|b| {
+                        crate::evaluator::order_compare(&val, b) == std::cmp::Ordering::Less
+                    })
+                {
+                    best = Some(val);
+                }
+            }
+            best.unwrap_or(Value::Null)
+        }
+        AggregateFunction::Max(expr) => {
+            let mut best: Option<Value> = None;
+            for row in rows {
+                let val = crate::evaluator::evaluate_expression_value(expr, row, snapshot, params);
+                if !matches!(val, Value::Null)
+                    && best.as_ref().is_none_or(|b| {
+                        crate::evaluator::order_compare(&val, b) == std::cmp::Ordering::Greater
+                    })
+                {
+                    best = Some(val);
+                }
+            }
+            best.unwrap_or(Value::Null)
+        }
+        _ => Value::String(format!(
+            "aggregate function {:?} not yet supported in 0.1",
+            std::mem::discriminant(func)
+        )),
+    }
+}
+
+fn compute_aggregate_float_sum<S: GraphSnapshot>(
+    expr: &crate::ast::Expression,
+    rows: &[Row],
+    snapshot: &S,
+    params: &crate::query_api::Params,
+) -> Value {
+    let mut sum: f64 = 0.0;
+    let mut has_value = false;
+    for row in rows {
+        let val = crate::evaluator::evaluate_expression_value(expr, row, snapshot, params);
+        match val {
+            Value::Int(n) => {
+                sum += n as f64;
+                has_value = true;
+            }
+            Value::Float(f) => {
+                sum += f;
+                has_value = true;
+            }
+            _ => {}
+        }
+    }
+    if has_value {
+        Value::Float(sum)
+    } else {
+        Value::Null
+    }
+}
