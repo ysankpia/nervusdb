@@ -1,79 +1,81 @@
-//! # NervusDB 0.1 Rust Facade
+//! # NervusDB — embedded property graph database for Rust
 //!
-//! Rust-first embedded property graph database: SQLite-style local files,
-//! crash-safe persistence, and a deliberately small graph query surface.
-//!
-//! The 0.1 line is intentionally narrow. The core path is:
-//!
-//! ```text
-//! Db::open -> begin_write/commit -> snapshot -> Mini-Cypher/direct traversal
-//! ```
-//!
-//! ## 0.1 Core APIs
-//!
-//! - [`Db::open`] and [`Db::open_paths`] open local `.ndb` and `.wal` files.
-//! - [`Db::snapshot`] creates a read snapshot for query execution.
-//! - [`Db::begin_write`] creates the single-writer transaction path.
-//! - [`ReadTxn`] and [`DbSnapshot`] expose label/property/traversal reads.
-//! - [`WriteTxn`] exposes node, edge, label, relationship type, and property
-//!   persistence.
-//! - [`query`] re-exports the Mini-Cypher query crate for supported 0.1 reads
-//!   and writes.
-//!
-//! ## Experimental Or Maintenance APIs
-//!
-//! Existing maintenance APIs such as [`Db::create_index`], [`Db::compact`],
-//! and [`Db::checkpoint`] remain available for compatibility. They are not
-//! the default 0.1 product surface.
-//!
-//! See `docs/reference/rust-api.md` for the repository-level API contract.
+//! SQLite-style local files, crash-safe WAL persistence, ACID single-writer
+//! transactions, lock-free snapshot reads. Zero configuration, zero server.
 //!
 //! ## Quickstart
 //!
-//! Add `nervusdb` to your `Cargo.toml`. Then, you can start building your graph:
-//!
-//! ```rust,no_run
-//! use nervusdb::{Db, Result};
+//! ```rust,ignore
+//! use nervusdb::Db;
 //! use nervusdb_query::{prepare, query_collect, Params};
 //!
-//! fn main() -> Result<()> {
-//!     let db = Db::open("my_graph.ndb")?;
+//! let db = Db::open("my_graph.ndb")?;
 //!
-//!     let snapshot = db.snapshot();
-//!     let create = prepare("CREATE (n:Person {name: 'Alice'})")
-//!         .map_err(|e| nervusdb::Error::Other(e.to_string()))?;
-//!     let mut txn = db.begin_write();
-//!     create
-//!         .execute_write(&snapshot, &mut txn, &Params::new())
-//!         .map_err(|e| nervusdb::Error::Other(e.to_string()))?;
-//!     txn.commit()?;
+//! // CREATE
+//! let snapshot = db.snapshot();
+//! let mut txn = db.begin_write();
+//! prepare("CREATE (n:Person {name: 'Alice', age: 30})")?
+//!     .execute_write(&snapshot, &mut txn, &Params::new())?;
+//! txn.commit()?;
 //!
-//!     let rows = query_collect(
-//!         &db.snapshot(),
-//!         "MATCH (n:Person) RETURN n.name LIMIT 10",
-//!         &Params::new(),
-//!     )
-//!     .map_err(|e| nervusdb::Error::Other(e.to_string()))?;
-//!     assert_eq!(rows.len(), 1);
-//!
-//!     Ok(())
-//! }
+//! // QUERY
+//! let rows = query_collect(
+//!     &db.snapshot(),
+//!     "MATCH (n:Person) WHERE n.age > 20 RETURN n.name ORDER BY n.name LIMIT 10",
+//!     &Params::new(),
+//! )?;
+//! assert_eq!(rows[0].columns()[0].1, "Alice".into());
+//! # Ok::<_, Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! ## Core Concepts
+//! ## Supported Mini-Cypher
 //!
-//! - **[`Db`]**: The entry point. Handles file management, locking, and engine initialization.
-//!   Safe to share across threads (it uses internal locking).
-//! - **[`WriteTxn`]**: Exclusive access for modifying the graph. ACID compliant.
-//! - **[`ReadTxn`] / [`Snapshot`]**: Consistent view of the graph for querying. Non-blocking.
-//! - **[`query`]**: The Cypher execution engine (re-exported from `nervusdb-query`).
+//! | Feature | Example |
+//! |---------|---------|
+//! | Node scan | `MATCH (n:Person) RETURN n` |
+//! | One-hop traversal | `MATCH (a)-[:KNOWS]->(b) RETURN b` |
+//! | Two-hop traversal | `MATCH (a)-[:KNOWS]->(b)-[:KNOWS]->(c)` |
+//! | Property filter | `MATCH (n) WHERE n.age = 30` |
+//! | Create | `CREATE (n:Person {name: 'Alice'})` |
+//! | Set property | `MATCH (n) SET n.name = 'Bob'` |
+//! | Delete | `MATCH (n) WHERE ... DELETE n` |
+//! | Remove property | `MATCH (n) REMOVE n.name` |
+//! | OPTIONAL MATCH | `MATCH (a) OPTIONAL MATCH (a)-[:KNOWS]->(b)` |
+//! | Aggregation | `RETURN count(*), sum(n.x), avg(n.x), min(n.x), max(n.x)` |
+//! | ORDER BY | `ORDER BY n.name DESC` |
+//! | SKIP / LIMIT | `SKIP 5 LIMIT 10` |
+//! | EXPLAIN | `EXPLAIN MATCH (n) RETURN n` |
+//! | Label operations | `SET n:Label`, `REMOVE n:Label` |
+//! | Property Map SET | `SET n = {x: 1}` |
 //!
-//! ## 📦 Feature Flags
+//! ## Core API
 //!
-//! | Flag | Description | Default |
-//! |------|-------------|---------|
-//! | `async` | (Planned) Enable async `Db` and `Txn` wrappers | `false` |
-//! | `serde` | (Implicit) Serde support for property values | `true` |
+//! | Type | Purpose |
+//! |------|---------|
+//! | [`Db`] | Open/create database, begin transactions, create indexes |
+//! | [`WriteTxn`] | ACID write transaction — create nodes/edges, set properties |
+//! | [`DbSnapshot`] | Lock-free read snapshot for queries and traversals |
+//! | [`ReadTxn`] | Lightweight read transaction, neighbor traversal |
+//! | [`query`] | Mini-Cypher parser and executor (re-export) |
+//!
+//! ## Architecture
+//!
+//! ```text
+//!         ┌──────────┐
+//!         │    Db    │  ← entry point
+//!         └────┬─────┘
+//!          ┌───┴───┐
+//!          ▼       ▼
+//!     ┌────────┐ ┌──────────┐
+//!     │WriteTxn│ │DbSnapshot│  ← single writer, lock-free readers
+//!     └───┬────┘ └────┬─────┘
+//!         │           │
+//!     ┌───▼──────┐  ┌─▼──────────┐
+//!     │ GraphEngine │ │ Mini-Cypher │
+//!     └────────────┘ └────────────┘
+//! ```
+//!
+//! Files: `*.ndb` (data pages) + `*.wal` (write-ahead log, crash recovery).
 
 mod error;
 
@@ -91,16 +93,11 @@ pub use nervusdb_api::{
 pub use nervusdb_query as query;
 pub use nervusdb_storage::PAGE_SIZE;
 
-/// The main Rust facade for the 0.1 embedded database core.
-///
-/// `Db` is the 0.1 entry point for opening local `.ndb` / `.wal` files,
-/// creating write transactions, and taking read snapshots. APIs outside that
-/// path are retained for maintenance or experiments and are called out in their
-/// own docs.
+/// Open and manage an embedded property graph database.
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```rust,ignore
 /// use nervusdb::Db;
 ///
 /// let db = Db::open("my_graph.ndb").unwrap();
@@ -108,8 +105,9 @@ pub use nervusdb_storage::PAGE_SIZE;
 ///
 /// # Concurrency
 ///
-/// `Db` can be shared across threads. Internal mutations are serialized
-/// through a single writer lock.
+/// `Db` is `Send + Sync`. Internal mutations are serialized through a
+/// single writer lock — only one write transaction can exist at a time.
+/// Read snapshots are lock-free and never block writers.
 #[derive(Debug)]
 pub struct Db {
     engine: GraphEngine,
@@ -118,29 +116,25 @@ pub struct Db {
 }
 
 impl Db {
-    /// Opens a local database path.
+    /// Open a database at the given path.
     ///
-    /// The path can be:
-    /// - A directory path: files will be created as `<path>.ndb` and `<path>.wal`
-    /// - An explicit `.ndb` or `.wal` path: the other file is inferred
+    /// - If `path` is a directory, files will be `<path>.ndb` and `<path>.wal`.
+    /// - If `path` ends in `.ndb`, the WAL file is inferred.
+    /// - If `path` ends in `.wal`, the data file is inferred.
     ///
-    /// Returns an error if the database cannot be opened.
+    /// Creates the database files if they don't exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if files cannot be created or opened, or if recovery
+    /// from a previous crash fails.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let (ndb_path, wal_path) = derive_paths(path);
         Self::open_paths(ndb_path, wal_path)
     }
 
-    /// Opens a database with explicit paths for the data and WAL files.
-    ///
-    /// This is part of the 0.1 core API for callers that want predictable file
-    /// placement.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let db = Db::open_paths("graph.ndb", "graph.wal").unwrap();
-    /// ```
+    /// Open a database with explicit paths for the data and WAL files.
     pub fn open_paths(ndb_path: impl AsRef<Path>, wal_path: impl AsRef<Path>) -> Result<Self> {
         let ndb_path = ndb_path.as_ref().to_path_buf();
         let wal_path = wal_path.as_ref().to_path_buf();
@@ -152,97 +146,100 @@ impl Db {
         })
     }
 
-    /// Returns the path to the main data file (`.ndb`).
-    ///
-    /// This is part of the 0.1 core API.
+    /// Path to the `.ndb` data file.
     #[inline]
     pub fn ndb_path(&self) -> &Path {
         &self.ndb_path
     }
 
-    /// Returns the path to the WAL file (`.wal`).
-    ///
-    /// This is part of the 0.1 core API.
+    /// Path to the `.wal` write-ahead log file.
     #[inline]
     pub fn wal_path(&self) -> &Path {
         &self.wal_path
     }
 
-    /// Begins a read-only transaction.
+    /// Create a read snapshot for queries and traversals.
     ///
-    /// The returned `ReadTxn` provides a consistent view of the database
-    /// at the time of creation. It can be used concurrently with other
-    /// read transactions and will not see writes that commit after its creation.
-    /// This is part of the 0.1 core API.
+    /// The snapshot reflects a consistent view of the graph at creation time.
+    /// It is lock-free and non-blocking — concurrent write transactions do
+    /// not affect the data visible through this snapshot.
+    ///
+    /// Use the snapshot directly with [`GraphSnapshot`] methods or pass it
+    /// to [`query::query_collect`] for Mini-Cypher queries.
+    pub fn snapshot(&self) -> DbSnapshot {
+        DbSnapshot(self.engine.snapshot())
+    }
+
+    /// Begin a read-only transaction.
+    ///
+    /// Returns a [`ReadTxn`] providing low-level neighbor traversal. For
+    /// Mini-Cypher queries, prefer [`Db::snapshot`] instead.
     pub fn begin_read(&self) -> ReadTxn {
         ReadTxn {
             snapshot: self.engine.begin_read(),
         }
     }
 
-    /// Creates a snapshot for query execution and direct graph reads.
+    /// Begin an ACID write transaction.
     ///
-    /// Returns a `DbSnapshot` that implements `GraphSnapshot` trait,
-    /// suitable for use with the query engine and direct traversal. This is
-    /// part of the 0.1 core API.
-    pub fn snapshot(&self) -> DbSnapshot {
-        DbSnapshot(self.engine.snapshot())
-    }
-
-    /// Begins a write transaction.
-    ///
-    /// Write transactions are exclusive - only one can exist at a time.
-    /// The transaction must be explicitly committed with `commit()`.
-    /// This is part of the 0.1 core API.
+    /// Only one write transaction can exist at a time across all threads.
+    /// All modifications are buffered in memory until [`WriteTxn::commit`]
+    /// is called, at which point they are written atomically to the WAL
+    /// and made visible to new snapshots.
     ///
     /// # Panics
     ///
     /// Panics if another write transaction is already in progress.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut txn = db.begin_write();
+    /// let person = txn.get_or_create_label("Person").unwrap();
+    /// let node = txn.create_node(1, person).unwrap();
+    /// txn.set_node_property(node, "name".into(), "Alice".into()).unwrap();
+    /// txn.commit().unwrap();
+    /// ```
     pub fn begin_write(&self) -> WriteTxn<'_> {
         WriteTxn {
             inner: self.engine.begin_write(),
         }
     }
 
-    /// Triggers a compaction operation.
+    /// Compact L0 runs into CSR segments and persist properties.
     ///
-    /// Experimental / maintenance API. Not part of the 0.1 core API contract.
-    ///
-    /// Compaction merges frozen MemTables into CSR segments and removes
-    /// tombstoned entries. This is a potentially expensive operation
-    /// that should be done during maintenance windows.
+    /// This is a potentially expensive operation that merges pending writes
+    /// into read-optimized CSR segments and sinks properties into the B-Tree
+    /// property store. Call during maintenance windows.
     pub fn compact(&self) -> Result<()> {
         self.engine.compact().map_err(Error::from)
     }
 
-    /// Creates a durability checkpoint.
-    ///
-    /// Experimental / maintenance API. Not part of the 0.1 core API contract.
-    ///
-    /// In MVP, this is equivalent to `compact()`. Future versions may
-    /// implement lightweight checkpoints that don't require full compaction.
+    /// Create a durability checkpoint (equivalent to compact in MVP).
     pub fn checkpoint(&self) -> Result<()> {
-        // MVP: checkpoint == explicit compaction boundary + durability manifest.
         self.engine.compact().map_err(Error::from)
     }
 
-    /// Explicitly closes the DB and performs a best-effort checkpoint-on-close.
+    /// Close the database after a best-effort checkpoint.
     ///
-    /// Experimental / maintenance API. Not part of the 0.1 core API contract.
-    ///
-    /// This is intentionally not implemented in `Drop` to avoid hiding expensive IO.
+    /// Not implemented in `Drop` — call this explicitly to flush pending
+    /// state before discarding the handle.
     pub fn close(self) -> Result<()> {
         self.engine.checkpoint_on_close().map_err(Error::from)?;
         Ok(())
     }
 
-    /// Creates an index on the specified label and property.
+    /// Create a B-Tree index on `(label, property)` for fast equality lookups.
     ///
-    /// Experimental / maintenance API. Not part of the 0.1 core API contract.
+    /// Existing nodes with matching label and property are backfilled
+    /// into the index automatically. The index is persisted across restarts.
     ///
     /// # Example
-    /// ```ignore
-    /// db.create_index("User", "email")?;
+    ///
+    /// ```rust,ignore
+    /// db.create_index("User", "email").unwrap();
+    /// let snap = db.snapshot();
+    /// let results = snap.lookup_index("User", "email", &"alice@example.com".into());
     /// ```
     pub fn create_index(&self, label: &str, property: &str) -> Result<()> {
         self.engine
@@ -251,11 +248,23 @@ impl Db {
     }
 }
 
-/// A 0.1 core read snapshot returned by [`Db::snapshot`].
+/// A read snapshot that implements [`GraphSnapshot`].
 ///
-/// `DbSnapshot` implements [`GraphSnapshot`] so callers can scan nodes, resolve
-/// labels and relationship types, read properties, and traverse neighbors
-/// without coupling to storage internals.
+/// Created by [`Db::snapshot`]. Provides access to nodes, labels,
+/// properties, neighbor traversal, label/relationship-type resolution,
+/// and index lookups. All methods are read-only and lock-free.
+///
+/// # Methods
+///
+/// All [`GraphSnapshot`] methods are available directly:
+/// - `nodes()` — iterate all non-tombstoned node IDs
+/// - `neighbors()` / `incoming_neighbors()` — traverse relationships
+/// - `node_property()` / `edge_property()` — read property values
+/// - `node_properties()` / `edge_properties()` — read all properties of a node/edge
+/// - `resolve_label_id()` / `resolve_label_name()` — label name ↔ id
+/// - `resolve_rel_type_id()` / `resolve_rel_type_name()` — rel type name ↔ id
+/// - `lookup_index()` — fast equality lookup via B-Tree index
+/// - `node_count()` / `edge_count()` — count entities
 pub struct DbSnapshot(StorageSnapshot);
 
 impl GraphSnapshot for DbSnapshot {
@@ -343,20 +352,17 @@ impl GraphSnapshot for DbSnapshot {
     }
 }
 
-/// A 0.1 core read-only transaction.
+/// A low-level read transaction returned by [`Db::begin_read`].
 ///
-/// Created by [`Db::begin_read()`]. Provides consistent snapshot access.
+/// Use for direct neighbor traversal by relationship type.
+/// For Mini-Cypher queries, use [`Db::snapshot`] instead.
 #[derive(Debug, Clone)]
 pub struct ReadTxn {
     snapshot: Snapshot,
 }
 
 impl ReadTxn {
-    /// Gets outgoing neighbors of a node.
-    ///
-    /// Returns an iterator over edges. If `rel` is `Some`, only edges
-    /// of that relationship type are returned.
-    /// This is part of the 0.1 core API.
+    /// Iterate outgoing edges from `src`. Optionally filter by `rel` type.
     pub fn neighbors(
         &self,
         src: InternalNodeId,
@@ -370,19 +376,40 @@ impl ReadTxn {
     }
 }
 
-/// A 0.1 core write transaction.
+/// An ACID write transaction.
 ///
-/// Created by [`Db::begin_write()`]. All modifications are buffered
-/// until `commit()` is called. The transaction consumes `self` on commit.
+/// Created by [`Db::begin_write`]. All modifications are buffered in memory
+/// until [`commit`](WriteTxn::commit) writes them atomically to the WAL.
+///
+/// Only one write transaction may exist at a time. Drop without committing
+/// discards all pending changes.
+///
+/// # Multiple statements in one transaction
+///
+/// You can call [`query::prepare`] + [`execute_write`](prepared_query_impl)
+/// multiple times within the same transaction:
+///
+/// ```rust,ignore
+/// let snapshot = db.snapshot();
+/// let mut txn = db.begin_write();
+///
+/// prepare("CREATE (a:Person {name: 'Alice'})")?
+///     .execute_write(&snapshot, &mut txn, &Params::new())?;
+/// prepare("CREATE (b:Person {name: 'Bob'})")?
+///     .execute_write(&snapshot, &mut txn, &Params::new())?;
+///
+/// txn.commit()?;  // both creates are atomic
+/// ```
 pub struct WriteTxn<'a> {
     inner: nervusdb_storage::engine::WriteTxn<'a>,
 }
 
 impl<'a> WriteTxn<'a> {
-    /// Creates a new node with the given external ID and label.
+    /// Create a new node.
     ///
-    /// Returns the internal node ID for use in subsequent operations.
-    /// This is part of the 0.1 core API.
+    /// `external_id` must be unique (across all committed nodes). Returns
+    /// the internal node ID used for edge creation and property operations.
+    /// External ID 0 is reserved — use positive integers.
     pub fn create_node(
         &mut self,
         external_id: ExternalId,
@@ -393,64 +420,47 @@ impl<'a> WriteTxn<'a> {
             .map_err(Error::from)
     }
 
-    /// Gets or creates a label ID for the given name.
-    ///
-    /// This is part of the 0.1 core API.
+    /// Get or create a label by name. Returns the label ID.
     pub fn get_or_create_label(&mut self, name: &str) -> Result<LabelId> {
         self.inner.get_or_create_label(name).map_err(Error::from)
     }
 
-    /// Gets or creates a relationship type ID for the given name.
+    /// Get or create a relationship type by name. Returns the type ID.
     ///
-    /// This is part of the 0.1 core API.
+    /// Relationship types share the label namespace internally — use
+    /// distinct names from labels to avoid collisions.
     pub fn get_or_create_rel_type(&mut self, name: &str) -> Result<RelTypeId> {
         self.inner.get_or_create_rel_type(name).map_err(Error::from)
     }
 
-    /// Creates a directed edge from source to destination.
-    ///
-    /// The relationship type is identified by `rel`.
-    /// This is part of the 0.1 core API.
+    /// Create a directed edge from `src` to `dst` with relationship type `rel`.
     pub fn create_edge(&mut self, src: InternalNodeId, rel: RelTypeId, dst: InternalNodeId) {
         self.inner.create_edge(src, rel, dst);
     }
 
-    /// Soft-deletes a node.
-    ///
-    /// The node becomes invisible to queries but its data is retained
-    /// until compaction removes it. Outgoing edges are also hidden.
-    /// This is part of the 0.1 core API.
+    /// Soft-delete a node. The node becomes invisible to queries but its
+    /// data is retained until compaction.
     pub fn tombstone_node(&mut self, node: InternalNodeId) {
         self.inner.tombstone_node(node);
     }
 
-    /// Soft-deletes an edge.
-    ///
-    /// The edge becomes invisible to neighbor queries.
-    /// This is part of the 0.1 core API.
+    /// Soft-delete an edge.
     pub fn tombstone_edge(&mut self, src: InternalNodeId, rel: RelTypeId, dst: InternalNodeId) {
         self.inner.tombstone_edge(src, rel, dst);
     }
 
-    /// Sets a property on a node.
-    ///
-    /// If the property already exists, it is overwritten.
-    /// This is part of the 0.1 core API.
+    /// Set a property on a node. Overwrites existing value.
     pub fn set_node_property(
         &mut self,
         node: InternalNodeId,
         key: String,
         value: PropertyValue,
     ) -> Result<()> {
-        let storage_value = convert_to_storage_property_value(value);
-        self.inner.set_node_property(node, key, storage_value);
+        self.inner.set_node_property(node, key, value);
         Ok(())
     }
 
-    /// Sets a property on an edge.
-    ///
-    /// If the property already exists, it is overwritten.
-    /// This is part of the 0.1 core API.
+    /// Set a property on an edge. Overwrites existing value.
     pub fn set_edge_property(
         &mut self,
         src: InternalNodeId,
@@ -459,25 +469,17 @@ impl<'a> WriteTxn<'a> {
         key: String,
         value: PropertyValue,
     ) -> Result<()> {
-        let storage_value = convert_to_storage_property_value(value);
-        self.inner
-            .set_edge_property(src, rel, dst, key, storage_value);
+        self.inner.set_edge_property(src, rel, dst, key, value);
         Ok(())
     }
 
-    /// Removes a property from a node.
-    ///
-    /// If the property doesn't exist, this is a no-op.
-    /// This is part of the 0.1 core API.
+    /// Remove a property from a node. No-op if the property doesn't exist.
     pub fn remove_node_property(&mut self, node: InternalNodeId, key: &str) -> Result<()> {
         self.inner.remove_node_property(node, key);
         Ok(())
     }
 
-    /// Removes a property from an edge.
-    ///
-    /// If the property doesn't exist, this is a no-op.
-    /// This is part of the 0.1 core API.
+    /// Remove a property from an edge. No-op if the property doesn't exist.
     pub fn remove_edge_property(
         &mut self,
         src: InternalNodeId,
@@ -489,23 +491,17 @@ impl<'a> WriteTxn<'a> {
         Ok(())
     }
 
-    /// Commits the transaction.
+    /// Commit this transaction atomically.
     ///
-    /// All modifications are written to the WAL and made visible
-    /// to new read transactions. The transaction is consumed.
-    /// This is part of the 0.1 core API.
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(())` on success, or an error if commit fails.
+    /// Writes all buffered modifications to the WAL and fsyncs, then makes
+    /// them visible to new read snapshots. Consumes the transaction —
+    /// call once per `begin_write`.
     pub fn commit(self) -> Result<()> {
         self.inner.commit().map_err(Error::from)
     }
 }
 
-fn convert_to_storage_property_value(
-    v: PropertyValue,
-) -> nervusdb_storage::property::PropertyValue {
+fn convert_to_storage_property_value(v: PropertyValue) -> nervusdb_storage::property::PropertyValue {
     v
 }
 
@@ -517,8 +513,6 @@ fn derive_paths(path: &Path) -> (PathBuf, PathBuf) {
     }
 }
 
-// Implement WriteableGraph for Facade WriteTxn
-// This bridges the Facade (v2) with the Query Engine (v2-query)
 impl nervusdb_query::WriteableGraph for WriteTxn<'_> {
     fn create_node(
         &mut self,
@@ -566,7 +560,6 @@ impl nervusdb_query::WriteableGraph for WriteTxn<'_> {
         key: String,
         value: nervusdb_storage::property::PropertyValue,
     ) -> nervusdb_query::Result<()> {
-        // Query Engine uses storage PropertyValue directly now (from re-export)
         self.inner.set_node_property(node, key, value);
         Ok(())
     }

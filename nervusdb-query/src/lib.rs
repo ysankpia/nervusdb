@@ -1,9 +1,15 @@
 //! NervusDB Mini-Cypher Query Engine
 //!
-//! Provides parsing, planning, and execution for the query surface used by the
-//! NervusDB 0.1 embedded core. The implementation contains historical support
-//! for broader Cypher work, but only the Mini-Cypher surface documented in
-//! `docs/reference/mini-cypher.md` defines 0.1 readiness.
+//! Parsing, planning, and execution for the NervusDB 0.1 embedded graph core.
+//!
+//! # API
+//!
+//! | Function | Purpose |
+//! |----------|---------|
+//! | [`prepare`] | Parse a Cypher string into a [`PreparedQuery`] |
+//! | [`query_collect`] | Parse + execute + collect all rows in one call |
+//! | [`query_collect_params`] | Like `query_collect` with typed parameters |
+//! | [`query_executor::execute_plan`] | Low-level plan execution (internal) |
 //!
 //! # Quick Start
 //!
@@ -17,15 +23,20 @@
 //!     .unwrap();
 //! ```
 //!
-//! # Mini-Cypher 0.1
+//! # Mini-Cypher 0.1 — Supported Features
 //!
-//! - `RETURN 1` - Constant return
-//! - `MATCH (n)` / `MATCH (n:Label)` - Node scans
-//! - `MATCH (a)-[:TYPE]->(b) RETURN a, b LIMIT k` - Single-hop pattern match
-//! - `MATCH (a)-[:TYPE]->(b)-[:TYPE]->(c)` - Two-hop pattern match for 0.1 examples
-//! - Simple property equality in `WHERE`
-//! - `CREATE`, basic `DELETE`, and basic `SET` where already stable
-//! - `EXPLAIN <query>` - Show compiled plan (no execution)
+//! | Category | Examples |
+//! |----------|----------|
+//! | Node scan | `MATCH (n)`, `MATCH (n:Person)` |
+//! | Traversal | `(a)-[:TYPE]->(b)`, 2-hop, OPTIONAL MATCH |
+//! | Property filter | `WHERE n.age = 30`, `WHERE n.name = 'Alice'` |
+//! | Aggregation | `RETURN count(*)`, `sum(n.x)`, `avg(n.x)`, `min(n.x)`, `max(n.x)` |
+//! | Ordering | `ORDER BY n.name DESC` |
+//! | Pagination | `SKIP 5 LIMIT 10` |
+//! | Projection | `RETURN n, n.name, n.age + 1` |
+//! | Write | `CREATE`, `SET n.x = v`, `DELETE n`, `REMOVE n.x` |
+//! | Labels | `SET n:Label`, `REMOVE n:Label` |
+//! | Plan debug | `EXPLAIN MATCH (n) RETURN n` |
 //!
 //! # Architecture
 //!
