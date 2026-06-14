@@ -20,6 +20,10 @@ clear, not preserve every old ambition in the current path.
 - Validation, CI, or script changes update `docs/engineering/` or `docs/runbooks/`.
 - Public CLI or query behavior changes update `docs/reference/`.
 - Bug fixes add or update a record under `docs/bugs/` when the issue can recur.
+- Quality score, technical debt, and architecture invariants update when a change
+  reveals a quality gap, accepted debt, boundary violation, or new invariant.
+- Doc-gardening pass after substantial work, bug fixes, architecture changes,
+  validation changes, or long handoffs.
 
 ## Archive Rules
 

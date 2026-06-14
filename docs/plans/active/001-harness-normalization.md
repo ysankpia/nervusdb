@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress
+Superseded by 007-harness-doc-backfill
 
 ## Goal
 

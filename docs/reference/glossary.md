@@ -1,5 +1,42 @@
 # Glossary
 
+## Direction Contract
+
+The product decision record at `docs/product/direction-contract.md` that defines
+what NervusDB is, who it is for, what is in and out of scope, and acceptance
+criteria for 0.1.
+
+## Roadmap
+
+The current-phase, now/next/later, milestone, and open-questions document at
+`docs/roadmap.md`.
+
+## PROGRESS.md
+
+The live execution ledger at the repository root that tracks current objective,
+active plan, done/next/blockers, validation log, and last checkpoint.
+
+## Quality Score
+
+The 0-5 assessment at `docs/engineering/quality-score.md` with evidence across
+product/domain, architecture, validation, documentation, and maintainability.
+
+## Architecture Invariants
+
+Always-true rules about crate boundaries, data flow, and system properties,
+recorded at `docs/engineering/architecture-invariants.md`.
+
+## Technical Debt
+
+The debt ledger at `docs/plans/tech-debt.md` that records active debt, deferred
+cleanup, accepted debt, and retired items.
+
+## Doc Gardening
+
+The recurring maintenance pass defined in `docs/runbooks/doc-gardening.md` that
+checks links, archives plans, verifies bug records, updates quality scores, and
+removes stale instructions.
+
 ## SQLite For Graphs
 
 The product direction for NervusDB 0.1: embedded, local-file, Rust-first graph

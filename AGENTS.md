@@ -7,10 +7,13 @@ and a small query surface.
 ## Read Order
 
 1. `docs/index.md`
-2. `docs/product/scope-0.1.md`
-3. `docs/architecture/overview.md`
-4. `docs/engineering/validation-policy.md`
-5. The relevant active plan under `docs/plans/active/`
+2. `docs/product/direction-contract.md`
+3. `docs/product/scope-0.1.md`
+4. `docs/roadmap.md`
+5. `PROGRESS.md`
+6. `docs/architecture/overview.md`
+7. `docs/engineering/validation-policy.md`
+8. The relevant active plan under `docs/plans/active/`
 
 Archived platform-era documents are evidence only. Do not use them to infer
 current scope unless a current ADR promotes that material.
@@ -60,9 +63,11 @@ Never hide full test fan-out behind `quick`, `check`, `pre-commit`, or
 
 ## Done
 
-- The change matches `docs/product/scope-0.1.md`.
+- The change matches `docs/product/direction-contract.md` and `docs/product/scope-0.1.md`.
 - The relevant focused validation passed or the skip is documented.
 - Public behavior, API, storage format, validation, or architecture docs were
   updated when affected.
+- Quality score, technical debt, or architecture invariants were updated when the
+  change reveals a quality gap, accepted debt, or boundary violation.
 - No archived platform-era material was promoted without a new ADR.
 - `git status --short` contains only intentional changes before commit.

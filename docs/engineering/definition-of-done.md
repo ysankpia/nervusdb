@@ -2,11 +2,13 @@
 
 A change is done when:
 
-- It matches `docs/product/scope-0.1.md`.
+- It matches `docs/product/direction-contract.md` and `docs/product/scope-0.1.md`.
 - Tests or regression guards cover behavior changes.
 - Public API, storage format, build, validation, or operational changes update
   docs in the same PR.
 - `bash scripts/check.sh` passes, or any skipped part is explicitly explained.
+- Quality score, technical debt, or architecture invariants were updated when the
+  change reveals a quality gap, accepted debt, or boundary violation.
 - Historical/experimental areas are not promoted into the 0.1 path by accident.
 - `git status --short` contains only intentional changes before commit.
 

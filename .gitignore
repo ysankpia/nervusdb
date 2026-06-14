@@ -32,6 +32,7 @@ Thumbs.db
 .agents/
 .beads/
 .claude/
+.codegraph/
 
 # IDE
 .vscode/
