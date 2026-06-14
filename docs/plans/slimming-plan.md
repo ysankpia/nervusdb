@@ -1,5 +1,10 @@
 # Slimming Plan: Cut To Ship 0.1
 
+## Status: ✅ DONE (committed `c55b81e9`, 218 files, 41,386 lines deleted)
+
+All steps executed on branch `chore/slim-to-0.1`. `bash scripts/check.sh` passes.
+See commit message for the full deletion list.
+
 ## Problem
 
 NervusDB 目前想做的太多 — 一个嵌套在文件里的「完整图平台」：
@@ -333,18 +338,18 @@ nervusdb/
 
 ---
 
-## 执行顺序
+## 执行顺序 (all ✅)
 
-1. **备份**: `git checkout -b chore/slim-to-0.1`
-2. **删 HNSW**: 文件级删除，修改 engine.rs，去掉依赖
-3. **删绑定**: pyo3 + capi + node + examples-test
-4. **删测试**: 历史集成测试文件
-5. **删 CI**: 10 个 workflow
-6. **删脚本**: 31 个脚本
-7. **删面代码**: 非 Mini-Cypher 的 AST 变体 + executor 文件
-8. **清理 facade 导出**: backup/bulkload/vacuum
-9. **清理示例**: py-local, ts-local
-10. **清理杂物**: fuzz, artifacts, Makefile, lefthook
-11. **验证**: `bash scripts/check.sh`
-12. **提交**: 大提交，message 写清删除了什么
-13. **编写新的方向契约**: 更新 docs 反映新的、更激进的范围
+1. ✅ **备份**: `git checkout -b chore/slim-to-0.1`
+2. ✅ **删 HNSW**: 5 文件 824 行，engine.rs 清理，2 依赖移除
+3. ✅ **删绑定**: pyo3 + capi + node + examples-test
+4. ✅ **删测试**: ~50 个文件
+5. ✅ **删 CI**: 10 个 workflow
+6. ✅ **删脚本**: 31 个脚本
+7. ✅ **删查询代码**: 15 个 executor 文件 + evaluator_temporal_parse
+8. ✅ **清理 facade 导出**: backup/bulkload/vacuum
+9. ✅ **清理示例**: py-local, ts-local
+10. ✅ **清理杂物**: fuzz, Makefile, lefthook
+11. ✅ **验证**: `bash scripts/check.sh` — fmt, clippy, 16 tests all green
+12. ✅ **提交**: `c55b81e9`, 218 files, 41,386 lines deleted
+13. ✅ **更新方向契约**: `docs/product/direction-contract.md` 已有 "Explicitly Deleted" 章节
