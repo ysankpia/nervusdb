@@ -47,6 +47,7 @@ not linked here or under the archive index, do not use it to infer current scope
 - Storage format: `docs/reference/storage-format.md`
 - CLI: `docs/reference/cli.md`
 - Generated artifacts: `docs/reference/generated-artifacts.md`
+- Codebase analysis: `docs/reference/codebase-analysis.md`
 - Glossary: `docs/reference/glossary.md`
 
 ## Roadmap And Progress
