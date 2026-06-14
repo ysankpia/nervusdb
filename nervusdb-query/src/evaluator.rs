@@ -25,7 +25,6 @@ mod evaluator_temporal_functions;
 mod evaluator_temporal_map;
 mod evaluator_temporal_math;
 mod evaluator_temporal_overrides;
-mod evaluator_temporal_parse;
 mod evaluator_temporal_shift;
 mod evaluator_temporal_truncate;
 mod evaluator_timezone;
@@ -106,7 +105,7 @@ pub fn evaluate_expression_value<S: GraphSnapshot>(
             }
 
             if let Some(Value::String(raw)) = row.get(&pa.variable)
-                && let Some(temporal) = evaluator_temporal_parse::parse_temporal_string(raw)
+                && let Some(temporal) = evaluator_temporal_map::parse_temporal_string(raw)
                 && let Some(v) = evaluate_temporal_accessor(raw, temporal, &pa.property)
             {
                 return v;
@@ -447,7 +446,7 @@ fn evaluate_temporal_accessor(raw: &str, temporal: TemporalValue, property: &str
             let offset = *dt.offset();
             let offset_str = evaluator_timezone::format_offset(offset);
             match property {
-                "timezone" => evaluator_temporal_parse::extract_timezone_name(raw)
+                "timezone" => evaluator_temporal_map::extract_timezone_name(raw)
                     .map(Value::String)
                     .or(Some(Value::String(offset_str))),
                 "offset" => Some(Value::String(offset_str)),

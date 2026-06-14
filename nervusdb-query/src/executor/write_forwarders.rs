@@ -1,50 +1,7 @@
 use super::{
-    Expression, GraphSnapshot, MergeOverlayState, Pattern, Plan, PropertyValue, Result, Row, Value,
-    WriteableGraph, create_delete_ops, foreach_ops, merge_execution, write_path,
+    Expression, GraphSnapshot, Pattern, Plan, PropertyValue, Result, Row, Value, WriteableGraph,
+    create_delete_ops, write_path,
 };
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn execute_merge_create_from_rows<S: GraphSnapshot>(
-    snapshot: &S,
-    input_rows: Vec<Row>,
-    txn: &mut dyn WriteableGraph,
-    pattern: &Pattern,
-    params: &crate::query_api::Params,
-    on_create_items: &[(String, String, Expression)],
-    on_create_map_items: &[(String, Expression, bool)],
-    on_match_items: &[(String, String, Expression)],
-    on_match_map_items: &[(String, Expression, bool)],
-    on_create_labels: &[(String, Vec<String>)],
-    on_match_labels: &[(String, Vec<String>)],
-    overlay: &mut MergeOverlayState,
-) -> Result<(u32, Vec<Row>)> {
-    merge_execution::execute_merge_create_from_rows(
-        snapshot,
-        input_rows,
-        txn,
-        pattern,
-        params,
-        on_create_items,
-        on_create_map_items,
-        on_match_items,
-        on_match_map_items,
-        on_create_labels,
-        on_match_labels,
-        overlay,
-    )
-}
-
-pub(super) fn execute_foreach<S: GraphSnapshot>(
-    snapshot: &S,
-    input: &Plan,
-    txn: &mut dyn WriteableGraph,
-    variable: &str,
-    list: &Expression,
-    sub_plan: &Plan,
-    params: &crate::query_api::Params,
-) -> Result<u32> {
-    foreach_ops::execute_foreach(snapshot, input, txn, variable, list, sub_plan, params)
-}
 
 pub(super) fn execute_delete_on_rows<S: GraphSnapshot>(
     snapshot: &S,

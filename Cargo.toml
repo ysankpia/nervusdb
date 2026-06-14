@@ -1,11 +1,9 @@
 [workspace]
 members = [
     "nervusdb-cli",
-    "nervusdb-pyo3",
     "nervusdb",
     "nervusdb-api",
     "nervusdb-query",
     "nervusdb-storage",
-    "nervusdb-capi",
 ]
 resolver = "2"

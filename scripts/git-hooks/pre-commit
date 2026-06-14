@@ -1,9 +1,0 @@
-#!/bin/sh
-# Fast pre-commit hook for the NervusDB 0.1 core loop.
-set -e
-
-echo "[pre-commit] running core check"
-bash scripts/check.sh
-
-echo "[pre-commit] ok"
-

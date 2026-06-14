@@ -1,9 +1,9 @@
 use super::{
-    AggregateFunction, ApplyIter, CartesianProductIter, ChainIter, Direction, DistinctIter,
-    ExpandIter, Expression, FilterIter, FilteredMatchOutIter, GraphSnapshot, IndexSeekIter,
-    LimitIter, MatchBoundRelIter, MatchInIter, MatchOutVarLenIter, MatchUndirectedIter,
-    NodeScanIter, Pattern, ProcedureCallIter, ProjectIter, RelationshipDirection, Result,
-    ResultRowsIter, Row, RuntimeGuardIter, SkipIter, UnionDistinctIter, UnwindIter, ValuesIter,
+    AggregateFunction, CartesianProductIter, ChainIter, Direction, DistinctIter, ExpandIter,
+    Expression, FilterIter, FilteredMatchOutIter, GraphSnapshot, IndexSeekIter, LimitIter,
+    MatchBoundRelIter, MatchOutVarLenIter, NodeScanIter, Pattern, ProjectIter,
+    RelationshipDirection, Result, ResultRowsIter, Row, SkipIter, UnionDistinctIter, UnwindIter,
+    ValuesIter,
 };
 use std::sync::Arc;
 
@@ -239,13 +239,8 @@ pub enum PlanIterator<'a, S: GraphSnapshot> {
     Expand(Box<ExpandIter<'a, S>>),
     MatchOutVarLen(Box<MatchOutVarLenIter<'a, S>>),
     MatchOutFiltered(Box<FilteredMatchOutIter<'a, S>>),
-    MatchIn(Box<MatchInIter<'a, S>>),
-    MatchUndirected(Box<MatchUndirectedIter<'a, S>>),
     MatchBoundRel(Box<MatchBoundRelIter<'a, S>>),
-    RuntimeGuard(Box<RuntimeGuardIter<'a, S>>),
     CartesianProduct(Box<CartesianProductIter<'a, S>>),
-    Apply(Box<ApplyIter<'a, S>>),
-    ProcedureCall(Box<ProcedureCallIter<'a, S>>),
 }
 
 impl<'a, S: GraphSnapshot> Iterator for PlanIterator<'a, S> {
@@ -269,13 +264,8 @@ impl<'a, S: GraphSnapshot> Iterator for PlanIterator<'a, S> {
             PlanIterator::Expand(iter) => iter.next(),
             PlanIterator::MatchOutVarLen(iter) => iter.next(),
             PlanIterator::MatchOutFiltered(iter) => iter.next(),
-            PlanIterator::MatchIn(iter) => iter.next(),
-            PlanIterator::MatchUndirected(iter) => iter.next(),
             PlanIterator::MatchBoundRel(iter) => iter.next(),
-            PlanIterator::RuntimeGuard(iter) => iter.next(),
             PlanIterator::CartesianProduct(iter) => iter.next(),
-            PlanIterator::Apply(iter) => iter.next(),
-            PlanIterator::ProcedureCall(iter) => iter.next(),
         }
     }
 }

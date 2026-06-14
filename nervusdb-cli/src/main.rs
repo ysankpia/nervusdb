@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use nervusdb::{Db, vacuum};
+use nervusdb::Db;
 use nervusdb_api::GraphSnapshot;
 use nervusdb_query::Value as V2Value;
 use nervusdb_query::prepare;
@@ -32,7 +32,6 @@ enum V2Commands {
     Query(V2QueryArgs),
     Write(V2WriteArgs),
     Repl(V2ReplArgs),
-    Vacuum(V2VacuumArgs),
 }
 
 #[derive(Parser)]
@@ -86,13 +85,6 @@ struct V2WriteArgs {
     /// Parameters as a JSON object (M3: supports scalar values)
     #[arg(long)]
     params_json: Option<String>,
-}
-
-#[derive(Parser)]
-struct V2VacuumArgs {
-    /// Database base path
-    #[arg(long)]
-    db: PathBuf,
 }
 
 fn value_to_json_v2<S: GraphSnapshot>(snapshot: &S, value: &V2Value) -> serde_json::Value {
@@ -209,9 +201,7 @@ fn run_v2_query(args: V2QueryArgs) -> Result<(), String> {
                 let row = row.map_err(|e| e.to_string())?;
                 let mut map = serde_json::Map::with_capacity(row.columns().len());
                 for (k, v) in row.columns() {
-                    // Reify the value to resolve IDs to full objects
-                    let reified = v.reify(&graph_snap).map_err(|e| e.to_string())?;
-                    map.insert(k.clone(), value_to_json_v2(&graph_snap, &reified));
+                    map.insert(k.clone(), value_to_json_v2(&graph_snap, v));
                 }
                 serde_json::to_writer(&mut stdout, &serde_json::Value::Object(map))
                     .map_err(|e| e.to_string())?;
@@ -244,24 +234,6 @@ fn run_v2_write(args: V2WriteArgs) -> Result<(), String> {
     Ok(())
 }
 
-fn run_v2_vacuum(args: V2VacuumArgs) -> Result<(), String> {
-    let report = vacuum(&args.db).map_err(|e| e.to_string())?;
-
-    println!(
-        "{}",
-        serde_json::json!({
-            "ndb_path": report.ndb_path,
-            "backup_path": report.backup_path,
-            "old_next_page_id": report.old_next_page_id,
-            "new_next_page_id": report.new_next_page_id,
-            "copied_data_pages": report.copied_data_pages,
-            "old_file_pages": report.old_file_pages,
-            "new_file_pages": report.new_file_pages,
-        })
-    );
-    Ok(())
-}
-
 fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
@@ -269,7 +241,6 @@ fn main() {
             V2Commands::Query(args) => run_v2_query(args),
             V2Commands::Write(args) => run_v2_write(args),
             V2Commands::Repl(args) => repl::run_repl(&args.db),
-            V2Commands::Vacuum(args) => run_v2_vacuum(args),
         },
     };
 

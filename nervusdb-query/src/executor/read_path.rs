@@ -1,8 +1,60 @@
 use super::{
-    EdgeKey, ErasedSnapshot, Error, InternalNodeId, LabelConstraint, PathValue, RelTypeId, Result,
-    Row, Value, apply_optional_unbinds_row, edge_multiplicity, node_matches_label_constraint,
-    path_alias_contains_edge, row_matches_node_binding,
+    EdgeKey, Error, InternalNodeId, LabelConstraint, PathValue, RelTypeId, Result, Row, Value,
+    node_matches_label_constraint,
 };
+
+fn edge_multiplicity<S: GraphSnapshot>(snapshot: &S, edge: EdgeKey) -> usize {
+    let count = snapshot
+        .neighbors(edge.src, Some(edge.rel))
+        .filter(|candidate| candidate.dst == edge.dst)
+        .count();
+    count.max(1)
+}
+
+fn path_alias_contains_edge<S: GraphSnapshot>(
+    snapshot: &S,
+    row: &Row,
+    path_alias: Option<&str>,
+    edge: EdgeKey,
+) -> bool {
+    if let Some(alias) = path_alias
+        && let Some(Value::Path(path)) = row.get(alias)
+    {
+        let used = path
+            .edges
+            .iter()
+            .filter(|existing| **existing == edge)
+            .count();
+        if used == 0 {
+            return false;
+        }
+        return used >= edge_multiplicity(snapshot, edge);
+    }
+    false
+}
+
+fn apply_optional_unbinds_row(mut row: Row, optional_unbind: &[String]) -> Row {
+    for alias in optional_unbind {
+        row = row.with(alias.clone(), Value::Null);
+    }
+    row
+}
+
+fn row_matches_node_binding(row: &Row, alias: &str, candidate: InternalNodeId) -> bool {
+    match row.get(alias) {
+        None => true,
+        Some(Value::Null) => false,
+        Some(value) => value_node_id(value).is_some_and(|id| id == candidate),
+    }
+}
+
+fn value_node_id(value: &Value) -> Option<InternalNodeId> {
+    match value {
+        Value::NodeId(id) => Some(*id),
+        Value::Node(node) => Some(node.id),
+        _ => None,
+    }
+}
 use crate::ast::RelationshipDirection;
 use nervusdb_api::GraphSnapshot;
 use std::collections::HashMap;
@@ -340,9 +392,8 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
 
                         (RelationshipDirection::RightToLeft, Some(rels)) => {
                             for rel in rels {
-                                for edge in self
-                                    .snapshot
-                                    .incoming_neighbors_erased(current_node, Some(*rel))
+                                for edge in
+                                    self.snapshot.incoming_neighbors(current_node, Some(*rel))
                                 {
                                     if edge.src == edge.dst {
                                         continue;
@@ -352,8 +403,7 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
                             }
                         }
                         (RelationshipDirection::RightToLeft, None) => {
-                            for edge in self.snapshot.incoming_neighbors_erased(current_node, None)
-                            {
+                            for edge in self.snapshot.incoming_neighbors(current_node, None) {
                                 if edge.src == edge.dst {
                                     continue;
                                 }
@@ -366,9 +416,8 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
                                 for edge in self.snapshot.neighbors(current_node, Some(*rel)) {
                                     push_edge(edge, edge.dst, &mut self.stack);
                                 }
-                                for edge in self
-                                    .snapshot
-                                    .incoming_neighbors_erased(current_node, Some(*rel))
+                                for edge in
+                                    self.snapshot.incoming_neighbors(current_node, Some(*rel))
                                 {
                                     if edge.src == edge.dst {
                                         continue;
@@ -381,8 +430,7 @@ impl<'a, S: GraphSnapshot + 'a> Iterator for MatchOutVarLenIter<'a, S> {
                             for edge in self.snapshot.neighbors(current_node, None) {
                                 push_edge(edge, edge.dst, &mut self.stack);
                             }
-                            for edge in self.snapshot.incoming_neighbors_erased(current_node, None)
-                            {
+                            for edge in self.snapshot.incoming_neighbors(current_node, None) {
                                 if edge.src == edge.dst {
                                     continue;
                                 }

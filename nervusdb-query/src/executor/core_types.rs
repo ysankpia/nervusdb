@@ -1,6 +1,4 @@
-use super::{
-    EdgeKey, ErasedSnapshot, ExternalId, InternalNodeId, Result, convert_api_property_to_value,
-};
+use super::{EdgeKey, ExternalId, InternalNodeId, Result, convert_api_property_to_value};
 use serde::ser::{SerializeMap, SerializeSeq};
 use smallvec::SmallVec;
 use std::collections::HashMap;
@@ -200,85 +198,6 @@ impl Value {
             _ => None,
         }
     }
-
-    pub fn reify(&self, snapshot: &dyn ErasedSnapshot) -> Result<Value> {
-        match self {
-            Value::NodeId(id) => {
-                let mut labels = Vec::new();
-                if let Some(label_ids) = snapshot.resolve_node_labels_erased(*id) {
-                    for lid in label_ids {
-                        if let Some(name) = snapshot.resolve_label_name_erased(lid) {
-                            labels.push(name);
-                        }
-                    }
-                }
-
-                let mut properties = std::collections::BTreeMap::new();
-                if let Some(props) = snapshot.node_properties_erased(*id) {
-                    for (k, v) in props {
-                        properties.insert(k, convert_api_property_to_value(&v));
-                    }
-                }
-
-                Ok(Value::Node(NodeValue {
-                    id: *id,
-                    labels,
-                    properties,
-                }))
-            }
-            Value::EdgeKey(key) => {
-                let rel_type = snapshot
-                    .resolve_rel_type_name_erased(key.rel)
-                    .unwrap_or_else(|| format!("<{}>", key.rel));
-
-                let mut properties = std::collections::BTreeMap::new();
-                if let Some(props) = snapshot.edge_properties_erased(*key) {
-                    for (k, v) in props {
-                        properties.insert(k, convert_api_property_to_value(&v));
-                    }
-                }
-
-                Ok(Value::Relationship(RelationshipValue {
-                    key: *key,
-                    rel_type,
-                    properties,
-                }))
-            }
-            Value::Path(p) => {
-                let mut nodes = Vec::new();
-                for nid in &p.nodes {
-                    if let Value::Node(n) = Value::NodeId(*nid).reify(snapshot)? {
-                        nodes.push(n);
-                    }
-                }
-                let mut relationships = Vec::new();
-                for ekey in &p.edges {
-                    if let Value::Relationship(r) = Value::EdgeKey(*ekey).reify(snapshot)? {
-                        relationships.push(r);
-                    }
-                }
-                Ok(Value::ReifiedPath(ReifiedPathValue {
-                    nodes,
-                    relationships,
-                }))
-            }
-            Value::List(l) => {
-                let mut out = Vec::new();
-                for v in l {
-                    out.push(v.reify(snapshot)?);
-                }
-                Ok(Value::List(out))
-            }
-            Value::Map(m) => {
-                let mut out = std::collections::BTreeMap::new();
-                for (k, v) in m {
-                    out.insert(k.clone(), v.reify(snapshot)?);
-                }
-                Ok(Value::Map(out))
-            }
-            _ => Ok(self.clone()),
-        }
-    }
 }
 
 // Custom Hash implementation for Value (since Float doesn't implement Hash)
@@ -348,16 +267,6 @@ impl Row {
         };
         row.maybe_rebuild_index();
         row
-    }
-
-    pub fn reify(&self, snapshot: &dyn ErasedSnapshot) -> Result<Row> {
-        let mut cols = SmallVec::<[(String, Value); 8]>::with_capacity(self.cols.len());
-        for (k, v) in &self.cols {
-            cols.push((k.clone(), v.reify(snapshot)?));
-        }
-        let mut row = Row { cols, index: None };
-        row.maybe_rebuild_index();
-        Ok(row)
     }
 
     pub fn get(&self, name: &str) -> Option<&Value> {

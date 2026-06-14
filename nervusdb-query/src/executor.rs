@@ -3,78 +3,42 @@ use crate::ast::{
 };
 use crate::error::{Error, Result};
 use crate::evaluator::evaluate_expression_value;
-mod binding_utils;
 mod core_types;
 mod create_delete_ops;
-mod foreach_ops;
-mod index_seek_plan;
-mod join_apply;
 mod label_constraint;
 mod match_bound_rel_plan;
-mod match_in_undirected_plan;
 mod match_out_plan;
-mod merge_execution;
-mod merge_helpers;
-mod merge_overlay;
-mod path_usage;
 mod plan_dispatch;
 mod plan_head;
 mod plan_iterators;
 mod plan_mid;
 mod plan_tail;
 mod plan_types;
-mod procedure_registry;
-mod projection_sort;
 mod property_bridge;
 mod read_path;
-mod runtime_limits;
 mod txn_engine_impl;
 mod write_dispatch;
 mod write_forwarders;
-mod write_orchestration;
 mod write_path;
-mod write_support;
-use binding_utils::{
-    apply_optional_unbinds_row, row_contains_all_bindings, row_matches_node_binding,
-};
-use join_apply::{ApplyIter, ProcedureCallIter};
 use label_constraint::{LabelConstraint, node_matches_label_constraint, resolve_label_constraint};
 use match_bound_rel_plan::MatchBoundRelIter;
-use match_in_undirected_plan::{MatchInIter, MatchUndirectedIter};
 use match_out_plan::FilteredMatchOutIter;
-use merge_overlay::{MergeOverlayEdge, MergeOverlayNode, MergeOverlayState};
 pub use nervusdb_api::LabelId;
 use nervusdb_api::{EdgeKey, ExternalId, GraphSnapshot, InternalNodeId, RelTypeId};
-use path_usage::{edge_multiplicity, path_alias_contains_edge};
 use plan_iterators::{
     CartesianProductIter, ChainIter, DistinctIter, FilterIter, IndexSeekIter, LimitIter,
     NodeScanIter, ProjectIter, ResultRowsIter, SkipIter, UnionDistinctIter, UnwindIter, ValuesIter,
 };
-use projection_sort::execute_aggregate;
-use property_bridge::{
-    api_property_map_to_storage, merge_props_to_values, merge_storage_property_to_api,
-};
+use property_bridge::api_property_map_to_storage;
 use read_path::{ExpandIter, MatchOutVarLenIter};
-use runtime_limits::RuntimeGuardIter;
-use write_forwarders::{
-    convert_executor_value_to_property, execute_create, execute_create_write_rows, execute_delete,
-    execute_delete_on_rows, execute_foreach, execute_merge_create_from_rows,
-};
+use write_forwarders::{convert_executor_value_to_property, execute_create, execute_delete};
 use write_path::{
-    apply_label_overlay_to_rows, apply_removed_property_overlay_to_rows,
-    apply_set_map_overlay_to_row, apply_set_map_overlay_to_rows,
-    apply_set_property_overlay_to_rows, execute_remove, execute_remove_labels, execute_set,
-    execute_set_from_maps, execute_set_labels,
+    execute_remove, execute_remove_labels, execute_set, execute_set_from_maps, execute_set_labels,
 };
 
 const UNLABELED_LABEL_ID: LabelId = LabelId::MAX;
 pub use core_types::{NodeValue, PathValue, ReifiedPathValue, RelationshipValue, Row, Value};
 pub use plan_types::{Plan, PlanIterator};
-pub use procedure_registry::{
-    ErasedSnapshot, Procedure, ProcedureRegistry, TestProcedureField, TestProcedureFixture,
-    TestProcedureType, clear_test_procedure_fixtures, get_procedure_registry,
-    get_test_procedure_fixture, register_test_procedure_fixture,
-};
 
 pub fn execute_plan<'a, S: GraphSnapshot + 'a>(
     snapshot: &'a S,
@@ -92,69 +56,6 @@ pub fn execute_write<S: GraphSnapshot>(
     params: &crate::query_api::Params,
 ) -> Result<u32> {
     write_dispatch::execute_write(plan, snapshot, txn, params)
-}
-
-pub fn execute_write_with_rows<S: GraphSnapshot>(
-    plan: &Plan,
-    snapshot: &S,
-    txn: &mut dyn WriteableGraph,
-    params: &crate::query_api::Params,
-) -> Result<(u32, Vec<Row>)> {
-    write_orchestration::execute_write_with_rows(plan, snapshot, txn, params)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn execute_merge_with_rows<S: GraphSnapshot>(
-    plan: &Plan,
-    snapshot: &S,
-    txn: &mut dyn WriteableGraph,
-    params: &crate::query_api::Params,
-    on_create_items: &[(String, String, Expression)],
-    on_create_map_items: &[(String, Expression, bool)],
-    on_match_items: &[(String, String, Expression)],
-    on_match_map_items: &[(String, Expression, bool)],
-    on_create_labels: &[(String, Vec<String>)],
-    on_match_labels: &[(String, Vec<String>)],
-) -> Result<(u32, Vec<Row>)> {
-    write_orchestration::execute_merge_with_rows(
-        plan,
-        snapshot,
-        txn,
-        params,
-        on_create_items,
-        on_create_map_items,
-        on_match_items,
-        on_match_map_items,
-        on_create_labels,
-        on_match_labels,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn execute_merge<S: GraphSnapshot>(
-    plan: &Plan,
-    snapshot: &S,
-    txn: &mut dyn WriteableGraph,
-    params: &crate::query_api::Params,
-    on_create_items: &[(String, String, Expression)],
-    on_create_map_items: &[(String, Expression, bool)],
-    on_match_items: &[(String, String, Expression)],
-    on_match_map_items: &[(String, Expression, bool)],
-    on_create_labels: &[(String, Vec<String>)],
-    on_match_labels: &[(String, Vec<String>)],
-) -> Result<u32> {
-    merge_execution::execute_merge(
-        plan,
-        snapshot,
-        txn,
-        params,
-        on_create_items,
-        on_create_map_items,
-        on_match_items,
-        on_match_map_items,
-        on_create_labels,
-        on_match_labels,
-    )
 }
 
 pub trait WriteableGraph {

@@ -74,18 +74,9 @@ impl PreparedQuery {
         params.begin_execution();
         match self.write {
             WriteSemantics::Default => execute_write(&self.plan, snapshot, txn, params),
-            WriteSemantics::Merge => crate::executor::execute_merge(
-                &self.plan,
-                snapshot,
-                txn,
-                params,
-                &self.merge_on_create_items,
-                &self.merge_on_create_map_items,
-                &self.merge_on_match_items,
-                &self.merge_on_match_map_items,
-                &self.merge_on_create_labels,
-                &self.merge_on_match_labels,
-            ),
+            WriteSemantics::Merge => Err(Error::Other(
+                "MERGE not yet supported in 0.1 slim build".into(),
+            )),
         }
     }
 
@@ -106,62 +97,9 @@ impl PreparedQuery {
         params.begin_execution();
 
         if plan_contains_write(&self.plan) {
-            return match self.write {
-                WriteSemantics::Default => {
-                    let (write_count, write_rows) = crate::executor::execute_write_with_rows(
-                        &self.plan, snapshot, txn, params,
-                    )?;
-
-                    let mut results: Vec<
-                        std::collections::HashMap<String, crate::executor::Value>,
-                    > = write_rows
-                        .into_iter()
-                        .map(|row| {
-                            let mut map = std::collections::HashMap::new();
-                            for (k, v) in row.columns().iter().cloned() {
-                                map.insert(k, v);
-                            }
-                            map
-                        })
-                        .collect();
-
-                    if Self::should_clear_write_rows(&self.plan) {
-                        results.clear();
-                    }
-
-                    Ok((results, write_count))
-                }
-                WriteSemantics::Merge => {
-                    let (write_count, write_rows) = crate::executor::execute_merge_with_rows(
-                        &self.plan,
-                        snapshot,
-                        txn,
-                        params,
-                        &self.merge_on_create_items,
-                        &self.merge_on_create_map_items,
-                        &self.merge_on_match_items,
-                        &self.merge_on_match_map_items,
-                        &self.merge_on_create_labels,
-                        &self.merge_on_match_labels,
-                    )?;
-                    let results: Vec<std::collections::HashMap<String, crate::executor::Value>> =
-                        write_rows
-                            .into_iter()
-                            .map(|row| {
-                                let mut map = std::collections::HashMap::new();
-                                for (k, v) in row.columns().iter().cloned() {
-                                    map.insert(k, v);
-                                }
-                                map
-                            })
-                            .collect();
-                    let mut results = results;
-                    if Self::should_clear_write_rows(&self.plan) {
-                        results.clear();
-                    }
-                    Ok((results, write_count))
-                }
-            };
+            return Err(Error::Other(
+                "mixed write+read queries not yet supported in 0.1 slim build".into(),
+            ));
         }
 
         let rows: Vec<_> = crate::executor::execute_plan(snapshot, &self.plan, params).collect();

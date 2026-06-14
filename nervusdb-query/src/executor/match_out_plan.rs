@@ -1,10 +1,17 @@
-use super::binding_utils::value_node_id;
 use super::label_constraint::{node_matches_label_constraint, resolve_label_constraint};
 use super::read_path::{ExpandIter, MatchOutIter, MatchOutVarLenIter};
 use super::{
-    GraphSnapshot, LabelConstraint, LimitIter, Plan, PlanIterator, RelTypeId,
-    RelationshipDirection, Result, Row, execute_plan,
+    GraphSnapshot, InternalNodeId, LabelConstraint, LimitIter, Plan, PlanIterator, RelTypeId,
+    RelationshipDirection, Result, Row, Value, execute_plan,
 };
+
+fn value_node_id(value: &Value) -> Option<InternalNodeId> {
+    match value {
+        Value::NodeId(id) => Some(*id),
+        Value::Node(node) => Some(node.id),
+        _ => None,
+    }
+}
 
 pub struct FilteredMatchOutIter<'a, S: GraphSnapshot + 'a> {
     snapshot: &'a S,

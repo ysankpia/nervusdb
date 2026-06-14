@@ -1,9 +1,44 @@
 use super::{
-    Direction, Error, FilterIter, GraphSnapshot, Plan, PlanIterator, ProjectIter, Result,
-    ResultRowsIter, Row, Value, execute_aggregate as execute_aggregate_impl, execute_plan,
-    row_contains_all_bindings,
+    Direction, EdgeKey, Error, FilterIter, GraphSnapshot, InternalNodeId, Plan, PlanIterator,
+    ProjectIter, Result, ResultRowsIter, Row, Value, execute_plan,
 };
 use crate::ast::Expression;
+
+fn value_node_id(value: &Value) -> Option<InternalNodeId> {
+    match value {
+        Value::NodeId(id) => Some(*id),
+        Value::Node(node) => Some(node.id),
+        _ => None,
+    }
+}
+
+fn value_edge_key(value: &Value) -> Option<EdgeKey> {
+    match value {
+        Value::EdgeKey(edge) => Some(*edge),
+        Value::Relationship(rel) => Some(rel.key),
+        _ => None,
+    }
+}
+
+fn binding_values_equal(candidate: &Value, outer: &Value) -> bool {
+    if let (Some(candidate_id), Some(outer_id)) = (value_node_id(candidate), value_node_id(outer)) {
+        return candidate_id == outer_id;
+    }
+    if let (Some(candidate_edge), Some(outer_edge)) =
+        (value_edge_key(candidate), value_edge_key(outer))
+    {
+        return candidate_edge == outer_edge;
+    }
+    candidate == outer
+}
+
+fn row_contains_all_bindings(candidate: &Row, outer: &Row) -> bool {
+    outer.columns().iter().all(|(key, outer_value)| {
+        candidate
+            .get(key)
+            .is_some_and(|candidate_value| binding_values_equal(candidate_value, outer_value))
+    })
+}
 
 fn runtime_type_error(code: &str) -> Error {
     Error::Other(format!("runtime error: {code}"))
@@ -339,26 +374,6 @@ pub(super) fn execute_project<'a, S: GraphSnapshot + 'a>(
         input: Box::new(input_iter),
         projections,
         params,
-    }))
-}
-
-pub(super) fn execute_aggregate<'a, S: GraphSnapshot + 'a>(
-    snapshot: &'a S,
-    input: &'a Plan,
-    group_by: &[String],
-    aggregates: &[(super::AggregateFunction, String)],
-    params: &'a crate::query_api::Params,
-) -> PlanIterator<'a, S> {
-    let input_iter = execute_plan(snapshot, input, params);
-    let rows = execute_aggregate_impl(
-        snapshot,
-        Box::new(input_iter),
-        group_by.to_vec(),
-        aggregates.to_vec(),
-        params,
-    );
-    PlanIterator::ResultRows(Box::new(ResultRowsIter {
-        rows: rows.into_iter(),
     }))
 }
 

@@ -22,11 +22,9 @@
 //!
 //! ## Experimental Or Maintenance APIs
 //!
-//! Existing maintenance APIs such as [`Db::create_index`], [`Db::search_vector`],
-//! [`backup`], [`vacuum`], [`bulkload`], [`Db::compact`], and [`Db::checkpoint`]
-//! remain available for compatibility and manual experiments. They are not the
-//! default 0.1 product surface and should not drive new scope before the core
-//! embedded path is credible.
+//! Existing maintenance APIs such as [`Db::create_index`], [`Db::compact`],
+//! and [`Db::checkpoint`] remain available for compatibility. They are not
+//! the default 0.1 product surface.
 //!
 //! See `docs/reference/rust-api.md` for the repository-level API contract.
 //!
@@ -92,11 +90,6 @@ pub use nervusdb_api::{
 };
 pub use nervusdb_query as query;
 pub use nervusdb_storage::PAGE_SIZE;
-pub use nervusdb_storage::backup::{
-    BackupHandle, BackupInfo, BackupManager, BackupManifest, BackupStatus,
-};
-pub use nervusdb_storage::bulkload::{BulkEdge, BulkLoader, BulkNode};
-pub use nervusdb_storage::vacuum::VacuumReport;
 
 /// The main Rust facade for the 0.1 embedded database core.
 ///
@@ -256,62 +249,6 @@ impl Db {
             .create_index(label, property)
             .map_err(Error::from)
     }
-
-    /// Searches for nodes with vectors similar to the query vector.
-    ///
-    /// Experimental / maintenance API. Not part of the 0.1 core API contract.
-    ///
-    /// Returns a list of `(node_id, distance)` tuples.
-    pub fn search_vector(&self, query: &[f32], k: usize) -> Result<Vec<(InternalNodeId, f32)>> {
-        self.engine.search_vector(query, k).map_err(Error::from)
-    }
-}
-
-/// Performs in-place vacuum through the facade.
-///
-/// Experimental / maintenance API. Not part of the 0.1 core API contract.
-///
-/// This keeps CLI and other callers on the facade surface instead of coupling
-/// directly to storage internals.
-pub fn vacuum(path: impl AsRef<Path>) -> Result<VacuumReport> {
-    let (ndb_path, wal_path) = derive_paths(path.as_ref());
-    nervusdb_storage::vacuum::vacuum_in_place(&ndb_path, &wal_path).map_err(Error::from)
-}
-
-/// Creates a consistent on-disk backup snapshot.
-///
-/// Experimental / maintenance API. Not part of the 0.1 core API contract.
-///
-/// The database path accepts either base path, `.ndb`, or `.wal`.
-/// Backup artifacts are written under `backup_dir/<backup-id>/`.
-pub fn backup(path: impl AsRef<Path>, backup_dir: impl AsRef<Path>) -> Result<BackupInfo> {
-    let (ndb_path, _) = derive_paths(path.as_ref());
-    let manager = BackupManager::new(ndb_path, backup_dir.as_ref().to_path_buf());
-    let handle = manager.begin_backup().map_err(Error::from)?;
-    manager.execute_backup(&handle).map_err(Error::from)?;
-
-    match manager.status(&handle).map_err(Error::from)? {
-        BackupStatus::Completed(info) => Ok(info),
-        BackupStatus::Failed { error } => Err(Error::Other(error)),
-        BackupStatus::InProgress { .. } => Err(Error::Other(
-            "backup did not reach completed state".to_string(),
-        )),
-    }
-}
-
-/// Bulk loads data into a new database file in offline mode.
-///
-/// Experimental / maintenance API. Not part of the 0.1 core API contract.
-pub fn bulkload(path: impl AsRef<Path>, nodes: Vec<BulkNode>, edges: Vec<BulkEdge>) -> Result<()> {
-    let (ndb_path, _) = derive_paths(path.as_ref());
-    let mut loader = BulkLoader::new(ndb_path).map_err(Error::from)?;
-    for node in nodes {
-        loader.add_node(node).map_err(Error::from)?;
-    }
-    for edge in edges {
-        loader.add_edge(edge).map_err(Error::from)?;
-    }
-    loader.commit().map_err(Error::from)
 }
 
 /// A 0.1 core read snapshot returned by [`Db::snapshot`].
@@ -552,14 +489,6 @@ impl<'a> WriteTxn<'a> {
         Ok(())
     }
 
-    /// Sets the vector embedding for a node.
-    ///
-    /// This vector can be used for similarity search.
-    /// Experimental / maintenance API. Not part of the 0.1 core API contract.
-    pub fn set_vector(&mut self, node: InternalNodeId, vector: Vec<f32>) -> Result<()> {
-        self.inner.set_vector(node, vector).map_err(Error::from)
-    }
-
     /// Commits the transaction.
     ///
     /// All modifications are written to the WAL and made visible
@@ -585,74 +514,6 @@ fn derive_paths(path: &Path) -> (PathBuf, PathBuf) {
         Some("ndb") => (path.to_path_buf(), path.with_extension("wal")),
         Some("wal") => (path.with_extension("ndb"), path.to_path_buf()),
         _ => (path.with_extension("ndb"), path.with_extension("wal")),
-    }
-}
-
-#[allow(clippy::items_after_test_module)]
-#[cfg(test)]
-mod tests {
-    use super::{BulkNode, Db, Error, PropertyValue, backup, bulkload, vacuum};
-    use std::collections::BTreeMap;
-
-    #[test]
-    fn vacuum_reports_not_found_for_missing_db() {
-        let dir = tempfile::tempdir().expect("create temp dir");
-        let missing = dir.path().join("missing-db");
-        let err = vacuum(&missing).expect_err("missing db must fail");
-        match err {
-            Error::Io(inner) => assert_eq!(inner.kind(), std::io::ErrorKind::NotFound),
-            other => panic!("expected IO error, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn vacuum_succeeds_for_existing_db() {
-        let dir = tempfile::tempdir().expect("create temp dir");
-        let base = dir.path().join("graph");
-        let db = Db::open(&base).expect("open db");
-        db.close().expect("close db");
-
-        let report = vacuum(&base).expect("vacuum should succeed");
-        assert_eq!(
-            report.ndb_path.extension().and_then(|s| s.to_str()),
-            Some("ndb")
-        );
-        assert!(
-            report.backup_path.exists(),
-            "vacuum should emit backup file path"
-        );
-    }
-
-    #[test]
-    fn backup_reports_not_found_for_missing_db() {
-        let dir = tempfile::tempdir().expect("create temp dir");
-        let missing = dir.path().join("missing-db");
-        let backups = dir.path().join("backups");
-        std::fs::create_dir_all(&backups).expect("create backup dir");
-
-        let err = backup(&missing, &backups).expect_err("missing db must fail");
-        match err {
-            Error::Io(inner) => assert_eq!(inner.kind(), std::io::ErrorKind::NotFound),
-            other => panic!("expected IO error, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn bulkload_creates_database_from_nodes() {
-        let dir = tempfile::tempdir().expect("create temp dir");
-        let base = dir.path().join("bulkload-graph");
-        let nodes = vec![BulkNode {
-            external_id: 1,
-            label: "User".to_string(),
-            properties: BTreeMap::from([(
-                "name".to_string(),
-                PropertyValue::String("alice".to_string()),
-            )]),
-        }];
-
-        bulkload(&base, nodes, Vec::new()).expect("bulkload should succeed");
-        let db = Db::open(&base).expect("bulkloaded db should open");
-        db.close().expect("bulkloaded db should close");
     }
 }
 

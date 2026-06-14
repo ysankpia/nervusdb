@@ -164,32 +164,18 @@ fn compile_pattern_chain(
             apply_label_filters_for_alias(joined, &src_alias, &src_labels)
         }
     } else {
-        // Build Initial Plan (Scan or IndexSeek)
+        // Build Initial Plan (always NodeScan; property filters applied below)
         extend_predicates_from_properties(
             &src_alias,
             &src_node_el.properties,
             &mut local_predicates,
         );
 
-        let mut start_plan = Plan::NodeScan {
+        let start_plan = Plan::NodeScan {
             alias: src_alias.clone().into(),
             label: src_label.clone(),
             optional,
         };
-
-        // Try IndexSeek optimization
-        if let Some(label_name) = &src_label
-            && let Some(var_preds) = local_predicates.get(&src_alias)
-            && let Some((field, val_expr)) = var_preds.iter().next()
-        {
-            start_plan = Plan::IndexSeek {
-                alias: src_alias.clone().into(),
-                label: label_name.clone(),
-                field: field.clone(),
-                value_expr: val_expr.clone(),
-                fallback: Box::new(start_plan),
-            };
-        }
 
         let plan = apply_filters_for_alias(start_plan, &src_alias, &local_predicates);
         apply_label_filters_for_alias(plan, &src_alias, &src_labels)
@@ -301,30 +287,36 @@ fn compile_pattern_chain(
                     };
                 }
                 crate::ast::RelationshipDirection::RightToLeft => {
-                    plan = Plan::MatchIn {
+                    // 0.1 slim: swap src/dst so MatchOut handles incoming via reversed traversal
+                    plan = Plan::MatchOut {
                         input: Some(Box::new(plan)),
-                        src_alias: curr_src_alias.clone().into(),
-                        dst_alias: dst_alias.clone().into(),
+                        src_alias: dst_alias.clone().into(),
+                        rels: rel_types,
+                        edge_alias: edge_alias.clone().map(Into::into),
+                        dst_alias: curr_src_alias.clone().into(),
                         dst_labels: dst_labels.clone(),
                         src_prebound,
-                        edge_alias: edge_alias.clone().map(Into::into),
-                        rels: rel_types,
                         limit: None,
+                        project: Vec::new(),
+                        project_external: false,
                         optional,
                         optional_unbind: optional_unbind.clone(),
                         path_alias: path_alias.clone().map(Into::into),
                     };
                 }
                 crate::ast::RelationshipDirection::Undirected => {
-                    plan = Plan::MatchUndirected {
+                    // 0.1 slim: use MatchOut (outgoing traversal) for undirected
+                    plan = Plan::MatchOut {
                         input: Some(Box::new(plan)),
                         src_alias: curr_src_alias.clone().into(),
+                        rels: rel_types,
+                        edge_alias: edge_alias.clone().map(Into::into),
                         dst_alias: dst_alias.clone().into(),
                         dst_labels: dst_labels.clone(),
                         src_prebound,
-                        edge_alias: edge_alias.clone().map(Into::into),
-                        rels: rel_types,
                         limit: None,
+                        project: Vec::new(),
+                        project_external: false,
                         optional,
                         optional_unbind: optional_unbind.clone(),
                         path_alias: path_alias.clone().map(Into::into),

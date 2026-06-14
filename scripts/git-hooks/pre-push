@@ -1,9 +1,0 @@
-#!/bin/sh
-# Fast pre-push hook for the NervusDB 0.1 core loop.
-set -e
-
-echo "[pre-push] running core check"
-bash scripts/check.sh
-
-echo "[pre-push] ok"
-

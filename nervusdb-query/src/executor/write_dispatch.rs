@@ -1,7 +1,6 @@
 use super::{
     Error, GraphSnapshot, Plan, Result, WriteableGraph, execute_create, execute_delete,
-    execute_foreach, execute_remove, execute_remove_labels, execute_set, execute_set_from_maps,
-    execute_set_labels,
+    execute_remove, execute_remove_labels, execute_set, execute_set_from_maps, execute_set_labels,
 };
 
 pub(super) fn execute_write<S: GraphSnapshot>(
@@ -30,12 +29,6 @@ pub(super) fn execute_write<S: GraphSnapshot>(
         Plan::RemoveLabels { input, items } => {
             execute_remove_labels(snapshot, input, txn, items, params)
         }
-        Plan::Foreach {
-            input,
-            variable,
-            list,
-            sub_plan,
-        } => execute_foreach(snapshot, input, txn, variable, list, sub_plan, params),
         Plan::Filter { input, .. }
         | Plan::Project { input, .. }
         | Plan::Limit { input, .. }

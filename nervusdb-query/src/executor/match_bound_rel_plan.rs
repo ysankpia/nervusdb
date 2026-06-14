@@ -1,8 +1,45 @@
 use super::{
-    GraphSnapshot, InternalNodeId, LabelConstraint, Plan, PlanIterator, RelationshipDirection,
-    Result, Row, Value, apply_optional_unbinds_row, execute_plan, node_matches_label_constraint,
-    path_alias_contains_edge, resolve_label_constraint,
+    EdgeKey, GraphSnapshot, InternalNodeId, LabelConstraint, Plan, PlanIterator,
+    RelationshipDirection, Result, Row, Value, execute_plan, node_matches_label_constraint,
+    resolve_label_constraint,
 };
+
+fn edge_multiplicity<S: GraphSnapshot>(snapshot: &S, edge: EdgeKey) -> usize {
+    let count = snapshot
+        .neighbors(edge.src, Some(edge.rel))
+        .filter(|candidate| candidate.dst == edge.dst)
+        .count();
+    count.max(1)
+}
+
+fn path_alias_contains_edge<S: GraphSnapshot>(
+    snapshot: &S,
+    row: &Row,
+    path_alias: Option<&str>,
+    edge: EdgeKey,
+) -> bool {
+    if let Some(alias) = path_alias
+        && let Some(Value::Path(path)) = row.get(alias)
+    {
+        let used = path
+            .edges
+            .iter()
+            .filter(|existing| **existing == edge)
+            .count();
+        if used == 0 {
+            return false;
+        }
+        return used >= edge_multiplicity(snapshot, edge);
+    }
+    false
+}
+
+fn apply_optional_unbinds_row(mut row: Row, optional_unbind: &[String]) -> Row {
+    for alias in optional_unbind {
+        row = row.with(alias.clone(), Value::Null);
+    }
+    row
+}
 
 pub struct MatchBoundRelIter<'a, S: GraphSnapshot + 'a> {
     snapshot: &'a S,

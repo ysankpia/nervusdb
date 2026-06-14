@@ -1,6 +1,6 @@
 use super::{
-    GraphSnapshot, Plan, PlanIterator, Row, index_seek_plan, match_bound_rel_plan,
-    match_in_undirected_plan, match_out_plan, plan_head, plan_mid, plan_tail, runtime_limits,
+    Error, GraphSnapshot, Plan, PlanIterator, Row, match_bound_rel_plan, match_out_plan, plan_head,
+    plan_mid, plan_tail,
 };
 
 pub(super) fn execute_plan<'a, S: GraphSnapshot + 'a>(
@@ -8,24 +8,21 @@ pub(super) fn execute_plan<'a, S: GraphSnapshot + 'a>(
     plan: &'a Plan,
     params: &'a crate::query_api::Params,
 ) -> PlanIterator<'a, S> {
-    let stage = plan_stage_name(plan);
     let iter = match plan {
         Plan::ReturnOne => PlanIterator::ReturnOne(std::iter::once(Ok(Row::default()))),
         Plan::CartesianProduct { left, right } => {
             plan_head::execute_cartesian_product(snapshot, left, right, params)
         }
-        Plan::Apply {
-            input,
-            subquery,
-            alias: _,
-        } => plan_head::execute_apply(snapshot, input, subquery, params),
-        Plan::ProcedureCall {
-            input,
-            name,
-            args,
-            yields,
-        } => plan_head::execute_procedure_call(snapshot, input, name, args, yields, params),
-        Plan::Foreach { .. } => plan_head::write_only_foreach_error(),
+        Plan::Apply { .. }
+        | Plan::ProcedureCall { .. }
+        | Plan::Foreach { .. }
+        | Plan::MatchIn { .. }
+        | Plan::MatchUndirected { .. }
+        | Plan::IndexSeek { .. } => {
+            return PlanIterator::ReturnOne(std::iter::once(Err(Error::Other(
+                "plan variant not yet supported in 0.1 slim build".into(),
+            ))));
+        }
         Plan::NodeScan {
             alias,
             label,
@@ -95,59 +92,6 @@ pub(super) fn execute_plan<'a, S: GraphSnapshot + 'a>(
             path_alias,
             params,
         ),
-        Plan::MatchIn {
-            input,
-            src_alias,
-            rels,
-            edge_alias,
-            dst_alias,
-            dst_labels,
-            src_prebound,
-            limit: _,
-            optional,
-            optional_unbind,
-            path_alias,
-        } => match_in_undirected_plan::execute_match_in(
-            snapshot,
-            input,
-            src_alias,
-            rels,
-            edge_alias,
-            dst_alias,
-            dst_labels,
-            *src_prebound,
-            *optional,
-            optional_unbind,
-            path_alias,
-            params,
-        ),
-        Plan::MatchUndirected {
-            input,
-            src_alias,
-            rels,
-            edge_alias,
-            dst_alias,
-            dst_labels,
-            src_prebound,
-            limit,
-            optional,
-            optional_unbind,
-            path_alias,
-        } => match_in_undirected_plan::execute_match_undirected(
-            snapshot,
-            input,
-            src_alias,
-            rels,
-            edge_alias,
-            dst_alias,
-            dst_labels,
-            *src_prebound,
-            limit.map(|n| n as usize),
-            *optional,
-            optional_unbind,
-            path_alias,
-            params,
-        ),
         Plan::MatchBoundRel {
             input,
             rel_alias,
@@ -188,11 +132,11 @@ pub(super) fn execute_plan<'a, S: GraphSnapshot + 'a>(
         Plan::Project { input, projections } => {
             plan_mid::execute_project(snapshot, input, projections, params)
         }
-        Plan::Aggregate {
-            input,
-            group_by,
-            aggregates,
-        } => plan_mid::execute_aggregate(snapshot, input, group_by, aggregates, params),
+        Plan::Aggregate { .. } => {
+            return PlanIterator::ReturnOne(std::iter::once(Err(Error::Other(
+                "aggregate not yet supported in 0.1 slim build".into(),
+            ))));
+        }
         Plan::OrderBy { input, items } => {
             plan_mid::execute_order_by(snapshot, input, items, params)
         }
@@ -219,52 +163,8 @@ pub(super) fn execute_plan<'a, S: GraphSnapshot + 'a>(
         Plan::RemoveProperty { .. } | Plan::RemoveLabels { .. } => {
             plan_tail::write_only_plan_error("REMOVE must be executed via execute_write")
         }
-        Plan::IndexSeek {
-            alias,
-            label,
-            field,
-            value_expr,
-            fallback,
-        } => index_seek_plan::execute_index_seek(
-            snapshot, alias, label, field, value_expr, fallback, params,
-        ),
         Plan::Values { rows } => plan_tail::execute_values(rows),
     };
 
-    runtime_limits::wrap_plan_iterator(iter, params, stage)
-}
-
-fn plan_stage_name(plan: &Plan) -> &'static str {
-    match plan {
-        Plan::ReturnOne => "ReturnOne",
-        Plan::NodeScan { .. } => "NodeScan",
-        Plan::MatchOut { .. } => "MatchOut",
-        Plan::MatchOutVarLen { .. } => "MatchOutVarLen",
-        Plan::MatchIn { .. } => "MatchIn",
-        Plan::MatchUndirected { .. } => "MatchUndirected",
-        Plan::MatchBoundRel { .. } => "MatchBoundRel",
-        Plan::Filter { .. } => "Filter",
-        Plan::OptionalWhereFixup { .. } => "OptionalWhereFixup",
-        Plan::Project { .. } => "Project",
-        Plan::Aggregate { .. } => "Aggregate",
-        Plan::OrderBy { .. } => "OrderBy",
-        Plan::Skip { .. } => "Skip",
-        Plan::Limit { .. } => "Limit",
-        Plan::Distinct { .. } => "Distinct",
-        Plan::Unwind { .. } => "Unwind",
-        Plan::Union { .. } => "Union",
-        Plan::Delete { .. } => "Delete",
-        Plan::SetProperty { .. } => "SetProperty",
-        Plan::SetPropertiesFromMap { .. } => "SetPropertiesFromMap",
-        Plan::SetLabels { .. } => "SetLabels",
-        Plan::RemoveProperty { .. } => "RemoveProperty",
-        Plan::RemoveLabels { .. } => "RemoveLabels",
-        Plan::IndexSeek { .. } => "IndexSeek",
-        Plan::CartesianProduct { .. } => "CartesianProduct",
-        Plan::Apply { .. } => "Apply",
-        Plan::ProcedureCall { .. } => "ProcedureCall",
-        Plan::Foreach { .. } => "Foreach",
-        Plan::Values { .. } => "Values",
-        Plan::Create { .. } => "Create",
-    }
+    iter
 }

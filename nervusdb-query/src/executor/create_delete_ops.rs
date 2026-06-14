@@ -460,12 +460,9 @@ pub(super) fn execute_create_write_rows<S: GraphSnapshot>(
         }
         Plan::Values { rows } => Ok((0, rows.clone())),
         Plan::ReturnOne => Ok((0, vec![Row::default()])),
-        _ => {
-            // Non-write wrappers (WITH/UNWIND/PROJECT/...) may still contain nested writes.
-            // Delegate back to write orchestration so CREATE/DELETE children are executed
-            // through write-capable paths instead of read-only `execute_plan`.
-            super::execute_write_with_rows(plan, snapshot, txn, params)
-        }
+        _ => Err(Error::Other(
+            "write-with-rows not yet supported in 0.1 slim build".into(),
+        )),
     }
 }
 

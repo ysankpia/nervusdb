@@ -17,8 +17,6 @@ serde_json = "1.0"
 thiserror = "2.0"
 uuid = { version = "1.0", features = ["v4", "serde"] }
 nervusdb-api = "=0.0.1"
-rand = "0.8"
-ordered-float = "5.0"
 
 [dev-dependencies]
 tempfile = "3"
