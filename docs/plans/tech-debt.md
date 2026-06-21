@@ -15,7 +15,6 @@
 
 | Area | Description | Reason For Deferral |
 |---|---|---|
-| Legacy archive structure | Some archived docs may be rescuable or deletable | Not worth the audit time before Fjall core lands |
 | Doc cross-reference audit | Some older docs reference each other without going through `docs/index.md` | Acceptable drift; validate current path first |
 | Old bd PB tasks | Existing beads still describe pager/page-cache work | ADR 0005 supersedes that direction; close or supersede after code lands |
 
@@ -31,7 +30,8 @@
 
 | Area | Retired When | Reason |
 |---|---|---|
-| Platform-era legacy docs in main doc tree | 001-harness-normalization | Archived under `docs/archive/legacy-platform-era/` |
+| Platform-era legacy docs | 0.0.2 cleanup | Removed from the working tree; use git history only when explicitly needed |
+| Old fuzz workspace | 0.0.2 cleanup | Removed; it targeted legacy query paths and produced a stale `rand` Dependabot alert |
 | Branching strategy undocumented | 007-harness-doc-backfill | Merged into `docs/engineering/git-workflow.md` |
 | 36 historical scripts | 009-slim-to-0.1 | Deleted; 6 core scripts remain |
 | 11 CI workflows | 009-slim-to-0.1 | Deleted; only ci.yml remains |

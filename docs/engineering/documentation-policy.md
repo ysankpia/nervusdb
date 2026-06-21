@@ -25,8 +25,9 @@ clear, not preserve every old ambition in the current path.
 - Doc-gardening pass after substantial work, bug fixes, architecture changes,
   validation changes, or long handoffs.
 
-## Archive Rules
+## Legacy Material Rules
 
-Historical docs live under `docs/archive/legacy-platform-era/`. Do not edit them
-to describe current scope. If an archived idea should become current again,
-write an ADR first and update product, architecture, validation, and plan docs.
+Platform-era archive docs were removed from the working tree. Use git history
+only when historical evidence is explicitly needed. If a deleted idea should
+become current again, write an ADR first and update product, architecture,
+validation, and plan docs.

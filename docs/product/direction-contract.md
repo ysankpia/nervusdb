@@ -68,9 +68,9 @@ The following are not current 0.1 product work:
 - openCypher TCK pass rate as a product success metric
 - fuzz, chaos, soak, perf, TCK, or release windows as default development gates
 
-Archived platform-era material is evidence only. Promotion back into core
-requires a new ADR and updates to product, architecture, validation, and active
-plan docs.
+Deleted platform-era material is evidence only through git history. Promotion
+back into core requires a new ADR and updates to product, architecture,
+validation, and active plan docs.
 
 ## Acceptance Criteria
 

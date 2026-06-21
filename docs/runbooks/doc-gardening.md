@@ -17,7 +17,7 @@ Do a doc-gardening pass after:
 
 - `docs/index.md` entries point to existing files.
 - All cross-references between docs (e.g. "see `docs/engineering/...`") resolve.
-- Archived docs are not linked from current docs except through `docs/archive/.../INDEX.md`.
+- Deleted legacy docs are not referenced from current docs.
 
 ### Plans
 
@@ -63,8 +63,9 @@ for f in $(rg -o 'docs/[^)]+' docs/index.md | sort -u); do
   test -f "$f" || echo "MISSING: $f"
 done
 
-# Find archived docs referenced outside the archive index
-rg -l "docs/archive/" docs/ --include="*.md" | grep -v "docs/archive/.*INDEX.md"
+# Find stale references to deleted archive paths
+rg -n "docs/archive/|legacy-platform-era" docs/ AGENTS.md README.md README_CN.md \
+  --glob '!docs/runbooks/doc-gardening.md'
 
 # Check for broken internal links
 rg -o '\[.*\]\((/?docs/[^)]+)\)' docs/ | rg -v 'http' | while IFS=: read -r file link; do

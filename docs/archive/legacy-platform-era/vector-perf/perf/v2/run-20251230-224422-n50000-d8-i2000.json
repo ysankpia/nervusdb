@@ -1,1 +1,0 @@
-{"nodes":50000,"degree":8,"edges":400000,"iters":2000,"insert_edges_per_sec":227205.652,"wal_bytes_per_edge":24.125,"neighbors_hot_m1_edges_per_sec":28887384.338,"neighbors_hot_m2_edges_per_sec":21551230.643,"neighbors_cold_m1_edges_per_sec":13700096.329,"neighbors_cold_m2_edges_per_sec":15880231.296,"compact_secs":0.065997,"date":"$(date +%Y-%m-%d)","platform":"macOS"}

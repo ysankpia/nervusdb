@@ -86,8 +86,8 @@ crate 暂时留在 workspace 里，方便测试和脚本收口。它们不是当
 公共包。
 
 Python、Node.js、C 绑定、完整 openCypher TCK、向量搜索、一致性门禁、
-perf/chaos/soak/fuzz 矩阵、release window 和 Fjall 之前的存储设计记录仍保留在
-仓库中，但不属于默认产品路径。
+perf/chaos/soak/fuzz 矩阵、release window 和 Fjall 之前的存储设计记录不属于默认
+产品路径。
 
 ## 开发
 
@@ -105,7 +105,8 @@ cargo test --workspace
 ```
 
 examples、crash recovery、benchmark、TCK、bindings、perf、fuzz、chaos、soak、
-stability 相关检查只作为手动信号。
+stability 相关检查不是默认门禁。当前树不保留 fuzz target；如果后续需要，应基于
+当前 API 重新引入。
 
 ## 文档
 

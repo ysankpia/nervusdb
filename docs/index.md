@@ -1,7 +1,7 @@
 # NervusDB Documentation Index
 
 This is the current map for the SQLite-for-graphs 0.1 refactor. If a document is
-not linked here or under the archive index, do not use it to infer current scope.
+not linked here, do not use it to infer current scope.
 
 Current active direction: Fjall-backed local database directory storage for the
 0.1 embedded Rust graph core.
@@ -74,9 +74,8 @@ Current active direction: Fjall-backed local database directory storage for the
 
 - Bug ledger: `docs/bugs/index.md`
 
-## Archive
+## Deleted Legacy Material
 
-- Platform-era archive: `docs/archive/legacy-platform-era/INDEX.md`
-
-Archived docs are not current 0.1 scope. Reviving archived material requires a
-new ADR that updates product, architecture, validation, and plan docs.
+Platform-era archive docs and old fuzz targets were removed from the working
+tree. Reviving any of that material requires a new ADR that updates product,
+architecture, validation, and plan docs.

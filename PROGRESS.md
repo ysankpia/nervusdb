@@ -93,12 +93,20 @@ durability remain unchanged from 0.0.1.
   - tag: `v0.0.2`
   - GitHub release: `https://github.com/ysankpia/nervusdb/releases/tag/v0.0.2`
   - crates.io: `https://crates.io/crates/nervusdb`
+- Post-0.0.2 cleanup completed in the working tree:
+  - removed the obsolete `fuzz/` workspace that targeted old query paths and
+    carried the stale `rand` Dependabot alert source.
+  - removed `docs/archive/legacy-platform-era/` from the working tree; deleted
+    platform-era material is now historical evidence through git history only.
+  - updated current docs so deleted archive/fuzz material cannot be mistaken for
+    current 0.1 scope.
 
 ## Next
 
 - Decide whether repeated read benchmark variance needs a separate
   benchmark plan.
-- Triage the low-severity Dependabot alert reported by GitHub.
+- Wait for GitHub Dependabot to rescan after the stale `fuzz/Cargo.lock`
+  removal is pushed.
 - Update GitHub Actions if the Node.js 20 deprecation annotation becomes noisy.
 
 ## Blockers
@@ -184,11 +192,12 @@ None yet.
 | 2026-06-22 | `gh release create v0.0.2 --verify-tag --title "NervusDB v0.0.2" --notes-file docs/releases/v0.0.2.md --latest=true` | Passed |
 | 2026-06-22 | `cargo publish -p nervusdb --registry crates-io` | Published `nervusdb v0.0.2` |
 | 2026-06-22 | `cargo search nervusdb --limit 5 --registry crates-io` | Confirmed `nervusdb = "0.0.2"` appears in crates.io search |
+| 2026-06-22 | `cargo fmt --all -- --check` | Passed after removing stale fuzz workspace and legacy platform-era archive docs |
+| 2026-06-22 | `bash scripts/check.sh` | Passed after removing stale fuzz workspace and legacy platform-era archive docs |
 
 ## Last Checkpoint
 
-2026-06-22: NervusDB 0.0.2 was tagged, released on GitHub, and published to
-crates.io. The release fixes the bulk import bug caused by per-node durable meta
-commits during node id allocation. The best 100k/500k run improved insert time
-from the 0.0.1 baseline 438.130s to 0.415s without changing the public API or
-disabling `SyncAll`.
+2026-06-22: Post-0.0.2 cleanup removed the obsolete `fuzz/` workspace and the
+legacy platform-era archive docs from the working tree. The current tree should
+use git history for that material only when historical evidence is explicitly
+needed; it should not infer product scope from deleted platform-era files.

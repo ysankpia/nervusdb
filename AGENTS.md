@@ -15,8 +15,9 @@ persistence, durable graph data, and a small query surface.
 7. `docs/engineering/validation-policy.md`
 8. `docs/plans/active/010-fjall-storage-refactor.md`
 
-Archived platform-era documents are evidence only. Do not use them to infer
-current scope unless a current ADR promotes that material.
+Legacy platform-era documents have been removed from the working tree. Use git
+history only when historical evidence is explicitly needed; do not infer current
+scope from deleted platform-era material.
 
 ## Core Rule
 
@@ -69,5 +70,5 @@ Never hide full test fan-out behind `quick`, `check`, `pre-commit`, or
   updated when affected.
 - Quality score, technical debt, or architecture invariants were updated when the
   change reveals a quality gap, accepted debt, or boundary violation.
-- No archived platform-era material was promoted without a new ADR.
+- No deleted platform-era material was promoted without a new ADR.
 - `git status --short` contains only intentional changes before commit.

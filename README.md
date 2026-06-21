@@ -89,10 +89,10 @@ nervusdb-cli         local debug/import/query/write tool
 workspace as local wrapper crates while tests and scripts are consolidated. They
 are not separate public packages for the current line.
 
-Experimental or historical areas remain in the repository but are not the
-default product path: Python, Node.js, C bindings, full openCypher TCK, vector
-search, parity gates, perf/chaos/soak/fuzz matrices, release windows, and
-pre-Fjall storage design notes.
+Experimental or historical areas are not the default product path: Python,
+Node.js, C bindings, full openCypher TCK, vector search, parity gates,
+perf/chaos/soak/fuzz matrices, release windows, and pre-Fjall storage design
+notes.
 
 ## Development
 
@@ -110,7 +110,9 @@ cargo test --workspace
 ```
 
 Area-specific checks for examples, crash recovery, benchmarks, TCK, bindings,
-perf, fuzz, chaos, soak, and stability are manual signals only.
+perf, fuzz, chaos, soak, and stability are not default gates. Fuzz targets are
+not kept in the current tree; reintroduce them from the current API if they
+become useful again.
 
 ## Documentation
 
