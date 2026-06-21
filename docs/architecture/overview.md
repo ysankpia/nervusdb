@@ -13,7 +13,7 @@ Rust API / CLI
 
 ## Boundary Rules
 
-- `nervusdb` is the only public 0.0.1 crate.
+- `nervusdb` is the only public crate for the current line.
 - `nervusdb::api` owns shared IDs, `PropertyValue`, `GraphSnapshot`,
   `GraphStore`, and write-boundary traits.
 - `nervusdb::storage` owns graph persistence, keyspace layout, durability,
@@ -26,7 +26,7 @@ Rust API / CLI
 - `nervusdb-cli` is a smoke/debug/import-style tool, not a separate product
   surface.
 - Workspace crates named `nervusdb-api`, `nervusdb-storage`, and
-  `nervusdb-query` are local wrapper crates during consolidation, not 0.0.1
+  `nervusdb-query` are local wrapper crates during consolidation, not current
   public packages.
 - Bindings, vector search, full TCK, parity gates, and perf matrices are
   historical or experimental until promoted by ADR.

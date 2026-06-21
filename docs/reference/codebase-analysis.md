@@ -40,7 +40,7 @@ nervusdb-query -> nervusdb
 ```
 
 Those wrapper crates are marked `publish = false` and are not independent
-0.0.1 public packages. Inside `nervusdb`, query must not depend on storage
+public packages for the current line. Inside `nervusdb`, query must not depend on storage
 implementation types. Storage implements the API traits; query consumes the
 traits.
 

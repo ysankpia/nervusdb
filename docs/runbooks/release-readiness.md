@@ -1,6 +1,6 @@
 # Release Readiness Runbook
 
-This is for 0.0.1 / 0.1-core readiness only. It is not a revival of the old
+This is for current 0.x / 0.1-core readiness only. It is not a revival of the old
 platform release window.
 
 Per ADR 0006, the public release artifact is one crate: `nervusdb`.
@@ -31,12 +31,12 @@ blockers for the embedded graph 0.1 line unless a future ADR changes that rule.
 ## Publish Shape
 
 Do not publish `nervusdb-api`, `nervusdb-storage`, or `nervusdb-query` as public
-0.0.1 crates. They are internal engineering boundaries unless a future ADR gives
+public crates. They are internal engineering boundaries unless a future ADR gives
 one of them a real external audience.
 
 Expected user install:
 
 ```toml
 [dependencies]
-nervusdb = "0.0.1"
+nervusdb = "0.0.2"
 ```

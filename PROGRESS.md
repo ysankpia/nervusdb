@@ -12,16 +12,16 @@ bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
-0.0.1 release is complete. The current public package is `nervusdb = "0.0.1"`.
-0.0.2 write-path work is active in the working tree. The public API and
-`PersistMode::SyncAll` durability remain unchanged.
+0.0.1 release is complete. The next public package candidate is
+`nervusdb = "0.0.2"`. 0.0.2 write-path work has passed local and GitHub
+validation. The public API and `PersistMode::SyncAll` durability remain
+unchanged.
 
 ## Now
 
-- Finish validating 0.0.2 write-path changes.
-- Keep public API unchanged and avoid unsafe/buffered durability modes.
-- Treat property indexes, tombstone cleanup, dangling-edge enforcement, EdgeId,
-  and advanced query work as later plans, not 0.0.2 scope.
+- Finish 0.0.2 release packaging, tag, GitHub release, and crates.io publish.
+- Keep property indexes, tombstone cleanup, dangling-edge enforcement, EdgeId,
+  unsafe/buffered durability modes, and advanced query work out of 0.0.2.
 
 ## Done
 
@@ -87,13 +87,15 @@ bd epic: `nervusdb-a1z`
 - 0.0.2 write-path changes in the working tree stage node ids inside
   `WriteTxn`, persist `next_node_id` in the commit batch, and stage edges in a
   `Vec<EdgeKey>` with commit-time sort/dedup.
+- 0.0.2 release preparation is in progress: workspace package versions and
+  current install docs are being updated to `0.0.2`.
 
 ## Next
 
-- Run the remaining default validation.
-- Commit the 0.0.2 write-path implementation once validation stays green.
-- Decide whether repeated read benchmark variance needs a separate benchmark
-  plan before release.
+- Run release dry-run after version bump.
+- Tag and publish `v0.0.2` if dry-run and CI pass.
+- Decide after release whether repeated read benchmark variance needs a separate
+  benchmark plan.
 
 ## Blockers
 

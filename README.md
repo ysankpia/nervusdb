@@ -87,7 +87,7 @@ nervusdb-cli         local debug/import/query/write tool
 
 `nervusdb-api`, `nervusdb-storage`, and `nervusdb-query` may exist in the
 workspace as local wrapper crates while tests and scripts are consolidated. They
-are not separate public 0.0.1 packages.
+are not separate public packages for the current line.
 
 Experimental or historical areas remain in the repository but are not the
 default product path: Python, Node.js, C bindings, full openCypher TCK, vector

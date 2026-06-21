@@ -2,11 +2,11 @@
 
 ## Public Package
 
-`nervusdb` is the only public 0.0.1 crate. Users should depend on:
+`nervusdb` is the only public crate for the current line. Users should depend on:
 
 ```toml
 [dependencies]
-nervusdb = "0.0.1"
+nervusdb = "0.0.2"
 ```
 
 The query, storage, and API boundaries live inside that crate as modules:
@@ -25,7 +25,7 @@ depends only on `nervusdb`.
 `nervusdb-api`, `nervusdb-storage`, and `nervusdb-query` may remain in the
 workspace as thin local wrappers while tests and scripts are being consolidated.
 They re-export the implementation from `nervusdb`. They are not independent
-0.0.1 release products and must not be published to crates.io for 0.0.1.
+current release products and must not be published to crates.io without a future ADR.
 
 ## Required Dependency Direction
 

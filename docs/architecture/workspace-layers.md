@@ -13,7 +13,7 @@ directory and Fjall-backed keyspaces.
 
 `nervusdb-api`, `nervusdb-storage`, and `nervusdb-query` may exist as
 workspace-local wrapper crates while scripts and tests are consolidated. They
-re-export `nervusdb` modules, are marked `publish = false`, and are not 0.0.1
+re-export `nervusdb` modules, are marked `publish = false`, and are not current
 public packages.
 
 ## Experimental

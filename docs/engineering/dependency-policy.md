@@ -12,7 +12,7 @@ nervusdb-query   — local publish=false wrapper for nervusdb::query
 nervusdb-cli     — local debug/import/query/write CLI
 ```
 
-ADR 0006 makes `nervusdb` the only public 0.0.1 crates.io target. The wrapper
+ADR 0006 makes `nervusdb` the only public crates.io target for the current line. The wrapper
 crates exist only to keep local tests and scripts cheap during consolidation;
 they must not become independent compatibility contracts.
 
@@ -82,14 +82,14 @@ Any direct dependency from `nervusdb::query` implementation code to
 
 ## Public Package Rule
 
-For 0.0.1, users should depend on one crate:
+For the current line, users should depend on one crate:
 
 ```toml
 [dependencies]
-nervusdb = "0.0.1"
+nervusdb = "0.0.2"
 ```
 
 Do not publish `nervusdb-api`, `nervusdb-storage`, or `nervusdb-query` as
-independent crates for 0.0.1 just to satisfy Cargo packaging. If the current
+independent crates just to satisfy Cargo packaging. If the current
 workspace shape blocks publishing `nervusdb` alone, refactor the package shape
 or merge internal crates into modules before release.

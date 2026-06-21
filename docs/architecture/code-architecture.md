@@ -25,7 +25,7 @@ nervusdb-cli/        local debug, query, write, repl, and smoke workflows
 
 `nervusdb-api/`, `nervusdb-storage/`, and `nervusdb-query/` are local
 `publish = false` wrapper crates that re-export the implementation from
-`nervusdb`. They are not separate 0.0.1 public packages. Experimental binding
+`nervusdb`. They are not separate public packages for the current line. Experimental binding
 crates may remain in the repository, but they do not define the 0.1 embedded
 graph core.
 

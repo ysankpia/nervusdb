@@ -82,7 +82,7 @@ nervusdb-cli         local debug/import/query/write tool
 ```
 
 `nervusdb-api`、`nervusdb-storage`、`nervusdb-query` 可以作为本地 wrapper
-crate 暂时留在 workspace 里，方便测试和脚本收口。它们不是 0.0.1 要发布的独立
+crate 暂时留在 workspace 里，方便测试和脚本收口。它们不是当前主线要发布的独立
 公共包。
 
 Python、Node.js、C 绑定、完整 openCypher TCK、向量搜索、一致性门禁、

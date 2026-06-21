@@ -24,7 +24,7 @@ docs.
    traits. `nervusdb::query` must not depend on `nervusdb::storage`
    implementation types.
 
-5. **`nervusdb` is the only public 0.0.1 crate.** It should not grow platform
+5. **`nervusdb` is the only public crate for the current line.** It should not grow platform
    SDK behavior. Wrapper crates named `nervusdb-api`, `nervusdb-storage`, and
    `nervusdb-query` are local `publish = false` compatibility wrappers only.
 
