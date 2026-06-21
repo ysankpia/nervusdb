@@ -12,6 +12,9 @@ nervusdb-query   — Mini-Cypher parser/planner/executor
 nervusdb-cli     — local debug/import/query/write CLI
 ```
 
+These are engineering boundaries, not automatically public release packages.
+ADR 0006 makes `nervusdb` the only public 0.0.1 crates.io target.
+
 ## Internal Dependency Rules
 
 1. **Core crates must not depend on frozen platform work.** Python, Node.js, C
@@ -71,3 +74,17 @@ nervusdb-cli -> nervusdb -> nervusdb-storage -> nervusdb-api
 
 Any direct `nervusdb-query -> nervusdb-storage` dependency is a boundary
 violation to remove before the Fjall backend lands.
+
+## Public Package Rule
+
+For 0.0.1, users should depend on one crate:
+
+```toml
+[dependencies]
+nervusdb = "0.0.1"
+```
+
+Do not publish `nervusdb-api`, `nervusdb-storage`, or `nervusdb-query` as
+independent crates for 0.0.1 just to satisfy Cargo packaging. If the current
+workspace shape blocks publishing `nervusdb` alone, refactor the package shape
+or merge internal crates into modules before release.

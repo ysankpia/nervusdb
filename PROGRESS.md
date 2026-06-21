@@ -2,25 +2,26 @@
 
 ## Current Objective
 
-Close the Fjall storage refactor, query scope pruning, and 0.1 readiness
-follow-up so the repository describes one coherent embedded Rust graph core.
+Prepare NervusDB 0.0.1 for release as a single public `nervusdb` crate.
 
 ## Active Plan
 
-`docs/plans/active/010-fjall-storage-refactor.md`
+`docs/plans/active/011-release-0.0.1-single-crate.md`
 
 bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
 Fjall storage refactor, non-0.1 query residue pruning, post-refactor public
-surface synchronization, and 0.1 API hook cleanup are complete in the working
-tree.
+surface synchronization, and 0.1 API hook cleanup are complete. Release
+preparation is now blocked on public package shape: 0.0.1 should publish one
+user-facing crate, `nervusdb`, not several internal implementation crates.
 
 ## Now
 
-- Validate and commit the 0.1 API hook cleanup.
-- Prepare a release-readiness pass once the cleanup commit lands.
+- Land ADR 0006 and the 0.0.1 single-crate release plan.
+- Decide the mechanical package-shape refactor for publishing only `nervusdb`.
+- Do not start 0.0.2 code before 0.0.1 release readiness is complete.
 
 ## Done
 
@@ -58,12 +59,15 @@ tree.
   `Db::create_index`, and `GraphSnapshot::lookup_index` were removed from the
   public API. `Db::checkpoint` and `Db::close` remain as explicit lifecycle
   helpers over Fjall persistence.
+- ADR 0006 drafted: public 0.0.1 release should be a single `nervusdb` crate.
+- Post-0.0.1 roadmap drafted as candidates, not current scope.
 
 ## Next
 
-- Commit the API hook cleanup after validation.
-- Prepare a 0.1 readiness checklist after this cleanup lands.
-- Run release-scale manual smoke on recorded hardware before release prep.
+- Commit the release packaging decision docs.
+- Refactor/package the workspace so `cargo publish -p nervusdb --dry-run` does
+  not require publishing internal crates.
+- Push `main`, wait for CI, run medium benchmark, dry-run, tag, and publish.
 
 ## Blockers
 

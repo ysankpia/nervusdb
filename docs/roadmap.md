@@ -11,20 +11,23 @@ Fjall-backed logical graph keyspaces.
 
 ## Now
 
+- Prepare 0.0.1 as a single public `nervusdb` crate release.
 - Keep the post-Fjall API surface small: `checkpoint` and `close` stay as
   lifecycle helpers; old compaction and property-index hooks stay out.
 - Run release-scale manual smoke when the API surface is otherwise stable.
 
 ## Next
 
-- Large manual acceptance smoke after Fjall storage stabilizes.
-- Benchmark baseline for the core path.
-- Property-index ADR if equality/range indexes become worth promoting.
-- Release-readiness pass over docs, examples, and crates.io metadata.
+- Push main and wait for CI.
+- Refactor or package the workspace so `nervusdb` is the only public crate needed
+  on crates.io.
+- Run release-readiness validation, medium benchmark, and publish dry-run.
+- Tag and publish `v0.0.1`.
 
 ## Later
 
-- Property index ADR if equality/range indexes become core.
+- 0.0.2 correctness work: dangling-edge rejection and tombstone cleanup.
+- Property equality index ADR if real usage or benchmarks justify it.
 - Benchmark regression detection for the core path.
 - Release mechanics and publish documentation.
 - Community contribution guide.
@@ -39,7 +42,7 @@ Fjall-backed logical graph keyspaces.
 | Query boring | Q2 2026 | Core tests match Mini-Cypher reference |
 | API obvious | Q2 2026 | Directory path API documented and tested |
 | 0.1 credible | Q2 2026 | Examples runnable, recovery proven, 10k/50k smoke passes |
-| 0.1 release | Q2 2026 | Published to crates.io, docs complete, validation repeatable |
+| 0.0.1 release | Q2 2026 | Single `nervusdb` crate published to crates.io, docs complete, validation repeatable |
 
 ## Open Questions
 

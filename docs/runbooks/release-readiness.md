@@ -1,7 +1,9 @@
 # Release Readiness Runbook
 
-This is for 0.1 readiness only. It is not a revival of the old platform release
-window.
+This is for 0.0.1 / 0.1-core readiness only. It is not a revival of the old
+platform release window.
+
+Per ADR 0006, the public release artifact is one crate: `nervusdb`.
 
 ## Required Evidence
 
@@ -13,6 +15,8 @@ window.
 - Ten realistic examples are documented in `docs/reference/examples-0.1.md`.
 - Storage format and compatibility expectations are documented.
 - Manual benchmark evidence exists for the chosen release candidate.
+- `cargo publish -p nervusdb --dry-run` passes without requiring users to depend
+  on internal implementation crates.
 
 ## Not Required By Default
 
@@ -23,3 +27,16 @@ window.
 
 Those checks may be useful for targeted changes, but they are not release
 blockers for the embedded graph 0.1 line unless a future ADR changes that rule.
+
+## Publish Shape
+
+Do not publish `nervusdb-api`, `nervusdb-storage`, or `nervusdb-query` as public
+0.0.1 crates. They are internal engineering boundaries unless a future ADR gives
+one of them a real external audience.
+
+Expected user install:
+
+```toml
+[dependencies]
+nervusdb = "0.0.1"
+```
