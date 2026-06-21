@@ -5,9 +5,11 @@
 | Area | Debt | Impact | Plan |
 |---|---|---|---|
 | Experimental advanced query code | Parser/executor still contain features outside 0.1 core | Future tests can accidentally promote non-core behavior again | Keep out of core gates; document only when a future ADR promotes it |
+| Bulk import write path | 100k nodes / 500k edges took 438.130s in 0.0.1 | Large imports are usable but too slow | Active plan 013; stage benchmark and optimize write staging |
+| Benchmark observability | 0.0.1 insert timing was a single aggregate number | Cannot identify whether time is spent in staging or commit | Add stage timing fields in 013 |
 | Tombstone secondary cleanup | Node tombstone hides nodes but does not eagerly remove every secondary key | Disk space and internal keyspace drift until future cleanup | Define delete/tombstone compaction after core API stabilizes |
 | No large release-scale smoke | 10k node / 50k edge smoke passes, but no documented 1M node / 5M edge acceptance result | Cannot prove release-scale readiness | Run and record large smoke after Fjall core stabilizes |
-| No benchmark baseline | `core_bench.sh` exists but no regression detection pipeline | Performance drift invisible | Add benchmark recording and comparison after 0.1 |
+| No benchmark regression pipeline | `core_bench.sh` exists but no automatic comparison gate | Performance drift invisible | Add comparison after the 0.0.2 benchmark schema stabilizes |
 
 ## Deferred Cleanup
 
