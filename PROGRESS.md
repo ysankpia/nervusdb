@@ -20,9 +20,8 @@ are `publish = false` wrapper crates.
 
 ## Now
 
-- Commit the single-crate package-shape refactor.
-- Rerun clean `cargo publish -p nervusdb --dry-run --registry crates-io` after
-  commit.
+- Push `main` and wait for GitHub Actions when release publication is approved.
+- Run the medium benchmark before tagging or record an explicit defer reason.
 - Do not start 0.0.2 code before 0.0.1 release readiness is complete.
 
 ## Done
@@ -71,11 +70,13 @@ are `publish = false` wrapper crates.
   - README, architecture, validation, and runbook docs describe `nervusdb` as
     the only 0.0.1 public crate.
   - `scripts/core_bench.sh` now benchmarks the public `nervusdb` crate.
+- Single-crate package-shape commit created:
+  `0cd081fc refactor(release): package nervusdb as single public crate`.
+- Clean publish dry-run passed after commit:
+  `cargo publish -p nervusdb --dry-run --registry crates-io`.
 
 ## Next
 
-- Commit the release package-shape refactor.
-- Run clean publish dry-run after commit.
 - Push `main`, wait for CI, run medium benchmark, tag, and publish when release
   is explicitly authorized.
 
@@ -132,9 +133,10 @@ None yet.
 | 2026-06-22 | `bash scripts/core_bench.sh --small` | Passed; artifact `artifacts/core-bench/core-bench-small-20260621-173958.json` |
 | 2026-06-22 | `cargo test --workspace` | Passed after single-crate packaging |
 | 2026-06-22 | `cargo publish -p nervusdb --dry-run --registry crates-io --allow-dirty` | Passed; dirty flag needed only because package files were not committed yet |
+| 2026-06-22 | `cargo publish -p nervusdb --dry-run --registry crates-io` | Passed clean after commit `0cd081fc`; local patch warnings expected |
 
 ## Last Checkpoint
 
-2026-06-22: Single-crate public package shape is implemented and validated in
-the working tree. Remaining work is commit, clean publish dry-run, push/CI,
-medium benchmark, tag, and crates.io publish when explicitly authorized.
+2026-06-22: Single-crate public package shape is implemented, committed, and
+validated. Remaining work is push/CI, medium benchmark, tag, and crates.io
+publish when explicitly authorized.

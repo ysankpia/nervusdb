@@ -106,6 +106,10 @@ Current local evidence:
   crate, not the storage wrapper.
 - `cargo publish -p nervusdb --dry-run --registry crates-io --allow-dirty`
   passed before commit. A clean dry-run is still required after commit.
+- Commit `0cd081fc` created the package-shape refactor.
+- `cargo publish -p nervusdb --dry-run --registry crates-io` passed after
+  commit. The local `[patch.crates-io]` warnings are expected because the
+  publish package no longer depends on the wrapper crates.
 
 ## Completion Evidence
 
