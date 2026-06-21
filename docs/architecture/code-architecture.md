@@ -1,5 +1,10 @@
 # Code Architecture
 
+> Historical snapshot: this document describes the pre-ADR-0005 code structure.
+> It is not the current storage architecture. Current architecture is
+> `docs/architecture/overview.md`, `docs/architecture/storage-model.md`, and
+> `docs/plans/active/010-fjall-storage-refactor.md`.
+
 NervusDB is a Rust-first embedded graph database organized into five crates.
 This document covers the internal structure, key data flows, and design rules
 for every core module.

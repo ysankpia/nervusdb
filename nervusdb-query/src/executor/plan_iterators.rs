@@ -1,6 +1,4 @@
-use super::{
-    GraphSnapshot, InternalNodeId, LabelId, Plan, PlanIterator, Result, Row, Value, execute_plan,
-};
+use super::{GraphSnapshot, InternalNodeId, Plan, PlanIterator, Result, Row, Value, execute_plan};
 use crate::ast::Expression;
 use std::collections::HashSet;
 
@@ -8,7 +6,6 @@ pub struct NodeScanIter<'a, S: GraphSnapshot> {
     pub(super) snapshot: &'a S,
     pub(super) node_iter: Box<dyn Iterator<Item = InternalNodeId> + 'a>,
     pub(super) alias: &'a str,
-    pub(super) label_id: Option<LabelId>,
 }
 
 impl<'a, S: GraphSnapshot> Iterator for NodeScanIter<'a, S> {
@@ -18,16 +15,6 @@ impl<'a, S: GraphSnapshot> Iterator for NodeScanIter<'a, S> {
         for iid in self.node_iter.by_ref() {
             if self.snapshot.is_tombstoned_node(iid) {
                 continue;
-            }
-            if let Some(lid) = self.label_id {
-                let matches_label = self
-                    .snapshot
-                    .resolve_node_labels(iid)
-                    .map(|labels| labels.contains(&lid))
-                    .unwrap_or_else(|| self.snapshot.node_label(iid) == Some(lid));
-                if !matches_label {
-                    continue;
-                }
             }
             return Some(Ok(Row::default().with(self.alias, Value::NodeId(iid))));
         }

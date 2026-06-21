@@ -2,26 +2,31 @@
 
 ## Current Phase
 
-Refactoring toward SQLite-for-graphs 0.1 — cutting the repository back from
-platform-era breadth to a finishable embedded Rust graph database.
+Fjall storage refactor landed in the current working tree; 0.1 is now in
+validation and cleanup mode.
+
+The previous slimming work made the repository smaller. The Fjall refactor
+removed the self-built Pager/WAL/B+Tree/CSR direction and replaced it with
+Fjall-backed logical graph keyspaces.
 
 ## Now
 
-- Storage core baseline: local files, WAL recovery, persistence invariants.
-- Query core baseline: Mini-Cypher acceptance, deterministic results.
-- API surface classification: core vs experimental vs maintenance.
-- CLI/examples/validation: runnable examples, smoke, crash recovery, benchmark.
+- Review and commit the Fjall refactor.
+- Clean query warning/MSRV clippy debt separately.
+- Decide whether `Db::compact/checkpoint/close` remain explicit maintenance
+  wrappers or are simplified after 0.1.
+- Run release-scale manual smoke when the API surface is otherwise stable.
 
 ## Next
 
-- Comprehensive crash recovery and reopen test suite.
-- Mini-Cypher edge-case hardening (limit 0, empty label, error paths).
-- Facade API documentation pass (rustdoc + reference).
-- Large manual acceptance smoke (1M nodes / 5M edges).
+- Large manual acceptance smoke after Fjall storage stabilizes.
+- Benchmark baseline for the core path.
+- Property-index ADR if equality/range indexes become worth promoting.
+- Release-readiness pass over docs, examples, and crates.io metadata.
 
 ## Later
 
-- Cargo feature isolation for experimental and frozen code.
+- Property index ADR if equality/range indexes become core.
 - Benchmark regression detection for the core path.
 - Release mechanics and publish documentation.
 - Community contribution guide.
@@ -30,14 +35,18 @@ platform-era breadth to a finishable embedded Rust graph database.
 
 | Milestone | Target | Evidence |
 |---|---|---|
-| Storage boring | Q2 2026 | Format epoch fail-fast, reopen tests, crash recovery script passes |
-| Query boring | Q2 2026 | All Mini-Cypher forms in core test, advanced tests isolated |
-| API obvious | Q2 2026 | Core Rust path documented, experimental APIs classified |
-| 0.1 credible | Q2 2026 | Ten examples runnable, recovery proven, large smoke passes |
+| Contract reset | Q2 2026 | ADR 0005, active plan 010, docs updated |
+| Boundary clean | Q2 2026 | Query has no storage dependency |
+| Storage boring | Q2 2026 | Fjall reopen tests, crash recovery script passes |
+| Query boring | Q2 2026 | Core tests match Mini-Cypher reference |
+| API obvious | Q2 2026 | Directory path API documented and tested |
+| 0.1 credible | Q2 2026 | Examples runnable, recovery proven, 10k/50k smoke passes |
 | 0.1 release | Q2 2026 | Published to crates.io, docs complete, validation repeatable |
 
 ## Open Questions
 
-- Whether to feature-gate experimental code before 0.1 or keep soft isolation.
-- Whether `nervusdb-node`, `nervusdb-pyo3`, and `nervusdb-capi` should stay workspace members or move out.
-- Whether backup/vacuum/bulkload become 0.1 core or stay maintenance-only.
+- Whether `Db::compact/checkpoint/close` remain compatibility methods or become
+  no-op/maintenance wrappers under Fjall.
+- Whether property equality indexes deserve a post-0.1 `prop_index` ADR.
+- Whether old bd PB tasks should be closed as superseded once ADR 0005 is fully
+  implemented.

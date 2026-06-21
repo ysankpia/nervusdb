@@ -1,929 +1,648 @@
-mod write_txn;
-pub use write_txn::WriteTxn;
-
-use crate::csr::{CsrSegment, EdgeRecord, SegmentId};
-use crate::idmap::{ExternalId, I2eRecord, IdMap, InternalNodeId, LabelId};
-use crate::index::btree::BTree;
-use crate::index::catalog::{IndexCatalog, IndexDef};
-use crate::index::ordered_key::encode_ordered_value;
-use crate::label_interner::{LabelInterner, LabelSnapshot};
-use crate::memtable::MemTable;
-use crate::pager::{PageId, Pager};
-use crate::published_state::PublishedState;
-use crate::read_path_engine_idmap::{lookup_internal_node_id, read_i2e_arc, read_i2l_arc};
-use crate::read_path_engine_view::{
-    build_snapshot_from_published, load_properties_and_stats_roots,
+use crate::snapshot::{Snapshot, id_key, name_key};
+use crate::{Error, Result, STORAGE_FORMAT_EPOCH};
+use fjall::{Database, Keyspace, KeyspaceCreateOptions, PersistMode};
+use nervusdb_api::{
+    EdgeKey, ExternalId, GraphSnapshot, GraphStore, InternalNodeId, LabelId, PropertyValue,
+    RelTypeId,
 };
-use crate::read_path_nodes::collect_tombstoned_nodes;
-use crate::snapshot::{L0Run, PublishedRuns, PublishedSegments, Snapshot};
-use crate::wal::{CommittedTx, SegmentPointer, Wal, WalRecord};
-use crate::{Error, Result};
-use arc_swap::ArcSwap;
-use std::collections::BTreeMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Mutex, MutexGuard};
 
-#[derive(Debug)]
+pub(crate) const KEY_FLAG_TOMBSTONE: u8 = 0b0000_0001;
+
+const META_FORMAT_EPOCH: &[u8] = b"format_epoch";
+const META_NEXT_NODE_ID: &[u8] = b"next_node_id";
+const META_NEXT_LABEL_ID: &[u8] = b"next_label_id";
+const META_NEXT_REL_TYPE_ID: &[u8] = b"next_rel_type_id";
+
+#[derive(Clone)]
+pub(crate) struct Keyspaces {
+    pub(crate) meta: Keyspace,
+    pub(crate) nodes: Keyspace,
+    pub(crate) ext2node: Keyspace,
+    pub(crate) labels: Keyspace,
+    pub(crate) reltypes: Keyspace,
+    pub(crate) node_labels: Keyspace,
+    pub(crate) label_nodes: Keyspace,
+    pub(crate) adj_out: Keyspace,
+    pub(crate) adj_in: Keyspace,
+    pub(crate) node_props: Keyspace,
+    pub(crate) edge_props: Keyspace,
+}
+
+impl std::fmt::Debug for Keyspaces {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Keyspaces").finish_non_exhaustive()
+    }
+}
+
 pub struct GraphEngine {
-    ndb_path: PathBuf,
-    wal_path: PathBuf,
-
-    pub(super) pager: Arc<RwLock<Pager>>,
-    pub(super) wal: Mutex<Wal>,
-    pub(super) idmap: Mutex<IdMap>,
-    label_interner: Mutex<LabelInterner>,
-    index_catalog: Arc<Mutex<IndexCatalog>>,
-
-    pub(super) published_state: ArcSwap<PublishedState>,
+    path: PathBuf,
+    db: Database,
+    keyspaces: Keyspaces,
     write_lock: Mutex<()>,
-    pub(super) next_txid: AtomicU64,
-    next_segment_id: AtomicU64,
-    manifest_epoch: AtomicU64,
-    checkpoint_txid: AtomicU64,
-    properties_root: AtomicU64,
-    stats_root: AtomicU64,
+}
+
+impl std::fmt::Debug for GraphEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GraphEngine")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
 }
 
 impl GraphEngine {
-    pub(super) fn with_catalog_pager<T>(
-        &self,
-        f: impl FnOnce(&mut IndexCatalog, &mut Pager) -> Result<T>,
-    ) -> Result<T> {
-        let mut catalog = self.index_catalog.lock().unwrap();
-        let mut pager = self.pager.write().unwrap();
-        f(&mut catalog, &mut pager)
-    }
-
-    pub(super) fn publish_index_entries_snapshot(&self, catalog: &IndexCatalog) {
-        let current = self.published_state.load_full();
-        let mut next = (*current).clone();
-        next.index_entries = Arc::new(catalog.entries.clone());
-        self.published_state.store(Arc::new(next));
-    }
-
-    pub fn open(ndb_path: impl AsRef<Path>, wal_path: impl AsRef<Path>) -> Result<Self> {
-        let ndb_path = ndb_path.as_ref().to_path_buf();
-        let wal_path = wal_path.as_ref().to_path_buf();
-
-        let mut pager = Pager::open(&ndb_path)?;
-        let wal = Wal::open(&wal_path)?;
-
-        let mut idmap = IdMap::load(&mut pager)?;
-        let index_catalog = IndexCatalog::open_or_create(&mut pager)?;
-
-        let committed = wal.replay_committed()?;
-        let state = scan_recovery_state(&committed);
-
-        let mut segments = PublishedSegments::new();
-        let mut max_seg_id = 0u64;
-        for ptr in &state.manifest_segments {
-            let seg = Arc::new(CsrSegment::load(&mut pager, ptr.meta_page_id)?);
-            if seg.id.0 != ptr.id {
-                return Err(Error::WalProtocol("csr segment id mismatch"));
-            }
-            max_seg_id = max_seg_id.max(seg.id.0);
-            segments.push_back(seg);
-        }
-
-        // Build label interner from recovered state (first, before graph transactions)
-        let mut label_interner = LabelInterner::new();
-        replay_label_transactions(&committed, &mut label_interner)?;
-
-        let mut runs = Vec::new();
-        replay_graph_transactions(
-            &mut pager,
-            &mut idmap,
-            committed.clone(),
-            state.checkpoint_txid,
-            &mut runs,
-        )?;
-
-        runs.reverse(); // newest first for read path
-
-        let label_snapshot = label_interner.snapshot();
-        let node_labels_snapshot = idmap.get_i2l_arc();
-        let i2e_snapshot = idmap.get_i2e_arc();
-        let index_entries_snapshot = index_catalog.entries.clone();
-        let tombstoned_nodes_snapshot =
-            collect_tombstoned_nodes(&Arc::new(PublishedRuns::from(runs.clone())));
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        std::fs::create_dir_all(&path)?;
+        let db = Database::builder(&path).open()?;
+        let keyspaces = open_keyspaces(&db)?;
+        ensure_meta(&db, &keyspaces)?;
 
         Ok(Self {
-            ndb_path,
-            wal_path,
-            pager: Arc::new(RwLock::new(pager)),
-            wal: Mutex::new(wal),
-            idmap: Mutex::new(idmap),
-            label_interner: Mutex::new(label_interner),
-            index_catalog: Arc::new(Mutex::new(index_catalog)),
-            published_state: ArcSwap::from(Arc::new(PublishedState::new(
-                Arc::new(PublishedRuns::from(runs)),
-                Arc::new(segments),
-                Arc::new(label_snapshot),
-                node_labels_snapshot,
-                i2e_snapshot,
-                Arc::new(index_entries_snapshot),
-                tombstoned_nodes_snapshot.into(),
-            ))),
+            path,
+            db,
+            keyspaces,
             write_lock: Mutex::new(()),
-            next_txid: AtomicU64::new(state.max_txid.saturating_add(1).max(1)),
-            next_segment_id: AtomicU64::new(max_seg_id.saturating_add(1).max(1)),
-            manifest_epoch: AtomicU64::new(state.manifest_epoch),
-            checkpoint_txid: AtomicU64::new(state.checkpoint_txid),
-            properties_root: AtomicU64::new(state.properties_root),
-            stats_root: AtomicU64::new(state.stats_root),
         })
     }
 
     #[inline]
-    pub fn ndb_path(&self) -> &Path {
-        &self.ndb_path
+    pub fn storage_dir(&self) -> &Path {
+        &self.path
     }
 
-    #[inline]
-    pub fn wal_path(&self) -> &Path {
-        &self.wal_path
-    }
-
-    pub(crate) fn get_pager(&self) -> Arc<RwLock<Pager>> {
-        self.pager.clone()
-    }
-
-    pub(crate) fn get_published_index_entries(&self) -> Arc<BTreeMap<String, IndexDef>> {
-        self.published_state.load_full().index_entries.clone()
-    }
-
-    pub(crate) fn get_published_tombstoned_nodes(
-        &self,
-    ) -> Arc<std::collections::HashSet<InternalNodeId>> {
-        self.published_state.load_full().tombstoned_nodes.clone()
-    }
-
-    pub(crate) fn get_published_i2e(&self) -> Arc<Vec<I2eRecord>> {
-        self.published_state.load_full().i2e.clone()
-    }
-
-    /// Creates a B-Tree index for the given label and property.
-    ///
-    /// If the index already exists, this is a no-op.
-    /// Existing data with the matching label and property is backfilled
-    /// into the index automatically.
-    pub fn create_index(&self, label: &str, field: &str) -> Result<()> {
-        let name = format!("{}.{}", label, field);
-
-        let label_id = {
-            let state = self.published_state.load_full();
-            state.labels.get_id(label)
-        };
-
-        let lid = match label_id {
-            Some(id) => id,
-            None => return Ok(()),
-        };
-
-        let already_exists = {
-            let state = self.published_state.load_full();
-            state.index_entries.contains_key(&name)
-        };
-
-        if already_exists {
-            return Ok(());
-        }
-
-        self.with_catalog_pager(|catalog, pager| {
-            catalog.get_or_create(pager, &name)?;
-            catalog.flush(pager)?;
-            self.publish_index_entries_snapshot(catalog);
-            Ok(())
-        })?;
-
-        let to_insert: Vec<(u32, crate::property::PropertyValue)> = {
-            let snapshot = self.begin_read();
-            let all_labels = snapshot.all_node_labels();
-            let mut pairs = Vec::new();
-            for (iid_usize, labels) in all_labels.iter().enumerate() {
-                if labels.contains(&lid) {
-                    let iid = iid_usize as u32;
-                    if let Some(value) = snapshot.node_property(iid, field) {
-                        pairs.push((iid, value));
-                    }
-                }
-            }
-            pairs
-        };
-
-        if !to_insert.is_empty() {
-            self.with_catalog_pager(|catalog, pager| {
-                if let Some(re) = catalog.entries.get_mut(&name) {
-                    let mut tree = BTree::load(re.root);
-                    for (iid, value) in &to_insert {
-                        let mut key = Vec::with_capacity(4 + 64);
-                        key.extend_from_slice(&re.id.to_be_bytes());
-                        key.extend_from_slice(&encode_ordered_value(value));
-                        let _ = tree.insert(pager, &key, *iid as u64);
-                    }
-                    re.root = tree.root();
-                }
-                Ok(())
-            })?;
-        }
-
-        Ok(())
+    pub fn snapshot(&self) -> Snapshot {
+        self.begin_read()
     }
 
     pub fn begin_read(&self) -> Snapshot {
-        let state = self.published_state.load_full();
-        let (properties_root, stats_root) =
-            load_properties_and_stats_roots(&self.properties_root, &self.stats_root);
-        build_snapshot_from_published(
-            state.runs.clone(),
-            state.segments.clone(),
-            state.labels.clone(),
-            state.node_labels.clone(),
-            properties_root,
-            stats_root,
-        )
+        Snapshot::new(self.db.snapshot(), self.keyspaces.clone())
     }
 
     pub fn begin_write(&self) -> WriteTxn<'_> {
         let guard = self.write_lock.lock().unwrap();
-        let txid = self.next_txid.fetch_add(1, Ordering::Relaxed);
         WriteTxn {
             engine: self,
             _guard: guard,
-            txid,
             created_nodes: Vec::new(),
-            pending_label_additions: Vec::new(),
-            pending_label_removals: Vec::new(),
-            created_external_ids: std::collections::HashSet::new(),
-            memtable: MemTable::default(),
+            staged_external_ids: HashSet::new(),
+            label_additions: Vec::new(),
+            label_removals: Vec::new(),
+            created_edges: BTreeSet::new(),
+            tombstoned_nodes: BTreeSet::new(),
+            tombstoned_edges: BTreeSet::new(),
+            node_props: HashMap::new(),
+            edge_props: HashMap::new(),
+            removed_node_props: Vec::new(),
+            removed_edge_props: Vec::new(),
         }
     }
 
     pub fn lookup_internal_id(&self, external_id: ExternalId) -> Option<InternalNodeId> {
-        lookup_internal_node_id(&self.idmap, external_id)
+        let iid = self
+            .keyspaces
+            .ext2node
+            .get(key_u64(external_id))
+            .ok()
+            .flatten()
+            .and_then(|v| decode_u32(v.as_ref()))?;
+        if self.begin_read().is_tombstoned_node(iid) {
+            None
+        } else {
+            Some(iid)
+        }
     }
 
-    /// Get or create a label, returns the label ID.
-    ///
-    /// This is a write operation and must be called within a write transaction.
     pub fn get_or_create_label(&self, name: &str) -> Result<LabelId> {
-        if let Some(id) = self.published_state.load_full().labels.get_id(name) {
-            return Ok(id);
-        }
-
-        let mut interner = self.label_interner.lock().unwrap();
-        if let Some(id) = interner.get_id(name) {
-            return Ok(id);
-        }
-
-        let returned_id = interner.get_or_create(name);
-
-        {
-            let txid = self.next_txid.fetch_add(1, Ordering::Relaxed);
-            let mut wal = self.wal.lock().unwrap();
-            wal.append(&WalRecord::BeginTx { txid })?;
-            wal.append(&WalRecord::CreateLabel {
-                name: name.to_string(),
-                label_id: returned_id,
-            })?;
-            wal.append(&WalRecord::CommitTx { txid })?;
-            wal.fsync()?;
-        }
-
-        let snapshot = interner.snapshot();
-        let current = self.published_state.load_full();
-        let mut next = (*current).clone();
-        next.labels = Arc::new(snapshot);
-        self.published_state.store(Arc::new(next));
-
-        Ok(returned_id)
+        let _guard = self.write_lock.lock().unwrap();
+        self.get_or_create_name(&self.keyspaces.labels, META_NEXT_LABEL_ID, name)
     }
 
-    /// Update published node labels from IdMap.
-    /// Should be called after write transactions that create nodes.
-    pub(super) fn update_published_idmap_snapshots(&self) {
-        let labels = read_i2l_arc(&self.idmap);
-        let i2e = read_i2e_arc(&self.idmap);
-        let current = self.published_state.load_full();
-        let mut next = (*current).clone();
-        next.node_labels = labels;
-        next.i2e = i2e;
-        self.published_state.store(Arc::new(next));
+    pub fn get_or_create_rel_type(&self, name: &str) -> Result<RelTypeId> {
+        let _guard = self.write_lock.lock().unwrap();
+        self.get_or_create_name(&self.keyspaces.reltypes, META_NEXT_REL_TYPE_ID, name)
     }
 
-    /// Get a snapshot of the current label state for reading.
-    pub fn label_snapshot(&self) -> Arc<LabelSnapshot> {
-        self.published_state.load_full().labels.clone()
-    }
-
-    /// Get label ID by name, returns None if not found.
     pub fn get_label_id(&self, name: &str) -> Option<LabelId> {
-        self.published_state.load_full().labels.get_id(name)
+        self.get_name_id(&self.keyspaces.labels, name)
     }
 
-    /// Get label name by ID, returns None if not found.
+    pub fn get_rel_type_id(&self, name: &str) -> Option<RelTypeId> {
+        self.get_name_id(&self.keyspaces.reltypes, name)
+    }
+
     pub fn get_label_name(&self, id: LabelId) -> Option<String> {
-        self.published_state
-            .load_full()
-            .labels
-            .get_name(id)
-            .map(ToOwned::to_owned)
+        self.get_id_name(&self.keyspaces.labels, id)
     }
 
-    /// Compatibility helper for callers that explicitly need an owned snapshot copy.
-    /// Hot read paths should prefer the published Arc snapshot instead.
-    pub fn scan_i2e_records(&self) -> Vec<I2eRecord> {
-        self.published_state.load_full().i2e.as_ref().clone()
+    pub fn get_rel_type_name(&self, id: RelTypeId) -> Option<String> {
+        self.get_id_name(&self.keyspaces.reltypes, id)
     }
 
-    pub(super) fn publish_run(&self, run: Arc<L0Run>) {
-        let current = self.published_state.load_full();
-        let mut next = (*current).clone();
-        next.tombstoned_nodes = {
-            let mut nodes = (*next.tombstoned_nodes).clone();
-            nodes.extend(run.iter_tombstoned_nodes());
-            Arc::new(nodes)
-        };
-        let mut next_runs = (*next.runs).clone();
-        next_runs.push_front(run);
-        next.runs = Arc::new(next_runs);
-        self.published_state.store(Arc::new(next));
+    pub fn create_index(&self, _label: &str, _field: &str) -> Result<()> {
+        Ok(())
     }
 
-    /// M2/T45: Explicit compaction.
-    ///
-    /// Invariants:
-    /// - Writes CSR segment pages to `.ndb` and fsyncs before publishing the manifest in WAL.
-    /// - Writes `ManifestSwitch` + `Checkpoint` as a committed WAL tx to make the switch atomic.
     pub fn compact(&self) -> Result<()> {
-        let _guard = self.write_lock.lock().unwrap();
-
-        let state = self.published_state.load_full();
-        let runs = state.runs.clone();
-
-        if runs.is_empty() {
-            return Ok(());
-        }
-
-        let has_properties = runs.iter().any(|r| r.has_properties());
-
-        let seg_id = SegmentId(self.next_segment_id.fetch_add(1, Ordering::Relaxed));
-        let mut seg = build_segment_from_runs(seg_id, &runs);
-
-        {
-            let mut pager = self.pager.write().unwrap();
-            seg.persist(&mut pager)?;
-            pager.sync()?;
-        }
-
-        let up_to_txid = runs.iter().map(|r| r.txid()).max().unwrap_or(0);
-        let epoch = self.manifest_epoch.load(Ordering::Relaxed) + 1;
-
-        let new_segments = {
-            let mut next = (*state.segments).clone();
-            next.push_front(Arc::new(seg));
-            Arc::new(next)
-        };
-
-        // Property Sinking: Persist properties from L0Runs into the B-Tree Property Store.
-        let mut sink_node_props = BTreeMap::new();
-        let mut sink_edge_props = BTreeMap::new();
-        for run in runs.iter() {
-            for (node, props) in &run.node_properties {
-                for (key, val) in props {
-                    sink_node_props
-                        .entry((*node, key.clone()))
-                        .or_insert(val.clone());
-                }
-            }
-            for (edge, props) in &run.edge_properties {
-                for (key, val) in props {
-                    sink_edge_props
-                        .entry((*edge, key.clone()))
-                        .or_insert(val.clone());
-                }
-            }
-        }
-
-        let mut current_root = self.properties_root.load(Ordering::SeqCst);
-        if !sink_node_props.is_empty() || !sink_edge_props.is_empty() {
-            let mut pager = self.pager.write().unwrap();
-            let mut tree = if current_root == 0 {
-                BTree::create(&mut pager)?
-            } else {
-                BTree::load(PageId::new(current_root))
-            };
-
-            // Sink Node Properties (Tag 0)
-            for ((node, key), value) in sink_node_props {
-                let mut btree_key = Vec::with_capacity(1 + 4 + 4 + key.len());
-                btree_key.push(0u8); // Tag 0: Node Property
-                btree_key.extend_from_slice(&node.to_be_bytes());
-                btree_key.extend_from_slice(&(key.len() as u32).to_be_bytes());
-                btree_key.extend_from_slice(key.as_bytes());
-
-                let encoded_val = value.encode();
-                let blob_id = crate::blob_store::BlobStore::write(&mut pager, &encoded_val)?;
-                tree.insert(&mut pager, &btree_key, blob_id)?;
-            }
-
-            // Sink Edge Properties (Tag 1)
-            for ((edge, key), value) in sink_edge_props {
-                let mut btree_key = Vec::with_capacity(1 + 4 + 4 + 4 + 4 + key.len());
-                btree_key.push(1u8); // Tag 1: Edge Property
-                btree_key.extend_from_slice(&edge.src.to_be_bytes());
-                btree_key.extend_from_slice(&edge.rel.to_be_bytes());
-                btree_key.extend_from_slice(&edge.dst.to_be_bytes());
-                btree_key.extend_from_slice(&(key.len() as u32).to_be_bytes());
-                btree_key.extend_from_slice(key.as_bytes());
-
-                let encoded_val = value.encode();
-                let blob_id = crate::blob_store::BlobStore::write(&mut pager, &encoded_val)?;
-                tree.insert(&mut pager, &btree_key, blob_id)?;
-            }
-
-            current_root = tree.root().as_u64();
-        }
-
-        // Statistics Collection - read from published label snapshots to avoid cloning IdMap state.
-        let mut stats = crate::stats::GraphStatistics::default();
-        {
-            let node_labels = state.node_labels.clone();
-
-            // Count nodes per label (node_labels[iid] = vec of label_ids for that node)
-            stats.total_nodes = node_labels.len() as u64;
-            for labels in node_labels.iter() {
-                for &label_id in labels.iter() {
-                    *stats.node_counts_by_label.entry(label_id).or_default() += 1;
-                }
-            }
-        }
-
-        for seg in new_segments.iter() {
-            stats.total_edges += seg.edges.len() as u64;
-            for edge in &seg.edges {
-                *stats.edge_counts_by_type.entry(edge.rel).or_default() += 1;
-            }
-        }
-
-        let stats_root;
-        {
-            let mut pager = self.pager.write().unwrap();
-            let encoded_stats = stats.encode();
-            stats_root = crate::blob_store::BlobStore::write(&mut pager, &encoded_stats)?;
-        }
-
-        let pointers: Vec<SegmentPointer> = new_segments
-            .iter()
-            .map(|s| SegmentPointer {
-                id: s.id.0,
-                meta_page_id: s.meta_page_id,
-            })
-            .collect();
-
-        let system_txid = self.next_txid.fetch_add(1, Ordering::Relaxed);
-        {
-            let mut wal = self.wal.lock().unwrap();
-            wal.append(&WalRecord::BeginTx { txid: system_txid })?;
-            wal.append(&WalRecord::ManifestSwitch {
-                epoch,
-                segments: pointers,
-                properties_root: current_root,
-                stats_root,
-            })?;
-            // After sinking properties, we can safely checkpoint up_to_txid
-            wal.append(&WalRecord::Checkpoint {
-                up_to_txid,
-                epoch,
-                properties_root: current_root,
-                stats_root,
-            })?;
-            wal.append(&WalRecord::CommitTx { txid: system_txid })?;
-            wal.fsync()?;
-        }
-
-        // 4. Update memory state
-        self.checkpoint_txid.store(up_to_txid, Ordering::SeqCst);
-        self.properties_root.store(current_root, Ordering::SeqCst);
-        self.stats_root.store(stats_root, Ordering::SeqCst);
-        {
-            let current = self.published_state.load_full();
-            let mut next = (*current).clone();
-            next.runs = Arc::new(PublishedRuns::new());
-            next.segments = new_segments;
-            next.tombstoned_nodes = Arc::new(std::collections::HashSet::new());
-            self.published_state.store(Arc::new(next));
-        }
-
-        self.manifest_epoch.store(epoch, Ordering::Relaxed);
-        if !has_properties {
-            self.checkpoint_txid.store(up_to_txid, Ordering::Relaxed);
-        }
+        self.db.persist(PersistMode::SyncAll)?;
         Ok(())
     }
 
-    /// T106: Checkpoint-on-Close (WAL compaction).
-    ///
-    /// Safety rule:
-    /// - Only allowed when there are no published L0 runs (otherwise we'd lose data that only exists in WAL).
-    ///
-    /// The resulting WAL contains a single committed tx that replays:
-    /// - label mappings (`CreateLabel`) and
-    /// - the current manifest (`ManifestSwitch`) plus
-    /// - a `Checkpoint` that allows recovery to skip older graph tx.
     pub fn checkpoint_on_close(&self) -> Result<()> {
-        let _guard = self.write_lock.lock().unwrap();
+        self.compact()
+    }
 
-        let state = self.published_state.load_full();
-        let runs = state.runs.clone();
-        if !runs.is_empty() {
-            // Cannot compact WAL safely while L0 runs (esp. properties) are WAL-only.
-            // Best-effort durability: flush NDB + WAL.
-            {
-                let mut pager = self.pager.write().unwrap();
-                pager.sync()?;
-            }
-            {
-                let mut wal = self.wal.lock().unwrap();
-                wal.fsync()?;
-            }
-            return Ok(());
+    fn get_name_id(&self, keyspace: &Keyspace, name: &str) -> Option<u32> {
+        keyspace
+            .get(name_key(name))
+            .ok()
+            .flatten()
+            .and_then(|v| decode_u32(v.as_ref()))
+    }
+
+    fn get_id_name(&self, keyspace: &Keyspace, id: u32) -> Option<String> {
+        keyspace
+            .get(id_key(id))
+            .ok()
+            .flatten()
+            .and_then(|v| String::from_utf8(v.as_ref().to_vec()).ok())
+    }
+
+    fn get_or_create_name(
+        &self,
+        keyspace: &Keyspace,
+        counter_key: &[u8],
+        name: &str,
+    ) -> Result<u32> {
+        if let Some(id) = self.get_name_id(keyspace, name) {
+            return Ok(id);
         }
 
-        // Ensure idmap/pages are durable before allowing recovery to skip old WAL.
+        let id = self.next_counter(counter_key)?;
+        let mut batch = self.db.batch().durability(Some(PersistMode::SyncAll));
+        batch.insert(keyspace, name_key(name), id.to_be_bytes());
+        batch.insert(keyspace, id_key(id), name.as_bytes());
+        batch.commit()?;
+        Ok(id)
+    }
+
+    fn next_counter(&self, key: &[u8]) -> Result<u32> {
+        let current = read_meta_u64(&self.keyspaces.meta, key)?.unwrap_or(0);
+        if current > u32::MAX as u64 {
+            return Err(Error::StorageCorrupted(format!(
+                "counter {} exceeds u32",
+                String::from_utf8_lossy(key)
+            )));
+        }
+        let next = current + 1;
+        let mut batch = self.db.batch().durability(Some(PersistMode::SyncAll));
+        batch.insert(&self.keyspaces.meta, key, next.to_be_bytes());
+        batch.commit()?;
+        Ok(current as u32)
+    }
+}
+
+impl GraphStore for GraphEngine {
+    type Snapshot = Snapshot;
+
+    fn snapshot(&self) -> Self::Snapshot {
+        GraphEngine::snapshot(self)
+    }
+}
+
+#[derive(Debug)]
+struct CreatedNode {
+    iid: InternalNodeId,
+    external_id: ExternalId,
+    labels: BTreeSet<LabelId>,
+}
+
+#[derive(Debug)]
+pub struct WriteTxn<'a> {
+    engine: &'a GraphEngine,
+    _guard: MutexGuard<'a, ()>,
+    created_nodes: Vec<CreatedNode>,
+    staged_external_ids: HashSet<ExternalId>,
+    label_additions: Vec<(InternalNodeId, LabelId)>,
+    label_removals: Vec<(InternalNodeId, LabelId)>,
+    created_edges: BTreeSet<EdgeKey>,
+    tombstoned_nodes: BTreeSet<InternalNodeId>,
+    tombstoned_edges: BTreeSet<EdgeKey>,
+    node_props: HashMap<(InternalNodeId, String), PropertyValue>,
+    edge_props: HashMap<(EdgeKey, String), PropertyValue>,
+    removed_node_props: Vec<(InternalNodeId, String)>,
+    removed_edge_props: Vec<(EdgeKey, String)>,
+}
+
+impl<'a> WriteTxn<'a> {
+    pub fn create_node(
+        &mut self,
+        external_id: ExternalId,
+        label_id: LabelId,
+    ) -> Result<InternalNodeId> {
+        if external_id == 0 {
+            return Err(Error::StorageCorrupted(
+                "external id 0 is reserved".to_string(),
+            ));
+        }
+        if self.staged_external_ids.contains(&external_id)
+            || self.engine.lookup_internal_id(external_id).is_some()
         {
-            let mut pager = self.pager.write().unwrap();
-            pager.sync()?;
+            return Err(Error::DuplicateExternalId(external_id));
         }
 
-        let state = self.published_state.load_full();
+        let iid = self.engine.next_counter(META_NEXT_NODE_ID)?;
+        self.staged_external_ids.insert(external_id);
+        self.created_nodes.push(CreatedNode {
+            iid,
+            external_id,
+            labels: BTreeSet::from([label_id]),
+        });
+        Ok(iid)
+    }
 
-        let pointers: Vec<SegmentPointer> = state
-            .segments
+    pub fn add_node_label(&mut self, node: InternalNodeId, label_id: LabelId) -> Result<()> {
+        if let Some(created) = self.created_nodes.iter_mut().find(|n| n.iid == node) {
+            created.labels.insert(label_id);
+        } else {
+            self.label_additions.push((node, label_id));
+        }
+        Ok(())
+    }
+
+    pub fn remove_node_label(&mut self, node: InternalNodeId, label_id: LabelId) -> Result<()> {
+        if let Some(created) = self.created_nodes.iter_mut().find(|n| n.iid == node) {
+            created.labels.remove(&label_id);
+        } else {
+            self.label_removals.push((node, label_id));
+        }
+        Ok(())
+    }
+
+    pub fn create_edge(&mut self, src: InternalNodeId, rel: RelTypeId, dst: InternalNodeId) {
+        self.created_edges.insert(EdgeKey { src, rel, dst });
+    }
+
+    pub fn tombstone_node(&mut self, node: InternalNodeId) {
+        self.tombstoned_nodes.insert(node);
+    }
+
+    pub fn tombstone_edge(&mut self, src: InternalNodeId, rel: RelTypeId, dst: InternalNodeId) {
+        self.tombstoned_edges.insert(EdgeKey { src, rel, dst });
+    }
+
+    pub fn set_node_property(&mut self, node: InternalNodeId, key: String, value: PropertyValue) {
+        self.node_props.insert((node, key), value);
+    }
+
+    pub fn set_edge_property(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+        key: String,
+        value: PropertyValue,
+    ) {
+        self.edge_props
+            .insert((EdgeKey { src, rel, dst }, key), value);
+    }
+
+    pub fn remove_node_property(&mut self, node: InternalNodeId, key: &str) {
+        self.removed_node_props.push((node, key.to_string()));
+    }
+
+    pub fn remove_edge_property(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+        key: &str,
+    ) {
+        self.removed_edge_props
+            .push((EdgeKey { src, rel, dst }, key.to_string()));
+    }
+
+    pub fn get_or_create_label(&mut self, name: &str) -> Result<LabelId> {
+        self.engine
+            .get_or_create_name(&self.engine.keyspaces.labels, META_NEXT_LABEL_ID, name)
+    }
+
+    pub fn get_or_create_rel_type(&mut self, name: &str) -> Result<RelTypeId> {
+        self.engine
+            .get_or_create_name(&self.engine.keyspaces.reltypes, META_NEXT_REL_TYPE_ID, name)
+    }
+
+    pub fn staged_created_nodes_with_labels(&self) -> Vec<(InternalNodeId, Vec<String>)> {
+        self.created_nodes
             .iter()
-            .map(|s| SegmentPointer {
-                id: s.id.0,
-                meta_page_id: s.meta_page_id,
+            .map(|node| {
+                let labels = node
+                    .labels
+                    .iter()
+                    .filter_map(|id| self.engine.get_label_name(*id))
+                    .collect();
+                (node.iid, labels)
             })
-            .collect();
+            .collect()
+    }
 
-        let up_to_txid = self.next_txid.load(Ordering::Relaxed).saturating_sub(1);
-        let epoch = self.manifest_epoch.load(Ordering::Relaxed);
-        let system_txid = self.next_txid.fetch_add(1, Ordering::Relaxed);
+    pub fn commit(self) -> Result<()> {
+        let mut batch = self
+            .engine
+            .db
+            .batch()
+            .durability(Some(PersistMode::SyncAll));
+        let snapshot = self.engine.begin_read();
 
-        let mut ops: Vec<WalRecord> = Vec::new();
-        for id in state.labels.iter_ids() {
-            if let Some(name) = state.labels.get_name(id) {
-                ops.push(WalRecord::CreateLabel {
-                    name: name.to_string(),
-                    label_id: id,
-                });
+        for node in &self.created_nodes {
+            batch.insert(
+                &self.engine.keyspaces.nodes,
+                key_u32(node.iid),
+                encode_node_value(node.external_id, 0),
+            );
+            batch.insert(
+                &self.engine.keyspaces.ext2node,
+                key_u64(node.external_id),
+                key_u32(node.iid),
+            );
+            for label in &node.labels {
+                batch.insert(
+                    &self.engine.keyspaces.node_labels,
+                    node_label_key(node.iid, *label),
+                    [],
+                );
+                batch.insert(
+                    &self.engine.keyspaces.label_nodes,
+                    label_node_key(*label, node.iid),
+                    [],
+                );
             }
         }
 
-        let (properties_root, stats_root) =
-            load_properties_and_stats_roots(&self.properties_root, &self.stats_root);
-        ops.push(WalRecord::ManifestSwitch {
-            epoch,
-            segments: pointers,
-            properties_root,
-            stats_root,
-        });
-        ops.push(WalRecord::Checkpoint {
-            up_to_txid,
-            epoch,
-            properties_root,
-            stats_root,
-        });
-
-        {
-            let mut wal = self.wal.lock().unwrap();
-            wal.rewrite_as_snapshot(system_txid, ops)?;
-            wal.fsync()?;
+        for (node, label) in &self.label_additions {
+            batch.insert(
+                &self.engine.keyspaces.node_labels,
+                node_label_key(*node, *label),
+                [],
+            );
+            batch.insert(
+                &self.engine.keyspaces.label_nodes,
+                label_node_key(*label, *node),
+                [],
+            );
         }
 
+        for (node, label) in &self.label_removals {
+            batch.remove(
+                &self.engine.keyspaces.node_labels,
+                node_label_key(*node, *label),
+            );
+            batch.remove(
+                &self.engine.keyspaces.label_nodes,
+                label_node_key(*label, *node),
+            );
+        }
+
+        for edge in &self.created_edges {
+            batch.insert(&self.engine.keyspaces.adj_out, adj_out_key(*edge), []);
+            batch.insert(&self.engine.keyspaces.adj_in, adj_in_key(*edge), []);
+        }
+
+        for edge in &self.tombstoned_edges {
+            batch.remove(&self.engine.keyspaces.adj_out, adj_out_key(*edge));
+            batch.remove(&self.engine.keyspaces.adj_in, adj_in_key(*edge));
+            for key in snapshot.collect_edge_property_keys(*edge) {
+                batch.remove(&self.engine.keyspaces.edge_props, key);
+            }
+        }
+
+        for node in &self.tombstoned_nodes {
+            if let Some(external_id) = snapshot.resolve_external(*node) {
+                batch.insert(
+                    &self.engine.keyspaces.nodes,
+                    key_u32(*node),
+                    encode_node_value(external_id, KEY_FLAG_TOMBSTONE),
+                );
+            }
+        }
+
+        for ((node, key), value) in &self.node_props {
+            batch.insert(
+                &self.engine.keyspaces.node_props,
+                node_prop_prefix(*node, key),
+                value.encode(),
+            );
+        }
+
+        for ((edge, key), value) in &self.edge_props {
+            let mut storage_key = edge_prefix(*edge);
+            storage_key.extend_from_slice(&(key.len() as u32).to_be_bytes());
+            storage_key.extend_from_slice(key.as_bytes());
+            batch.insert(
+                &self.engine.keyspaces.edge_props,
+                storage_key,
+                value.encode(),
+            );
+        }
+
+        for (node, key) in &self.removed_node_props {
+            batch.remove(
+                &self.engine.keyspaces.node_props,
+                node_prop_prefix(*node, key),
+            );
+        }
+
+        for (edge, key) in &self.removed_edge_props {
+            let mut storage_key = edge_prefix(*edge);
+            storage_key.extend_from_slice(&(key.len() as u32).to_be_bytes());
+            storage_key.extend_from_slice(key.as_bytes());
+            batch.remove(&self.engine.keyspaces.edge_props, storage_key);
+        }
+
+        batch.commit()?;
         Ok(())
     }
 }
 
-fn build_segment_from_runs(seg_id: SegmentId, runs: &Arc<PublishedRuns>) -> CsrSegment {
-    // Apply the same semantics as snapshot merge: newest->oldest, key-based tombstones.
-    use std::collections::{BTreeMap, HashSet};
-
-    let mut blocked_nodes: HashSet<InternalNodeId> = HashSet::new();
-    let mut blocked_edges: HashSet<crate::snapshot::EdgeKey> = HashSet::new();
-    let mut edges: Vec<crate::snapshot::EdgeKey> = Vec::new();
-
-    for run in runs.iter() {
-        blocked_nodes.extend(run.iter_tombstoned_nodes());
-        blocked_edges.extend(run.iter_tombstoned_edges());
-
-        for e in run.iter_edges() {
-            if blocked_nodes.contains(&e.src) || blocked_nodes.contains(&e.dst) {
-                continue;
-            }
-            if blocked_edges.contains(&e) {
-                continue;
-            }
-            edges.push(e);
-        }
-    }
-
-    edges.sort();
-
-    let (min_src, max_src) = edges.iter().fold((u32::MAX, 0u32), |(min_s, max_s), e| {
-        (min_s.min(e.src), max_s.max(e.src))
-    });
-
-    if edges.is_empty() {
-        return CsrSegment {
-            id: seg_id,
-            meta_page_id: 0,
-            min_src: 0,
-            max_src: 0,
-            min_dst: 0,
-            max_dst: 0,
-            offsets: vec![0, 0],
-            edges: Vec::new(),
-            in_offsets: Vec::new(),
-            in_edges: Vec::new(),
-        };
-    }
-
-    let range = (max_src - min_src) as usize + 2;
-    let mut offsets = vec![0u64; range];
-    let mut edges_by_src: BTreeMap<InternalNodeId, Vec<EdgeRecord>> = BTreeMap::new();
-    for e in edges {
-        edges_by_src.entry(e.src).or_default().push(EdgeRecord {
-            rel: e.rel,
-            dst: e.dst,
-        });
-    }
-
-    let mut edge_vec: Vec<EdgeRecord> = Vec::new();
-    let mut cursor = 0u64;
-    for src in min_src..=max_src {
-        let idx = (src - min_src) as usize;
-        offsets[idx] = cursor;
-        if let Some(mut list) = edges_by_src.remove(&src) {
-            list.sort_by_key(|r| (r.rel, r.dst));
-            cursor += list.len() as u64;
-            edge_vec.extend(list);
-        }
-    }
-    offsets[(max_src - min_src) as usize + 1] = cursor;
-
-    CsrSegment {
-        id: seg_id,
-        meta_page_id: 0,
-        min_src,
-        max_src,
-        min_dst: 0,
-        max_dst: 0,
-        offsets,
-        edges: edge_vec,
-        in_offsets: Vec::new(),
-        in_edges: Vec::new(),
-    }
+fn open_keyspaces(db: &Database) -> Result<Keyspaces> {
+    Ok(Keyspaces {
+        meta: db.keyspace("meta", KeyspaceCreateOptions::default)?,
+        nodes: db.keyspace("nodes", KeyspaceCreateOptions::default)?,
+        ext2node: db.keyspace("ext2node", KeyspaceCreateOptions::default)?,
+        labels: db.keyspace("labels", KeyspaceCreateOptions::default)?,
+        reltypes: db.keyspace("reltypes", KeyspaceCreateOptions::default)?,
+        node_labels: db.keyspace("node_labels", KeyspaceCreateOptions::default)?,
+        label_nodes: db.keyspace("label_nodes", KeyspaceCreateOptions::default)?,
+        adj_out: db.keyspace("adj_out", KeyspaceCreateOptions::default)?,
+        adj_in: db.keyspace("adj_in", KeyspaceCreateOptions::default)?,
+        node_props: db.keyspace("node_props", KeyspaceCreateOptions::default)?,
+        edge_props: db.keyspace("edge_props", KeyspaceCreateOptions::default)?,
+    })
 }
 
-fn replay_graph_transactions(
-    pager: &mut Pager,
-    idmap: &mut IdMap,
-    committed: Vec<CommittedTx>,
-    checkpoint_txid: u64,
-    out_runs: &mut Vec<Arc<L0Run>>,
-) -> Result<()> {
-    for tx in committed {
-        if tx.txid <= checkpoint_txid {
-            continue;
+fn ensure_meta(db: &Database, keyspaces: &Keyspaces) -> Result<()> {
+    if let Some(found) = read_meta_u64(&keyspaces.meta, META_FORMAT_EPOCH)? {
+        if found != STORAGE_FORMAT_EPOCH {
+            return Err(Error::StorageFormatMismatch {
+                expected: STORAGE_FORMAT_EPOCH,
+                found,
+            });
         }
-
-        let mut memtable = MemTable::default();
-
-        for op in tx.ops {
-            match op {
-                WalRecord::CreateNode {
-                    external_id,
-                    label_id,
-                    internal_id,
-                } => {
-                    if let Some(existing) = idmap.lookup(external_id) {
-                        if existing != internal_id {
-                            return Err(Error::WalProtocol("external id remapped"));
-                        }
-                        continue;
-                    }
-                    idmap.apply_create_node(pager, external_id, label_id, internal_id)?;
-                }
-                WalRecord::AddNodeLabel { node, label_id } => {
-                    idmap.apply_add_label(pager, node, label_id)?;
-                }
-                WalRecord::RemoveNodeLabel { node, label_id } => {
-                    idmap.apply_remove_label(pager, node, label_id)?;
-                }
-                WalRecord::CreateEdge { src, rel, dst } => memtable.create_edge(src, rel, dst),
-                WalRecord::TombstoneNode { node } => memtable.tombstone_node(node),
-                WalRecord::TombstoneEdge { src, rel, dst } => {
-                    memtable.tombstone_edge(src, rel, dst)
-                }
-                WalRecord::SetNodeProperty { node, key, value } => {
-                    memtable.set_node_property(node, key, value);
-                }
-                WalRecord::SetEdgeProperty {
-                    src,
-                    rel,
-                    dst,
-                    key,
-                    value,
-                } => {
-                    memtable.set_edge_property(src, rel, dst, key, value);
-                }
-                WalRecord::RemoveNodeProperty { node, key } => {
-                    memtable.remove_node_property(node, &key);
-                }
-                WalRecord::RemoveEdgeProperty { src, rel, dst, key } => {
-                    memtable.remove_edge_property(src, rel, dst, &key);
-                }
-                WalRecord::BeginTx { .. }
-                | WalRecord::CommitTx { .. }
-                | WalRecord::PageWrite { .. }
-                | WalRecord::PageFree { .. }
-                | WalRecord::CreateLabel { .. }
-                | WalRecord::ManifestSwitch { .. }
-                | WalRecord::Checkpoint { .. } => {}
-            }
-        }
-
-        let run = Arc::new(memtable.freeze_into_run(tx.txid));
-        if !run.is_empty() {
-            out_runs.push(run);
-        }
+        return Ok(());
     }
 
+    let mut batch = db.batch().durability(Some(PersistMode::SyncAll));
+    batch.insert(
+        &keyspaces.meta,
+        META_FORMAT_EPOCH,
+        STORAGE_FORMAT_EPOCH.to_be_bytes(),
+    );
+    batch.insert(&keyspaces.meta, META_NEXT_NODE_ID, 0u64.to_be_bytes());
+    batch.insert(&keyspaces.meta, META_NEXT_LABEL_ID, 1u64.to_be_bytes());
+    batch.insert(&keyspaces.meta, META_NEXT_REL_TYPE_ID, 1u64.to_be_bytes());
+    batch.commit()?;
     Ok(())
 }
 
-/// Replay label creation transactions from WAL.
-fn replay_label_transactions(
-    committed: &[CommittedTx],
-    interner: &mut LabelInterner,
-) -> Result<()> {
-    for tx in committed {
-        for op in &tx.ops {
-            if let WalRecord::CreateLabel { name, label_id } = op {
-                // Ensure the label exists at the expected ID
-                let existing_id = interner.get_id(name);
-                match existing_id {
-                    Some(id) => {
-                        if id != *label_id {
-                            return Err(Error::WalProtocol("label id mismatch"));
-                        }
-                    }
-                    None => {
-                        // Label doesn't exist, create it with correct ID
-                        // We need to insert at the correct position
-                        while interner.next_id() < *label_id {
-                            // Fill with dummy entries
-                            interner
-                                .get_or_create(&format!("__placeholder_{}", interner.next_id()));
-                        }
-                        interner.get_or_create(name);
-                    }
-                }
+fn read_meta_u64(meta: &Keyspace, key: &[u8]) -> Result<Option<u64>> {
+    meta.get(key)?
+        .map(|value| {
+            let bytes = value.as_ref();
+            if bytes.len() != 8 {
+                return Err(Error::StorageCorrupted(format!(
+                    "meta key {} has invalid length {}",
+                    String::from_utf8_lossy(key),
+                    bytes.len()
+                )));
             }
-        }
-    }
-    Ok(())
+            let mut raw = [0u8; 8];
+            raw.copy_from_slice(bytes);
+            Ok(u64::from_be_bytes(raw))
+        })
+        .transpose()
 }
 
-#[derive(Debug, Default, Clone)]
-struct RecoveryState {
-    manifest_epoch: u64,
-    manifest_segments: Vec<SegmentPointer>,
-    checkpoint_txid: u64,
-    max_txid: u64,
-    properties_root: u64,
-    stats_root: u64,
+pub(crate) fn key_u32(value: u32) -> Vec<u8> {
+    value.to_be_bytes().to_vec()
 }
 
-fn scan_recovery_state(committed: &[CommittedTx]) -> RecoveryState {
-    let mut state = RecoveryState::default();
-    for tx in committed {
-        state.max_txid = state.max_txid.max(tx.txid);
-        for op in &tx.ops {
-            match op {
-                WalRecord::ManifestSwitch {
-                    epoch,
-                    segments,
-                    properties_root,
-                    stats_root,
-                } => {
-                    if *epoch >= state.manifest_epoch {
-                        state.manifest_epoch = *epoch;
-                        state.manifest_segments = segments.clone();
-                        state.checkpoint_txid = 0;
-                        state.properties_root = *properties_root;
-                        state.stats_root = *stats_root;
-                    }
-                }
-                WalRecord::Checkpoint {
-                    up_to_txid,
-                    epoch,
-                    properties_root,
-                    stats_root,
-                } => {
-                    if *epoch == state.manifest_epoch {
-                        state.checkpoint_txid = state.checkpoint_txid.max(*up_to_txid);
-                        state.properties_root = *properties_root;
-                        state.stats_root = *stats_root;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    state
+pub(crate) fn key_u64(value: u64) -> Vec<u8> {
+    value.to_be_bytes().to_vec()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use nervusdb_api::GraphStore;
-    use tempfile::tempdir;
+pub(crate) fn decode_u32(bytes: &[u8]) -> Option<u32> {
+    let raw: [u8; 4] = bytes.try_into().ok()?;
+    Some(u32::from_be_bytes(raw))
+}
 
-    #[test]
-    fn t45_compaction_persists_manifest_and_skips_replay_before_checkpoint() {
-        let dir = tempdir().unwrap();
-        let ndb = dir.path().join("graph.ndb");
-        let wal = dir.path().join("graph.wal");
+pub(crate) fn parse_iid_key(bytes: &[u8]) -> Option<InternalNodeId> {
+    decode_u32(bytes)
+}
 
-        {
-            let engine = GraphEngine::open(&ndb, &wal).unwrap();
-            let (a, _b, c) = {
-                let mut tx = engine.begin_write();
-                let a = tx.create_node(10, 1).unwrap();
-                let b = tx.create_node(20, 1).unwrap();
-                let c = tx.create_node(30, 1).unwrap();
-                tx.create_edge(a, 7, b);
-                tx.commit().unwrap();
-                (a, b, c)
-            };
+pub(crate) fn encode_node_value(external_id: ExternalId, flags: u8) -> Vec<u8> {
+    let mut out = Vec::with_capacity(9);
+    out.extend_from_slice(&external_id.to_be_bytes());
+    out.push(flags);
+    out
+}
 
-            {
-                let mut tx = engine.begin_write();
-                tx.create_edge(a, 7, c);
-                tx.commit().unwrap();
-            }
+pub(crate) fn decode_node_value(bytes: &[u8]) -> Option<(ExternalId, u8)> {
+    parse_node_value(bytes)
+}
 
-            engine.compact().unwrap();
-            assert_eq!(engine.published_state.load_full().runs.len(), 0);
-            assert_eq!(engine.published_state.load_full().segments.len(), 1);
-        }
-
-        let engine = GraphEngine::open(&ndb, &wal).unwrap();
-        assert_eq!(engine.published_state.load_full().runs.len(), 0);
-        assert_eq!(engine.published_state.load_full().segments.len(), 1);
-
-        let snap = engine.begin_read();
-        let a = engine.lookup_internal_id(10).unwrap();
-        assert_eq!(snap.neighbors(a, Some(7)).count(), 2);
+pub(crate) fn parse_node_value(bytes: &[u8]) -> Option<(ExternalId, u8)> {
+    if bytes.len() < 9 {
+        return None;
     }
+    let raw: [u8; 8] = bytes[..8].try_into().ok()?;
+    Some((u64::from_be_bytes(raw), bytes[8]))
+}
 
-    #[test]
-    fn t103_compaction_checkpoints_even_with_properties() {
-        use crate::api::StorageSnapshot;
-        use nervusdb_api::GraphSnapshot;
+fn node_label_key(node: InternalNodeId, label: LabelId) -> Vec<u8> {
+    let mut key = Vec::with_capacity(8);
+    key.extend_from_slice(&node.to_be_bytes());
+    key.extend_from_slice(&label.to_be_bytes());
+    key
+}
 
-        let dir = tempdir().unwrap();
-        let ndb = dir.path().join("graph_props.ndb");
-        let wal = dir.path().join("graph_props.wal");
+fn label_node_key(label: LabelId, node: InternalNodeId) -> Vec<u8> {
+    let mut key = Vec::with_capacity(8);
+    key.extend_from_slice(&label.to_be_bytes());
+    key.extend_from_slice(&node.to_be_bytes());
+    key
+}
 
-        let internal_id;
-        {
-            let engine = GraphEngine::open(&ndb, &wal).unwrap();
-            let mut tx = engine.begin_write();
-            let node = tx.create_node(10, 1).unwrap();
-            tx.set_node_property(
-                node,
-                "age".to_string(),
-                crate::property::PropertyValue::Int(30),
-            );
-            tx.commit().unwrap();
-            internal_id = node;
-
-            engine.compact().unwrap();
-            // Runs MUST BE cleared because properties are now persisted.
-            assert!(engine.published_state.load_full().runs.is_empty());
-        }
-
-        let engine = GraphEngine::open(&ndb, &wal).unwrap();
-        // Use API-level snapshot which supports reading from B-Tree
-        let snap: StorageSnapshot = engine.snapshot();
-        let age = snap.node_property(internal_id, "age").unwrap();
-        assert_eq!(age, nervusdb_api::PropertyValue::Int(30));
-        // And we must have NO runs after restart, because they were checkpointed.
-        assert!(engine.published_state.load_full().runs.is_empty());
+pub(crate) fn parse_label_node_key(key: &[u8]) -> Option<InternalNodeId> {
+    if key.len() != 8 {
+        return None;
     }
+    decode_u32(&key[4..8])
+}
+
+pub(crate) fn edge_prefix(edge: EdgeKey) -> Vec<u8> {
+    let mut key = Vec::with_capacity(12);
+    key.extend_from_slice(&edge.src.to_be_bytes());
+    key.extend_from_slice(&edge.rel.to_be_bytes());
+    key.extend_from_slice(&edge.dst.to_be_bytes());
+    key
+}
+
+fn adj_out_key(edge: EdgeKey) -> Vec<u8> {
+    edge_prefix(edge)
+}
+
+fn adj_in_key(edge: EdgeKey) -> Vec<u8> {
+    let mut key = Vec::with_capacity(12);
+    key.extend_from_slice(&edge.dst.to_be_bytes());
+    key.extend_from_slice(&edge.rel.to_be_bytes());
+    key.extend_from_slice(&edge.src.to_be_bytes());
+    key
+}
+
+pub(crate) fn edge_key_from_adj_out(key: &[u8]) -> Option<EdgeKey> {
+    if key.len() != 12 {
+        return None;
+    }
+    Some(EdgeKey {
+        src: decode_u32(&key[0..4])?,
+        rel: decode_u32(&key[4..8])?,
+        dst: decode_u32(&key[8..12])?,
+    })
+}
+
+pub(crate) fn edge_key_from_adj_in(key: &[u8]) -> Option<EdgeKey> {
+    if key.len() != 12 {
+        return None;
+    }
+    Some(EdgeKey {
+        dst: decode_u32(&key[0..4])?,
+        rel: decode_u32(&key[4..8])?,
+        src: decode_u32(&key[8..12])?,
+    })
+}
+
+pub(crate) fn node_prop_prefix(node: InternalNodeId, key: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + key.len());
+    out.extend_from_slice(&node.to_be_bytes());
+    out.extend_from_slice(&(key.len() as u32).to_be_bytes());
+    out.extend_from_slice(key.as_bytes());
+    out
+}
+
+pub(crate) fn parse_node_prop_key(key: &[u8], node: InternalNodeId) -> Option<String> {
+    if key.len() < 8 || decode_u32(&key[0..4])? != node {
+        return None;
+    }
+    let raw_len: [u8; 4] = key[4..8].try_into().ok()?;
+    let len = u32::from_be_bytes(raw_len) as usize;
+    if key.len() != 8 + len {
+        return None;
+    }
+    String::from_utf8(key[8..].to_vec()).ok()
+}
+
+pub(crate) fn parse_prop_value(bytes: &[u8]) -> Result<PropertyValue> {
+    PropertyValue::decode(bytes).map_err(|e| Error::PropertyDecode(e.to_string()))
 }

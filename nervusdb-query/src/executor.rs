@@ -16,7 +16,6 @@ mod plan_tail;
 mod plan_types;
 mod property_bridge;
 mod read_path;
-mod txn_engine_impl;
 mod write_dispatch;
 mod write_forwarders;
 mod write_path;
@@ -29,7 +28,7 @@ use plan_iterators::{
     CartesianProductIter, ChainIter, DistinctIter, FilterIter, LimitIter, NodeScanIter,
     ProjectIter, ResultRowsIter, SkipIter, UnionDistinctIter, UnwindIter, ValuesIter,
 };
-use property_bridge::api_property_map_to_storage;
+use property_bridge::api_property_map_to_query;
 use read_path::{ExpandIter, MatchOutVarLenIter};
 use write_forwarders::{convert_executor_value_to_property, execute_create, execute_delete};
 use write_path::{
@@ -58,57 +57,7 @@ pub fn execute_write<S: GraphSnapshot>(
     write_dispatch::execute_write(plan, snapshot, txn, params)
 }
 
-pub trait WriteableGraph {
-    fn create_node(&mut self, external_id: ExternalId, label_id: LabelId)
-    -> Result<InternalNodeId>;
-    fn add_node_label(&mut self, node: InternalNodeId, label_id: LabelId) -> Result<()>;
-    fn remove_node_label(&mut self, node: InternalNodeId, label_id: LabelId) -> Result<()>;
-    fn create_edge(
-        &mut self,
-        src: InternalNodeId,
-        rel: RelTypeId,
-        dst: InternalNodeId,
-    ) -> Result<()>;
-    fn set_node_property(
-        &mut self,
-        node: InternalNodeId,
-        key: String,
-        value: PropertyValue,
-    ) -> Result<()>;
-    fn set_edge_property(
-        &mut self,
-        src: InternalNodeId,
-        rel: RelTypeId,
-        dst: InternalNodeId,
-        key: String,
-        value: PropertyValue,
-    ) -> Result<()>;
-    fn remove_node_property(&mut self, node: InternalNodeId, key: &str) -> Result<()>;
-    fn remove_edge_property(
-        &mut self,
-        src: InternalNodeId,
-        rel: RelTypeId,
-        dst: InternalNodeId,
-        key: &str,
-    ) -> Result<()>;
-    fn tombstone_node(&mut self, node: InternalNodeId) -> Result<()>;
-    fn tombstone_edge(
-        &mut self,
-        src: InternalNodeId,
-        rel: RelTypeId,
-        dst: InternalNodeId,
-    ) -> Result<()>;
-
-    // T65: Dynamic schema support
-    fn get_or_create_label_id(&mut self, name: &str) -> Result<LabelId>;
-    fn get_or_create_rel_type_id(&mut self, name: &str) -> Result<RelTypeId>;
-
-    fn staged_created_nodes_with_labels(&self) -> Vec<(InternalNodeId, Vec<String>)> {
-        Vec::new()
-    }
-}
-
-pub use nervusdb_storage::property::PropertyValue;
+pub use nervusdb_api::{PropertyValue, WriteableGraph};
 
 pub fn convert_api_property_to_value(api_value: &nervusdb_api::PropertyValue) -> Value {
     match api_value {

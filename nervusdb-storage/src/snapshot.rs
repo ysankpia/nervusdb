@@ -1,268 +1,203 @@
-use crate::csr::CsrSegment;
-use crate::idmap::InternalNodeId;
-use crate::property::PropertyValue;
-use crate::read_path_api_props::{
-    edge_properties_as_api, edge_property_as_api, node_properties_as_api, node_property_as_api,
+use crate::engine::{
+    KEY_FLAG_TOMBSTONE, Keyspaces, decode_node_value, edge_key_from_adj_in, edge_key_from_adj_out,
+    edge_prefix, key_u32, node_prop_prefix, parse_iid_key, parse_label_node_key,
+    parse_node_prop_key, parse_node_value, parse_prop_value,
 };
-use crate::read_path_iters::{ApiNeighborsIter, IncomingNeighborsIter, NeighborsIter};
-use crate::read_path_labels::{
-    node_all_labels, node_primary_label, resolve_symbol_id, resolve_symbol_name,
+use fjall::Readable;
+use nervusdb_api::{
+    EdgeKey, ExternalId, GraphSnapshot, InternalNodeId, LabelId, PropertyValue, RelTypeId,
 };
-use crate::read_path_nodes::{
-    edges_for_dst as run_edges_for_dst, edges_for_src as run_edges_for_src,
-    is_tombstoned_node_in_runs, iter_edges as run_iter_edges,
-    iter_tombstoned_edges as run_iter_tombstoned_edges,
-    iter_tombstoned_nodes as run_iter_tombstoned_nodes, live_node_ids,
-};
-use crate::read_path_overlay::{
-    edge_properties_in_run, edge_property_from_runs, edge_property_in_run,
-    merge_edge_properties_from_runs, merge_node_properties_from_runs, node_properties_in_run,
-    node_property_from_runs, node_property_in_run, run_has_properties, run_is_empty,
-};
-use crate::read_path_stats::read_statistics;
-use im::Vector as ImVector;
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::collections::BTreeMap;
 
-pub type RelTypeId = nervusdb_api::RelTypeId;
-pub type EdgeKey = nervusdb_api::EdgeKey;
-pub type PublishedRuns = ImVector<Arc<L0Run>>;
-pub type PublishedSegments = ImVector<Arc<CsrSegment>>;
-
-#[derive(Debug)]
-pub struct L0Run {
-    txid: u64,
-    edges_by_src: BTreeMap<InternalNodeId, Vec<EdgeKey>>,
-    edges_by_dst: BTreeMap<InternalNodeId, Vec<EdgeKey>>,
-    tombstoned_nodes: BTreeSet<InternalNodeId>,
-    pub(crate) tombstoned_edges: BTreeSet<EdgeKey>,
-    // Node properties: node_id -> { key -> value }
-    pub(crate) node_properties: BTreeMap<InternalNodeId, BTreeMap<String, PropertyValue>>,
-    // Edge properties: edge_key -> { key -> value }
-    pub(crate) edge_properties: BTreeMap<EdgeKey, BTreeMap<String, PropertyValue>>,
-    // Tombstoned node properties: node_id -> set of keys
-    pub(crate) tombstoned_node_properties: BTreeMap<InternalNodeId, BTreeSet<String>>,
-    // Tombstoned edge properties: edge_key -> set of keys
-    pub(crate) tombstoned_edge_properties: BTreeMap<EdgeKey, BTreeSet<String>>,
-}
-
-impl L0Run {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        txid: u64,
-        edges_by_src: BTreeMap<InternalNodeId, Vec<EdgeKey>>,
-        edges_by_dst: BTreeMap<InternalNodeId, Vec<EdgeKey>>,
-        tombstoned_nodes: BTreeSet<InternalNodeId>,
-        tombstoned_edges: BTreeSet<EdgeKey>,
-        node_properties: BTreeMap<InternalNodeId, BTreeMap<String, PropertyValue>>,
-        edge_properties: BTreeMap<EdgeKey, BTreeMap<String, PropertyValue>>,
-        tombstoned_node_properties: BTreeMap<InternalNodeId, BTreeSet<String>>,
-        tombstoned_edge_properties: BTreeMap<EdgeKey, BTreeSet<String>>,
-    ) -> Self {
-        Self {
-            txid,
-            edges_by_src,
-            edges_by_dst,
-            tombstoned_nodes,
-            tombstoned_edges,
-            node_properties,
-            edge_properties,
-            tombstoned_node_properties,
-            tombstoned_edge_properties,
-        }
-    }
-
-    pub(crate) fn txid(&self) -> u64 {
-        self.txid
-    }
-
-    pub(crate) fn edges_for_src(&self, src: InternalNodeId) -> &[EdgeKey] {
-        run_edges_for_src(&self.edges_by_src, src)
-    }
-
-    pub(crate) fn edges_for_dst(&self, dst: InternalNodeId) -> &[EdgeKey] {
-        run_edges_for_dst(&self.edges_by_dst, dst)
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        run_is_empty(
-            &self.edges_by_src,
-            &self.edges_by_dst,
-            &self.tombstoned_nodes,
-            &self.tombstoned_edges,
-            &self.node_properties,
-            &self.edge_properties,
-            &self.tombstoned_node_properties,
-            &self.tombstoned_edge_properties,
-        )
-    }
-
-    pub(crate) fn has_properties(&self) -> bool {
-        run_has_properties(
-            &self.node_properties,
-            &self.edge_properties,
-            &self.tombstoned_node_properties,
-            &self.tombstoned_edge_properties,
-        )
-    }
-
-    pub(crate) fn node_property(&self, node: InternalNodeId, key: &str) -> Option<&PropertyValue> {
-        node_property_in_run(self, node, key)
-    }
-
-    pub(crate) fn edge_property(&self, edge: EdgeKey, key: &str) -> Option<&PropertyValue> {
-        edge_property_in_run(self, edge, key)
-    }
-
-    pub(crate) fn node_properties(
-        &self,
-        node: InternalNodeId,
-    ) -> Option<&BTreeMap<String, PropertyValue>> {
-        node_properties_in_run(&self.node_properties, node)
-    }
-
-    pub(crate) fn edge_properties(
-        &self,
-        edge: EdgeKey,
-    ) -> Option<&BTreeMap<String, PropertyValue>> {
-        edge_properties_in_run(&self.edge_properties, edge)
-    }
-
-    pub(crate) fn iter_edges(&self) -> impl Iterator<Item = EdgeKey> + '_ {
-        run_iter_edges(&self.edges_by_src)
-    }
-
-    pub(crate) fn iter_tombstoned_nodes(&self) -> impl Iterator<Item = InternalNodeId> + '_ {
-        run_iter_tombstoned_nodes(&self.tombstoned_nodes)
-    }
-
-    pub(crate) fn iter_tombstoned_edges(&self) -> impl Iterator<Item = EdgeKey> + '_ {
-        run_iter_tombstoned_edges(&self.tombstoned_edges)
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Snapshot {
-    runs: Arc<PublishedRuns>,
-    segments: Arc<PublishedSegments>,
-    labels: Arc<crate::label_interner::LabelSnapshot>,
-    node_labels: Arc<Vec<Vec<crate::idmap::LabelId>>>,
-    pub(crate) properties_root: u64,
-    pub(crate) stats_root: u64,
+    inner: fjall::Snapshot,
+    keyspaces: Keyspaces,
+}
+
+pub type StorageSnapshot = Snapshot;
+
+impl std::fmt::Debug for Snapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Snapshot").finish_non_exhaustive()
+    }
 }
 
 impl Snapshot {
-    pub fn new(
-        runs: Arc<PublishedRuns>,
-        segments: Arc<PublishedSegments>,
-        labels: Arc<crate::label_interner::LabelSnapshot>,
-        node_labels: Arc<Vec<Vec<crate::idmap::LabelId>>>,
-        properties_root: u64,
-        stats_root: u64,
-    ) -> Self {
-        Self {
-            runs,
-            segments,
-            labels,
-            node_labels,
-            properties_root,
-            stats_root,
-        }
+    pub(crate) fn new(inner: fjall::Snapshot, keyspaces: Keyspaces) -> Self {
+        Self { inner, keyspaces }
     }
 
-    pub fn neighbors(&self, src: InternalNodeId, rel: Option<RelTypeId>) -> NeighborsIter {
-        NeighborsIter::new(self.runs.clone(), self.segments.clone(), src, rel)
+    fn get(&self, keyspace: &fjall::Keyspace, key: impl AsRef<[u8]>) -> Option<Vec<u8>> {
+        self.inner
+            .get(keyspace, key)
+            .ok()
+            .flatten()
+            .map(|value| value.as_ref().to_vec())
+    }
+
+    fn node_is_live(&self, iid: InternalNodeId) -> bool {
+        self.get(&self.keyspaces.nodes, key_u32(iid))
+            .and_then(|value| parse_node_value(&value))
+            .is_some_and(|(_, flags)| flags & KEY_FLAG_TOMBSTONE == 0)
+    }
+
+    fn collect_prefix_keys(&self, keyspace: &fjall::Keyspace, prefix: Vec<u8>) -> Vec<Vec<u8>> {
+        self.inner
+            .prefix(keyspace, prefix)
+            .filter_map(|guard| guard.key().ok().map(|key| key.as_ref().to_vec()))
+            .collect()
+    }
+
+    pub fn neighbors(
+        &self,
+        src: InternalNodeId,
+        rel: Option<RelTypeId>,
+    ) -> impl Iterator<Item = EdgeKey> + '_ {
+        let mut prefix = key_u32(src);
+        if let Some(rel) = rel {
+            prefix.extend_from_slice(&rel.to_be_bytes());
+        }
+
+        self.collect_prefix_keys(&self.keyspaces.adj_out, prefix)
+            .into_iter()
+            .filter_map(|key| edge_key_from_adj_out(&key))
+            .filter(|edge| self.node_is_live(edge.src) && self.node_is_live(edge.dst))
     }
 
     pub fn incoming_neighbors(
         &self,
         dst: InternalNodeId,
         rel: Option<RelTypeId>,
-    ) -> IncomingNeighborsIter {
-        IncomingNeighborsIter::new(self.runs.clone(), self.segments.clone(), dst, rel)
+    ) -> impl Iterator<Item = EdgeKey> + '_ {
+        let mut prefix = key_u32(dst);
+        if let Some(rel) = rel {
+            prefix.extend_from_slice(&rel.to_be_bytes());
+        }
+
+        self.collect_prefix_keys(&self.keyspaces.adj_in, prefix)
+            .into_iter()
+            .filter_map(|key| edge_key_from_adj_in(&key))
+            .filter(|edge| self.node_is_live(edge.src) && self.node_is_live(edge.dst))
     }
 
-    pub fn get_statistics(
-        &self,
-        pager: &crate::pager::Pager,
-    ) -> crate::Result<crate::stats::GraphStatistics> {
-        read_statistics(pager, self.stats_root)
+    pub fn resolve_label_id(&self, name: &str) -> Option<LabelId> {
+        self.get(&self.keyspaces.labels, name_key(name))
+            .and_then(|v| decode_u32(&v))
     }
 
-    /// Get the label ID for a node.
-    /// Get the first label for a node (backward compat).
-    pub fn node_label(&self, iid: InternalNodeId) -> Option<crate::idmap::LabelId> {
-        node_primary_label(&self.node_labels, iid)
+    pub fn resolve_rel_type_id(&self, name: &str) -> Option<RelTypeId> {
+        self.get(&self.keyspaces.reltypes, name_key(name))
+            .and_then(|v| decode_u32(&v))
     }
 
-    /// Get all labels for a node.
-    pub fn node_labels(&self, iid: InternalNodeId) -> Option<Vec<crate::idmap::LabelId>> {
-        node_all_labels(&self.node_labels, iid)
+    pub fn resolve_label_name(&self, id: LabelId) -> Option<String> {
+        self.get(&self.keyspaces.labels, id_key(id))
+            .and_then(|v| String::from_utf8(v).ok())
     }
 
-    /// Get node property from the most recent run that has it.
-    /// Get node property from the most recent run that has it.
-    pub(crate) fn node_property(&self, node: InternalNodeId, key: &str) -> Option<PropertyValue> {
-        node_property_from_runs(&self.runs, node, key)
+    pub fn resolve_rel_type_name(&self, id: RelTypeId) -> Option<String> {
+        self.get(&self.keyspaces.reltypes, id_key(id))
+            .and_then(|v| String::from_utf8(v).ok())
     }
 
-    /// Get edge property from the most recent run that has it.
-    pub(crate) fn edge_property(&self, edge: EdgeKey, key: &str) -> Option<PropertyValue> {
-        edge_property_from_runs(&self.runs, edge, key)
+    pub fn node_label(&self, iid: InternalNodeId) -> Option<LabelId> {
+        self.node_labels(iid).into_iter().next()
     }
 
-    /// Get all node properties merged from all runs (newest takes precedence).
-    pub(crate) fn node_properties(
-        &self,
-        node: InternalNodeId,
-    ) -> Option<BTreeMap<String, PropertyValue>> {
-        merge_node_properties_from_runs(&self.runs, node)
+    pub fn node_labels(&self, iid: InternalNodeId) -> Vec<LabelId> {
+        self.collect_prefix_keys(&self.keyspaces.node_labels, key_u32(iid))
+            .into_iter()
+            .filter_map(|key| {
+                if key.len() == 8 {
+                    decode_u32(&key[4..8])
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
-    /// Get all edge properties merged from all runs (newest takes precedence).
-    pub(crate) fn edge_properties(&self, edge: EdgeKey) -> Option<BTreeMap<String, PropertyValue>> {
-        merge_edge_properties_from_runs(&self.runs, edge)
+    pub fn node_property(&self, node: InternalNodeId, key: &str) -> Option<PropertyValue> {
+        self.get(&self.keyspaces.node_props, node_prop_prefix(node, key))
+            .and_then(|value| parse_prop_value(&value).ok())
     }
 
-    pub fn resolve_label_id(&self, name: &str) -> Option<crate::idmap::LabelId> {
-        resolve_symbol_id(&self.labels, name)
+    pub fn edge_property(&self, edge: EdgeKey, key: &str) -> Option<PropertyValue> {
+        let mut storage_key = edge_prefix(edge);
+        storage_key.extend_from_slice(&(key.len() as u32).to_be_bytes());
+        storage_key.extend_from_slice(key.as_bytes());
+        self.get(&self.keyspaces.edge_props, storage_key)
+            .and_then(|value| parse_prop_value(&value).ok())
     }
 
-    pub fn resolve_rel_type_id(&self, name: &str) -> Option<crate::snapshot::RelTypeId> {
-        resolve_symbol_id(&self.labels, name)
+    pub fn node_properties(&self, iid: InternalNodeId) -> Option<BTreeMap<String, PropertyValue>> {
+        let mut props = BTreeMap::new();
+        for guard in self.inner.prefix(&self.keyspaces.node_props, key_u32(iid)) {
+            let Ok((key, value)) = guard.into_inner() else {
+                continue;
+            };
+            let Some(prop_key) = parse_node_prop_key(key.as_ref(), iid) else {
+                continue;
+            };
+            let Ok(prop_value) = parse_prop_value(value.as_ref()) else {
+                continue;
+            };
+            props.insert(prop_key, prop_value);
+        }
+
+        if props.is_empty() { None } else { Some(props) }
     }
 
-    pub fn resolve_label_name(&self, id: crate::idmap::LabelId) -> Option<String> {
-        resolve_symbol_name(&self.labels, id)
+    pub fn edge_properties(&self, edge: EdgeKey) -> Option<BTreeMap<String, PropertyValue>> {
+        let mut props = BTreeMap::new();
+        let prefix = edge_prefix(edge);
+        for guard in self.inner.prefix(&self.keyspaces.edge_props, prefix) {
+            let Ok((key, value)) = guard.into_inner() else {
+                continue;
+            };
+            let Some(prop_key) = parse_edge_prop_key(key.as_ref()) else {
+                continue;
+            };
+            let Ok(prop_value) = parse_prop_value(value.as_ref()) else {
+                continue;
+            };
+            props.insert(prop_key, prop_value);
+        }
+
+        if props.is_empty() { None } else { Some(props) }
     }
 
-    pub fn resolve_rel_type_name(&self, id: crate::snapshot::RelTypeId) -> Option<String> {
-        resolve_symbol_name(&self.labels, id)
+    pub(crate) fn collect_edge_property_keys(&self, edge: EdgeKey) -> Vec<Vec<u8>> {
+        self.collect_prefix_keys(&self.keyspaces.edge_props, edge_prefix(edge))
     }
 
-    /// Low-level access to the full node-labels vector for bulk scans.
-    pub(crate) fn all_node_labels(&self) -> &Arc<Vec<Vec<crate::idmap::LabelId>>> {
-        &self.node_labels
-    }
-
-    /// Iterate over all non-tombstoned nodes.
-    /// This implementation assumes nodes occupy a dense ID space up to the max size of `node_labels`.
-    /// Nodes that are tombstoned are skipped.
     pub fn nodes(&self) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {
-        let max_id = self.node_labels.len() as u32;
-        live_node_ids(max_id, &self.runs)
+        let nodes: Vec<_> = self
+            .inner
+            .iter(&self.keyspaces.nodes)
+            .filter_map(|guard| guard.key().ok())
+            .filter_map(|key| parse_iid_key(key.as_ref()))
+            .filter(|iid| self.node_is_live(*iid))
+            .collect();
+        Box::new(nodes.into_iter())
     }
 
     pub fn is_tombstoned_node(&self, iid: InternalNodeId) -> bool {
-        is_tombstoned_node_in_runs(&self.runs, iid)
+        self.get(&self.keyspaces.nodes, key_u32(iid))
+            .and_then(|value| parse_node_value(&value))
+            .is_some_and(|(_, flags)| flags & KEY_FLAG_TOMBSTONE != 0)
     }
 }
 
-impl nervusdb_api::GraphSnapshot for Snapshot {
-    type Neighbors<'a> = ApiNeighborsIter<'a>;
+impl GraphSnapshot for Snapshot {
+    type Neighbors<'a>
+        = Box<dyn Iterator<Item = EdgeKey> + 'a>
+    where
+        Self: 'a;
 
     fn neighbors(&self, src: InternalNodeId, rel: Option<RelTypeId>) -> Self::Neighbors<'_> {
-        ApiNeighborsIter::new(Box::new(self.neighbors(src, rel)))
+        Box::new(self.neighbors(src, rel))
     }
 
     fn incoming_neighbors(
@@ -270,64 +205,130 @@ impl nervusdb_api::GraphSnapshot for Snapshot {
         dst: InternalNodeId,
         rel: Option<RelTypeId>,
     ) -> Self::Neighbors<'_> {
-        ApiNeighborsIter::new(Box::new(self.incoming_neighbors(dst, rel)))
+        Box::new(self.incoming_neighbors(dst, rel))
     }
 
     fn nodes(&self) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {
         self.nodes()
     }
 
+    fn nodes_with_label(&self, label: LabelId) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {
+        let nodes: Vec<_> = self
+            .collect_prefix_keys(&self.keyspaces.label_nodes, key_u32(label))
+            .into_iter()
+            .filter_map(|key| parse_label_node_key(&key))
+            .filter(|iid| self.node_is_live(*iid))
+            .collect();
+        Box::new(nodes.into_iter())
+    }
+
+    fn resolve_external(&self, iid: InternalNodeId) -> Option<ExternalId> {
+        if !self.node_is_live(iid) {
+            return None;
+        }
+        self.get(&self.keyspaces.nodes, key_u32(iid))
+            .and_then(|value| decode_node_value(&value).map(|(external, _)| external))
+    }
+
+    fn node_label(&self, iid: InternalNodeId) -> Option<LabelId> {
+        self.node_label(iid)
+    }
+
+    fn resolve_node_labels(&self, iid: InternalNodeId) -> Option<Vec<LabelId>> {
+        let labels = self.node_labels(iid);
+        if labels.is_empty() {
+            None
+        } else {
+            Some(labels)
+        }
+    }
+
     fn is_tombstoned_node(&self, iid: InternalNodeId) -> bool {
         self.is_tombstoned_node(iid)
     }
 
-    fn resolve_external(&self, _iid: InternalNodeId) -> Option<nervusdb_api::ExternalId> {
-        None
+    fn node_property(&self, iid: InternalNodeId, key: &str) -> Option<PropertyValue> {
+        self.node_property(iid, key)
     }
 
-    fn node_label(&self, iid: InternalNodeId) -> Option<crate::idmap::LabelId> {
-        self.node_label(iid)
+    fn edge_property(&self, edge: EdgeKey, key: &str) -> Option<PropertyValue> {
+        self.edge_property(edge, key)
     }
 
-    fn node_property(&self, iid: InternalNodeId, key: &str) -> Option<nervusdb_api::PropertyValue> {
-        node_property_as_api(self, iid, key)
+    fn node_properties(&self, iid: InternalNodeId) -> Option<BTreeMap<String, PropertyValue>> {
+        self.node_properties(iid)
     }
 
-    fn edge_property(
-        &self,
-        edge: nervusdb_api::EdgeKey,
-        key: &str,
-    ) -> Option<nervusdb_api::PropertyValue> {
-        edge_property_as_api(self, edge, key)
+    fn edge_properties(&self, edge: EdgeKey) -> Option<BTreeMap<String, PropertyValue>> {
+        self.edge_properties(edge)
     }
 
-    fn node_properties(
-        &self,
-        iid: InternalNodeId,
-    ) -> Option<BTreeMap<String, nervusdb_api::PropertyValue>> {
-        node_properties_as_api(self, iid)
-    }
-
-    fn edge_properties(
-        &self,
-        edge: nervusdb_api::EdgeKey,
-    ) -> Option<BTreeMap<String, nervusdb_api::PropertyValue>> {
-        edge_properties_as_api(self, edge)
-    }
-
-    fn resolve_label_id(&self, name: &str) -> Option<crate::idmap::LabelId> {
+    fn resolve_label_id(&self, name: &str) -> Option<LabelId> {
         self.resolve_label_id(name)
     }
 
-    fn resolve_rel_type_id(&self, name: &str) -> Option<crate::snapshot::RelTypeId> {
+    fn resolve_rel_type_id(&self, name: &str) -> Option<RelTypeId> {
         self.resolve_rel_type_id(name)
     }
 
-    fn resolve_label_name(&self, id: crate::idmap::LabelId) -> Option<String> {
+    fn resolve_label_name(&self, id: LabelId) -> Option<String> {
         self.resolve_label_name(id)
     }
 
-    fn resolve_rel_type_name(&self, id: crate::snapshot::RelTypeId) -> Option<String> {
+    fn resolve_rel_type_name(&self, id: RelTypeId) -> Option<String> {
         self.resolve_rel_type_name(id)
     }
+
+    fn node_count(&self, label: Option<LabelId>) -> u64 {
+        match label {
+            Some(label) => self.nodes_with_label(label).count() as u64,
+            None => self.nodes().count() as u64,
+        }
+    }
+
+    fn edge_count(&self, rel: Option<RelTypeId>) -> u64 {
+        self.neighbors_for_count(rel).count() as u64
+    }
+}
+
+impl Snapshot {
+    fn neighbors_for_count(&self, rel: Option<RelTypeId>) -> impl Iterator<Item = EdgeKey> + '_ {
+        self.inner
+            .iter(&self.keyspaces.adj_out)
+            .filter_map(|guard| guard.key().ok())
+            .filter_map(|key| edge_key_from_adj_out(key.as_ref()))
+            .filter(move |edge| rel.is_none_or(|r| edge.rel == r))
+            .filter(|edge| self.node_is_live(edge.src) && self.node_is_live(edge.dst))
+    }
+}
+
+pub(crate) fn name_key(name: &str) -> Vec<u8> {
+    let mut key = Vec::with_capacity(1 + name.len());
+    key.push(b'n');
+    key.extend_from_slice(name.as_bytes());
+    key
+}
+
+pub(crate) fn id_key(id: u32) -> Vec<u8> {
+    let mut key = Vec::with_capacity(1 + 4);
+    key.push(b'i');
+    key.extend_from_slice(&id.to_be_bytes());
+    key
+}
+
+fn decode_u32(bytes: &[u8]) -> Option<u32> {
+    let raw: [u8; 4] = bytes.try_into().ok()?;
+    Some(u32::from_be_bytes(raw))
+}
+
+fn parse_edge_prop_key(key: &[u8]) -> Option<String> {
+    if key.len() < 16 {
+        return None;
+    }
+    let raw_len: [u8; 4] = key[12..16].try_into().ok()?;
+    let len = u32::from_be_bytes(raw_len) as usize;
+    if key.len() != 16 + len {
+        return None;
+    }
+    String::from_utf8(key[16..].to_vec()).ok()
 }

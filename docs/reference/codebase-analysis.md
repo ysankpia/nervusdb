@@ -1,9 +1,17 @@
 # Codebase Analysis
 
-Generated from CodeGraph exploration on 2026-06-14. This document captures the
-current codebase structure, quality assessment, pain points, and recommended
-next steps. It is a snapshot in time — re-run the analysis after significant
-work.
+Generated from CodeGraph exploration on 2026-06-14. This document is a
+historical snapshot from before ADR 0005. It does not define current scope or
+architecture.
+
+Current direction lives in:
+
+- `docs/decisions/0005-fjall-storage-backend.md`
+- `docs/plans/active/010-fjall-storage-refactor.md`
+- `docs/architecture/storage-model.md`
+- `docs/reference/storage-format.md`
+
+Use the material below only as evidence of the old pre-Fjall codebase shape.
 
 ## Contents
 
@@ -20,11 +28,13 @@ work.
 
 ## 1. Project Overview
 
-**Product**: SQLite for property graphs — Rust-first embedded graph database.  
-**Phase**: Refactoring from platform-era breadth toward a finishable 0.1 core.  
-**Workspace**: 7 crates, ~11 KLOC core code, ~40 KLOC total (including tests).  
+**Product**: SQLite for property graphs — Rust-first embedded graph database.
+**Phase at capture time**: Refactoring from platform-era breadth toward a
+finishable 0.1 core.
+**Workspace at capture time**: 7 crates, ~11 KLOC core code, ~40 KLOC total
+(including tests).
 **Default validation**: `bash scripts/check.sh` — fmt + core clippy + Mini-Cypher
-9-test suite.  
+9-test suite.
 **CI**: `ci.yml` runs default validation on push/PR to `main`.
 
 ---

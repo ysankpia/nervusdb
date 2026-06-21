@@ -31,11 +31,6 @@ behavior or examples.
 
 ## Area-Specific Checks
 
-- Query compatibility: `make tck-tier0`, `make tck-tier1`, `make tck-tier2`
-- Bindings: `bash scripts/binding_smoke.sh`
-- Cross-binding parity: `bash scripts/binding_parity_gate.sh`
-- Performance: `bash scripts/perf_slo_gate.sh`
-- Stability window evidence: `bash scripts/stability_window.sh`
 - Core smoke: `bash scripts/core_smoke.sh`
 - Core examples: `bash scripts/core_examples.sh`
 - Core crash recovery: `bash scripts/core_crash_recovery.sh`
@@ -44,8 +39,16 @@ behavior or examples.
 - Full workspace clippy: included in `bash scripts/workspace_full_test.sh`
 
 These checks are not part of the default 0.1 loop unless the PR touches the
-corresponding area. Historical gates are manual-only. They do not run on a
-schedule and do not block ordinary 0.1 changes.
+corresponding area. Platform-era binding/TCK/performance gates are archived
+history, not current 0.1 requirements, unless a future ADR restores them.
+
+Fjall storage changes should run at least:
+
+```bash
+cargo test -p nervusdb-storage --test core_0_1_storage
+cargo test -p nervusdb --test core_0_1_rust_api
+bash scripts/core_crash_recovery.sh
+```
 
 ## Large 0.1 Acceptance Runs
 

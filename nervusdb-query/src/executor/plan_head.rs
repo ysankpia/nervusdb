@@ -46,9 +46,11 @@ pub(super) fn execute_node_scan<'a, S: GraphSnapshot + 'a>(
 
     let mut iter = NodeScanIter {
         snapshot,
-        node_iter: Box::new(snapshot.nodes()),
+        node_iter: match label_id {
+            Some(lid) => snapshot.nodes_with_label(lid),
+            None => snapshot.nodes(),
+        },
         alias,
-        label_id,
     };
 
     if optional {

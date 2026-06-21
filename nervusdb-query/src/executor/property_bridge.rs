@@ -6,59 +6,27 @@ pub(super) fn merge_props_to_values(
 ) -> BTreeMap<String, Value> {
     props
         .iter()
-        .map(|(k, v)| (k.clone(), merge_storage_property_to_value(v)))
+        .map(|(k, v)| (k.clone(), merge_property_to_value(v)))
         .collect()
 }
 
-pub(super) fn merge_storage_property_to_api(v: &PropertyValue) -> nervusdb_api::PropertyValue {
-    match v {
-        PropertyValue::Null => nervusdb_api::PropertyValue::Null,
-        PropertyValue::Bool(b) => nervusdb_api::PropertyValue::Bool(*b),
-        PropertyValue::Int(i) => nervusdb_api::PropertyValue::Int(*i),
-        PropertyValue::Float(f) => nervusdb_api::PropertyValue::Float(*f),
-        PropertyValue::String(s) => nervusdb_api::PropertyValue::String(s.clone()),
-        PropertyValue::DateTime(i) => nervusdb_api::PropertyValue::DateTime(*i),
-        PropertyValue::Blob(b) => nervusdb_api::PropertyValue::Blob(b.clone()),
-        PropertyValue::List(l) => {
-            nervusdb_api::PropertyValue::List(l.iter().map(merge_storage_property_to_api).collect())
-        }
-        PropertyValue::Map(m) => nervusdb_api::PropertyValue::Map(
-            m.iter()
-                .map(|(k, vv)| (k.clone(), merge_storage_property_to_api(vv)))
-                .collect(),
-        ),
-    }
+pub(super) fn merge_property_to_api(v: &PropertyValue) -> nervusdb_api::PropertyValue {
+    v.clone()
 }
 
-fn api_property_to_storage(v: &nervusdb_api::PropertyValue) -> PropertyValue {
-    match v {
-        nervusdb_api::PropertyValue::Null => PropertyValue::Null,
-        nervusdb_api::PropertyValue::Bool(b) => PropertyValue::Bool(*b),
-        nervusdb_api::PropertyValue::Int(i) => PropertyValue::Int(*i),
-        nervusdb_api::PropertyValue::Float(f) => PropertyValue::Float(*f),
-        nervusdb_api::PropertyValue::String(s) => PropertyValue::String(s.clone()),
-        nervusdb_api::PropertyValue::DateTime(i) => PropertyValue::DateTime(*i),
-        nervusdb_api::PropertyValue::Blob(b) => PropertyValue::Blob(b.clone()),
-        nervusdb_api::PropertyValue::List(l) => {
-            PropertyValue::List(l.iter().map(api_property_to_storage).collect())
-        }
-        nervusdb_api::PropertyValue::Map(m) => PropertyValue::Map(
-            m.iter()
-                .map(|(k, vv)| (k.clone(), api_property_to_storage(vv)))
-                .collect(),
-        ),
-    }
+fn api_property_to_query(v: &nervusdb_api::PropertyValue) -> PropertyValue {
+    v.clone()
 }
 
-pub(super) fn api_property_map_to_storage(
+pub(super) fn api_property_map_to_query(
     map: &BTreeMap<String, nervusdb_api::PropertyValue>,
 ) -> BTreeMap<String, PropertyValue> {
     map.iter()
-        .map(|(k, v)| (k.clone(), api_property_to_storage(v)))
+        .map(|(k, v)| (k.clone(), api_property_to_query(v)))
         .collect()
 }
 
-pub(super) fn merge_storage_property_to_value(v: &PropertyValue) -> Value {
+pub(super) fn merge_property_to_value(v: &PropertyValue) -> Value {
     match v {
         PropertyValue::Null => Value::Null,
         PropertyValue::Bool(b) => Value::Bool(*b),
@@ -67,12 +35,10 @@ pub(super) fn merge_storage_property_to_value(v: &PropertyValue) -> Value {
         PropertyValue::String(s) => Value::String(s.clone()),
         PropertyValue::DateTime(i) => Value::DateTime(*i),
         PropertyValue::Blob(b) => Value::Blob(b.clone()),
-        PropertyValue::List(l) => {
-            Value::List(l.iter().map(merge_storage_property_to_value).collect())
-        }
+        PropertyValue::List(l) => Value::List(l.iter().map(merge_property_to_value).collect()),
         PropertyValue::Map(m) => Value::Map(
             m.iter()
-                .map(|(k, vv)| (k.clone(), merge_storage_property_to_value(vv)))
+                .map(|(k, vv)| (k.clone(), merge_property_to_value(vv)))
                 .collect(),
         ),
     }
@@ -81,8 +47,8 @@ pub(super) fn merge_storage_property_to_value(v: &PropertyValue) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        api_property_map_to_storage, merge_props_to_values, merge_storage_property_to_api,
-        merge_storage_property_to_value,
+        api_property_map_to_query, merge_property_to_api, merge_property_to_value,
+        merge_props_to_values,
     };
     use crate::executor::{PropertyValue, Value};
     use std::collections::BTreeMap;
@@ -96,7 +62,7 @@ mod tests {
             PropertyValue::Map(inner.clone()),
         ]);
 
-        let converted = merge_storage_property_to_value(&prop);
+        let converted = merge_property_to_value(&prop);
         assert_eq!(
             converted,
             Value::List(vec![
@@ -105,7 +71,7 @@ mod tests {
             ])
         );
 
-        let api = merge_storage_property_to_api(&PropertyValue::Map(inner));
+        let api = merge_property_to_api(&PropertyValue::Map(inner));
         assert_eq!(
             api,
             nervusdb_api::PropertyValue::Map(BTreeMap::from([(
@@ -116,7 +82,7 @@ mod tests {
     }
 
     #[test]
-    fn api_map_to_storage_and_props_to_values_roundtrip_shape() {
+    fn api_map_to_query_and_props_to_values_roundtrip_shape() {
         let api_props = BTreeMap::from([(
             "m".to_string(),
             nervusdb_api::PropertyValue::Map(BTreeMap::from([(
@@ -128,8 +94,8 @@ mod tests {
             )])),
         )]);
 
-        let storage = api_property_map_to_storage(&api_props);
-        let projected = merge_props_to_values(&storage);
+        let query_props = api_property_map_to_query(&api_props);
+        let projected = merge_props_to_values(&query_props);
 
         assert_eq!(
             projected,

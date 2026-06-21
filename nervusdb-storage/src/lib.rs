@@ -1,33 +1,14 @@
 pub mod api;
-pub mod blob_store;
-pub mod csr;
 pub mod engine;
 mod error;
-pub mod idmap;
-pub mod index;
-pub mod label_interner;
-pub mod memtable;
-pub mod pager;
 pub mod property;
-pub(crate) mod published_state;
-mod read_path_api_props;
-mod read_path_api_stats;
-mod read_path_engine_idmap;
-mod read_path_engine_view;
-mod read_path_iters;
-mod read_path_labels;
-mod read_path_nodes;
-mod read_path_overlay;
-mod read_path_property_store;
-mod read_path_stats;
 pub mod snapshot;
-pub mod stats;
-pub mod wal;
 
 pub use crate::error::{Error, Result};
 
+/// Legacy compatibility constant. The Fjall backend has no NervusDB page size.
 pub const PAGE_SIZE: usize = 8192;
-pub const FILE_MAGIC: [u8; 16] = *b"NERVUSDBv2\x00\x00\x00\x00\x00\x00";
-pub const VERSION_MAJOR: u32 = 2;
+pub const FILE_MAGIC: [u8; 16] = *b"NERVUSDBFJALL\x00\x00\x00";
+pub const VERSION_MAJOR: u32 = 3;
 pub const VERSION_MINOR: u32 = 0;
-pub const STORAGE_FORMAT_EPOCH: u64 = 1;
+pub const STORAGE_FORMAT_EPOCH: u64 = 2;

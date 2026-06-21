@@ -1,7 +1,8 @@
 # Crash Recovery Validation Runbook
 
-Use this runbook when storage, WAL, file format, commit, reopen, or recovery
-behavior changes.
+Use this runbook when storage, commit, reopen, or recovery behavior changes.
+NervusDB 0.1 uses Fjall-backed local database directories; NervusDB no longer
+owns a public `.ndb + .wal` file-pair format.
 
 ## Default Command
 
@@ -20,16 +21,17 @@ verification after each kill.
 
 Verification currently checks:
 
-- WAL committed transactions can be replayed.
-- Manifest epochs do not decrease.
-- Last manifest segments can be loaded from `.ndb`.
 - `GraphEngine::open` succeeds after the interrupted writer.
+- The database directory can be reopened after a killed writer process.
+- The `CrashNode` label can be resolved and scanned through label lookup.
 - Visible edges point to known visible nodes.
+- Edge property decoding still works for committed graph data.
+- External IDs do not resolve to invisible nodes.
 
 ## When To Run
 
-- WAL append, replay, checkpoint, or truncation changes.
-- Page format or file epoch/version changes.
+- Fjall storage adapter changes.
+- Logical storage format epoch changes.
 - Transaction commit visibility changes.
 - Recovery error handling changes.
 - Any storage refactor that can affect committed data after process failure.
@@ -41,14 +43,14 @@ Verification currently checks:
 - Data scale and temp database path policy.
 - Whether committed nodes, edges, labels, and properties were visible after
   reopen.
-- Any compatibility error observed for old or invalid formats.
+- Any compatibility error observed for invalid format epochs.
 
 ## Limits
 
 This script does not prove full Cypher behavior, bindings, vector/HNSW
-durability, optimizer behavior, or long soak stability. It also does not replace
-targeted storage tests for node, edge, label, relationship type, property, and
-format-epoch invariants.
+durability, optimizer behavior, Fjall internals, or long soak stability. It also
+does not replace targeted storage tests for node, edge, label, relationship
+type, property, snapshot, tombstone, and format-epoch invariants.
 
 ## Larger Manual Runs
 

@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+pub type GraphWriteResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
+
 /// External identifier for a node, assigned by the user.
 ///
 /// This is a stable ID that users can use to reference nodes across transactions.
@@ -310,6 +312,77 @@ pub trait GraphStore {
     fn snapshot(&self) -> Self::Snapshot;
 }
 
+/// Storage-neutral write boundary used by the query executor.
+///
+/// Implementations stage graph mutations and make them durable when their
+/// owning transaction commits. The query crate depends on this trait instead of
+/// depending on a concrete storage backend.
+pub trait WriteableGraph {
+    fn create_node(
+        &mut self,
+        external_id: ExternalId,
+        label_id: LabelId,
+    ) -> GraphWriteResult<InternalNodeId>;
+
+    fn add_node_label(&mut self, node: InternalNodeId, label_id: LabelId) -> GraphWriteResult<()>;
+
+    fn remove_node_label(
+        &mut self,
+        node: InternalNodeId,
+        label_id: LabelId,
+    ) -> GraphWriteResult<()>;
+
+    fn create_edge(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+    ) -> GraphWriteResult<()>;
+
+    fn set_node_property(
+        &mut self,
+        node: InternalNodeId,
+        key: String,
+        value: PropertyValue,
+    ) -> GraphWriteResult<()>;
+
+    fn set_edge_property(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+        key: String,
+        value: PropertyValue,
+    ) -> GraphWriteResult<()>;
+
+    fn remove_node_property(&mut self, node: InternalNodeId, key: &str) -> GraphWriteResult<()>;
+
+    fn remove_edge_property(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+        key: &str,
+    ) -> GraphWriteResult<()>;
+
+    fn tombstone_node(&mut self, node: InternalNodeId) -> GraphWriteResult<()>;
+
+    fn tombstone_edge(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+    ) -> GraphWriteResult<()>;
+
+    fn get_or_create_label_id(&mut self, name: &str) -> GraphWriteResult<LabelId>;
+
+    fn get_or_create_rel_type_id(&mut self, name: &str) -> GraphWriteResult<RelTypeId>;
+
+    fn staged_created_nodes_with_labels(&self) -> Vec<(InternalNodeId, Vec<String>)> {
+        Vec::new()
+    }
+}
+
 /// A read-only snapshot of the graph state.
 ///
 /// Snapshots are immutable and provide consistent views of the graph
@@ -344,6 +417,17 @@ pub trait GraphSnapshot {
     /// The default implementation returns an empty iterator.
     fn nodes(&self) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {
         Box::new(std::iter::empty())
+    }
+
+    /// Get an iterator over all non-tombstoned nodes with a label.
+    ///
+    /// Implementations should use a storage-level label index when available.
+    /// The default implementation preserves correctness by filtering `nodes()`.
+    fn nodes_with_label(&self, label: LabelId) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {
+        Box::new(self.nodes().filter(move |iid| {
+            self.resolve_node_labels(*iid)
+                .is_some_and(|v| v.contains(&label))
+        }))
     }
 
     /// Lookup nodes using an index.

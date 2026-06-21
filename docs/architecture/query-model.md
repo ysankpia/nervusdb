@@ -14,7 +14,7 @@ with product scope, architecture notes, tests, and validation policy.
 - Planner: produce simple plans for label scan, neighbor traversal, filters,
   projection, limit, write operations, and explain.
 - Executor: return deterministic rows and apply supported writes against the
-  storage boundary.
+  storage-neutral API boundary.
 
 ## 0.1 Core Path
 
@@ -25,12 +25,25 @@ query string
   -> parser
   -> simple Mini-Cypher plan
   -> executor
-  -> GraphSnapshot or write transaction
+  -> GraphSnapshot or WriteableGraph from nervusdb-api
 ```
 
 Before 0.1, this path is optimized for correctness and predictable behavior, not
 for openCypher breadth. The default acceptance suite is
 `nervusdb/tests/core_0_1_mini_cypher.rs`.
+
+## Label Scan Rule
+
+`MATCH (n:Label)` must use `GraphSnapshot::nodes_with_label(label_id)`. It must
+not rely only on scanning every node and filtering labels in the query layer.
+
+The storage layer owns the `label_nodes` keyspace. The query layer owns only the
+decision to request nodes for a resolved label.
+
+## Boundary Rule
+
+`nervusdb-query` must not depend on `nervusdb-storage`. Shared types and traits
+belong in `nervusdb-api`.
 
 ## Before 0.1
 

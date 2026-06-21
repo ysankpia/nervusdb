@@ -4,29 +4,28 @@
 
 | Area | Debt | Impact | Plan |
 |---|---|---|---|
-| Dead code in storage | `backup.rs`, `bulkload.rs`, `vacuum.rs` (1,503 lines) still compiled in nervusdb-storage | Increases build time and binary size; API surface confusion | `git rm` these files and remove `pub mod` from lib.rs |
-| Dead plan variants | Plan::MatchIn, MatchUndirected, IndexSeek, Apply, ProcedureCall, Foreach still exist in source | Return error at runtime; 200+ lines of never-constructed variants | Delete variants after verifying no parser path reaches them |
-| Merge fields in PreparedQuery | merge_on_create_items, merge_on_match_items, etc. (6 fields) | Never read; wastes reader attention | Delete fields when touching query_api.rs next |
-| No large-scale smoke | No documented 1M node / 5M edge acceptance test | Cannot prove scale readiness | Write and document a large smoke after core stabilizes |
+| Property index ambiguity | `create_index/lookup_index` exists but is not 0.1 core | Scope drift and planner/storage ambiguity | Classify as experimental; no `prop_index` until future ADR |
+| Query warning debt | `nervusdb-query` has unused imports, unused helpers, and MSRV-related clippy warnings | Noise in validation output; can hide real warnings later | Separate cleanup PR; do not mix with storage refactor |
+| Experimental advanced query code | Parser/executor still contain features outside 0.1 core | Future tests can accidentally promote non-core behavior again | Keep out of core gates; document only when a future ADR promotes it |
+| Tombstone secondary cleanup | Node tombstone hides nodes but does not eagerly remove every secondary key | Disk space and internal keyspace drift until future cleanup | Define delete/tombstone compaction after core API stabilizes |
+| No large release-scale smoke | 10k node / 50k edge smoke passes, but no documented 1M node / 5M edge acceptance result | Cannot prove release-scale readiness | Run and record large smoke after Fjall core stabilizes |
 | No benchmark baseline | `core_bench.sh` exists but no regression detection pipeline | Performance drift invisible | Add benchmark recording and comparison after 0.1 |
-| No rustdoc on public API | Db, WriteTxn, ReadTxn have near-zero doc comments | User cannot learn API without reading source | Add rustdoc before 0.1 release |
-| File format epoch | `STORAGE_FORMAT_EPOCH = 1` defined but no focused fail-fast test for mismatch | Weak invariant enforcement | Add test during storage hardening |
-| No crates.io release | Version 0.0.1, never published | Nobody can install it | Publish after docs and smoke pass |
 
 ## Deferred Cleanup
 
 | Area | Description | Reason For Deferral |
 |---|---|---|
-| Legacy archive structure | Some archived docs may be rescuable or deletable | Not worth the audit time before 0.1 |
-| Doc cross-reference audit | Some older docs reference each other without going through `docs/index.md` | Acceptable drift; will be caught in next gardening pass |
+| Legacy archive structure | Some archived docs may be rescuable or deletable | Not worth the audit time before Fjall core lands |
+| Doc cross-reference audit | Some older docs reference each other without going through `docs/index.md` | Acceptable drift; validate current path first |
+| Old bd PB tasks | Existing beads still describe pager/page-cache work | ADR 0005 supersedes that direction; close or supersede after code lands |
 
 ## Accepted Debt
 
 | Area | Rationale |
 |---|---|
-| backup/bulkload/vacuum still compiled | Deleting them is 30 min of work and blocked only by priority — should be done soon |
-| Dead plan variants remain | Parsing still produces them for complex queries; verifying they're unreachable requires deeper analysis |
-| No Cargo feature isolation | Features add Cargo resolver complexity; soft isolation via docs and clippy scope is sufficient before 0.1 |
+| Fjall internal file layout is not documented | Fjall owns it; NervusDB documents logical keyspaces only |
+| No property range index in 0.1 | Correct graph persistence matters before planner/index breadth |
+| No independent edge ID in 0.1 | `(src, rel, dst)` is enough for the core embedded graph use case |
 
 ## Retired Debt
 
@@ -40,3 +39,9 @@
 | HNSW/vector in storage | 009-slim-to-0.1 | Deleted from storage crate |
 | Binding test suites | 009-slim-to-0.1 | examples-test/ deleted |
 | Makefile TCK targets | 009-slim-to-0.1 | Makefile deleted |
+| Query/storage dependency | 010-fjall-storage-refactor | `nervusdb-query` no longer depends on `nervusdb-storage`; writes go through `nervusdb-api::WriteableGraph` |
+| Old facade path semantics | 010-fjall-storage-refactor | `Db::open(path)` opens a database directory; `open_paths`, `ndb_path`, and `wal_path` were removed |
+| Old storage engine | 010-fjall-storage-refactor | Pager, WAL, B+Tree, CSR, L0 runs, overlay, and old read-path files were deleted |
+| Label scan path | 010-fjall-storage-refactor | `GraphSnapshot::nodes_with_label` and Fjall `label_nodes` keyspace are implemented |
+| Label/reltype namespace | 010-fjall-storage-refactor | Labels and reltypes use separate Fjall keyspaces and independent counters |
+| Core query scope drift in 0.1 gates | 010-fjall-storage-refactor | Core tests/examples no longer require optional match, aggregation, ordering/skip, or index backfill |

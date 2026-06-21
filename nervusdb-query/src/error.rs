@@ -52,6 +52,12 @@ impl From<io::Error> for Error {
     }
 }
 
+impl From<Box<dyn std::error::Error + Send + Sync + 'static>> for Error {
+    fn from(err: Box<dyn std::error::Error + Send + Sync + 'static>) -> Self {
+        Error::Other(err.to_string())
+    }
+}
+
 impl Error {
     pub fn resource_limit_exceeded(
         kind: ResourceLimitKind,

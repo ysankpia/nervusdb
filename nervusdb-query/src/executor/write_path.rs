@@ -1,6 +1,6 @@
 use super::{
     NodeValue, Plan, PropertyValue, RelationshipValue, Result, Row, Value, WriteableGraph,
-    api_property_map_to_storage, convert_api_property_to_value, execute_plan,
+    api_property_map_to_query, convert_api_property_to_value, execute_plan,
 };
 use crate::ast::Expression;
 use crate::error::Error;
@@ -121,7 +121,7 @@ pub(super) fn execute_set_from_maps<S: GraphSnapshot>(
                     Some(Value::Node(node)) => value_map_to_property_map(&node.properties)?,
                     _ => snapshot
                         .node_properties(node_id)
-                        .map(|props| api_property_map_to_storage(&props))
+                        .map(|props| api_property_map_to_query(&props))
                         .unwrap_or_default(),
                 };
                 let mut target = if *append {
@@ -159,7 +159,7 @@ pub(super) fn execute_set_from_maps<S: GraphSnapshot>(
                     Some(Value::Relationship(rel)) => value_map_to_property_map(&rel.properties)?,
                     _ => snapshot
                         .edge_properties(edge)
-                        .map(|props| api_property_map_to_storage(&props))
+                        .map(|props| api_property_map_to_query(&props))
                         .unwrap_or_default(),
                 };
                 let mut target = if *append {

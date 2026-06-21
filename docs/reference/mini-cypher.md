@@ -24,6 +24,12 @@ Read queries:
 - `LIMIT`
 - `EXPLAIN` for supported plans
 
+Storage expectation:
+
+- `MATCH (n:Label)` resolves the label ID and uses
+  `GraphSnapshot::nodes_with_label(label_id)`. It is not allowed to rely only
+  on full node scans as the 0.1 storage contract.
+
 Write queries:
 
 - `CREATE (n)`

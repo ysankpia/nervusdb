@@ -1,8 +1,8 @@
 # NervusDB Agent Guide
 
 NervusDB is being refactored into SQLite for property graphs: a Rust-first
-embedded graph database with local files, WAL recovery, persistent graph data,
-and a small query surface.
+embedded graph database with local directory storage, Fjall-backed crash-safe
+persistence, durable graph data, and a small query surface.
 
 ## Read Order
 
@@ -13,7 +13,7 @@ and a small query surface.
 5. `PROGRESS.md`
 6. `docs/architecture/overview.md`
 7. `docs/engineering/validation-policy.md`
-8. The relevant active plan under `docs/plans/active/`
+8. `docs/plans/active/010-fjall-storage-refactor.md`
 
 Archived platform-era documents are evidence only. Do not use them to infer
 current scope unless a current ADR promotes that material.
@@ -23,9 +23,9 @@ current scope unless a current ADR promotes that material.
 Every change must either move the 0.1 embedded graph core forward or cleanly
 isolate non-core work.
 
-0.1 core means Rust embedded API, local file storage, WAL/crash recovery,
-node/edge/label/property persistence, label scans, neighbor traversal,
-Mini-Cypher, and CLI smoke/debug/import workflows.
+0.1 core means Rust embedded API, local database directory storage,
+Fjall-backed committed persistence, node/edge/label/property persistence, label
+scans, neighbor traversal, Mini-Cypher, and CLI smoke/debug/import workflows.
 
 ## Frozen Before 0.1
 

@@ -3,6 +3,9 @@
 This is the current map for the SQLite-for-graphs 0.1 refactor. If a document is
 not linked here or under the archive index, do not use it to infer current scope.
 
+Current active direction: Fjall-backed local database directory storage for the
+0.1 embedded Rust graph core.
+
 ## Product
 
 - Direction contract: `docs/product/direction-contract.md`
@@ -57,7 +60,7 @@ not linked here or under the archive index, do not use it to infer current scope
 
 ## Plans
 
-- Slimming plan (current): `docs/plans/slimming-plan.md`
+- Active Fjall storage refactor: `docs/plans/active/010-fjall-storage-refactor.md`
 - Active plans: `docs/plans/active/`
 - Completed plans: `docs/plans/completed/`
 - Technical debt: `docs/plans/tech-debt.md`

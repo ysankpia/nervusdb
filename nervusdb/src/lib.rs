@@ -1,7 +1,8 @@
 //! # NervusDB — embedded property graph database for Rust
 //!
-//! SQLite-style local files, crash-safe WAL persistence, ACID single-writer
-//! transactions, lock-free snapshot reads. Zero configuration, zero server.
+//! SQLite-style local database directory, Fjall-backed crash-safe persistence,
+//! ACID single-writer transactions, lock-free snapshot reads. Zero
+//! configuration, zero server.
 //!
 //! ## Quickstart
 //!
@@ -9,7 +10,7 @@
 //! use nervusdb::Db;
 //! use nervusdb_query::{prepare, query_collect, Params};
 //!
-//! let db = Db::open("my_graph.ndb")?;
+//! let db = Db::open("my_graph")?;
 //!
 //! // CREATE
 //! let snapshot = db.snapshot();
@@ -21,7 +22,7 @@
 //! // QUERY
 //! let rows = query_collect(
 //!     &db.snapshot(),
-//!     "MATCH (n:Person) WHERE n.age > 20 RETURN n.name ORDER BY n.name LIMIT 10",
+//!     "MATCH (n:Person) WHERE n.age > 20 RETURN n.name LIMIT 10",
 //!     &Params::new(),
 //! )?;
 //! assert_eq!(rows[0].columns()[0].1, "Alice".into());
@@ -40,10 +41,7 @@
 //! | Set property | `MATCH (n) SET n.name = 'Bob'` |
 //! | Delete | `MATCH (n) WHERE ... DELETE n` |
 //! | Remove property | `MATCH (n) REMOVE n.name` |
-//! | OPTIONAL MATCH | `MATCH (a) OPTIONAL MATCH (a)-[:KNOWS]->(b)` |
-//! | Aggregation | `RETURN count(*), sum(n.x), avg(n.x), min(n.x), max(n.x)` |
-//! | ORDER BY | `ORDER BY n.name DESC` |
-//! | SKIP / LIMIT | `SKIP 5 LIMIT 10` |
+//! | LIMIT | `LIMIT 10` |
 //! | EXPLAIN | `EXPLAIN MATCH (n) RETURN n` |
 //! | Label operations | `SET n:Label`, `REMOVE n:Label` |
 //! | Property Map SET | `SET n = {x: 1}` |
@@ -75,7 +73,8 @@
 //!     └────────────┘ └────────────┘
 //! ```
 //!
-//! Files: `*.ndb` (data pages) + `*.wal` (write-ahead log, crash recovery).
+//! Storage path: a local database directory managed by Fjall. Fjall's internal
+//! files are not part of the NervusDB public format contract.
 
 mod error;
 
@@ -88,7 +87,7 @@ use std::path::{Path, PathBuf};
 pub use error::{Error, Result};
 pub use nervusdb_api::{
     EdgeKey, ExternalId, GraphSnapshot, GraphStore, InternalNodeId, LabelId, PropertyValue,
-    RelTypeId,
+    RelTypeId, WriteableGraph,
 };
 pub use nervusdb_query as query;
 pub use nervusdb_storage::PAGE_SIZE;
@@ -100,7 +99,7 @@ pub use nervusdb_storage::PAGE_SIZE;
 /// ```rust,ignore
 /// use nervusdb::Db;
 ///
-/// let db = Db::open("my_graph.ndb").unwrap();
+/// let db = Db::open("my_graph").unwrap();
 /// ```
 ///
 /// # Concurrency
@@ -111,51 +110,33 @@ pub use nervusdb_storage::PAGE_SIZE;
 #[derive(Debug)]
 pub struct Db {
     engine: GraphEngine,
-    ndb_path: PathBuf,
-    wal_path: PathBuf,
+    storage_dir: PathBuf,
 }
 
 impl Db {
-    /// Open a database at the given path.
+    /// Open a database directory at the given path.
     ///
-    /// - If `path` is a directory, files will be `<path>.ndb` and `<path>.wal`.
-    /// - If `path` ends in `.ndb`, the WAL file is inferred.
-    /// - If `path` ends in `.wal`, the data file is inferred.
-    ///
-    /// Creates the database files if they don't exist.
+    /// Creates the directory and Fjall-managed storage files if they don't
+    /// exist. NervusDB 0.1 does not expose or preserve a `.ndb/.wal` file-pair
+    /// format.
     ///
     /// # Errors
     ///
-    /// Returns an error if files cannot be created or opened, or if recovery
-    /// from a previous crash fails.
+    /// Returns an error if the directory cannot be created or opened, or if
+    /// storage recovery fails.
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref();
-        let (ndb_path, wal_path) = derive_paths(path);
-        Self::open_paths(ndb_path, wal_path)
-    }
-
-    /// Open a database with explicit paths for the data and WAL files.
-    pub fn open_paths(ndb_path: impl AsRef<Path>, wal_path: impl AsRef<Path>) -> Result<Self> {
-        let ndb_path = ndb_path.as_ref().to_path_buf();
-        let wal_path = wal_path.as_ref().to_path_buf();
-        let engine = GraphEngine::open(&ndb_path, &wal_path)?;
+        let storage_dir = path.as_ref().to_path_buf();
+        let engine = GraphEngine::open(&storage_dir)?;
         Ok(Self {
             engine,
-            ndb_path,
-            wal_path,
+            storage_dir,
         })
     }
 
-    /// Path to the `.ndb` data file.
+    /// Path to the local database directory.
     #[inline]
-    pub fn ndb_path(&self) -> &Path {
-        &self.ndb_path
-    }
-
-    /// Path to the `.wal` write-ahead log file.
-    #[inline]
-    pub fn wal_path(&self) -> &Path {
-        &self.wal_path
+    pub fn storage_dir(&self) -> &Path {
+        &self.storage_dir
     }
 
     /// Create a read snapshot for queries and traversals.
@@ -184,8 +165,8 @@ impl Db {
     ///
     /// Only one write transaction can exist at a time across all threads.
     /// All modifications are buffered in memory until [`WriteTxn::commit`]
-    /// is called, at which point they are written atomically to the WAL
-    /// and made visible to new snapshots.
+    /// is called, at which point they are written atomically through Fjall and
+    /// made visible to new snapshots.
     ///
     /// # Panics
     ///
@@ -206,11 +187,10 @@ impl Db {
         }
     }
 
-    /// Compact L0 runs into CSR segments and persist properties.
+    /// Ask the storage backend to persist pending state.
     ///
-    /// This is a potentially expensive operation that merges pending writes
-    /// into read-optimized CSR segments and sinks properties into the B-Tree
-    /// property store. Call during maintenance windows.
+    /// In the Fjall backend this is a durability flush, not a NervusDB-owned
+    /// B+Tree/CSR compaction step.
     pub fn compact(&self) -> Result<()> {
         self.engine.compact().map_err(Error::from)
     }
@@ -229,18 +209,11 @@ impl Db {
         Ok(())
     }
 
-    /// Create a B-Tree index on `(label, property)` for fast equality lookups.
+    /// Non-core index hook retained for experimental callers.
     ///
-    /// Existing nodes with matching label and property are backfilled
-    /// into the index automatically. The index is persisted across restarts.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// db.create_index("User", "email").unwrap();
-    /// let snap = db.snapshot();
-    /// let results = snap.lookup_index("User", "email", &"alice@example.com".into());
-    /// ```
+    /// Property indexes are not part of the 0.1 core contract. The Fjall
+    /// backend currently treats this as a no-op; query correctness must not
+    /// depend on this method.
     pub fn create_index(&self, label: &str, property: &str) -> Result<()> {
         self.engine
             .create_index(label, property)
@@ -252,7 +225,7 @@ impl Db {
 ///
 /// Created by [`Db::snapshot`]. Provides access to nodes, labels,
 /// properties, neighbor traversal, label/relationship-type resolution,
-/// and index lookups. All methods are read-only and lock-free.
+/// All methods are read-only and lock-free.
 ///
 /// # Methods
 ///
@@ -263,7 +236,6 @@ impl Db {
 /// - `node_properties()` / `edge_properties()` — read all properties of a node/edge
 /// - `resolve_label_id()` / `resolve_label_name()` — label name ↔ id
 /// - `resolve_rel_type_id()` / `resolve_rel_type_name()` — rel type name ↔ id
-/// - `lookup_index()` — fast equality lookup via B-Tree index
 /// - `node_count()` / `edge_count()` — count entities
 pub struct DbSnapshot(StorageSnapshot);
 
@@ -271,7 +243,7 @@ impl GraphSnapshot for DbSnapshot {
     type Neighbors<'a> = Box<dyn Iterator<Item = EdgeKey> + 'a>;
 
     fn neighbors(&self, src: InternalNodeId, rel: Option<RelTypeId>) -> Self::Neighbors<'_> {
-        self.0.neighbors(src, rel)
+        Box::new(self.0.neighbors(src, rel))
     }
 
     fn incoming_neighbors(
@@ -279,11 +251,15 @@ impl GraphSnapshot for DbSnapshot {
         dst: InternalNodeId,
         rel: Option<RelTypeId>,
     ) -> Self::Neighbors<'_> {
-        self.0.incoming_neighbors(dst, rel)
+        Box::new(self.0.incoming_neighbors(dst, rel))
     }
 
     fn nodes(&self) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {
         self.0.nodes()
+    }
+
+    fn nodes_with_label(&self, label: LabelId) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {
+        self.0.nodes_with_label(label)
     }
 
     fn resolve_external(&self, iid: InternalNodeId) -> Option<ExternalId> {
@@ -379,7 +355,8 @@ impl ReadTxn {
 /// An ACID write transaction.
 ///
 /// Created by [`Db::begin_write`]. All modifications are buffered in memory
-/// until [`commit`](WriteTxn::commit) writes them atomically to the WAL.
+/// until [`commit`](WriteTxn::commit) writes them atomically through the
+/// storage backend.
 ///
 /// Only one write transaction may exist at a time. Drop without committing
 /// discards all pending changes.
@@ -427,15 +404,19 @@ impl<'a> WriteTxn<'a> {
 
     /// Get or create a relationship type by name. Returns the type ID.
     ///
-    /// Relationship types share the label namespace internally — use
-    /// distinct names from labels to avoid collisions.
     pub fn get_or_create_rel_type(&mut self, name: &str) -> Result<RelTypeId> {
         self.inner.get_or_create_rel_type(name).map_err(Error::from)
     }
 
     /// Create a directed edge from `src` to `dst` with relationship type `rel`.
-    pub fn create_edge(&mut self, src: InternalNodeId, rel: RelTypeId, dst: InternalNodeId) {
+    pub fn create_edge(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+    ) -> Result<()> {
         self.inner.create_edge(src, rel, dst);
+        Ok(())
     }
 
     /// Soft-delete a node. The node becomes invisible to queries but its
@@ -493,55 +474,43 @@ impl<'a> WriteTxn<'a> {
 
     /// Commit this transaction atomically.
     ///
-    /// Writes all buffered modifications to the WAL and fsyncs, then makes
-    /// them visible to new read snapshots. Consumes the transaction —
-    /// call once per `begin_write`.
+    /// Writes all buffered modifications through Fjall, then makes them
+    /// visible to new read snapshots. Consumes the transaction; call once per
+    /// `begin_write`.
     pub fn commit(self) -> Result<()> {
         self.inner.commit().map_err(Error::from)
     }
 }
 
-fn convert_to_storage_property_value(v: PropertyValue) -> nervusdb_storage::property::PropertyValue {
-    v
-}
-
-fn derive_paths(path: &Path) -> (PathBuf, PathBuf) {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("ndb") => (path.to_path_buf(), path.with_extension("wal")),
-        Some("wal") => (path.with_extension("ndb"), path.to_path_buf()),
-        _ => (path.with_extension("ndb"), path.with_extension("wal")),
-    }
-}
-
-impl nervusdb_query::WriteableGraph for WriteTxn<'_> {
+impl WriteableGraph for WriteTxn<'_> {
     fn create_node(
         &mut self,
         external_id: ExternalId,
         label_id: LabelId,
-    ) -> nervusdb_query::Result<InternalNodeId> {
+    ) -> nervusdb_api::GraphWriteResult<InternalNodeId> {
         self.inner
             .create_node(external_id, label_id)
-            .map_err(|e| nervusdb_query::Error::Other(e.to_string()))
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     }
 
     fn add_node_label(
         &mut self,
         node: InternalNodeId,
         label_id: LabelId,
-    ) -> nervusdb_query::Result<()> {
+    ) -> nervusdb_api::GraphWriteResult<()> {
         self.inner
             .add_node_label(node, label_id)
-            .map_err(|e| nervusdb_query::Error::Other(e.to_string()))
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     }
 
     fn remove_node_label(
         &mut self,
         node: InternalNodeId,
         label_id: LabelId,
-    ) -> nervusdb_query::Result<()> {
+    ) -> nervusdb_api::GraphWriteResult<()> {
         self.inner
             .remove_node_label(node, label_id)
-            .map_err(|e| nervusdb_query::Error::Other(e.to_string()))
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     }
 
     fn create_edge(
@@ -549,7 +518,7 @@ impl nervusdb_query::WriteableGraph for WriteTxn<'_> {
         src: InternalNodeId,
         rel: RelTypeId,
         dst: InternalNodeId,
-    ) -> nervusdb_query::Result<()> {
+    ) -> nervusdb_api::GraphWriteResult<()> {
         self.inner.create_edge(src, rel, dst);
         Ok(())
     }
@@ -558,8 +527,8 @@ impl nervusdb_query::WriteableGraph for WriteTxn<'_> {
         &mut self,
         node: InternalNodeId,
         key: String,
-        value: nervusdb_storage::property::PropertyValue,
-    ) -> nervusdb_query::Result<()> {
+        value: PropertyValue,
+    ) -> nervusdb_api::GraphWriteResult<()> {
         self.inner.set_node_property(node, key, value);
         Ok(())
     }
@@ -570,8 +539,8 @@ impl nervusdb_query::WriteableGraph for WriteTxn<'_> {
         rel: RelTypeId,
         dst: InternalNodeId,
         key: String,
-        value: nervusdb_storage::property::PropertyValue,
-    ) -> nervusdb_query::Result<()> {
+        value: PropertyValue,
+    ) -> nervusdb_api::GraphWriteResult<()> {
         self.inner.set_edge_property(src, rel, dst, key, value);
         Ok(())
     }
@@ -580,7 +549,7 @@ impl nervusdb_query::WriteableGraph for WriteTxn<'_> {
         &mut self,
         node: InternalNodeId,
         key: &str,
-    ) -> nervusdb_query::Result<()> {
+    ) -> nervusdb_api::GraphWriteResult<()> {
         self.inner.remove_node_property(node, key);
         Ok(())
     }
@@ -591,12 +560,12 @@ impl nervusdb_query::WriteableGraph for WriteTxn<'_> {
         rel: RelTypeId,
         dst: InternalNodeId,
         key: &str,
-    ) -> nervusdb_query::Result<()> {
+    ) -> nervusdb_api::GraphWriteResult<()> {
         self.inner.remove_edge_property(src, rel, dst, key);
         Ok(())
     }
 
-    fn tombstone_node(&mut self, node: InternalNodeId) -> nervusdb_query::Result<()> {
+    fn tombstone_node(&mut self, node: InternalNodeId) -> nervusdb_api::GraphWriteResult<()> {
         self.inner.tombstone_node(node);
         Ok(())
     }
@@ -606,21 +575,24 @@ impl nervusdb_query::WriteableGraph for WriteTxn<'_> {
         src: InternalNodeId,
         rel: RelTypeId,
         dst: InternalNodeId,
-    ) -> nervusdb_query::Result<()> {
+    ) -> nervusdb_api::GraphWriteResult<()> {
         self.inner.tombstone_edge(src, rel, dst);
         Ok(())
     }
 
-    fn get_or_create_label_id(&mut self, name: &str) -> nervusdb_query::Result<LabelId> {
+    fn get_or_create_label_id(&mut self, name: &str) -> nervusdb_api::GraphWriteResult<LabelId> {
         self.inner
             .get_or_create_label(name)
-            .map_err(|e| nervusdb_query::Error::Other(e.to_string()))
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     }
 
-    fn get_or_create_rel_type_id(&mut self, name: &str) -> nervusdb_query::Result<RelTypeId> {
+    fn get_or_create_rel_type_id(
+        &mut self,
+        name: &str,
+    ) -> nervusdb_api::GraphWriteResult<RelTypeId> {
         self.inner
             .get_or_create_rel_type(name)
-            .map_err(|e| nervusdb_query::Error::Other(e.to_string()))
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     }
 
     fn staged_created_nodes_with_labels(&self) -> Vec<(InternalNodeId, Vec<String>)> {

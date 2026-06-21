@@ -2,9 +2,12 @@
 
 ## Product Definition
 
-NervusDB is SQLite for property graphs: a Rust-first embedded graph database with
-local file storage, WAL-backed crash recovery, persistent graph data, and a
-small query surface.
+NervusDB is SQLite for property graphs: a Rust-first embedded graph database
+with local directory storage, Fjall-backed crash-safe persistence, durable graph
+data, and a small query surface.
+
+NervusDB owns the graph model and query/API contract. Fjall owns low-level KV
+persistence. The product goal is not to reimplement a general storage engine.
 
 ## Primary User
 
@@ -14,59 +17,81 @@ ownership graphs, module graphs, or small relationship-heavy features.
 
 ## North Star Workflow
 
-```
-open(path) -> write graph data -> query one-hop/two-hop relationships -> crash/reopen -> trust results
+```text
+open(directory) -> write graph data -> query one-hop/two-hop relationships -> crash/reopen -> trust results
 ```
 
 ## In Scope (0.1)
 
-- **Rust embedded API** — `Db::open`, `WriteTxn`, `DbSnapshot`, `ReadTxn`, Mini-Cypher.
-- **Local `.ndb` + `.wal` files** — 每数据库一个文件对。
-- **WAL-backed crash recovery** — 提交的数据在 kill/reopen 后仍可读。
-- **节点 / 边 / 标签 / 属性持久化** — 创建、读取、删除。
-- **一个写入者 + 快照读取** — `begin_write` 串行化，读不受写阻塞。
-- **标签扫描** — `MATCH (n:Label)`。
-- **按关系类型遍历邻居** — `MATCH (a)-[:TYPE]->(b)`（一跳）、两跳。
-- **Mini-Cypher** — 仅 `RETURN`/`MATCH`/`CREATE`/`SET`/`DELETE`/`LIMIT`/`EXPLAIN`。
-- **CLI** — 本地调试、查询、写入、文件导入。
-- **10 个可运行的 0.1 示例** — Social/Dependency/Knowledge Graph 等。
+- **Rust embedded API** — `Db::open`, `WriteTxn`, `DbSnapshot`, `ReadTxn`, and
+  Mini-Cypher.
+- **Local database directory** — `Db::open(path)` opens a directory managed by
+  the Fjall-backed storage layer.
+- **Crash-safe committed persistence** — committed data remains readable after
+  process failure and reopen.
+- **Node / edge / label / relationship type / property persistence**.
+- **One writer and snapshot readers** — write transactions are serialized;
+  snapshots are immutable read views.
+- **Label scans** — `MATCH (n:Label)` uses label storage, not only full graph
+  filtering.
+- **Neighbor traversal by relationship type** — directed one-hop and documented
+  two-hop patterns.
+- **Mini-Cypher core** — documented `MATCH`, `RETURN`, `CREATE`, basic `SET`,
+  basic `DELETE`, `WHERE` equality, `LIMIT`, and `EXPLAIN`.
+- **CLI** — local smoke/debug/query/write/import-style workflows.
+- **Runnable 0.1 examples** — realistic local graph examples that stay inside
+  the supported core.
 
-## Explicitly Deleted (Not Just Out Of Scope)
+## Current Storage Contract
 
-以下代码将从仓库中物理删除。Git 历史中有备份。
+0.1 uses a Fjall-backed logical keyspace model. The public contract is a local
+database directory, not a `.ndb + .wal` file pair.
 
-- **HNSW/向量搜索** — `nervusdb-storage/src/index/hnsw/` 全部（824 行）。删 `ordered-float`、`rand` 依赖。
-- **Python 绑定** — `nervusdb-pyo3/` 全部。
-- **Node.js 绑定** — `nervusdb-node/` 全部。
-- **C API 绑定** — `nervusdb-capi/` 全部。
-- **完整 openCypher 语法** — MERGE、UNWIND、CALL/子查询/存储过程、WITH、UNION、FOREACH、OPTIONAL MATCH、ORDER BY、SKIP、DISTINCT、聚合、CASE、EXISTS、模式推导、命名路径、变长路径、字符串高级函数、类型交替。
-- **历史集成测试** — ~35 个 `tXXX_*.rs` 文件。
-- **TCK 夹具** — `tck_harness.rs` + `opencypher_tck/`。
-- **绑定测试** — `examples-test/` 全部。
-- **CI 夜间工作流** — 10 个非 `ci.yml` 的 workflow。
-- **历史验证脚本** — 31 个非核心的脚本。
-- **fuzz 目标** — `fuzz/` 全部。
-- **实验性 API 导出** — `backup`、`bulkload`、`vacuum` 从 facade crate root 移除。
-- **Python/TypeScript 示例** — `examples/py-local/`、`examples/ts-local/`。
-- **Makefile / lefthook** — 用纯 `scripts/`。
+The current model has no independent edge ID and no parallel edges. Edge
+identity is `(src_iid, rel_type_id, dst_iid)`. Labels and relationship types are
+separate namespaces. Property keys are original strings with length framing, not
+hashes.
+
+## Explicitly Deleted Or Frozen Before 0.1
+
+The following are not current 0.1 product work:
+
+- self-built Pager/WAL/B+Tree/CSR storage direction
+- `.ndb/.wal` as a public file-format promise
+- HNSW/vector search
+- Python, Node.js, and C bindings
+- full openCypher
+- procedures, subqueries, pattern comprehension
+- `OPTIONAL MATCH`, broad aggregation, `ORDER BY/SKIP`, `WITH`, `UNION`,
+  `UNWIND`, and variable-length paths as core gates
+- property range indexes
+- openCypher TCK pass rate as a product success metric
+- fuzz, chaos, soak, perf, TCK, or release windows as default development gates
+
+Archived platform-era material is evidence only. Promotion back into core
+requires a new ADR and updates to product, architecture, validation, and active
+plan docs.
 
 ## Acceptance Criteria
 
 0.1 is credible when:
 
-- A Rust program can create and reopen a local graph database.
-- Nodes, edges, labels, and properties persist across restart.
-- Committed data survives kill/reopen recovery tests.
-- One-hop and two-hop queries are documented and tested.
+- A Rust program can create and reopen a local graph database directory.
+- Nodes, edges, labels, relationship types, and properties persist across
+  restart.
+- Committed data survives process-level crash/reopen smoke.
+- Label scans and one-hop/two-hop traversal are documented and tested.
 - Mini-Cypher results are deterministic for the supported surface.
-- Ten realistic examples are documented and runnable.
+- CLI smoke/write/query workflows work against a local directory.
 - Rust API docs are clear enough to start without a server or non-Rust SDK.
-- A manual large smoke can create 1,000,000 nodes and 5,000,000 edges without corruption on documented hardware.
+- A manual large smoke can create 1,000,000 nodes and 5,000,000 edges without
+  corruption on documented hardware.
 
 ## Product Bias
 
 - Correctness before language breadth.
 - Rust API before SDK expansion.
-- WAL/recovery proof before feature count.
+- Reopen/crash proof before feature count.
 - Mini-Cypher before full Cypher.
+- Logical graph storage before custom storage-engine work.
 - Fast focused validation before historical gate matrices.

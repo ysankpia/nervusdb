@@ -5,13 +5,10 @@ use tempfile::tempdir;
 fn core_0_1_rust_facade_write_snapshot_and_reopen() {
     let dir = tempdir().unwrap();
     let base = dir.path().join("graph");
-    let ndb_path = base.with_extension("ndb");
-    let wal_path = base.with_extension("wal");
 
     let (alice, bob, knows) = {
         let db = Db::open(&base).unwrap();
-        assert_eq!(db.ndb_path(), ndb_path.as_path());
-        assert_eq!(db.wal_path(), wal_path.as_path());
+        assert_eq!(db.storage_dir(), base.as_path());
 
         let mut txn = db.begin_write();
         let person = txn.get_or_create_label("Person").unwrap();
@@ -33,7 +30,7 @@ fn core_0_1_rust_facade_write_snapshot_and_reopen() {
             PropertyValue::String("Bob".to_string()),
         )
         .unwrap();
-        txn.create_edge(alice, knows, bob);
+        txn.create_edge(alice, knows, bob).unwrap();
         txn.set_edge_property(
             alice,
             knows,
@@ -63,6 +60,8 @@ fn core_0_1_rust_facade_write_snapshot_and_reopen() {
             snapshot.node_property(alice, "age"),
             Some(PropertyValue::Int(30))
         );
+        let person_nodes: Vec<_> = snapshot.nodes_with_label(person).collect();
+        assert_eq!(person_nodes, vec![alice, bob]);
 
         let outgoing: Vec<EdgeKey> = snapshot.neighbors(alice, Some(knows)).collect();
         assert_eq!(

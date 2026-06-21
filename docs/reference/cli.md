@@ -17,8 +17,13 @@ v2 write   Execute supported Mini-Cypher write statements.
 v2 repl    Local interactive debug session.
 ```
 
-`v2 vacuum` is a maintenance command. It may be useful locally, but it is not a
-0.1 core stability promise until the API surface doc promotes it.
+`v2 vacuum` is a maintenance command if present. It is not a 0.1 core stability
+promise until the API surface doc promotes it.
+
+## Database Path
+
+`--db <path>` is a local database directory. The CLI must not document `.ndb`
+and `.wal` as public files.
 
 ## Query
 
@@ -30,7 +35,7 @@ cargo run -p nervusdb-cli -- v2 query \
 
 Options:
 
-- `--db <path>`: database base path.
+- `--db <path>`: database directory.
 - `--cypher <query>`: query string. Mutually exclusive with `--file`.
 - `--file <path>`: read query from a file.
 - `--params-json <json>`: parameters as a JSON object. The 0.1 CLI path accepts
@@ -58,7 +63,7 @@ paths documented by Mini-Cypher tests.
 
 Options:
 
-- `--db <path>`: database base path.
+- `--db <path>`: database directory.
 - `--cypher <query>`: write statement. Mutually exclusive with `--file`.
 - `--file <path>`: read one write statement from a file.
 - `--params-json <json>`: parameters as a JSON object. The 0.1 CLI path accepts

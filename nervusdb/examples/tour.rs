@@ -15,7 +15,7 @@ fn main() -> Result<()> {
 
     // 1. Setup: Open a database in a temporary directory
     let dir = tempdir()?;
-    let db_path = dir.path().join("matrix.ndb");
+    let db_path = dir.path().join("matrix");
     let db = Db::open(&db_path)?;
     println!("✅ Database opened at: {:?}", db_path);
 

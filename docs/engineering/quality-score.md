@@ -4,11 +4,11 @@
 
 | Dimension | Score | Evidence |
 |---|---|---|
-| Product / Domain | 4 | Clear direction-contract, scope-0.1, vision, non-goals, user stories. Product bias documented. Ten user stories map to runnable examples. |
-| Architecture | 4 | Crate boundaries documented. 5 workspace crates, clean separation. Storage/query/API models documented with invariants. Four ADRs record key decisions. |
-| Validation | 4 | `scripts/check.sh` runs fmt + core clippy + 16 core tests. Validation-policy table maps change type to required check. Crash recovery script exists. CI runs core check on push/PR. |
-| Documentation | 4 | All harness-layer docs exist and are coherent. Direction-contract, roadmap, architecture-invariants, quality-score, tech-debt all present. ADRs, plan template, bug template in place. |
-| Maintainability | 4 | 5 focused crates, 6 scripts, 1 CI workflow. No bindings, no HNSW, no dead query code. Clean workspace. `.gitignore` covers OS/IDE/build/temp. |
+| Product / Domain | 4 | Direction, scope, non-goals, and active Fjall plan now define a finishable embedded Rust graph core. |
+| Architecture | 4 | Code now matches the Fjall directory-storage contract; query/storage meet through `nervusdb-api`; old storage code was deleted. |
+| Validation | 4 | Fjall reopen, label scan, traversal, property, snapshot, crash recovery, examples, default check, and workspace tests passed. |
+| Documentation | 4 | Current docs now name the storage reset and scope boundaries directly. |
+| Maintainability | 4 | The storage crate is reduced to Fjall glue plus graph semantics; remaining warning debt is isolated mostly in query. |
 
 ## Dimension Details
 
@@ -17,73 +17,72 @@
 Strengths:
 
 - `docs/product/vision.md` states "SQLite for property graphs" clearly.
-- `docs/product/scope-0.1.md` lists concrete in-scope and out-of-scope items.
-- `docs/product/non-goals.md` explicitly names frozen ambitions.
-- `docs/product/user-stories-0.1.md` defines ten executable acceptance stories.
+- `docs/product/scope-0.1.md` limits the product to embedded Rust graph core.
+- `docs/product/non-goals.md` blocks platform and full-Cypher scope creep.
+- ADR 0005 states why Fjall replaces self-built storage.
 
 Gaps:
 
-- No third-party validation that the ten user stories actually map to real use.
+- No third-party validation that the ten user stories map to real use.
+- Release-scale smoke remains manual; current checked smoke is 10k nodes and
+  50k unique edges.
 
 ### Architecture — 4
 
 Strengths:
 
-- Crate boundaries documented in both `crate-boundaries.md` and `workspace-layers.md`.
-- Core path: `nervusdb -> nervusdb-api -> nervusdb-storage / nervusdb-query -> nervusdb-cli`.
-- Storage model documented with invariants (format epoch, WAL replay, reopen).
-- Query model limited to Mini-Cypher with clear boundaries.
-- API surface classified as core vs experimental/maintenance.
-- ADR 0004 records the core/experimental/frozen layering decision.
+- Crate boundaries now state that query and storage meet only through
+  `nervusdb-api`.
+- Storage model now describes logical Fjall keyspaces.
+- API surface now removes `.ndb/.wal` from 0.1 core.
+- `nervusdb-query` no longer depends on `nervusdb-storage`.
+- `nervusdb-storage` no longer contains Pager/WAL/B+Tree/CSR/read-path modules.
+- Labels and relationship types are separate keyspaces and counters.
 
 Gaps:
 
-- backup.rs, bulkload.rs, vacuum.rs still compiled in nervusdb-storage as dead code.
-- No Cargo feature isolation for the storage-only dead code paths.
+- `Db::compact/checkpoint/close` remain compatibility-style maintenance wrappers
+  over Fjall persistence and should be simplified or documented further later.
 
 ### Validation — 4
 
 Strengths:
 
-- `bash scripts/check.sh` is the fast default (fmt + core clippy + 16 core tests).
-- `bash scripts/workspace_quick_test.sh` targets core Mini-Cypher only.
-- Validation-policy table (`docs/engineering/validation-policy.md`) maps change type to required command.
-- Crash recovery script (`scripts/core_crash_recovery.sh`) exists and passes.
-- CI (`ci.yml`) runs `bash scripts/check.sh` on push/PR to main.
+- `bash scripts/check.sh` remains the default validation path.
+- Crash recovery script exists.
+- Validation policy now includes Fjall-specific focused checks.
+- `cargo test --workspace` passes after the Fjall refactor.
+- `bash scripts/core_crash_recovery.sh` passes against the Fjall backend.
 
 Gaps:
 
-- No large-scale acceptance test (1M nodes / 5M edges).
-- No benchmark regression detection.
-- No documented regression guard requirement for bug fixes in script form.
+- Query crate still emits warning noise, including MSRV/clippy warnings, which
+  should be cleaned separately.
 
 ### Documentation — 4
 
 Strengths:
 
-- `docs/index.md` is the default map.
-- Product, architecture, and engineering docs are present and coherent.
-- ADRs record key decisions with context and consequences.
-- Plan template and bug template exist.
+- ADR 0005 and active plan 010 are current direction.
+- Product, architecture, API, storage, validation, and debt docs share the same
+  storage model.
 
 Gaps:
 
-- Rust public API has near-zero rustdoc comments.
-- README quickstart code not verified as compilable.
-- Some engineering docs overlap (branching-pr.md could merge into git-workflow.md).
+- Some archived and older reference material may still mention the old storage
+  model. It is not current unless linked from `docs/index.md`.
 
 ### Maintainability — 4
 
 Strengths:
 
-- Workspace shrunk to 5 crates (removed pyo3, capi).
-- All 6 kept scripts are core-focused and documented in runbooks.
-- Single CI workflow (ci.yml), no nightly noise.
-- No bindings, no HNSW, no historical integration tests in workspace.
-- `.gitignore` covers OS, IDE, build, temp, and generated artifacts.
+- Workspace has 5 focused crates.
+- Current docs forbid restoring platform-era breadth.
+- Fjall reduces the amount of custom storage code NervusDB must own.
+- Storage crate currently has only API re-export, error, property, snapshot,
+  engine, and crash-test surfaces.
 
 Gaps:
 
-- backup.rs, bulkload.rs, vacuum.rs (1,503 lines) still compile as dead code.
-- Plan variants MatchIn, MatchUndirected, IndexSeek, Apply, ProcedureCall, Foreach still exist in source (return error at runtime).
-- Merge-related fields in PreparedQuery never read.
+- Existing advanced query code remains outside the intended 0.1 core and should
+  not be promoted by tests without a future ADR.

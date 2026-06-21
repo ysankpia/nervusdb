@@ -2,13 +2,14 @@
 
 A change is done when:
 
-- It matches `docs/product/direction-contract.md` and `docs/product/scope-0.1.md`.
+- It matches `docs/product/direction-contract.md` and
+  `docs/product/scope-0.1.md`.
 - Tests or regression guards cover behavior changes.
 - Public API, storage format, build, validation, or operational changes update
   docs in the same PR.
 - `bash scripts/check.sh` passes, or any skipped part is explicitly explained.
-- Quality score, technical debt, or architecture invariants were updated when the
-  change reveals a quality gap, accepted debt, or boundary violation.
+- Quality score, technical debt, or architecture invariants were updated when
+  the change reveals a quality gap, accepted debt, or boundary violation.
 - Historical/experimental areas are not promoted into the 0.1 path by accident.
 - `git status --short` contains only intentional changes before commit.
 
@@ -19,5 +20,14 @@ is not practical, document the prevention guard in `docs/bugs/`.
 
 ## Storage And Recovery Changes
 
-Storage, WAL, page format, and recovery changes are not done until reopen or
-replay behavior is tested.
+Storage, backend, keyspace, and recovery changes are not done until reopen or
+crash/reopen behavior is tested.
+
+For the Fjall refactor, done also requires:
+
+- graph data persists after dropping and reopening `Db`
+- label scans use storage-level label access
+- outgoing and incoming traversal round-trip
+- node and edge properties round-trip
+- query/storage dependency direction matches `docs/engineering/dependency-policy.md`
+- docs no longer describe `.ndb + .wal` as the current public contract

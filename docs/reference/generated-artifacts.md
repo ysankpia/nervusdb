@@ -6,17 +6,14 @@
 |---|---|---|---|
 | Rust build output | `target/` | `cargo build` | Gitignored |
 | Cargo lock | `Cargo.lock` | `cargo generate-lockfile` | Tracked in git |
-| npm modules | `nervusdb-node/node_modules/` | `npm install` | Gitignored |
-| npm dist | `nervusdb-node/dist/` | `npm run build` | Gitignored |
-| TypeScript build info | `*.tsbuildinfo` | `tsc` | Gitignored |
+| TypeScript build info | `*.tsbuildinfo` | `tsc` if JS tooling is restored | Gitignored |
 
 ## Runtime / Test Artifacts
 
 | Artifact | Location | Regeneration | Status |
 |---|---|---|---|
-| Database files | `*.ndb`, `*.wal` | Application creates on `Db::open` | Gitignored (patterns in `.gitignore`) |
-| Database files | `*.synapsedb`, `*.nervusdb`, `*.redb` | Test runs | Gitignored |
-| Test coverage | `bindings/node/coverage/`, `.nyc_output/` | `npm test` | Gitignored |
+| Database directories | caller-selected temp dirs such as `/tmp/nervusdb-demo` | Application creates on `Db::open` | Use temp dirs for tests |
+| Legacy database files | `*.synapsedb`, `*.nervusdb`, `*.redb` | Historical test runs | Gitignored |
 | Memory snapshots | `memory-snapshots/` | Heap profiling | Gitignored |
 | TCK logs | `/tck_*.log`, `/tck_*.txt`, `/tck_results.*` | Manual TCK runs | Gitignored |
 

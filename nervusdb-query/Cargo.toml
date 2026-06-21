@@ -11,10 +11,8 @@ edition = "2024"
 serde = { version = "1.0", features = ["derive"] }
 nervusdb-api = "=0.0.1"
 
-nervusdb-storage = "=0.0.1"
 chrono = "0.4"
 smallvec = "1.13"
 
 [dev-dependencies]
 tempfile = "3"
-nervusdb-storage = "=0.0.1"
