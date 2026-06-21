@@ -21,7 +21,8 @@ are `publish = false` wrapper crates.
 ## Now
 
 - Push `main` and wait for GitHub Actions when release publication is approved.
-- Run the medium benchmark before tagging or record an explicit defer reason.
+- Medium benchmark was attempted and explicitly deferred because it did not
+  finish within the interactive release window.
 - Do not start 0.0.2 code before 0.0.1 release readiness is complete.
 
 ## Done
@@ -74,10 +75,11 @@ are `publish = false` wrapper crates.
   `0cd081fc refactor(release): package nervusdb as single public crate`.
 - Clean publish dry-run passed after commit:
   `cargo publish -p nervusdb --dry-run --registry crates-io`.
+- Release notes for `v0.0.1` were written in `docs/releases/v0.0.1.md`.
 
 ## Next
 
-- Push `main`, wait for CI, run medium benchmark, tag, and publish when release
+- Tag `v0.0.1`, create the GitHub release, and publish to crates.io when release
   is explicitly authorized.
 
 ## Blockers
@@ -134,9 +136,12 @@ None yet.
 | 2026-06-22 | `cargo test --workspace` | Passed after single-crate packaging |
 | 2026-06-22 | `cargo publish -p nervusdb --dry-run --registry crates-io --allow-dirty` | Passed; dirty flag needed only because package files were not committed yet |
 | 2026-06-22 | `cargo publish -p nervusdb --dry-run --registry crates-io` | Passed clean after commit `0cd081fc`; local patch warnings expected |
+| 2026-06-22 | GitHub Actions `main` push run `27912993929` | Passed |
+| 2026-06-22 | `bash scripts/core_bench.sh --nodes 100000 --degree 5 --iters 1000` | Deferred; no JSON artifact, run stopped after not finishing in the interactive release window |
 
 ## Last Checkpoint
 
 2026-06-22: Single-crate public package shape is implemented, committed, and
-validated. Remaining work is push/CI, medium benchmark, tag, and crates.io
-publish when explicitly authorized.
+validated. GitHub Actions passed on `main`. Medium benchmark was attempted and
+deferred. Remaining work is tag, GitHub release, and crates.io publish when
+explicitly authorized.

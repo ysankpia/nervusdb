@@ -110,6 +110,10 @@ Current local evidence:
 - `cargo publish -p nervusdb --dry-run --registry crates-io` passed after
   commit. The local `[patch.crates-io]` warnings are expected because the
   publish package no longer depends on the wrapper crates.
+- The attempted medium benchmark
+  `bash scripts/core_bench.sh --nodes 100000 --degree 5 --iters 1000` was
+  stopped after it did not finish within the interactive release window. It is
+  deferred for post-release tuning and is not used as 0.0.1 evidence.
 
 ## Completion Evidence
 
