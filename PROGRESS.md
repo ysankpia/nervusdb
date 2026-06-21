@@ -164,10 +164,15 @@ None yet.
 | 2026-06-22 | `bash scripts/core_bench.sh --nodes 1000 --degree 5 --iters 100 --write-iters 20` | Passed; artifact `artifacts/core-bench/core-bench-custom-1000n-5d-20260621-190502.json`; custom naming verified |
 | 2026-06-22 | `bash scripts/core_bench.sh --nodes 100000 --degree 5 --iters 1000` | Passed; artifact `artifacts/core-bench/core-bench-custom-100000n-5d-20260621-190510.json`; insert 0.415s, 1,204,516 edges/sec |
 | 2026-06-22 | repeated `bash scripts/core_bench.sh --nodes 100000 --degree 5 --iters 1000` | Passed; artifacts `artifacts/core-bench/core-bench-custom-100000n-5d-20260621-190709.json` and `artifacts/core-bench/core-bench-custom-100000n-5d-20260621-190713.json`; insert stayed >881k edges/sec, read throughput varied |
+| 2026-06-22 | GitHub Actions `main` push run `27914671878` | Passed for commit `a79b4bc8` |
+| 2026-06-22 | `cargo test --workspace` | Passed after 0.0.2 write-path changes |
+| 2026-06-22 | `bash scripts/core_examples.sh` | Passed: 10 CLI/file-driven examples after 0.0.2 write-path changes |
+| 2026-06-22 | `bash scripts/core_crash_recovery.sh` | Passed: 5 kill/reopen iterations after 0.0.2 write-path changes |
+| 2026-06-22 | `cargo publish -p nervusdb --dry-run --registry crates-io` | Passed after 0.0.2 write-path changes; existing `0.0.1` and unused local patch warnings expected |
 
 ## Last Checkpoint
 
-2026-06-22: 0.0.2 write-path work found and fixed the real bulk import bug:
-node id allocation was doing a durable meta commit per created node. The best
-100k/500k run improved insert time from the 0.0.1 baseline 438.130s to 0.415s
-without changing the public API or disabling `SyncAll`.
+2026-06-22: 0.0.2 write-path work was pushed to `main` and GitHub Actions
+passed. The real bulk import bug was per-node durable meta commits during node id
+allocation. The best 100k/500k run improved insert time from the 0.0.1 baseline
+438.130s to 0.415s without changing the public API or disabling `SyncAll`.
