@@ -12,16 +12,16 @@ bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
-0.0.1 release is complete. The next public package candidate is
-`nervusdb = "0.0.2"`. 0.0.2 write-path work has passed local and GitHub
-validation. The public API and `PersistMode::SyncAll` durability remain
-unchanged.
+0.0.2 has been tagged, released on GitHub, and published to crates.io as the
+single public `nervusdb` crate. The public API and `PersistMode::SyncAll`
+durability remain unchanged from 0.0.1.
 
 ## Now
 
-- Finish 0.0.2 release packaging, tag, GitHub release, and crates.io publish.
 - Keep property indexes, tombstone cleanup, dangling-edge enforcement, EdgeId,
   unsafe/buffered durability modes, and advanced query work out of 0.0.2.
+- Plan the next release from measured needs, not from the older 0.0.2 candidate
+  roadmap.
 
 ## Done
 
@@ -89,13 +89,17 @@ unchanged.
   `Vec<EdgeKey>` with commit-time sort/dedup.
 - 0.0.2 release preparation is in progress: workspace package versions and
   current install docs are being updated to `0.0.2`.
+- 0.0.2 release completed:
+  - tag: `v0.0.2`
+  - GitHub release: `https://github.com/ysankpia/nervusdb/releases/tag/v0.0.2`
+  - crates.io: `https://crates.io/crates/nervusdb`
 
 ## Next
 
-- Run release dry-run after version bump.
-- Tag and publish `v0.0.2` if dry-run and CI pass.
-- Decide after release whether repeated read benchmark variance needs a separate
+- Decide whether repeated read benchmark variance needs a separate
   benchmark plan.
+- Triage the low-severity Dependabot alert reported by GitHub.
+- Update GitHub Actions if the Node.js 20 deprecation annotation becomes noisy.
 
 ## Blockers
 
@@ -171,10 +175,20 @@ None yet.
 | 2026-06-22 | `bash scripts/core_examples.sh` | Passed: 10 CLI/file-driven examples after 0.0.2 write-path changes |
 | 2026-06-22 | `bash scripts/core_crash_recovery.sh` | Passed: 5 kill/reopen iterations after 0.0.2 write-path changes |
 | 2026-06-22 | `cargo publish -p nervusdb --dry-run --registry crates-io` | Passed after 0.0.2 write-path changes; existing `0.0.1` and unused local patch warnings expected |
+| 2026-06-22 | `cargo fmt --all -- --check` | Passed after 0.0.2 version bump |
+| 2026-06-22 | `cargo check -p nervusdb-api -p nervusdb-storage -p nervusdb-query -p nervusdb -p nervusdb-cli --lib --bins` | Passed after 0.0.2 version bump |
+| 2026-06-22 | `bash scripts/check.sh` | Passed after 0.0.2 version bump |
+| 2026-06-22 | `cargo publish -p nervusdb --dry-run --registry crates-io` | Passed clean after version bump; unused local patch warnings expected |
+| 2026-06-22 | GitHub Actions `main` push run `27915458907` | Passed for commit `9c776651` |
+| 2026-06-22 | `git tag -a v0.0.2` and `git push origin v0.0.2` | Passed; tag points at `9c776651` |
+| 2026-06-22 | `gh release create v0.0.2 --verify-tag --title "NervusDB v0.0.2" --notes-file docs/releases/v0.0.2.md --latest=true` | Passed |
+| 2026-06-22 | `cargo publish -p nervusdb --registry crates-io` | Published `nervusdb v0.0.2` |
+| 2026-06-22 | `cargo search nervusdb --limit 5 --registry crates-io` | Confirmed `nervusdb = "0.0.2"` appears in crates.io search |
 
 ## Last Checkpoint
 
-2026-06-22: 0.0.2 write-path work was pushed to `main` and GitHub Actions
-passed. The real bulk import bug was per-node durable meta commits during node id
-allocation. The best 100k/500k run improved insert time from the 0.0.1 baseline
-438.130s to 0.415s without changing the public API or disabling `SyncAll`.
+2026-06-22: NervusDB 0.0.2 was tagged, released on GitHub, and published to
+crates.io. The release fixes the bulk import bug caused by per-node durable meta
+commits during node id allocation. The best 100k/500k run improved insert time
+from the 0.0.1 baseline 438.130s to 0.415s without changing the public API or
+disabling `SyncAll`.
