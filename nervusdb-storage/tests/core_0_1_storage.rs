@@ -228,6 +228,36 @@ fn core_0_1_snapshot_isolation_holds_across_commits() {
 }
 
 #[test]
+fn core_0_1_batch_node_ids_are_committed_atomically() {
+    let dir = tempdir().unwrap();
+    let path = db_dir(&dir);
+    let engine = GraphEngine::open(&path).unwrap();
+    let person = engine.get_or_create_label("Person").unwrap();
+
+    {
+        let mut tx = engine.begin_write();
+        tx.create_node(10, person).unwrap();
+        tx.create_node(20, person).unwrap();
+    }
+
+    assert!(
+        engine.lookup_internal_id(10).is_none(),
+        "dropped transaction must not persist staged node ids"
+    );
+
+    let mut tx = engine.begin_write();
+    let a = tx.create_node(10, person).unwrap();
+    let b = tx.create_node(20, person).unwrap();
+    tx.commit().unwrap();
+
+    assert_eq!(a, 0);
+    assert_eq!(b, 1);
+    assert_eq!(engine.lookup_internal_id(10), Some(a));
+    assert_eq!(engine.lookup_internal_id(20), Some(b));
+    assert_eq!(engine.snapshot().node_count(Some(person)), 2);
+}
+
+#[test]
 fn core_0_1_duplicate_edge_is_idempotent_not_parallel() {
     let dir = tempdir().unwrap();
     let path = db_dir(&dir);
@@ -238,11 +268,13 @@ fn core_0_1_duplicate_edge_is_idempotent_not_parallel() {
     let mut tx = engine.begin_write();
     let a = tx.create_node(10, person).unwrap();
     let b = tx.create_node(20, person).unwrap();
-    tx.create_edge(a, knows, b);
-    tx.create_edge(a, knows, b);
+    for _ in 0..8 {
+        tx.create_edge(a, knows, b);
+    }
     tx.commit().unwrap();
 
-    let edges: Vec<_> = engine.snapshot().neighbors(a, Some(knows)).collect();
+    let snapshot = engine.snapshot();
+    let edges: Vec<_> = snapshot.neighbors(a, Some(knows)).collect();
     assert_eq!(
         edges,
         vec![EdgeKey {
@@ -251,6 +283,8 @@ fn core_0_1_duplicate_edge_is_idempotent_not_parallel() {
             dst: b
         }]
     );
+    assert_eq!(snapshot.incoming_neighbors(b, Some(knows)).count(), 1);
+    assert_eq!(snapshot.edge_count(Some(knows)), 1);
 }
 
 #[test]

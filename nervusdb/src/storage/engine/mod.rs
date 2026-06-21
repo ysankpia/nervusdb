@@ -87,10 +87,11 @@ impl GraphEngine {
             engine: self,
             _guard: guard,
             created_nodes: Vec::new(),
+            pending_next_node_id: None,
             staged_external_ids: HashSet::new(),
             label_additions: Vec::new(),
             label_removals: Vec::new(),
-            created_edges: BTreeSet::new(),
+            created_edges: Vec::new(),
             tombstoned_nodes: BTreeSet::new(),
             tombstoned_edges: BTreeSet::new(),
             node_props: HashMap::new(),
@@ -220,10 +221,11 @@ pub struct WriteTxn<'a> {
     engine: &'a GraphEngine,
     _guard: MutexGuard<'a, ()>,
     created_nodes: Vec<CreatedNode>,
+    pending_next_node_id: Option<u64>,
     staged_external_ids: HashSet<ExternalId>,
     label_additions: Vec<(InternalNodeId, LabelId)>,
     label_removals: Vec<(InternalNodeId, LabelId)>,
-    created_edges: BTreeSet<EdgeKey>,
+    created_edges: Vec<EdgeKey>,
     tombstoned_nodes: BTreeSet<InternalNodeId>,
     tombstoned_edges: BTreeSet<EdgeKey>,
     node_props: HashMap<(InternalNodeId, String), PropertyValue>,
@@ -249,7 +251,19 @@ impl<'a> WriteTxn<'a> {
             return Err(Error::DuplicateExternalId(external_id));
         }
 
-        let iid = self.engine.next_counter(META_NEXT_NODE_ID)?;
+        let next_node_id = match self.pending_next_node_id {
+            Some(next) => next,
+            None => read_meta_u64(&self.engine.keyspaces.meta, META_NEXT_NODE_ID)?.unwrap_or(0),
+        };
+        if next_node_id > u32::MAX as u64 {
+            return Err(Error::StorageCorrupted(format!(
+                "counter {} exceeds u32",
+                String::from_utf8_lossy(META_NEXT_NODE_ID)
+            )));
+        }
+
+        let iid = next_node_id as u32;
+        self.pending_next_node_id = Some(next_node_id + 1);
         self.staged_external_ids.insert(external_id);
         self.created_nodes.push(CreatedNode {
             iid,
@@ -278,7 +292,7 @@ impl<'a> WriteTxn<'a> {
     }
 
     pub fn create_edge(&mut self, src: InternalNodeId, rel: RelTypeId, dst: InternalNodeId) {
-        self.created_edges.insert(EdgeKey { src, rel, dst });
+        self.created_edges.push(EdgeKey { src, rel, dst });
     }
 
     pub fn tombstone_node(&mut self, node: InternalNodeId) {
@@ -351,6 +365,17 @@ impl<'a> WriteTxn<'a> {
             .batch()
             .durability(Some(PersistMode::SyncAll));
         let snapshot = self.engine.begin_read();
+        let mut created_edges = self.created_edges;
+        created_edges.sort_unstable();
+        created_edges.dedup();
+
+        if let Some(next_node_id) = self.pending_next_node_id {
+            batch.insert(
+                &self.engine.keyspaces.meta,
+                META_NEXT_NODE_ID,
+                next_node_id.to_be_bytes(),
+            );
+        }
 
         for node in &self.created_nodes {
             batch.insert(
@@ -401,7 +426,7 @@ impl<'a> WriteTxn<'a> {
             );
         }
 
-        for edge in &self.created_edges {
+        for edge in &created_edges {
             batch.insert(&self.engine.keyspaces.adj_out, adj_out_key(*edge), []);
             batch.insert(&self.engine.keyspaces.adj_in, adj_in_key(*edge), []);
         }

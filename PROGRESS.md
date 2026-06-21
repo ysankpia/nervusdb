@@ -2,24 +2,26 @@
 
 ## Current Objective
 
-NervusDB 0.0.1 has been released as a single public `nervusdb` crate.
+NervusDB 0.0.2 is focused on write-path and bulk-import performance.
 
 ## Active Plan
 
-`docs/plans/active/011-release-0.0.1-single-crate.md`
+`docs/plans/active/013-write-path-and-bulk-import-0.0.2.md`
 
 bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
 0.0.1 release is complete. The current public package is `nervusdb = "0.0.1"`.
-The workspace-local crates `nervusdb-api`, `nervusdb-storage`, and
-`nervusdb-query` remain `publish = false` wrappers.
+0.0.2 write-path work is active in the working tree. The public API and
+`PersistMode::SyncAll` durability remain unchanged.
 
 ## Now
 
-- Keep 0.0.1 stable unless a release-blocking bug is found.
-- Start 0.0.2 only from a new plan/ADR, not by reopening old zombie features.
+- Finish validating 0.0.2 write-path changes.
+- Keep public API unchanged and avoid unsafe/buffered durability modes.
+- Treat property indexes, tombstone cleanup, dangling-edge enforcement, EdgeId,
+  and advanced query work as later plans, not 0.0.2 scope.
 
 ## Done
 
@@ -77,11 +79,21 @@ The workspace-local crates `nervusdb-api`, `nervusdb-storage`, and
   `https://github.com/ysankpia/nervusdb/releases/tag/v0.0.1`.
 - crates.io package published:
   `https://crates.io/crates/nervusdb`.
+- 0.0.2 write-path plan opened:
+  `0c1de3b9 docs(plan): start 0.0.2 write path work`.
+- 0.0.2 benchmark staging identified the real 0.0.1 bulk-write bug:
+  `create_node` persisted `next_node_id` with `SyncAll` for every node before
+  the transaction commit.
+- 0.0.2 write-path changes in the working tree stage node ids inside
+  `WriteTxn`, persist `next_node_id` in the commit batch, and stage edges in a
+  `Vec<EdgeKey>` with commit-time sort/dedup.
 
 ## Next
 
-- Plan 0.0.2 from real post-release needs. Treat the completed medium benchmark
-  as evidence that read/traversal is strong and bulk import needs focused work.
+- Run the remaining default validation.
+- Commit the 0.0.2 write-path implementation once validation stays green.
+- Decide whether repeated read benchmark variance needs a separate benchmark
+  plan before release.
 
 ## Blockers
 
@@ -144,10 +156,18 @@ None yet.
 | 2026-06-22 | `gh release create v0.0.1 --verify-tag --title "NervusDB v0.0.1" --notes-file docs/releases/v0.0.1.md --latest=false` | Passed |
 | 2026-06-22 | `cargo publish -p nervusdb --registry crates-io` | Published `nervusdb v0.0.1` |
 | 2026-06-22 | `cargo search nervusdb --limit 10 --registry crates-io` | Confirmed `nervusdb = "0.0.1"` appears in crates.io search |
+| 2026-06-22 | `cargo check -p nervusdb --examples` | Passed after 0.0.2 benchmark/write-path changes |
+| 2026-06-22 | `cargo test -p nervusdb-storage --test core_0_1_storage` | Passed: 11 storage contract tests after batched node id allocation and edge staging |
+| 2026-06-22 | `cargo test -p nervusdb --test core_0_1_rust_api` | Passed after 0.0.2 write-path changes |
+| 2026-06-22 | `cargo test -p nervusdb --test core_0_1_mini_cypher` | Passed after 0.0.2 write-path changes |
+| 2026-06-22 | `bash scripts/core_bench.sh --small` | Passed; artifact `artifacts/core-bench/core-bench-small-20260621-190446.json`; insert 0.030s, 169,135 edges/sec |
+| 2026-06-22 | `bash scripts/core_bench.sh --nodes 1000 --degree 5 --iters 100 --write-iters 20` | Passed; artifact `artifacts/core-bench/core-bench-custom-1000n-5d-20260621-190502.json`; custom naming verified |
+| 2026-06-22 | `bash scripts/core_bench.sh --nodes 100000 --degree 5 --iters 1000` | Passed; artifact `artifacts/core-bench/core-bench-custom-100000n-5d-20260621-190510.json`; insert 0.415s, 1,204,516 edges/sec |
+| 2026-06-22 | repeated `bash scripts/core_bench.sh --nodes 100000 --degree 5 --iters 1000` | Passed; artifacts `artifacts/core-bench/core-bench-custom-100000n-5d-20260621-190709.json` and `artifacts/core-bench/core-bench-custom-100000n-5d-20260621-190713.json`; insert stayed >881k edges/sec, read throughput varied |
 
 ## Last Checkpoint
 
-2026-06-22: NervusDB 0.0.1 was tagged, released on GitHub, and published to
-crates.io as the single public `nervusdb` crate. Old GitHub releases were kept
-as legacy history, not deleted. The medium benchmark later completed and showed
-strong traversal throughput with slow bulk import.
+2026-06-22: 0.0.2 write-path work found and fixed the real bulk import bug:
+node id allocation was doing a durable meta commit per created node. The best
+100k/500k run improved insert time from the 0.0.1 baseline 438.130s to 0.415s
+without changing the public API or disabling `SyncAll`.

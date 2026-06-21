@@ -32,6 +32,26 @@ struct WriteTxnBenchResult {
     p99_us: f64,
 }
 
+#[derive(Debug, Clone)]
+struct InsertBenchResult {
+    nodes: Vec<u32>,
+    label: u32,
+    rel: u32,
+    stage_get_schema_ms: f64,
+    stage_create_nodes_ms: f64,
+    stage_create_edges_ms: f64,
+    stage_commit_ms: f64,
+}
+
+impl InsertBenchResult {
+    fn total_ms(&self) -> f64 {
+        self.stage_get_schema_ms
+            + self.stage_create_nodes_ms
+            + self.stage_create_edges_ms
+            + self.stage_commit_ms
+    }
+}
+
 impl Config {
     fn from_args() -> Self {
         let mut cfg = Self {
@@ -136,29 +156,45 @@ fn summarize_write_txn_bench(latencies_us: Vec<f64>) -> WriteTxnBenchResult {
     }
 }
 
+fn elapsed_ms(start: Instant) -> f64 {
+    start.elapsed().as_secs_f64() * 1_000.0
+}
+
 fn main() {
     let cfg = Config::from_args();
 
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("bench");
+    let stage_open_start = Instant::now();
     let db = Db::open(&db_path).unwrap();
+    let stage_open_ms = elapsed_ms(stage_open_start);
 
     let total_edges = cfg.nodes * cfg.degree;
-    let (nodes, label, rel, insert_secs) = bench_insert(&db, cfg.clone());
-    let insert_edges_per_sec = total_edges as f64 / insert_secs.max(1e-9);
+    let insert = bench_insert(&db, cfg.clone());
+    let insert_total_ms = insert.total_ms();
+    let insert_edges_per_sec = total_edges as f64 / (insert_total_ms / 1_000.0).max(1e-9);
 
+    let stage_reopen_start = Instant::now();
     drop(db);
     let db = Db::open(&db_path).unwrap();
     let snapshot = db.snapshot();
-    assert_eq!(snapshot.node_count(Some(label)), cfg.nodes as u64);
-    assert_eq!(snapshot.edge_count(Some(rel)), total_edges as u64);
+    assert_eq!(snapshot.node_count(Some(insert.label)), cfg.nodes as u64);
+    assert_eq!(snapshot.edge_count(Some(insert.rel)), total_edges as u64);
     drop(snapshot);
+    let stage_reopen_verify_ms = elapsed_ms(stage_reopen_start);
 
-    let neighbors_hot = bench_neighbors_hot(&db, nodes[0], rel, cfg.iters);
-    let neighbors_cold = bench_neighbors_cold(&db, &nodes, rel, cfg.iters);
-    let write_txn = bench_write_txn(&db, label, cfg.nodes as u64 + 1, cfg.write_iters);
+    let stage_neighbors_hot_start = Instant::now();
+    let neighbors_hot = bench_neighbors_hot(&db, insert.nodes[0], insert.rel, cfg.iters);
+    let stage_neighbors_hot_ms = elapsed_ms(stage_neighbors_hot_start);
+    let stage_neighbors_cold_start = Instant::now();
+    let neighbors_cold = bench_neighbors_cold(&db, &insert.nodes, insert.rel, cfg.iters);
+    let stage_neighbors_cold_ms = elapsed_ms(stage_neighbors_cold_start);
+    let stage_write_txn_start = Instant::now();
+    let write_txn = bench_write_txn(&db, insert.label, cfg.nodes as u64 + 1, cfg.write_iters);
+    let stage_write_txn_ms = elapsed_ms(stage_write_txn_start);
     let read_query_p99_ms = neighbors_cold.p99_us / 1_000.0;
     let write_txn_p99_ms = write_txn.p99_us / 1_000.0;
+    let estimated_kv_writes = (4 * cfg.nodes) + (2 * total_edges);
 
     println!("=== NervusDB Core 0.1 Bench ===");
     println!(
@@ -167,7 +203,17 @@ fn main() {
     );
     println!(
         "insert: {:.3}s ({:.0} edges/sec)",
-        insert_secs, insert_edges_per_sec
+        insert_total_ms / 1_000.0,
+        insert_edges_per_sec
+    );
+    println!(
+        "stages: open={:.2}ms schema={:.2}ms create_nodes={:.2}ms create_edges={:.2}ms commit={:.2}ms reopen_verify={:.2}ms",
+        stage_open_ms,
+        insert.stage_get_schema_ms,
+        insert.stage_create_nodes_ms,
+        insert.stage_create_edges_ms,
+        insert.stage_commit_ms,
+        stage_reopen_verify_ms
     );
     println!(
         "neighbors_hot: {:.0} edges/sec ({} edges, avg={:.2}us, p95={:.2}us, p99={:.2}us)",
@@ -191,13 +237,24 @@ fn main() {
     );
 
     println!(
-        "{{\"nodes\":{},\"degree\":{},\"edges\":{},\"iters\":{},\"write_iters\":{},\"insert_edges_per_sec\":{:.3},\"neighbors_hot_edges_per_sec\":{:.3},\"neighbors_cold_edges_per_sec\":{:.3},\"neighbors_hot_avg_us\":{:.3},\"neighbors_hot_p95_us\":{:.3},\"neighbors_hot_p99_us\":{:.3},\"neighbors_cold_avg_us\":{:.3},\"neighbors_cold_p95_us\":{:.3},\"neighbors_cold_p99_us\":{:.3},\"write_txn_avg_us\":{:.3},\"write_txn_p95_us\":{:.3},\"write_txn_p99_us\":{:.3},\"write_txn_p99_ms\":{:.6},\"read_query_p99_ms\":{:.6}}}",
+        "{{\"nodes\":{},\"degree\":{},\"edges\":{},\"iters\":{},\"write_iters\":{},\"stage_open_ms\":{:.3},\"stage_get_schema_ms\":{:.3},\"stage_create_nodes_ms\":{:.3},\"stage_create_edges_ms\":{:.3},\"stage_commit_ms\":{:.3},\"stage_reopen_verify_ms\":{:.3},\"stage_neighbors_hot_ms\":{:.3},\"stage_neighbors_cold_ms\":{:.3},\"stage_write_txn_ms\":{:.3},\"insert_total_ms\":{:.3},\"insert_edges_per_sec\":{:.3},\"estimated_kv_writes\":{},\"neighbors_hot_edges_per_sec\":{:.3},\"neighbors_cold_edges_per_sec\":{:.3},\"neighbors_hot_avg_us\":{:.3},\"neighbors_hot_p95_us\":{:.3},\"neighbors_hot_p99_us\":{:.3},\"neighbors_cold_avg_us\":{:.3},\"neighbors_cold_p95_us\":{:.3},\"neighbors_cold_p99_us\":{:.3},\"write_txn_avg_us\":{:.3},\"write_txn_p95_us\":{:.3},\"write_txn_p99_us\":{:.3},\"write_txn_p99_ms\":{:.6},\"read_query_p99_ms\":{:.6}}}",
         cfg.nodes,
         cfg.degree,
         total_edges,
         cfg.iters,
         cfg.write_iters,
+        stage_open_ms,
+        insert.stage_get_schema_ms,
+        insert.stage_create_nodes_ms,
+        insert.stage_create_edges_ms,
+        insert.stage_commit_ms,
+        stage_reopen_verify_ms,
+        stage_neighbors_hot_ms,
+        stage_neighbors_cold_ms,
+        stage_write_txn_ms,
+        insert_total_ms,
         insert_edges_per_sec,
+        estimated_kv_writes,
         neighbors_hot.edges_per_sec,
         neighbors_cold.edges_per_sec,
         neighbors_hot.avg_us,
@@ -214,18 +271,22 @@ fn main() {
     );
 }
 
-fn bench_insert(db: &Db, cfg: Config) -> (Vec<u32>, u32, u32, f64) {
-    let start = Instant::now();
+fn bench_insert(db: &Db, cfg: Config) -> InsertBenchResult {
     let mut tx = db.begin_write();
+    let stage_get_schema_start = Instant::now();
     let label = tx.get_or_create_label("BenchNode").unwrap();
     let rel = tx.get_or_create_rel_type("BENCH_EDGE").unwrap();
+    let stage_get_schema_ms = elapsed_ms(stage_get_schema_start);
 
     let mut nodes = Vec::with_capacity(cfg.nodes);
+    let stage_create_nodes_start = Instant::now();
     for i in 0..cfg.nodes {
         let external_id = (i as u64) + 1;
         nodes.push(tx.create_node(external_id, label).unwrap());
     }
+    let stage_create_nodes_ms = elapsed_ms(stage_create_nodes_start);
 
+    let stage_create_edges_start = Instant::now();
     for src_idx in 0..cfg.nodes {
         let src = nodes[src_idx];
         for j in 0..cfg.degree {
@@ -234,10 +295,21 @@ fn bench_insert(db: &Db, cfg: Config) -> (Vec<u32>, u32, u32, f64) {
             tx.create_edge(src, rel, dst).unwrap();
         }
     }
+    let stage_create_edges_ms = elapsed_ms(stage_create_edges_start);
 
+    let stage_commit_start = Instant::now();
     tx.commit().unwrap();
+    let stage_commit_ms = elapsed_ms(stage_commit_start);
 
-    (nodes, label, rel, start.elapsed().as_secs_f64())
+    InsertBenchResult {
+        nodes,
+        label,
+        rel,
+        stage_get_schema_ms,
+        stage_create_nodes_ms,
+        stage_create_edges_ms,
+        stage_commit_ms,
+    }
 }
 
 fn bench_neighbors_hot(db: &Db, src: u32, rel: u32, iters: usize) -> NeighborBenchResult {
