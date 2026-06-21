@@ -6,25 +6,27 @@ docs.
 
 ## Boundary Invariants
 
-1. **nervusdb-storage owns graph persistence.** Keyspace layout, committed
+1. **`nervusdb::storage` owns graph persistence.** Keyspace layout, committed
    durability behavior, recovery-facing behavior, labels, relationship types,
    properties, traversal storage, and logical format versioning live in
-   `nervusdb-storage`.
+   `nervusdb::storage`.
 
 2. **Fjall owns low-level KV persistence.** NervusDB must not reintroduce a
    self-built Pager, WAL, B+Tree, or CSR storage engine for 0.1.
 
-3. **nervusdb-query owns only the Mini-Cypher path before 0.1.** Parser,
+3. **`nervusdb::query` owns only the Mini-Cypher path before 0.1.** Parser,
    planner, and executor serve the documented Mini-Cypher surface. Query
    behavior outside that surface must fail fast or live outside the current
    main path until a future ADR promotes it.
 
-4. **nervusdb-api is the boundary between query and storage.** It defines
+4. **`nervusdb::api` is the boundary between query and storage.** It defines
    shared IDs, `PropertyValue`, `GraphSnapshot`, `GraphStore`, and write-boundary
-   traits. Neither `nervusdb-query` nor `nervusdb-storage` depends on the other
-   directly.
+   traits. `nervusdb::query` must not depend on `nervusdb::storage`
+   implementation types.
 
-5. **nervusdb is the Rust facade.** It should not grow platform SDK behavior.
+5. **`nervusdb` is the only public 0.0.1 crate.** It should not grow platform
+   SDK behavior. Wrapper crates named `nervusdb-api`, `nervusdb-storage`, and
+   `nervusdb-query` are local `publish = false` compatibility wrappers only.
 
 6. **nervusdb-cli is a smoke/debug/import tool**, not a separate product
    surface. Its command set is limited to 0.1 core workflows.

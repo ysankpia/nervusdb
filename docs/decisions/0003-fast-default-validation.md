@@ -20,8 +20,9 @@ but it must be explicit.
 `scripts/check.sh` is the default validation entry point. It must stay tied to
 the 0.1 core and must not hide full workspace fan-out.
 
-`scripts/workspace_full_test.sh` is manual. Git hooks, quick scripts,
-pre-commit, pre-push, and default CI must not call it.
+Full workspace validation is manual through `cargo test --workspace`. Git hooks,
+quick scripts, pre-commit, pre-push, and default CI must not hide broad test
+fan-out behind the fast default path.
 
 Scheduled full TCK, binding, vector, perf, fuzz, chaos, soak, stability, and
 release-window pressure is not part of the default 0.1 loop.

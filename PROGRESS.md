@@ -13,14 +13,16 @@ bd epic: `nervusdb-a1z`
 ## Current Phase
 
 Fjall storage refactor, non-0.1 query residue pruning, post-refactor public
-surface synchronization, and 0.1 API hook cleanup are complete. Release
-preparation is now blocked on public package shape: 0.0.1 should publish one
-user-facing crate, `nervusdb`, not several internal implementation crates.
+surface synchronization, and 0.1 API hook cleanup are complete. The 0.0.1
+single-crate package shape is implemented locally: `nervusdb` owns the real
+implementation, while `nervusdb-api`, `nervusdb-storage`, and `nervusdb-query`
+are `publish = false` wrapper crates.
 
 ## Now
 
-- Land ADR 0006 and the 0.0.1 single-crate release plan.
-- Decide the mechanical package-shape refactor for publishing only `nervusdb`.
+- Commit the single-crate package-shape refactor.
+- Rerun clean `cargo publish -p nervusdb --dry-run --registry crates-io` after
+  commit.
 - Do not start 0.0.2 code before 0.0.1 release readiness is complete.
 
 ## Done
@@ -61,13 +63,21 @@ user-facing crate, `nervusdb`, not several internal implementation crates.
   helpers over Fjall persistence.
 - ADR 0006 drafted: public 0.0.1 release should be a single `nervusdb` crate.
 - Post-0.0.1 roadmap drafted as candidates, not current scope.
+- Single-crate package shape implemented in the working tree:
+  - `nervusdb` is self-contained and has no dependency on `nervusdb-api`,
+    `nervusdb-storage`, or `nervusdb-query`.
+  - `nervusdb-api`, `nervusdb-storage`, and `nervusdb-query` re-export
+    `nervusdb` modules and are marked `publish = false`.
+  - README, architecture, validation, and runbook docs describe `nervusdb` as
+    the only 0.0.1 public crate.
+  - `scripts/core_bench.sh` now benchmarks the public `nervusdb` crate.
 
 ## Next
 
-- Commit the release packaging decision docs.
-- Refactor/package the workspace so `cargo publish -p nervusdb --dry-run` does
-  not require publishing internal crates.
-- Push `main`, wait for CI, run medium benchmark, dry-run, tag, and publish.
+- Commit the release package-shape refactor.
+- Run clean publish dry-run after commit.
+- Push `main`, wait for CI, run medium benchmark, tag, and publish when release
+  is explicitly authorized.
 
 ## Blockers
 
@@ -113,11 +123,18 @@ None yet.
 | 2026-06-21 | `cargo test -p nervusdb-storage --test core_0_1_storage` | Passed: 10 storage contract tests |
 | 2026-06-21 | `bash scripts/core_crash_recovery.sh` | Passed after API hook cleanup |
 | 2026-06-21 | `cargo test --workspace` | Passed after API hook cleanup |
+| 2026-06-22 | `cargo check -p nervusdb-api -p nervusdb-storage -p nervusdb-query -p nervusdb -p nervusdb-cli --lib --bins` | Passed after single-crate packaging |
+| 2026-06-22 | `bash scripts/check.sh` | Passed after single-crate packaging |
+| 2026-06-22 | `cargo test -p nervusdb-storage --test core_0_1_storage` | Passed: 10 storage contract tests |
+| 2026-06-22 | `cargo test -p nervusdb --test core_0_1_rust_api && cargo test -p nervusdb --test core_0_1_examples` | Passed: 1 Rust API test and 10 example tests |
+| 2026-06-22 | `bash scripts/core_examples.sh` | Passed: 10 CLI/file-driven examples |
+| 2026-06-22 | `bash scripts/core_crash_recovery.sh` | Passed: 5 kill/reopen iterations |
+| 2026-06-22 | `bash scripts/core_bench.sh --small` | Passed; artifact `artifacts/core-bench/core-bench-small-20260621-173958.json` |
+| 2026-06-22 | `cargo test --workspace` | Passed after single-crate packaging |
+| 2026-06-22 | `cargo publish -p nervusdb --dry-run --registry crates-io --allow-dirty` | Passed; dirty flag needed only because package files were not committed yet |
 
 ## Last Checkpoint
 
-2026-06-21: Fjall-backed directory storage and non-0.1 query pruning are both
-committed. D6 public-surface cleanup is committed. API hook cleanup is complete
-and validated in the working tree: false compaction/index hooks are gone, and
-the remaining lifecycle helpers are `checkpoint` and `close`. Remaining work is
-commit, then a 0.1 release-readiness pass.
+2026-06-22: Single-crate public package shape is implemented and validated in
+the working tree. Remaining work is commit, clean publish dry-run, push/CI,
+medium benchmark, tag, and crates.io publish when explicitly authorized.

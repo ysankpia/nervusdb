@@ -11,5 +11,5 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
 
-    let _ = nervusdb_query::prepare(input);
+    let _ = nervusdb::query::prepare(input);
 });

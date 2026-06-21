@@ -6,13 +6,10 @@ description = "NervusDB v2 query engine – Cypher parser, planner, and executor
 repository = "https://github.com/LuQing-Studio/nervusdb"
 documentation = "https://docs.rs/nervusdb-query"
 edition = "2024"
+publish = false
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
-nervusdb-api = "=0.0.1"
-
-chrono = "0.4"
-smallvec = "1.13"
+nervusdb = { path = "../nervusdb", version = "=0.0.1" }
 
 [dev-dependencies]
 tempfile = "3"

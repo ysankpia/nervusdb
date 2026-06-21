@@ -12,8 +12,8 @@
 //!   cargo run -p nervusdb-storage --bin nervusdb-v2-crash-test -- writer <dir>
 //!   cargo run -p nervusdb-storage --bin nervusdb-v2-crash-test -- verify <dir>
 
-use nervusdb_api::{GraphSnapshot, PropertyValue};
-use nervusdb_storage::engine::GraphEngine;
+use nervusdb::storage::engine::GraphEngine;
+use nervusdb::{GraphSnapshot, PropertyValue};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -395,7 +395,7 @@ fn writer(args: WriterArgs) -> Result<(), String> {
 #[cfg(not(target_arch = "wasm32"))]
 fn ensure_node(
     engine: &GraphEngine,
-    tx: &mut nervusdb_storage::engine::WriteTxn<'_>,
+    tx: &mut nervusdb::storage::engine::WriteTxn<'_>,
     external_id: u64,
     label: u32,
 ) -> Result<u32, String> {

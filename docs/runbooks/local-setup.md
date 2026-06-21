@@ -27,8 +27,8 @@ cargo build --workspace
 bash scripts/check.sh
 ```
 
-This runs formatting, core-crate clippy, and the Mini-Cypher quick test. It
-should complete within minutes on a modern machine.
+This runs formatting, public-crate and wrapper clippy, and the Mini-Cypher quick
+test. It should complete within minutes on a modern machine.
 
 ## IDE Setup
 
@@ -51,10 +51,13 @@ both of which run `bash scripts/check.sh`.
 
 ```
 nervusdb/           — root workspace
-├── nervusdb/       — public Rust facade
-├── nervusdb-api/   — graph traits
-├── nervusdb-storage/ — Fjall-backed graph keyspaces and recovery
-├── nervusdb-query/ — Mini-Cypher parser/planner/executor
+├── nervusdb/       — public Rust crate and real implementation owner
+│   └── src/api.rs  — graph traits, shared IDs, and property values
+│   └── src/storage/ — Fjall-backed graph keyspaces and recovery
+│   └── src/query/  — Mini-Cypher parser/planner/executor
+├── nervusdb-api/   — local publish=false wrapper for nervusdb::api
+├── nervusdb-storage/ — local publish=false wrapper for nervusdb::storage
+├── nervusdb-query/ — local publish=false wrapper for nervusdb::query
 ├── nervusdb-cli/   — local CLI tool
 ├── nervusdb-pyo3/  — Python bindings (experimental)
 ├── nervusdb-capi/  — C API (experimental)

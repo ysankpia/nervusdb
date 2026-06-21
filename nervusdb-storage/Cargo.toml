@@ -6,11 +6,11 @@ description = "NervusDB storage layer – Fjall-backed local property graph keys
 repository = "https://github.com/LuQing-Studio/nervusdb"
 documentation = "https://docs.rs/nervusdb-storage"
 edition = "2024"
+publish = false
 
 [dependencies]
-fjall = "3.1.5"
-thiserror = "2.0"
-nervusdb-api = "=0.0.1"
+nervusdb = { path = "../nervusdb", version = "=0.0.1" }
 
 [dev-dependencies]
+fjall = "3.1.5"
 tempfile = "3"

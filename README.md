@@ -35,7 +35,7 @@ experimental. They are not the 0.1 success criteria.
 
 ```rust
 use nervusdb::Db;
-use nervusdb_query::{prepare, query_collect, Params};
+use nervusdb::query::{prepare, query_collect, Params};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = Db::open("/tmp/nervusdb-demo")?;
@@ -78,12 +78,16 @@ before 0.1.
 ## Architecture
 
 ```text
-nervusdb          public Rust facade
-nervusdb-api      storage/query boundary traits
-nervusdb-storage  Fjall-backed graph keyspaces, snapshots, recovery
-nervusdb-query    Mini-Cypher parser/planner/executor for the 0.1 surface
-nervusdb-cli      local debug/import/query/write tool
+nervusdb             public Rust crate
+nervusdb::api        graph traits, shared IDs, storage-neutral boundaries
+nervusdb::storage    Fjall-backed graph keyspaces, snapshots, recovery
+nervusdb::query      Mini-Cypher parser/planner/executor for the 0.1 surface
+nervusdb-cli         local debug/import/query/write tool
 ```
+
+`nervusdb-api`, `nervusdb-storage`, and `nervusdb-query` may exist in the
+workspace as local wrapper crates while tests and scripts are consolidated. They
+are not separate public 0.0.1 packages.
 
 Experimental or historical areas remain in the repository but are not the
 default product path: Python, Node.js, C bindings, full openCypher TCK, vector
@@ -98,10 +102,15 @@ Default local check:
 bash scripts/check.sh
 ```
 
-This runs formatting, core-crate clippy, and the Mini-Cypher core quick test.
-Full historical tests live behind `bash scripts/workspace_full_test.sh`.
-Area-specific scripts for TCK, bindings, perf, fuzz, chaos, soak, and stability
-are manual signals only.
+This runs formatting, public-crate and local-wrapper clippy, and the
+Mini-Cypher core quick test. Broader validation is manual:
+
+```bash
+cargo test --workspace
+```
+
+Area-specific checks for examples, crash recovery, benchmarks, TCK, bindings,
+perf, fuzz, chaos, soak, and stability are manual signals only.
 
 ## Documentation
 

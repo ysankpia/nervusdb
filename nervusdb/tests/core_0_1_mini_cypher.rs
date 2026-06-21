@@ -1,5 +1,5 @@
+use nervusdb::query::{Params, Result as QueryResult, Value, prepare, query_collect};
 use nervusdb::{Db, GraphSnapshot, PropertyValue};
-use nervusdb_query::{Params, Result as QueryResult, Value, prepare, query_collect};
 use tempfile::tempdir;
 
 #[test]

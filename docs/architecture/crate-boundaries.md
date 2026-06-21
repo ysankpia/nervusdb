@@ -1,29 +1,44 @@
-# Crate Boundaries
+# Crate And Module Boundaries
 
-## Core Crates
+## Public Package
 
-- `nervusdb`: public Rust facade for open/reopen, snapshots, write
-  transactions, and query composition.
-- `nervusdb-api`: graph traits, shared IDs, `PropertyValue`, and storage-neutral
-  read/write boundaries.
-- `nervusdb-storage`: Fjall-backed local graph storage and graph-keyspace
-  implementation.
-- `nervusdb-query`: Mini-Cypher parser/planner/executor path.
-- `nervusdb-cli`: local smoke/debug/import/query/write commands.
+`nervusdb` is the only public 0.0.1 crate. Users should depend on:
+
+```toml
+[dependencies]
+nervusdb = "0.0.1"
+```
+
+The query, storage, and API boundaries live inside that crate as modules:
+
+```text
+nervusdb::api      graph traits, shared IDs, PropertyValue, write boundary
+nervusdb::storage  Fjall-backed graph keyspaces and transaction engine
+nervusdb::query    Mini-Cypher parser/planner/executor for 0.1
+```
+
+`nervusdb-cli` remains a workspace-local smoke/debug/query/write tool. It
+depends only on `nervusdb`.
+
+## Local Wrapper Crates
+
+`nervusdb-api`, `nervusdb-storage`, and `nervusdb-query` may remain in the
+workspace as thin local wrappers while tests and scripts are being consolidated.
+They re-export the implementation from `nervusdb`. They are not independent
+0.0.1 release products and must not be published to crates.io for 0.0.1.
 
 ## Required Dependency Direction
 
 ```text
 nervusdb-cli -> nervusdb
-nervusdb     -> nervusdb-api
-nervusdb     -> nervusdb-storage
-nervusdb     -> nervusdb-query
-nervusdb-storage -> nervusdb-api
-nervusdb-query   -> nervusdb-api
+nervusdb-api -> nervusdb
+nervusdb-storage -> nervusdb
+nervusdb-query -> nervusdb
 ```
 
-`nervusdb-query` and `nervusdb-storage` must not depend on each other. Their
-contract is `nervusdb-api`.
+Inside the `nervusdb` crate, `query` must depend only on `api` traits/types, not
+on `storage` implementation types. `storage` implements the `api` traits.
+`nervusdb` facade composes both.
 
 ## Experimental Or Frozen Areas
 

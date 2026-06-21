@@ -11,15 +11,17 @@ Use:
 bash scripts/check.sh
 ```
 
-This runs formatting, clippy for the 0.1 core crates, and the core 0.1 quick
-test. The quick test is deliberately small:
+This runs formatting, clippy for the public library crate, CLI, and local
+wrapper crates, plus the core 0.1 quick test. The quick test is deliberately
+small:
 
 ```bash
 cargo test -p nervusdb --test core_0_1_mini_cypher
 ```
 
 The default clippy scope is also deliberate. It checks the Rust-first embedded
-path only:
+path plus the `publish = false` wrapper crates that re-export the public
+`nervusdb` modules:
 
 ```bash
 cargo clippy \

@@ -5,33 +5,36 @@
 The workspace defined in `Cargo.toml` has 5 members:
 
 ```text
-nervusdb         — public Rust facade
-nervusdb-api     — graph traits, shared IDs, PropertyValue, query/storage boundary
-nervusdb-storage — Fjall-backed local graph storage
-nervusdb-query   — Mini-Cypher parser/planner/executor
+nervusdb         — public Rust crate and real implementation owner
+nervusdb-api     — local publish=false wrapper for nervusdb::api
+nervusdb-storage — local publish=false wrapper for nervusdb::storage
+nervusdb-query   — local publish=false wrapper for nervusdb::query
 nervusdb-cli     — local debug/import/query/write CLI
 ```
 
-These are engineering boundaries, not automatically public release packages.
-ADR 0006 makes `nervusdb` the only public 0.0.1 crates.io target.
+ADR 0006 makes `nervusdb` the only public 0.0.1 crates.io target. The wrapper
+crates exist only to keep local tests and scripts cheap during consolidation;
+they must not become independent compatibility contracts.
 
 ## Internal Dependency Rules
 
 1. **Core crates must not depend on frozen platform work.** Python, Node.js, C
    bindings, vector/HNSW, and full TCK code are not workspace core before 0.1.
 
-2. **`nervusdb-api` is the query/storage boundary.** `nervusdb-storage` and
-   `nervusdb-query` depend on `nervusdb-api` for shared IDs, `PropertyValue`,
-   `GraphSnapshot`, and write-boundary traits. They do not depend on each other.
+2. **`nervusdb::api` is the query/storage boundary.** `nervusdb::storage` and
+   `nervusdb::query` share IDs, `PropertyValue`, `GraphSnapshot`, and
+   write-boundary traits through that module. Query and storage do not depend on
+   each other directly.
 
-3. **`nervusdb` composes storage and query.** The facade depends on
-   `nervusdb-storage`, `nervusdb-query`, and `nervusdb-api`.
+3. **`nervusdb` owns the implementation.** `api`, `storage`, `query`, and the
+   facade are modules in the public crate. Wrapper crates re-export these
+   modules and point inward to `nervusdb`, not the other way around.
 
 4. **`nervusdb-cli` depends on `nervusdb`.** It must not reach into
-   `nervusdb-storage` directly.
+   wrapper crates or duplicate storage/query implementation.
 
 5. **Query cannot import storage types.** If query needs a type or trait, move it
-   to `nervusdb-api`.
+   to `nervusdb::api`.
 
 ## External Dependency Rules
 
@@ -67,13 +70,15 @@ and read-path merge logic.
 ## Current Intended Graph
 
 ```text
-nervusdb-cli -> nervusdb -> nervusdb-storage -> nervusdb-api
-                          -> nervusdb-query   -> nervusdb-api
-                          -> nervusdb-api
+nervusdb-cli -> nervusdb
+nervusdb-api -> nervusdb
+nervusdb-storage -> nervusdb
+nervusdb-query -> nervusdb
 ```
 
-Any direct `nervusdb-query -> nervusdb-storage` dependency is a boundary
-violation to remove before the Fjall backend lands.
+Any direct dependency from `nervusdb::query` implementation code to
+`nervusdb::storage` implementation code is a boundary violation. Use
+`nervusdb::api`.
 
 ## Public Package Rule
 

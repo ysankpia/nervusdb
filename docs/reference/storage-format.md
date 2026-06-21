@@ -49,7 +49,7 @@ edge_props  [src][rel][dst][key_len][key_bytes] -> encoded PropertyValue
 
 ## Value Encoding
 
-`PropertyValue` encoding is owned by `nervusdb-api`. Storage must not create a
+`PropertyValue` encoding is owned by `nervusdb::api`. Storage must not create a
 second public property-value type. Any encoding change that affects persisted
 values requires a format epoch decision and compatibility handling.
 

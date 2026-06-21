@@ -7,8 +7,8 @@
 //! cargo test --test core_0_1_examples
 //! ```
 
+use nervusdb::query::{Params, Result as QueryResult, Value, prepare, query_collect};
 use nervusdb::{Db, GraphSnapshot, PropertyValue};
-use nervusdb_query::{Params, Result as QueryResult, Value, prepare, query_collect};
 use tempfile::tempdir;
 
 // ─── Example 1: Open a database and create a simple graph ────────────────

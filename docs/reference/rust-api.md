@@ -49,8 +49,8 @@ Write path:
 Query path:
 
 - `nervusdb::query` re-export for Mini-Cypher
-- `nervusdb_query::prepare`
-- `nervusdb_query::query_collect`
+- `nervusdb::query::prepare`
+- `nervusdb::query::query_collect`
 
 ## Removed From 0.1 Core
 

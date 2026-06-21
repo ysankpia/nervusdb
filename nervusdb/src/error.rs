@@ -43,11 +43,11 @@ impl From<std::io::Error> for Error {
 }
 
 // Convert storage errors to string to hide internal types
-impl From<nervusdb_storage::Error> for Error {
-    fn from(e: nervusdb_storage::Error) -> Self {
+impl From<crate::storage::Error> for Error {
+    fn from(e: crate::storage::Error) -> Self {
         match e {
-            nervusdb_storage::Error::Io(e) => Error::Io(e),
-            nervusdb_storage::Error::StorageFormatMismatch { expected, found } => {
+            crate::storage::Error::Io(e) => Error::Io(e),
+            crate::storage::Error::StorageFormatMismatch { expected, found } => {
                 Error::Compatibility(format!(
                     "storage format mismatch: expected epoch {expected}, found {found}"
                 ))
@@ -58,10 +58,10 @@ impl From<nervusdb_storage::Error> for Error {
 }
 
 // Convert query errors to string to hide internal types
-impl From<nervusdb_query::Error> for Error {
-    fn from(e: nervusdb_query::Error) -> Self {
+impl From<crate::query::Error> for Error {
+    fn from(e: crate::query::Error) -> Self {
         match e {
-            nervusdb_query::Error::Io(e) => Error::Io(e),
+            crate::query::Error::Io(e) => Error::Io(e),
             _ => Error::Query(e.to_string()),
         }
     }
@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn map_storage_format_mismatch_to_compatibility_error() {
-        let storage_err = nervusdb_storage::Error::StorageFormatMismatch {
+        let storage_err = crate::storage::Error::StorageFormatMismatch {
             expected: 1,
             found: 0,
         };

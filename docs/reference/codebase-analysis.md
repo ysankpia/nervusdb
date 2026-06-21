@@ -1,8 +1,8 @@
 # Codebase Analysis
 
-This is the current source map after the Fjall storage refactor and query scope
-pruning on 2026-06-21. Older pre-Fjall CodeGraph notes are historical evidence
-only and must not be used to infer current architecture.
+This is the current source map after the Fjall storage refactor, query scope
+pruning, and single-crate packaging work. Older pre-Fjall CodeGraph notes are
+historical evidence only and must not be used to infer current architecture.
 
 ## Workspace
 
@@ -19,27 +19,30 @@ nervusdb-storage
 Experimental binding directories may remain in the repository, but they are not
 workspace members and do not define the 0.1 embedded graph core.
 
-## Core Crates
+## Core Implementation
 
 ```text
-nervusdb          public Rust facade: Db, snapshots, write transactions
-nervusdb-api      storage/query boundary traits and shared value types
-nervusdb-storage  Fjall-backed graph keyspaces and write transaction engine
-nervusdb-query    Mini-Cypher parser/planner/executor for 0.1
-nervusdb-cli      local query/write/repl smoke tool
+nervusdb             public Rust crate and real implementation owner
+nervusdb::api        storage/query boundary traits and shared value types
+nervusdb::storage    Fjall-backed graph keyspaces and write transaction engine
+nervusdb::query      Mini-Cypher parser/planner/executor for 0.1
+nervusdb-cli         local query/write/repl smoke tool
 ```
 
-The intended dependency shape is:
+Local wrapper crates may remain for compatibility while scripts and tests are
+consolidated:
 
 ```text
 nervusdb-cli -> nervusdb
-nervusdb     -> nervusdb-api + nervusdb-storage + nervusdb-query
-nervusdb-storage -> nervusdb-api
-nervusdb-query   -> nervusdb-api
+nervusdb-api -> nervusdb
+nervusdb-storage -> nervusdb
+nervusdb-query -> nervusdb
 ```
 
-`nervusdb-query` must not depend on `nervusdb-storage`. Storage implements the
-API traits; query consumes the traits.
+Those wrapper crates are marked `publish = false` and are not independent
+0.0.1 public packages. Inside `nervusdb`, query must not depend on storage
+implementation types. Storage implements the API traits; query consumes the
+traits.
 
 ## Storage Shape
 
@@ -137,5 +140,5 @@ bash scripts/core_crash_recovery.sh
 Manual full validation:
 
 ```bash
-bash scripts/workspace_full_test.sh
+cargo test --workspace
 ```

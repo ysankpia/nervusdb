@@ -24,7 +24,7 @@ query string
   -> parser
   -> simple Mini-Cypher plan
   -> executor
-  -> GraphSnapshot or WriteableGraph from nervusdb-api
+  -> GraphSnapshot or WriteableGraph from nervusdb::api
 ```
 
 Before 0.1, this path is optimized for correctness and predictable behavior, not
@@ -41,8 +41,8 @@ decision to request nodes for a resolved label.
 
 ## Boundary Rule
 
-`nervusdb-query` must not depend on `nervusdb-storage`. Shared types and traits
-belong in `nervusdb-api`.
+`nervusdb::query` must not depend on `nervusdb::storage` implementation types.
+Shared types and traits belong in `nervusdb::api`.
 
 ## Before 0.1
 

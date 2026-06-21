@@ -16,15 +16,18 @@ Authoritative product boundaries remain:
 ## Workspace Layout
 
 ```text
-nervusdb/          public Rust facade: Db, snapshots, write transactions
-nervusdb-api/      storage/query boundary traits and shared value types
-nervusdb-storage/  Fjall-backed graph keyspaces and write transaction engine
-nervusdb-query/    Mini-Cypher parser, planner, and executor for 0.1
-nervusdb-cli/      local debug, query, write, repl, and smoke workflows
+nervusdb/            public Rust crate: Db, api, storage, query
+nervusdb/src/api.rs  graph traits and shared value types
+nervusdb/src/storage Fjall-backed graph keyspaces and write transaction engine
+nervusdb/src/query   Mini-Cypher parser, planner, and executor for 0.1
+nervusdb-cli/        local debug, query, write, repl, and smoke workflows
 ```
 
-Experimental binding crates may remain in the repository, but they do not define
-the 0.1 embedded graph core.
+`nervusdb-api/`, `nervusdb-storage/`, and `nervusdb-query/` are local
+`publish = false` wrapper crates that re-export the implementation from
+`nervusdb`. They are not separate 0.0.1 public packages. Experimental binding
+crates may remain in the repository, but they do not define the 0.1 embedded
+graph core.
 
 ## Current Data Flow
 
@@ -32,13 +35,13 @@ the 0.1 embedded graph core.
 Rust API / CLI
   -> nervusdb facade
   -> direct write API or Mini-Cypher query API
-  -> nervusdb-api traits
-  -> nervusdb-storage Fjall keyspaces
+  -> nervusdb::api traits
+  -> nervusdb::storage Fjall keyspaces
 ```
 
-`nervusdb-query` depends on `nervusdb-api`, not on `nervusdb-storage`.
-`nervusdb-storage` implements `nervusdb-api` traits. The facade crate composes
-the two. This boundary is intentional: query work must not reach into storage
+`nervusdb::query` depends on `nervusdb::api`, not on `nervusdb::storage`.
+`nervusdb::storage` implements `nervusdb::api` traits. The facade composes the
+two. This boundary is intentional: query work must not reach into storage
 implementation types.
 
 ## Storage Shape
@@ -103,8 +106,8 @@ storage-level `label_nodes` keyspace matters in practice.
 - `Db::begin_write()`
 - `WriteTxn::commit()`
 - `GraphSnapshot` traversal, label, property, and count methods
-- `nervusdb_query::prepare`
-- `nervusdb_query::query_collect`
+- `nervusdb::query::prepare`
+- `nervusdb::query::query_collect`
 
 `checkpoint` and `close` are lifecycle helpers over Fjall persistence. The old
 `compact` name and property-index hooks were removed from the 0.1 public API.
@@ -142,5 +145,5 @@ bash scripts/core_crash_recovery.sh
 Full workspace validation is manual:
 
 ```bash
-bash scripts/workspace_full_test.sh
+cargo test --workspace
 ```

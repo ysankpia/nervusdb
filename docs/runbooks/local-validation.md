@@ -14,7 +14,7 @@ Use narrower commands while developing:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy -p nervusdb-query --lib -- -W warnings
+cargo clippy -p nervusdb --lib -- -W warnings
 bash scripts/workspace_quick_test.sh
 ```
 
@@ -35,8 +35,8 @@ behavior or examples.
 - Core examples: `bash scripts/core_examples.sh`
 - Core crash recovery: `bash scripts/core_crash_recovery.sh`
 - Core benchmark: `bash scripts/core_bench.sh --small`
-- Full historical workspace test: `bash scripts/workspace_full_test.sh`
-- Full workspace clippy: included in `bash scripts/workspace_full_test.sh`
+- Full workspace test: `cargo test --workspace`
+- Broader clippy when needed: `cargo clippy --workspace --all-targets -- -W warnings`
 
 These checks are not part of the default 0.1 loop unless the PR touches the
 corresponding area. Platform-era binding/TCK/performance gates are archived

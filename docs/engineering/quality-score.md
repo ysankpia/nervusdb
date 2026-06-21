@@ -5,7 +5,7 @@
 | Dimension | Score | Evidence |
 |---|---|---|
 | Product / Domain | 4 | Direction, scope, non-goals, and active Fjall plan now define a finishable embedded Rust graph core. |
-| Architecture | 4 | Code now matches the Fjall directory-storage contract; query/storage meet through `nervusdb-api`; old storage code was deleted. |
+| Architecture | 4 | Code now matches the Fjall directory-storage contract; query/storage meet through `nervusdb::api`; implementation is owned by the single public `nervusdb` crate. |
 | Validation | 4 | Fjall reopen, label scan, traversal, property, snapshot, crash recovery, examples, default check, and workspace tests passed. |
 | Documentation | 4 | Current docs now name the storage reset and scope boundaries directly. |
 | Maintainability | 4 | The storage crate is reduced to Fjall glue plus graph semantics; false index and compaction hooks were removed from the public API. |
@@ -32,11 +32,12 @@ Gaps:
 Strengths:
 
 - Crate boundaries now state that query and storage meet only through
-  `nervusdb-api`.
+  `nervusdb::api`.
 - Storage model now describes logical Fjall keyspaces.
 - API surface now removes `.ndb/.wal` from 0.1 core.
-- `nervusdb-query` no longer depends on `nervusdb-storage`.
-- `nervusdb-storage` no longer contains Pager/WAL/B+Tree/CSR/read-path modules.
+- `nervusdb::query` does not depend on `nervusdb::storage` implementation
+  types.
+- `nervusdb::storage` no longer contains Pager/WAL/B+Tree/CSR/read-path modules.
 - Labels and relationship types are separate keyspaces and counters.
 
 Gaps:
@@ -76,11 +77,11 @@ Gaps:
 
 Strengths:
 
-- Workspace has 5 focused crates.
+- Workspace has one public implementation crate plus local wrapper crates.
 - Current docs forbid restoring platform-era breadth.
 - Fjall reduces the amount of custom storage code NervusDB must own.
-- Storage crate currently has only API re-export, error, property, snapshot,
-  engine, and crash-test surfaces.
+- Storage implementation is now a `nervusdb::storage` module; wrapper crates
+  are `publish = false`.
 
 Gaps:
 

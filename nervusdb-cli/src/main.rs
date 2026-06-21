@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use nervusdb::Db;
-use nervusdb_api::GraphSnapshot;
-use nervusdb_query::Value as V2Value;
-use nervusdb_query::prepare;
+use nervusdb::GraphSnapshot;
+use nervusdb::query::Value as V2Value;
+use nervusdb::query::prepare;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
@@ -145,16 +145,16 @@ fn value_to_json_v2<S: GraphSnapshot>(snapshot: &S, value: &V2Value) -> serde_js
     }
 }
 
-fn parse_params_json_v2(raw: Option<String>) -> Result<nervusdb_query::Params, String> {
+fn parse_params_json_v2(raw: Option<String>) -> Result<nervusdb::query::Params, String> {
     let Some(raw) = raw else {
-        return Ok(nervusdb_query::Params::new());
+        return Ok(nervusdb::query::Params::new());
     };
     if raw.trim().is_empty() {
-        return Ok(nervusdb_query::Params::new());
+        return Ok(nervusdb::query::Params::new());
     }
     let parsed: HashMap<String, serde_json::Value> = serde_json::from_str(&raw)
         .map_err(|e| format!("params_json must be a JSON object: {e}"))?;
-    let mut out = nervusdb_query::Params::new();
+    let mut out = nervusdb::query::Params::new();
     for (k, v) in parsed {
         let vv = match v {
             serde_json::Value::Null => V2Value::Null,

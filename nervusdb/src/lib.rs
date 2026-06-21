@@ -8,7 +8,7 @@
 //!
 //! ```rust,ignore
 //! use nervusdb::Db;
-//! use nervusdb_query::{prepare, query_collect, Params};
+//! use nervusdb::query::{prepare, query_collect, Params};
 //!
 //! let db = Db::open("my_graph")?;
 //!
@@ -40,17 +40,14 @@
 //! | Create | `CREATE (n:Person {name: 'Alice'})` |
 //! | Set property | `MATCH (n) SET n.name = 'Bob'` |
 //! | Delete | `MATCH (n) WHERE ... DELETE n` |
-//! | Remove property | `MATCH (n) REMOVE n.name` |
 //! | LIMIT | `LIMIT 10` |
 //! | EXPLAIN | `EXPLAIN MATCH (n) RETURN n` |
-//! | Label operations | `SET n:Label`, `REMOVE n:Label` |
-//! | Property Map SET | `SET n = {x: 1}` |
 //!
 //! ## Core API
 //!
 //! | Type | Purpose |
 //! |------|---------|
-//! | [`Db`] | Open/create database, begin transactions, create indexes |
+//! | [`Db`] | Open/create database, begin transactions |
 //! | [`WriteTxn`] | ACID write transaction — create nodes/edges, set properties |
 //! | [`DbSnapshot`] | Lock-free read snapshot for queries and traversals |
 //! | [`ReadTxn`] | Lightweight read transaction, neighbor traversal |
@@ -76,21 +73,24 @@
 //! Storage path: a local database directory managed by Fjall. Fjall's internal
 //! files are not part of the NervusDB public format contract.
 
+pub mod api;
 mod error;
+pub mod query;
+#[doc(hidden)]
+pub mod storage;
 
-use nervusdb_storage::api::StorageSnapshot;
-use nervusdb_storage::engine::GraphEngine;
-use nervusdb_storage::snapshot::Snapshot;
+use crate::storage::api::StorageSnapshot;
+use crate::storage::engine::GraphEngine;
+use crate::storage::snapshot::Snapshot;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-pub use error::{Error, Result};
-pub use nervusdb_api::{
+pub use crate::api::{
     EdgeKey, ExternalId, GraphSnapshot, GraphStore, InternalNodeId, LabelId, PropertyValue,
     RelTypeId, WriteableGraph,
 };
-pub use nervusdb_query as query;
-pub use nervusdb_storage::PAGE_SIZE;
+pub use crate::storage::PAGE_SIZE;
+pub use error::{Error, Result};
 
 /// Open and manage an embedded property graph database.
 ///
@@ -350,7 +350,7 @@ impl ReadTxn {
 /// txn.commit()?;  // both creates are atomic
 /// ```
 pub struct WriteTxn<'a> {
-    inner: nervusdb_storage::engine::WriteTxn<'a>,
+    inner: crate::storage::engine::WriteTxn<'a>,
 }
 
 impl<'a> WriteTxn<'a> {
@@ -459,7 +459,7 @@ impl WriteableGraph for WriteTxn<'_> {
         &mut self,
         external_id: ExternalId,
         label_id: LabelId,
-    ) -> nervusdb_api::GraphWriteResult<InternalNodeId> {
+    ) -> crate::api::GraphWriteResult<InternalNodeId> {
         self.inner
             .create_node(external_id, label_id)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
@@ -469,7 +469,7 @@ impl WriteableGraph for WriteTxn<'_> {
         &mut self,
         node: InternalNodeId,
         label_id: LabelId,
-    ) -> nervusdb_api::GraphWriteResult<()> {
+    ) -> crate::api::GraphWriteResult<()> {
         self.inner
             .add_node_label(node, label_id)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
@@ -479,7 +479,7 @@ impl WriteableGraph for WriteTxn<'_> {
         &mut self,
         node: InternalNodeId,
         label_id: LabelId,
-    ) -> nervusdb_api::GraphWriteResult<()> {
+    ) -> crate::api::GraphWriteResult<()> {
         self.inner
             .remove_node_label(node, label_id)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
@@ -490,7 +490,7 @@ impl WriteableGraph for WriteTxn<'_> {
         src: InternalNodeId,
         rel: RelTypeId,
         dst: InternalNodeId,
-    ) -> nervusdb_api::GraphWriteResult<()> {
+    ) -> crate::api::GraphWriteResult<()> {
         self.inner.create_edge(src, rel, dst);
         Ok(())
     }
@@ -500,7 +500,7 @@ impl WriteableGraph for WriteTxn<'_> {
         node: InternalNodeId,
         key: String,
         value: PropertyValue,
-    ) -> nervusdb_api::GraphWriteResult<()> {
+    ) -> crate::api::GraphWriteResult<()> {
         self.inner.set_node_property(node, key, value);
         Ok(())
     }
@@ -512,7 +512,7 @@ impl WriteableGraph for WriteTxn<'_> {
         dst: InternalNodeId,
         key: String,
         value: PropertyValue,
-    ) -> nervusdb_api::GraphWriteResult<()> {
+    ) -> crate::api::GraphWriteResult<()> {
         self.inner.set_edge_property(src, rel, dst, key, value);
         Ok(())
     }
@@ -521,7 +521,7 @@ impl WriteableGraph for WriteTxn<'_> {
         &mut self,
         node: InternalNodeId,
         key: &str,
-    ) -> nervusdb_api::GraphWriteResult<()> {
+    ) -> crate::api::GraphWriteResult<()> {
         self.inner.remove_node_property(node, key);
         Ok(())
     }
@@ -532,12 +532,12 @@ impl WriteableGraph for WriteTxn<'_> {
         rel: RelTypeId,
         dst: InternalNodeId,
         key: &str,
-    ) -> nervusdb_api::GraphWriteResult<()> {
+    ) -> crate::api::GraphWriteResult<()> {
         self.inner.remove_edge_property(src, rel, dst, key);
         Ok(())
     }
 
-    fn tombstone_node(&mut self, node: InternalNodeId) -> nervusdb_api::GraphWriteResult<()> {
+    fn tombstone_node(&mut self, node: InternalNodeId) -> crate::api::GraphWriteResult<()> {
         self.inner.tombstone_node(node);
         Ok(())
     }
@@ -547,21 +547,18 @@ impl WriteableGraph for WriteTxn<'_> {
         src: InternalNodeId,
         rel: RelTypeId,
         dst: InternalNodeId,
-    ) -> nervusdb_api::GraphWriteResult<()> {
+    ) -> crate::api::GraphWriteResult<()> {
         self.inner.tombstone_edge(src, rel, dst);
         Ok(())
     }
 
-    fn get_or_create_label_id(&mut self, name: &str) -> nervusdb_api::GraphWriteResult<LabelId> {
+    fn get_or_create_label_id(&mut self, name: &str) -> crate::api::GraphWriteResult<LabelId> {
         self.inner
             .get_or_create_label(name)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     }
 
-    fn get_or_create_rel_type_id(
-        &mut self,
-        name: &str,
-    ) -> nervusdb_api::GraphWriteResult<RelTypeId> {
+    fn get_or_create_rel_type_id(&mut self, name: &str) -> crate::api::GraphWriteResult<RelTypeId> {
         self.inner
             .get_or_create_rel_type(name)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)

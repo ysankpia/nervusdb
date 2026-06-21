@@ -2,7 +2,8 @@
 
 ## Status
 
-Planned
+In progress. The single-crate package shape has been implemented and locally
+validated. Push, CI, tag, and crates.io publish are still pending.
 
 ## Goal
 
@@ -95,6 +96,16 @@ not a family of public crates.
 
 Record command output and benchmark artifact path in `PROGRESS.md` before
 tagging.
+
+Current local evidence:
+
+- `nervusdb` owns the real implementation under `nervusdb/src/{api.rs,query,storage}`.
+- `nervusdb-api`, `nervusdb-storage`, and `nervusdb-query` are
+  `publish = false` local wrapper crates.
+- `scripts/core_bench.sh` runs the benchmark through the public `nervusdb`
+  crate, not the storage wrapper.
+- `cargo publish -p nervusdb --dry-run --registry crates-io --allow-dirty`
+  passed before commit. A clean dry-run is still required after commit.
 
 ## Completion Evidence
 

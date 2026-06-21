@@ -3,13 +3,18 @@
 ## Core
 
 - `nervusdb`
-- `nervusdb-api`
-- `nervusdb-storage`
-- `nervusdb-query` Mini-Cypher path
+- `nervusdb::api`
+- `nervusdb::storage`
+- `nervusdb::query` Mini-Cypher path
 - `nervusdb-cli` core smoke/debug/import subset
 
 The core is embedded Rust graph storage and query. It uses a local database
 directory and Fjall-backed keyspaces.
+
+`nervusdb-api`, `nervusdb-storage`, and `nervusdb-query` may exist as
+workspace-local wrapper crates while scripts and tests are consolidated. They
+re-export `nervusdb` modules, are marked `publish = false`, and are not 0.0.1
+public packages.
 
 ## Experimental
 

@@ -49,7 +49,7 @@ Write path:
 
 Query path:
 
-- Mini-Cypher execution through `nervusdb::query` or `nervusdb_query`
+- Mini-Cypher execution through `nervusdb::query`
 
 ## Removed From 0.1 Core
 

@@ -6,7 +6,7 @@ description = "NervusDB v2 public API – GraphStore trait and data types"
 repository = "https://github.com/LuQing-Studio/nervusdb"
 documentation = "https://docs.rs/nervusdb-api"
 edition = "2024"
+publish = false
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
-
+nervusdb = { path = "../nervusdb", version = "=0.0.1" }

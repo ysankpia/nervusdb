@@ -1,7 +1,7 @@
 use fjall::{Database, KeyspaceCreateOptions, PersistMode};
-use nervusdb_api::{EdgeKey, GraphSnapshot, PropertyValue};
-use nervusdb_storage::engine::GraphEngine;
-use nervusdb_storage::{Error, STORAGE_FORMAT_EPOCH};
+use nervusdb::storage::engine::GraphEngine;
+use nervusdb::storage::{Error, STORAGE_FORMAT_EPOCH};
+use nervusdb::{EdgeKey, GraphSnapshot, PropertyValue};
 use tempfile::tempdir;
 
 fn db_dir(dir: &tempfile::TempDir) -> std::path::PathBuf {

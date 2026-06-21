@@ -45,7 +45,7 @@ echo "[core-bench] mode=$mode nodes=$nodes degree=$degree iters=$iters write_ite
 echo "[core-bench] output=$out_file"
 
 set +e
-cargo run --example bench_v2 -p nervusdb-storage --release -- \
+cargo run --example bench_v2 -p nervusdb --release -- \
   --nodes "$nodes" \
   --degree "$degree" \
   --iters "$iters" \
@@ -67,4 +67,3 @@ fi
 
 printf '%s\n' "$json_line" > "$out_file"
 echo "[core-bench] wrote $out_file"
-
