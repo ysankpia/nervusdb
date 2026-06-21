@@ -2,38 +2,24 @@ use crate::ast::*;
 use crate::error::Error;
 use crate::lexer::{Lexer, Token, TokenType};
 
-#[derive(Debug, Clone, Default)]
-pub(crate) struct MergeSubclauses {
-    pub on_create: Vec<SetClause>,
-    pub on_match: Vec<SetClause>,
-}
-
 pub struct Parser<'a> {
     _phantom: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> Parser<'a> {
     pub fn parse(input: &'a str) -> Result<Query, Error> {
-        let (query, _merge_subclauses) = Self::parse_with_merge_subclauses(input)?;
-        Ok(query)
-    }
-
-    pub(crate) fn parse_with_merge_subclauses(
-        input: &'a str,
-    ) -> Result<(Query, Vec<MergeSubclauses>), Error> {
         let mut lexer = Lexer::new(input);
         let tokens = lexer.tokenize().map_err(Error::Other)?;
         let mut parser = TokenParser::new(tokens);
         let query = parser.parse_query()?;
         parser.ensure_budget()?;
-        Ok((query, parser.merge_subclauses))
+        Ok(query)
     }
 }
 
 struct TokenParser {
     tokens: Vec<Token>,
     position: usize,
-    merge_subclauses: Vec<MergeSubclauses>,
     parse_steps: usize,
     max_parse_steps: usize,
     budget_exhausted: bool,
@@ -59,7 +45,6 @@ impl TokenParser {
         Self {
             tokens,
             position: 0,
-            merge_subclauses: Vec::new(),
             parse_steps: 0,
             max_parse_steps,
             budget_exhausted: false,
@@ -83,6 +68,12 @@ impl TokenParser {
         Error::Other("syntax error: ParserComplexityLimitExceeded".to_string())
     }
 
+    fn unsupported_0_1(feature: &'static str) -> Error {
+        Error::Other(format!(
+            "syntax error: {feature} is outside Mini-Cypher 0.1"
+        ))
+    }
+
     fn ensure_budget(&self) -> Result<(), Error> {
         if self.budget_exhausted {
             Err(Self::parser_complexity_error())
@@ -93,27 +84,9 @@ impl TokenParser {
 
     fn parse_query(&mut self) -> Result<Query, Error> {
         self.ensure_budget()?;
-        let mut clauses = self.parse_single_query_clauses()?;
-        let mut union_mode: Option<bool> = None;
-
-        while self.match_token(&TokenType::Union) {
-            let all = self.match_token(&TokenType::All);
-            if let Some(existing) = union_mode {
-                if existing != all {
-                    return Err(Error::Other(
-                        "syntax error: InvalidClauseComposition".to_string(),
-                    ));
-                }
-            } else {
-                union_mode = Some(all);
-            }
-            let right_clauses = self.parse_single_query_clauses()?;
-            clauses.push(Clause::Union(UnionClause {
-                all,
-                query: Query {
-                    clauses: right_clauses,
-                },
-            }));
+        let clauses = self.parse_single_query_clauses()?;
+        if self.match_token(&TokenType::Union) {
+            return Err(Self::unsupported_0_1("UNION"));
         }
 
         self.ensure_budget()?;
@@ -143,12 +116,8 @@ impl TokenParser {
             return Ok(None);
         }
 
-        // Fail-fast on unsupported top-level clauses/keywords.
-        // if self.peek().token_type == TokenType::Foreach { ... }
-
         if self.match_token(&TokenType::Optional) {
-            self.consume(&TokenType::Match, "Expected MATCH after OPTIONAL")?;
-            return Ok(Some(Clause::Match(self.parse_optional_match()?)));
+            return Err(Self::unsupported_0_1("OPTIONAL MATCH"));
         }
         if self.match_token(&TokenType::Match) {
             return Ok(Some(Clause::Match(self.parse_match()?)));
@@ -157,19 +126,19 @@ impl TokenParser {
             return Ok(Some(Clause::Create(self.parse_create()?)));
         }
         if self.match_token(&TokenType::Merge) {
-            return Ok(Some(Clause::Merge(self.parse_merge()?)));
+            return Err(Self::unsupported_0_1("MERGE"));
         }
         if self.match_token(&TokenType::Unwind) {
-            return Ok(Some(Clause::Unwind(self.parse_unwind()?)));
+            return Err(Self::unsupported_0_1("UNWIND"));
         }
         if self.match_token(&TokenType::Call) {
-            return Ok(Some(Clause::Call(self.parse_call()?)));
+            return Err(Self::unsupported_0_1("CALL"));
         }
         if self.match_token(&TokenType::Return) {
             return Ok(Some(Clause::Return(self.parse_return()?)));
         }
         if self.match_token(&TokenType::With) {
-            return Ok(Some(Clause::With(self.parse_with()?)));
+            return Err(Self::unsupported_0_1("WITH"));
         }
         if self.match_token(&TokenType::Where) {
             return Ok(Some(Clause::Where(self.parse_where()?)));
@@ -178,14 +147,14 @@ impl TokenParser {
             return Ok(Some(Clause::Set(self.parse_set()?)));
         }
         if self.match_token(&TokenType::Remove) {
-            return Ok(Some(Clause::Remove(self.parse_remove()?)));
+            return Err(Self::unsupported_0_1("REMOVE"));
         }
         if self.check(&TokenType::Detach) || self.check(&TokenType::Delete) {
             return Ok(Some(Clause::Delete(self.parse_delete()?)));
         }
 
         if self.match_token(&TokenType::Foreach) {
-            return Ok(Some(Clause::Foreach(self.parse_foreach()?)));
+            return Err(Self::unsupported_0_1("FOREACH"));
         }
 
         if !self.is_at_end() {
@@ -193,77 +162,6 @@ impl TokenParser {
         }
 
         Ok(None)
-    }
-
-    fn parse_call(&mut self) -> Result<CallClause, Error> {
-        if self.check(&TokenType::LeftBrace) {
-            let query = self.parse_braced_subquery()?;
-            Ok(CallClause::Subquery(query))
-        } else {
-            let procedure = self.parse_procedure_call()?;
-            Ok(CallClause::Procedure(procedure))
-        }
-    }
-
-    fn parse_procedure_call(&mut self) -> Result<ProcedureCall, Error> {
-        // 1. Parse name (e.g. db.info)
-        let mut name = Vec::new();
-        name.push(self.consume_identifier("Expected procedure name")?);
-        while self.match_token(&TokenType::Dot) {
-            name.push(self.consume_identifier("Expected procedure name segment after '.'")?);
-        }
-
-        // 2. Parse arguments: (arg1, arg2)
-        // openCypher also allows implicit argument passing with `CALL ns.proc` (no parentheses).
-        let arguments = if self.match_token(&TokenType::LeftParen) {
-            self.parse_function_arguments()?
-        } else {
-            Vec::new()
-        };
-
-        // 3. Optional YIELD
-        let mut yields = None;
-        if self.match_token(&TokenType::Yield) {
-            if self.match_token(&TokenType::Asterisk) {
-                yields = Some(vec![YieldItem {
-                    name: "*".to_string(),
-                    alias: None,
-                }]);
-            } else {
-                let mut yield_items = Vec::new();
-                yield_items.push(self.parse_yield_item()?);
-                while self.match_token(&TokenType::Comma) {
-                    yield_items.push(self.parse_yield_item()?);
-                }
-                yields = Some(yield_items);
-            }
-        }
-
-        Ok(ProcedureCall {
-            name,
-            arguments,
-            yields,
-        })
-    }
-
-    fn parse_yield_item(&mut self) -> Result<YieldItem, Error> {
-        let name = self.consume_identifier("Expected yield column name")?;
-        let mut alias = None;
-        if self.match_token(&TokenType::As) {
-            alias = Some(self.consume_identifier("Expected alias after AS")?);
-        }
-        Ok(YieldItem { name, alias })
-    }
-
-    fn consume_identifier(&mut self, message: &str) -> Result<String, Error> {
-        let token = self.peek();
-        if let TokenType::Identifier(id) = &token.token_type {
-            let id = id.clone();
-            self.advance();
-            Ok(id)
-        } else {
-            Err(Error::Other(message.to_string()))
-        }
     }
 
     fn parse_match(&mut self) -> Result<MatchClause, Error> {
@@ -278,18 +176,6 @@ impl TokenParser {
         })
     }
 
-    fn parse_optional_match(&mut self) -> Result<MatchClause, Error> {
-        let mut patterns = Vec::new();
-        patterns.push(self.parse_pattern()?);
-        while self.match_token(&TokenType::Comma) {
-            patterns.push(self.parse_pattern()?);
-        }
-        Ok(MatchClause {
-            optional: true,
-            patterns,
-        })
-    }
-
     fn parse_create(&mut self) -> Result<CreateClause, Error> {
         let mut patterns = Vec::new();
         patterns.push(self.parse_pattern()?);
@@ -299,47 +185,12 @@ impl TokenParser {
         Ok(CreateClause { patterns })
     }
 
-    fn parse_merge(&mut self) -> Result<MergeClause, Error> {
-        let pattern = self.parse_pattern()?;
-        let mut subclauses = MergeSubclauses::default();
-
-        while self.match_token(&TokenType::On) {
-            if self.match_token(&TokenType::Create) {
-                self.consume(&TokenType::Set, "Expected SET after ON CREATE")?;
-                subclauses.on_create.push(self.parse_set()?);
-                continue;
-            }
-            if self.match_token(&TokenType::Match) {
-                self.consume(&TokenType::Set, "Expected SET after ON MATCH")?;
-                subclauses.on_match.push(self.parse_set()?);
-                continue;
-            }
-            return Err(Error::Other(
-                "Expected CREATE or MATCH after ON".to_string(),
-            ));
-        }
-
-        self.merge_subclauses.push(subclauses);
-        Ok(MergeClause { pattern })
-    }
-
-    fn parse_unwind(&mut self) -> Result<UnwindClause, Error> {
-        let expression = self.parse_expression()?;
-        self.consume(&TokenType::As, "Expected AS after UNWIND expression")?;
-
-        let alias = if let TokenType::Identifier(name) = &self.advance().token_type {
-            name.clone()
-        } else {
-            return Err(Error::Other(
-                "Expected identifier after UNWIND AS".to_string(),
-            ));
-        };
-
-        Ok(UnwindClause { expression, alias })
-    }
-
     fn parse_return(&mut self) -> Result<ReturnClause, Error> {
-        let distinct = self.match_token(&TokenType::Distinct);
+        let distinct = if self.match_token(&TokenType::Distinct) {
+            return Err(Self::unsupported_0_1("RETURN DISTINCT"));
+        } else {
+            false
+        };
         let mut items = Vec::new();
 
         loop {
@@ -349,17 +200,14 @@ impl TokenParser {
             }
         }
 
-        // Parse ORDER BY
         let order_by = if self.match_token(&TokenType::Order) {
-            self.consume(&TokenType::By, "Expected BY after ORDER")?;
-            Some(self.parse_order_by()?)
+            return Err(Self::unsupported_0_1("ORDER BY"));
         } else {
             None
         };
 
-        // Parse SKIP
         let skip = if self.match_token(&TokenType::Skip) {
-            Some(self.parse_expression()?)
+            return Err(Self::unsupported_0_1("SKIP"));
         } else {
             None
         };
@@ -393,55 +241,6 @@ impl TokenParser {
         Ok(ReturnItem { expression, alias })
     }
 
-    fn parse_with(&mut self) -> Result<WithClause, Error> {
-        let distinct = self.match_token(&TokenType::Distinct);
-        let mut items = Vec::new();
-
-        loop {
-            items.push(self.parse_return_item()?);
-            if !self.match_token(&TokenType::Comma) {
-                break;
-            }
-        }
-
-        let where_clause = if self.match_token(&TokenType::Where) {
-            Some(self.parse_where()?)
-        } else {
-            None
-        };
-
-        // Parse ORDER BY
-        let order_by = if self.match_token(&TokenType::Order) {
-            self.consume(&TokenType::By, "Expected BY after ORDER")?;
-            Some(self.parse_order_by()?)
-        } else {
-            None
-        };
-
-        // Parse SKIP
-        let skip = if self.match_token(&TokenType::Skip) {
-            Some(self.parse_expression()?)
-        } else {
-            None
-        };
-
-        // Parse LIMIT
-        let limit = if self.match_token(&TokenType::Limit) {
-            Some(self.parse_expression()?)
-        } else {
-            None
-        };
-
-        Ok(WithClause {
-            distinct,
-            items,
-            where_clause,
-            order_by,
-            limit,
-            skip,
-        })
-    }
-
     fn parse_where(&mut self) -> Result<WhereClause, Error> {
         let expression = self.parse_expression()?;
         Ok(WhereClause { expression })
@@ -449,8 +248,6 @@ impl TokenParser {
 
     fn parse_set(&mut self) -> Result<SetClause, Error> {
         let mut items = Vec::new();
-        let mut map_items = Vec::new();
-        let mut labels = Vec::new();
 
         loop {
             let variable = self.parse_set_target_variable()?;
@@ -463,26 +260,11 @@ impl TokenParser {
                     value,
                 });
             } else if self.check(&TokenType::Colon) {
-                let label_names = self.parse_label_chain()?;
-                labels.push(LabelSetItem {
-                    variable,
-                    labels: label_names,
-                });
+                return Err(Self::unsupported_0_1("SET labels"));
             } else if self.match_token(&TokenType::Equals) {
-                let value = self.parse_expression()?;
-                map_items.push(MapSetItem {
-                    variable,
-                    value,
-                    append: false,
-                });
+                return Err(Self::unsupported_0_1("SET map assignment"));
             } else if self.match_token(&TokenType::Plus) {
-                self.consume(&TokenType::Equals, "Expected '=' after '+' in SET clause")?;
-                let value = self.parse_expression()?;
-                map_items.push(MapSetItem {
-                    variable,
-                    value,
-                    append: true,
-                });
+                return Err(Self::unsupported_0_1("SET map update"));
             } else {
                 return Err(Error::Other(
                     "Expected '.', ':', '=' or '+=' after variable in SET clause".to_string(),
@@ -496,8 +278,8 @@ impl TokenParser {
 
         Ok(SetClause {
             items,
-            map_items,
-            labels,
+            map_items: Vec::new(),
+            labels: Vec::new(),
         })
     }
 
@@ -512,46 +294,6 @@ impl TokenParser {
         } else {
             self.parse_identifier("SET variable")
         }
-    }
-
-    fn parse_remove(&mut self) -> Result<RemoveClause, Error> {
-        let mut properties = Vec::new();
-        let mut labels = Vec::new();
-
-        loop {
-            let variable = self.parse_identifier("REMOVE variable")?;
-            if self.match_token(&TokenType::Dot) {
-                let property = self.parse_identifier("property name")?;
-                properties.push(PropertyAccess { variable, property });
-            } else if self.check(&TokenType::Colon) {
-                let label_names = self.parse_label_chain()?;
-                labels.push(LabelRemoveItem {
-                    variable,
-                    labels: label_names,
-                });
-            } else {
-                return Err(Error::Other(
-                    "Expected '.' or ':' after variable in REMOVE clause".to_string(),
-                ));
-            }
-
-            if !self.match_token(&TokenType::Comma) {
-                break;
-            }
-        }
-
-        Ok(RemoveClause { properties, labels })
-    }
-
-    fn parse_label_chain(&mut self) -> Result<Vec<String>, Error> {
-        let mut labels = Vec::new();
-        while self.match_token(&TokenType::Colon) {
-            labels.push(self.parse_identifier("label name")?);
-        }
-        if labels.is_empty() {
-            return Err(Error::Other("Expected label after ':'".to_string()));
-        }
-        Ok(labels)
     }
 
     fn parse_delete(&mut self) -> Result<DeleteClause, Error> {
@@ -575,9 +317,7 @@ impl TokenParser {
     fn parse_pattern(&mut self) -> Result<Pattern, Error> {
         self.ensure_budget()?;
         let variable = if self.peek_is_identifier() && self.check_next(&TokenType::Equals) {
-            let var = self.parse_identifier("path variable")?;
-            self.consume(&TokenType::Equals, "Expected '='")?;
-            Some(var)
+            return Err(Self::unsupported_0_1("named paths"));
         } else {
             None
         };
@@ -686,7 +426,7 @@ impl TokenParser {
         let mut variable = None;
         let mut types = Vec::new();
         let mut properties = None;
-        let mut variable_length = None;
+        let variable_length = None;
 
         if self.match_token(&TokenType::LeftBracket) {
             if let TokenType::Identifier(name) = &self.peek().token_type {
@@ -739,7 +479,7 @@ impl TokenParser {
             }
 
             if self.match_token(&TokenType::Asterisk) {
-                variable_length = Some(self.parse_variable_length()?);
+                return Err(Self::unsupported_0_1("variable-length paths"));
             }
 
             if self.check(&TokenType::LeftBrace) {
@@ -770,30 +510,6 @@ impl TokenParser {
         })
     }
 
-    fn parse_variable_length(&mut self) -> Result<VariableLength, Error> {
-        let mut min = None;
-        let mut max = None;
-        if matches!(self.peek().token_type, TokenType::Number(_)) {
-            let n = self.parse_integer("path length")?;
-            min = Some(n);
-            if self.match_token(&TokenType::RangeDots) {
-                if matches!(self.peek().token_type, TokenType::Number(_)) {
-                    max = Some(self.parse_integer("path length")?);
-                }
-            } else {
-                max = Some(n);
-            }
-            return Ok(VariableLength { min, max });
-        }
-        if self.match_token(&TokenType::RangeDots) {
-            if matches!(self.peek().token_type, TokenType::Number(_)) {
-                max = Some(self.parse_integer("path length")?);
-            }
-            return Ok(VariableLength { min, max });
-        }
-        Ok(VariableLength { min, max })
-    }
-
     fn parse_property_map(&mut self) -> Result<PropertyMap, Error> {
         self.consume(&TokenType::LeftBrace, "Expected '{'")?;
         let mut properties = Vec::new();
@@ -811,80 +527,6 @@ impl TokenParser {
 
         self.consume(&TokenType::RightBrace, "Expected '}'")?;
         Ok(PropertyMap { properties })
-    }
-
-    fn parse_order_by(&mut self) -> Result<OrderByClause, Error> {
-        let mut items = Vec::new();
-        loop {
-            let expression = self.parse_expression()?;
-            let direction = if self.match_token(&TokenType::Asc) {
-                Direction::Ascending
-            } else if self.match_token(&TokenType::Desc) {
-                Direction::Descending
-            } else {
-                Direction::Ascending
-            };
-
-            items.push(OrderByItem {
-                expression,
-                direction,
-            });
-
-            if !self.match_token(&TokenType::Comma) {
-                break;
-            }
-        }
-
-        Ok(OrderByClause { items })
-    }
-
-    fn parse_foreach(&mut self) -> Result<ForeachClause, Error> {
-        self.consume(&TokenType::LeftParen, "Expected '(' after FOREACH")?;
-        let variable = self.parse_identifier("FOREACH variable")?;
-        self.consume(&TokenType::In, "Expected IN after FOREACH variable")?;
-        let list = self.parse_expression()?;
-        self.consume(&TokenType::Pipe, "Expected '|' after FOREACH list")?;
-
-        let mut updates = Vec::new();
-        while !self.check(&TokenType::RightParen) && !self.is_at_end() {
-            if let Some(clause) = self.parse_clause()? {
-                match clause {
-                    Clause::Create(_)
-                    | Clause::Merge(_)
-                    | Clause::Set(_)
-                    | Clause::Delete(_)
-                    | Clause::Remove(_)
-                    | Clause::Foreach(_) => {
-                        updates.push(clause);
-                    }
-                    _ => {
-                        return Err(Error::Other(format!(
-                            "Invalid clause inside FOREACH: {:?}",
-                            clause
-                        )));
-                    }
-                }
-            } else {
-                break;
-            }
-        }
-
-        self.consume(&TokenType::RightParen, "Expected ')' at end of FOREACH")?;
-        Ok(ForeachClause {
-            variable,
-            list,
-            updates,
-        })
-    }
-
-    fn parse_integer(&mut self, ctx: &'static str) -> Result<u32, Error> {
-        match &self.advance().token_type {
-            TokenType::Number(n) if n.is_integer() => n
-                .raw
-                .parse::<u32>()
-                .map_err(|_| Error::Other(format!("Expected integer after {ctx}"))),
-            _ => Err(Error::Other(format!("Expected integer after {ctx}"))),
-        }
     }
 
     fn parse_property_key(&mut self) -> Result<String, Error> {
@@ -1693,13 +1335,6 @@ impl TokenParser {
         }
     }
 
-    fn parse_braced_subquery(&mut self) -> Result<Query, Error> {
-        self.consume(&TokenType::LeftBrace, "Expected '{' after CALL")?;
-        let query = self.parse_query()?;
-        self.consume(&TokenType::RightBrace, "Expected '}' after subquery")?;
-        Ok(query)
-    }
-
     fn parse_function_arguments(&mut self) -> Result<Vec<Expression>, Error> {
         let mut args = Vec::new();
 
@@ -1928,10 +1563,13 @@ mod tests {
     use crate::lexer::Lexer;
 
     #[test]
-    fn rejects_mixed_union_and_union_all() {
+    fn rejects_union_as_outside_0_1() {
         let err = Parser::parse("RETURN 1 AS a UNION RETURN 2 AS a UNION ALL RETURN 3 AS a")
-            .expect_err("mixed UNION / UNION ALL should fail");
-        assert_eq!(err.to_string(), "syntax error: InvalidClauseComposition");
+            .expect_err("UNION should be outside 0.1");
+        assert_eq!(
+            err.to_string(),
+            "syntax error: UNION is outside Mini-Cypher 0.1"
+        );
     }
 
     #[test]
@@ -1977,11 +1615,13 @@ mod tests {
 
     #[test]
     fn parser_complexity_guard_trips_with_tiny_budget() {
-        let mut lexer = Lexer::new("WITH x AS y RETURN y");
+        let mut lexer = Lexer::new("MATCH (n) RETURN n");
         let tokens = lexer.tokenize().expect("tokenize should succeed");
         let mut parser = TokenParser::new_with_step_budget(tokens, 1);
+        parser.advance();
+        parser.advance();
         let err = parser
-            .parse_query()
+            .ensure_budget()
             .expect_err("tiny budget should trigger complexity guard");
         assert_eq!(
             err.to_string(),

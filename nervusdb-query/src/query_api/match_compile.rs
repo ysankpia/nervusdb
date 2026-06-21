@@ -216,7 +216,11 @@ fn compile_pattern_chain(
         let edge_alias = rel_el.variable.clone();
         let rel_types = rel_el.types.clone();
         let dst_labels = dst_node_el.labels.clone();
-        let is_var_len = rel_el.variable_length.is_some();
+        if rel_el.variable_length.is_some() {
+            return Err(Error::Other(
+                "syntax error: variable-length paths is outside Mini-Cypher 0.1".to_string(),
+            ));
+        }
         let src_prebound =
             is_bound_before_local(known_bindings, &local_bound_aliases, &curr_src_alias);
 
@@ -229,26 +233,7 @@ fn compile_pattern_chain(
             path_alias.as_deref(),
         );
 
-        if let Some(var_len) = &rel_el.variable_length {
-            plan = Plan::MatchOutVarLen {
-                input: Some(Box::new(plan)),
-                src_alias: curr_src_alias.clone().into(),
-                dst_alias: dst_alias.clone().into(),
-                dst_labels: dst_labels.clone(),
-                src_prebound,
-                edge_alias: edge_alias.clone().map(Into::into),
-                rels: rel_types,
-                direction: rel_el.direction.clone(),
-                min_hops: var_len.min.unwrap_or(1),
-                max_hops: var_len.max,
-                limit: None,
-                project: Vec::new(),
-                project_external: false,
-                optional,
-                optional_unbind: optional_unbind.clone(),
-                path_alias: path_alias.clone().map(Into::into),
-            };
-        } else if let Some(rel_alias) = &edge_alias
+        if let Some(rel_alias) = &edge_alias
             && matches!(
                 known_bindings.get(rel_alias),
                 Some(BindingKind::Relationship | BindingKind::Unknown)
@@ -325,31 +310,19 @@ fn compile_pattern_chain(
             }
         }
 
-        if is_var_len
-            && let (Some(path_alias_name), Some(rel_props)) =
-                (path_alias.as_deref(), rel_el.properties.as_ref())
-            && let Some(predicate) =
-                build_var_len_rel_properties_predicate(path_alias_name, rel_props)
-        {
-            plan = Plan::Filter {
-                input: Box::new(plan),
-                predicate,
-            };
-        }
-
         // Extract properties from dst node and relationship
         extend_predicates_from_properties(
             &dst_alias,
             &dst_node_el.properties,
             &mut local_predicates,
         );
-        if !is_var_len && let Some(ea) = &edge_alias {
+        if let Some(ea) = &edge_alias {
             extend_predicates_from_properties(ea, &rel_el.properties, &mut local_predicates);
         }
 
         // Apply filters
         plan = apply_filters_for_alias(plan, &dst_alias, &local_predicates);
-        if !is_var_len && let Some(ea) = &edge_alias {
+        if let Some(ea) = &edge_alias {
             plan = apply_filters_for_alias(plan, ea, &local_predicates);
         }
 
@@ -388,46 +361,6 @@ fn compile_pattern_chain(
     }
 
     Ok(plan)
-}
-
-fn build_var_len_rel_properties_predicate(
-    path_alias: &str,
-    rel_props: &crate::ast::PropertyMap,
-) -> Option<Expression> {
-    let mut per_relationship_predicate: Option<Expression> = None;
-    for prop in &rel_props.properties {
-        let prop_access = Expression::PropertyAccess(crate::ast::PropertyAccess {
-            variable: "__nervus_rel".to_string(),
-            property: prop.key.clone(),
-        });
-        let eq_expr = Expression::Binary(Box::new(crate::ast::BinaryExpression {
-            operator: crate::ast::BinaryOperator::Equals,
-            left: prop_access,
-            right: prop.value.clone(),
-        }));
-        per_relationship_predicate = Some(match per_relationship_predicate {
-            Some(prev) => Expression::Binary(Box::new(crate::ast::BinaryExpression {
-                operator: crate::ast::BinaryOperator::And,
-                left: prev,
-                right: eq_expr,
-            })),
-            None => eq_expr,
-        });
-    }
-
-    per_relationship_predicate.map(|predicate| {
-        Expression::FunctionCall(crate::ast::FunctionCall {
-            name: "__quant_all".to_string(),
-            args: vec![
-                Expression::Variable("__nervus_rel".to_string()),
-                Expression::FunctionCall(crate::ast::FunctionCall {
-                    name: "relationships".to_string(),
-                    args: vec![Expression::Variable(path_alias.to_string())],
-                }),
-                predicate,
-            ],
-        })
-    })
 }
 
 fn is_bound_before_local(

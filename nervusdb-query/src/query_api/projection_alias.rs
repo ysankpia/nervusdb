@@ -211,64 +211,16 @@ pub(super) fn default_projection_alias(expr: &Expression, index: usize) -> Strin
     }
 }
 
-pub(super) fn default_aggregate_alias(call: &crate::ast::FunctionCall, index: usize) -> String {
-    let name = call.name.to_lowercase();
-    if call.args.is_empty() {
-        return format!("{}()", name);
-    }
-
-    if call.args.len() == 1 {
-        return format!("{}({})", name, expression_alias_fragment(&call.args[0]));
-    }
-
-    let args = call
-        .args
-        .iter()
-        .map(expression_alias_fragment)
-        .collect::<Vec<_>>()
-        .join(", ");
-    let alias = format!("{}({})", name, args);
-
-    if alias.len() > 80 {
-        format!("agg_{}", index)
-    } else {
-        alias
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{default_aggregate_alias, default_projection_alias};
-    use crate::ast::{BinaryExpression, BinaryOperator, Expression, FunctionCall, Literal};
+    use super::default_projection_alias;
+    use crate::ast::{BinaryExpression, BinaryOperator, Expression, Literal};
 
     #[test]
     fn projection_alias_falls_back_for_too_long_fragment() {
         let expr = Expression::Literal(Literal::String("x".repeat(128)));
         let alias = default_projection_alias(&expr, 7);
         assert_eq!(alias, "expr_7");
-    }
-
-    #[test]
-    fn aggregate_alias_for_single_arg_function() {
-        let call = FunctionCall {
-            name: "COUNT".to_string(),
-            args: vec![Expression::Variable("n".to_string())],
-        };
-        let alias = default_aggregate_alias(&call, 0);
-        assert_eq!(alias, "count(n)");
-    }
-
-    #[test]
-    fn aggregate_alias_renders_distinct_wrapper_as_distinct_keyword() {
-        let call = FunctionCall {
-            name: "COUNT".to_string(),
-            args: vec![Expression::FunctionCall(FunctionCall {
-                name: "__distinct".to_string(),
-                args: vec![Expression::Variable("p".to_string())],
-            })],
-        };
-        let alias = default_aggregate_alias(&call, 0);
-        assert_eq!(alias, "count(distinct p)");
     }
 
     #[test]

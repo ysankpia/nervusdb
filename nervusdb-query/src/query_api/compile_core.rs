@@ -1,101 +1,39 @@
 use super::{
-    BTreeMap, BTreeSet, BindingKind, CallClause, Clause, Error, Expression, Plan, Query, Result,
-    VecDeque, WriteSemantics, compile_create_plan, compile_delete_plan_v2, compile_match_plan,
-    compile_merge_plan, compile_merge_set_items, compile_remove_plan_v2, compile_return_plan,
-    compile_set_plan_v2, compile_unwind_plan, compile_with_plan, extract_merge_pattern_vars,
+    BTreeMap, BindingKind, Clause, Error, Expression, Plan, Query, Result, compile_create_plan,
+    compile_delete_plan_v2, compile_match_plan, compile_return_plan, compile_set_plan_v2,
     extract_output_var_kinds, extract_predicates, validate_expression_types,
     validate_where_expression_bindings,
 };
 
 pub(crate) struct CompiledQuery {
     pub(crate) plan: Plan,
-    pub(crate) write: WriteSemantics,
-    pub(crate) merge_on_create_items: Vec<(String, String, Expression)>,
-    pub(crate) merge_on_create_map_items: Vec<(String, Expression, bool)>,
-    pub(crate) merge_on_match_items: Vec<(String, String, Expression)>,
-    pub(crate) merge_on_match_map_items: Vec<(String, Expression, bool)>,
-    pub(crate) merge_on_create_labels: Vec<(String, Vec<String>)>,
-    pub(crate) merge_on_match_labels: Vec<(String, Vec<String>)>,
 }
 
-pub(crate) fn compile_m3_plan(
-    query: Query,
-    merge_subclauses: &mut VecDeque<crate::parser::MergeSubclauses>,
-    initial_input: Option<Plan>,
-) -> Result<CompiledQuery> {
+pub(crate) fn compile_m3_plan(query: Query, initial_input: Option<Plan>) -> Result<CompiledQuery> {
+    validate_query_scope(&query)?;
+
     let mut plan: Option<Plan> = initial_input;
     let mut clauses = query.clauses.iter().peekable();
-    let mut write_semantics = WriteSemantics::Default;
-    let mut merge_on_create_items: Vec<(String, String, Expression)> = Vec::new();
-    let mut merge_on_create_map_items: Vec<(String, Expression, bool)> = Vec::new();
-    let mut merge_on_match_items: Vec<(String, String, Expression)> = Vec::new();
-    let mut merge_on_match_map_items: Vec<(String, Expression, bool)> = Vec::new();
-    let mut merge_on_create_labels: Vec<(String, Vec<String>)> = Vec::new();
-    let mut merge_on_match_labels: Vec<(String, Vec<String>)> = Vec::new();
     let mut next_anon_id = 0u32;
-    let mut pending_optional_where_fixup: Option<(Plan, Vec<String>)> = None;
 
     while let Some(clause) = clauses.next() {
-        if !matches!(clause, Clause::Match(_) | Clause::Where(_)) {
-            pending_optional_where_fixup = None;
-        }
-
         match clause {
             Clause::Match(m) => {
-                // Check ahead for WHERE to optimize immediately
+                if m.optional {
+                    return Err(outside_0_1("OPTIONAL MATCH"));
+                }
+
                 let mut predicates = BTreeMap::new();
                 if let Some(Clause::Where(w)) = clauses.peek() {
                     extract_predicates(&w.expression, &mut predicates);
                 }
 
-                let previous_plan = plan.clone().unwrap_or(Plan::ReturnOne);
-                let mut before_kinds: BTreeMap<String, BindingKind> = BTreeMap::new();
-                if let Some(existing_plan) = &plan {
-                    extract_output_var_kinds(existing_plan, &mut before_kinds);
-                }
-
-                let mut compiled_match = m.clone();
-                if compiled_match.optional {
-                    // OPTIONAL 语义由 OptionalWhereFixup 在子句边界统一处理，
-                    // 避免多跳链路逐 hop 产出多余 null 行。
-                    compiled_match.optional = false;
-                }
-
                 plan = Some(compile_match_plan(
                     plan,
-                    compiled_match,
+                    m.clone(),
                     &predicates,
                     &mut next_anon_id,
                 )?);
-
-                if m.optional {
-                    let mut after_kinds: BTreeMap<String, BindingKind> = BTreeMap::new();
-                    if let Some(compiled_plan) = &plan {
-                        extract_output_var_kinds(compiled_plan, &mut after_kinds);
-                    }
-                    let mut aliases: BTreeSet<String> =
-                        collect_optional_match_aliases(m, &before_kinds);
-                    aliases.extend(
-                        after_kinds
-                            .keys()
-                            .filter(|name| !before_kinds.contains_key(*name))
-                            .cloned(),
-                    );
-                    let aliases = aliases.into_iter().collect::<Vec<_>>();
-
-                    if matches!(clauses.peek(), Some(Clause::Where(_))) {
-                        pending_optional_where_fixup = Some((previous_plan, aliases));
-                    } else {
-                        plan = Some(Plan::OptionalWhereFixup {
-                            outer: Box::new(previous_plan),
-                            filtered: Box::new(plan.unwrap()),
-                            null_aliases: aliases,
-                        });
-                        pending_optional_where_fixup = None;
-                    }
-                } else {
-                    pending_optional_where_fixup = None;
-                }
             }
             Clause::Where(w) => {
                 if plan.is_none() {
@@ -106,143 +44,51 @@ pub(crate) fn compile_m3_plan(
                 if let Some(current_plan) = &plan {
                     extract_output_var_kinds(current_plan, &mut where_bindings);
                 }
-                if let Some((_, pending_aliases)) = &pending_optional_where_fixup {
-                    for alias in pending_aliases {
-                        where_bindings
-                            .entry(alias.clone())
-                            .or_insert(BindingKind::Unknown);
-                    }
-                }
 
                 validate_expression_types(&w.expression)?;
                 validate_where_expression_bindings(&w.expression, &where_bindings)?;
 
-                let filtered = Plan::Filter {
+                plan = Some(Plan::Filter {
                     input: Box::new(plan.unwrap()),
                     predicate: w.expression.clone(),
-                };
-
-                if let Some((outer_plan, null_aliases)) = pending_optional_where_fixup.take() {
-                    plan = Some(Plan::OptionalWhereFixup {
-                        outer: Box::new(outer_plan),
-                        filtered: Box::new(filtered),
-                        null_aliases,
-                    });
-                } else {
-                    plan = Some(filtered);
-                }
+                });
             }
-            Clause::Call(c) => match c {
-                CallClause::Subquery(_) => {
-                    return Err(Error::Other(
-                        "syntax error: SubqueryCall not yet supported".to_string(),
-                    ));
-                }
-                CallClause::Procedure(_) => {
-                    return Err(Error::Other(
-                        "syntax error: ProcedureCall not yet supported".to_string(),
-                    ));
-                }
-            },
-            Clause::With(w) => {
-                let input = plan.unwrap_or(Plan::ReturnOne);
-                plan = Some(compile_with_plan(input, w)?);
-            }
+            Clause::Call(_) => return Err(outside_0_1("CALL")),
+            Clause::With(_) => return Err(outside_0_1("WITH")),
             Clause::Return(r) => {
                 let input = plan.unwrap_or(Plan::ReturnOne);
                 let (p, _) = compile_return_plan(input, r)?;
                 plan = Some(p);
-                // If there are more clauses after RETURN, it might be an error or valid?
-                // In standard Cypher, RETURN is terminal UNLESS followed by UNION.
-                // Check if any clauses left?
-                if let Some(next_clause) = clauses.peek() {
-                    // Allow UNION to follow RETURN
-                    if !matches!(next_clause, Clause::Union(_)) {
-                        return Err(Error::NotImplemented(
-                            "Clauses after RETURN are not supported",
-                        ));
-                    }
-                    // Continue loop to process UNION
-                } else {
-                    // No more clauses, return successfully
-                    return Ok(CompiledQuery {
-                        plan: plan.unwrap(),
-                        write: write_semantics,
-                        merge_on_create_items,
-                        merge_on_create_map_items,
-                        merge_on_match_items,
-                        merge_on_match_map_items,
-                        merge_on_create_labels,
-                        merge_on_match_labels,
-                    });
+                if clauses.peek().is_some() {
+                    return Err(Error::NotImplemented(
+                        "Clauses after RETURN are not supported",
+                    ));
                 }
+                return Ok(CompiledQuery {
+                    plan: plan.unwrap(),
+                });
             }
             Clause::Create(c) => {
                 let input = plan.unwrap_or(Plan::ReturnOne);
                 plan = Some(compile_create_plan(input, c.clone())?);
             }
-            Clause::Merge(m) => {
-                write_semantics = WriteSemantics::Merge;
-                // For chained MERGE, each MERGE can follow previous plan
-                let input = plan.unwrap_or(Plan::ReturnOne);
-                let sub = merge_subclauses.pop_front().ok_or_else(|| {
-                    Error::Other("internal error: missing MERGE subclauses".into())
-                })?;
-                let merge_vars = extract_merge_pattern_vars(&m.pattern);
-                let compiled_on_create = compile_merge_set_items(&merge_vars, sub.on_create)?;
-                merge_on_create_items = compiled_on_create.property_items;
-                merge_on_create_map_items = compiled_on_create.map_items;
-                merge_on_create_labels = compiled_on_create.label_items;
-                let compiled_on_match = compile_merge_set_items(&merge_vars, sub.on_match)?;
-                merge_on_match_items = compiled_on_match.property_items;
-                merge_on_match_map_items = compiled_on_match.map_items;
-                merge_on_match_labels = compiled_on_match.label_items;
-                plan = Some(compile_merge_plan(input, m.clone())?);
+            Clause::Merge(_) => {
+                return Err(Error::Other(
+                    "syntax error: MERGE is outside Mini-Cypher 0.1".to_string(),
+                ));
             }
             Clause::Set(s) => {
                 let input = plan.ok_or_else(|| Error::Other("SET need input".into()))?;
-                // We need to associate WHERE?
-                // SET doesn't have its own WHERE. It operates on rows.
                 plan = Some(compile_set_plan_v2(input, s.clone())?);
             }
-            Clause::Remove(r) => {
-                let input = plan.ok_or_else(|| Error::Other("REMOVE need input".into()))?;
-                plan = Some(compile_remove_plan_v2(input, r.clone())?);
-            }
+            Clause::Remove(_) => return Err(outside_0_1("REMOVE")),
             Clause::Delete(d) => {
                 let input = plan.ok_or_else(|| Error::Other("DELETE need input".into()))?;
                 plan = Some(compile_delete_plan_v2(input, d.clone())?);
-
-                // If DELETE is not terminal, we might have issues if we detach/delete nodes used later?
-                // But for now, let's allow it.
             }
-            Clause::Unwind(u) => {
-                let input = plan.unwrap_or(Plan::ReturnOne);
-                plan = Some(compile_unwind_plan(input, u.clone()));
-            }
-            Clause::Union(u) => {
-                // UNION logic: current plan is the "left" side; the clause's nested query is the "right" side
-                let left_plan =
-                    plan.ok_or_else(|| Error::Other("UNION requires left query part".into()))?;
-                let right_compiled = compile_m3_plan(u.query.clone(), merge_subclauses, None)?;
-                let left_columns = extract_union_output_columns(&left_plan);
-                let right_columns = extract_union_output_columns(&right_compiled.plan);
-                if left_columns != right_columns {
-                    return Err(Error::Other(
-                        "syntax error: DifferentColumnsInUnion".to_string(),
-                    ));
-                }
-                plan = Some(Plan::Union {
-                    left: Box::new(left_plan),
-                    right: Box::new(right_compiled.plan),
-                    all: u.all,
-                });
-            }
-            Clause::Foreach(_) => {
-                return Err(Error::Other(
-                    "syntax error: FOREACH not yet supported".to_string(),
-                ));
-            }
+            Clause::Unwind(_) => return Err(outside_0_1("UNWIND")),
+            Clause::Union(_) => return Err(outside_0_1("UNION")),
+            Clause::Foreach(_) => return Err(outside_0_1("FOREACH")),
         }
     }
 
@@ -259,113 +105,263 @@ pub(crate) fn compile_m3_plan(
     // If plan exists here, but no RETURN hit.
     // For queries ending in update clauses (CREATE, DELETE, etc.), this is valid.
     if let Some(plan) = plan {
-        return Ok(CompiledQuery {
-            plan,
-            write: write_semantics,
-            merge_on_create_items,
-            merge_on_create_map_items,
-            merge_on_match_items,
-            merge_on_match_map_items,
-            merge_on_create_labels,
-            merge_on_match_labels,
-        });
+        return Ok(CompiledQuery { plan });
     }
 
     Err(Error::NotImplemented("Empty query"))
 }
 
-fn extract_union_output_columns(plan: &Plan) -> Vec<String> {
-    match plan {
-        Plan::Project { projections, .. } => {
-            projections.iter().map(|(alias, _)| alias.clone()).collect()
-        }
-        Plan::Aggregate {
-            group_by,
-            aggregates,
-            ..
-        } => {
-            let mut cols = group_by.clone();
-            cols.extend(aggregates.iter().map(|(_, alias)| alias.clone()));
-            cols
-        }
-        Plan::Filter { input, .. }
-        | Plan::OrderBy { input, .. }
-        | Plan::Skip { input, .. }
-        | Plan::Limit { input, .. }
-        | Plan::Distinct { input } => extract_union_output_columns(input),
-        Plan::OptionalWhereFixup { filtered, .. } => extract_union_output_columns(filtered),
-        Plan::Union { left, .. } => extract_union_output_columns(left),
-        _ => {
-            let mut vars: BTreeMap<String, BindingKind> = BTreeMap::new();
-            extract_output_var_kinds(plan, &mut vars);
-            vars.keys().cloned().collect()
-        }
-    }
+fn outside_0_1(feature: &'static str) -> Error {
+    Error::Other(format!(
+        "syntax error: {feature} is outside Mini-Cypher 0.1"
+    ))
 }
 
-fn collect_optional_match_aliases(
-    match_clause: &crate::ast::MatchClause,
-    known_before: &BTreeMap<String, BindingKind>,
-) -> BTreeSet<String> {
-    let mut aliases = BTreeSet::new();
-    for pattern in &match_clause.patterns {
-        if let Some(path_alias) = &pattern.variable
-            && !known_before.contains_key(path_alias)
-        {
-            aliases.insert(path_alias.clone());
+fn validate_query_scope(query: &Query) -> Result<()> {
+    for clause in &query.clauses {
+        match clause {
+            Clause::Match(m) => {
+                if m.optional {
+                    return Err(outside_0_1("OPTIONAL MATCH"));
+                }
+                for pattern in &m.patterns {
+                    validate_pattern_scope(pattern)?;
+                }
+            }
+            Clause::Create(c) => {
+                for pattern in &c.patterns {
+                    validate_pattern_scope(pattern)?;
+                }
+            }
+            Clause::Return(r) => {
+                if r.distinct {
+                    return Err(outside_0_1("RETURN DISTINCT"));
+                }
+                if r.order_by.is_some() {
+                    return Err(outside_0_1("ORDER BY"));
+                }
+                if r.skip.is_some() {
+                    return Err(outside_0_1("SKIP"));
+                }
+                for item in &r.items {
+                    validate_expression_scope(&item.expression)?;
+                }
+                if let Some(limit) = &r.limit {
+                    validate_expression_scope(limit)?;
+                }
+            }
+            Clause::Where(w) => validate_expression_scope(&w.expression)?,
+            Clause::Set(s) => {
+                if !s.map_items.is_empty() {
+                    return Err(outside_0_1("SET map assignment"));
+                }
+                if !s.labels.is_empty() {
+                    return Err(outside_0_1("SET labels"));
+                }
+                for item in &s.items {
+                    validate_expression_scope(&item.value)?;
+                }
+            }
+            Clause::Delete(d) => {
+                for expr in &d.expressions {
+                    validate_expression_scope(expr)?;
+                }
+            }
+            Clause::Merge(_) => return Err(outside_0_1("MERGE")),
+            Clause::Unwind(_) => return Err(outside_0_1("UNWIND")),
+            Clause::Call(_) => return Err(outside_0_1("CALL")),
+            Clause::With(_) => return Err(outside_0_1("WITH")),
+            Clause::Remove(_) => return Err(outside_0_1("REMOVE")),
+            Clause::Union(_) => return Err(outside_0_1("UNION")),
+            Clause::Foreach(_) => return Err(outside_0_1("FOREACH")),
         }
-        for element in &pattern.elements {
-            match element {
-                crate::ast::PathElement::Node(node) => {
-                    if let Some(alias) = &node.variable
-                        && !known_before.contains_key(alias)
-                    {
-                        aliases.insert(alias.clone());
+    }
+    Ok(())
+}
+
+fn validate_pattern_scope(pattern: &crate::ast::Pattern) -> Result<()> {
+    if pattern.variable.is_some() {
+        return Err(outside_0_1("named paths"));
+    }
+    for element in &pattern.elements {
+        match element {
+            crate::ast::PathElement::Node(node) => {
+                if let Some(props) = &node.properties {
+                    for pair in &props.properties {
+                        validate_expression_scope(&pair.value)?;
                     }
                 }
-                crate::ast::PathElement::Relationship(rel) => {
-                    if let Some(alias) = &rel.variable
-                        && !known_before.contains_key(alias)
-                    {
-                        aliases.insert(alias.clone());
+            }
+            crate::ast::PathElement::Relationship(rel) => {
+                if rel.variable_length.is_some() {
+                    return Err(outside_0_1("variable-length paths"));
+                }
+                if let Some(props) = &rel.properties {
+                    for pair in &props.properties {
+                        validate_expression_scope(&pair.value)?;
                     }
                 }
             }
         }
     }
-    aliases
+    Ok(())
+}
+
+fn validate_expression_scope(expr: &Expression) -> Result<()> {
+    match expr {
+        Expression::FunctionCall(call) => {
+            let name = call.name.to_ascii_lowercase();
+            if matches!(
+                name.as_str(),
+                "count"
+                    | "sum"
+                    | "avg"
+                    | "min"
+                    | "max"
+                    | "collect"
+                    | "percentiledisc"
+                    | "percentilecont"
+            ) {
+                return Err(outside_0_1("aggregation"));
+            }
+            for arg in &call.args {
+                validate_expression_scope(arg)?;
+            }
+        }
+        Expression::Exists(_) => return Err(outside_0_1("EXISTS")),
+        Expression::ListComprehension(_) => return Err(outside_0_1("list comprehension")),
+        Expression::PatternComprehension(_) => return Err(outside_0_1("pattern comprehension")),
+        Expression::Binary(binary) => {
+            validate_expression_scope(&binary.left)?;
+            validate_expression_scope(&binary.right)?;
+        }
+        Expression::Unary(unary) => validate_expression_scope(&unary.operand)?,
+        Expression::List(items) => {
+            for item in items {
+                validate_expression_scope(item)?;
+            }
+        }
+        Expression::Map(map) => {
+            for pair in &map.properties {
+                validate_expression_scope(&pair.value)?;
+            }
+        }
+        Expression::Case(case_expr) => {
+            if let Some(expr) = &case_expr.expression {
+                validate_expression_scope(expr)?;
+            }
+            for (when_expr, then_expr) in &case_expr.when_clauses {
+                validate_expression_scope(when_expr)?;
+                validate_expression_scope(then_expr)?;
+            }
+            if let Some(expr) = &case_expr.else_expression {
+                validate_expression_scope(expr)?;
+            }
+        }
+        Expression::Literal(_)
+        | Expression::Variable(_)
+        | Expression::PropertyAccess(_)
+        | Expression::Parameter(_) => {}
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::compile_m3_plan;
-    use std::collections::VecDeque;
 
     fn compile_query(cypher: &str) -> crate::error::Result<()> {
-        let (query, merge_subclauses) = crate::parser::Parser::parse_with_merge_subclauses(cypher)?;
-        let mut merge_subclauses = VecDeque::from(merge_subclauses);
-        compile_m3_plan(query, &mut merge_subclauses, None).map(|_| ())
+        let query = crate::parser::Parser::parse(cypher)?;
+        compile_m3_plan(query, None).map(|_| ())
     }
 
     #[test]
-    fn union_rejects_different_projection_columns() {
-        let err = compile_query("RETURN 1 AS a UNION RETURN 2 AS b")
-            .expect_err("UNION with different columns should fail");
-        assert_eq!(err.to_string(), "syntax error: DifferentColumnsInUnion");
-    }
-
-    #[test]
-    fn union_all_rejects_different_projection_columns() {
-        let err = compile_query("RETURN 1 AS a UNION ALL RETURN 2 AS b")
-            .expect_err("UNION ALL with different columns should fail");
-        assert_eq!(err.to_string(), "syntax error: DifferentColumnsInUnion");
-    }
-
-    #[test]
-    fn with_requires_alias_for_non_variable_projection() {
-        let err = compile_query("MATCH (a) WITH a, count(*) RETURN a")
-            .expect_err("WITH non-variable expression without alias should fail");
-        assert_eq!(err.to_string(), "syntax error: NoExpressionAlias");
+    fn non_0_1_syntax_is_rejected() {
+        for (cypher, expected) in [
+            (
+                "OPTIONAL MATCH (n) RETURN n",
+                "syntax error: OPTIONAL MATCH is outside Mini-Cypher 0.1",
+            ),
+            (
+                "MATCH (n) WITH n RETURN n",
+                "syntax error: WITH is outside Mini-Cypher 0.1",
+            ),
+            (
+                "RETURN 1 UNION RETURN 2",
+                "syntax error: UNION is outside Mini-Cypher 0.1",
+            ),
+            (
+                "UNWIND [1] AS x RETURN x",
+                "syntax error: UNWIND is outside Mini-Cypher 0.1",
+            ),
+            (
+                "MERGE (n)",
+                "syntax error: MERGE is outside Mini-Cypher 0.1",
+            ),
+            (
+                "FOREACH (x IN [1] | CREATE (n))",
+                "syntax error: FOREACH is outside Mini-Cypher 0.1",
+            ),
+            (
+                "CALL db.labels()",
+                "syntax error: CALL is outside Mini-Cypher 0.1",
+            ),
+            (
+                "MATCH (n) REMOVE n.name",
+                "syntax error: REMOVE is outside Mini-Cypher 0.1",
+            ),
+            (
+                "MATCH (n) RETURN DISTINCT n",
+                "syntax error: RETURN DISTINCT is outside Mini-Cypher 0.1",
+            ),
+            (
+                "MATCH (n) RETURN n ORDER BY n.name",
+                "syntax error: ORDER BY is outside Mini-Cypher 0.1",
+            ),
+            (
+                "MATCH (n) RETURN n SKIP 1",
+                "syntax error: SKIP is outside Mini-Cypher 0.1",
+            ),
+            (
+                "MATCH p = (a)-[:T]->(b) RETURN p",
+                "syntax error: named paths is outside Mini-Cypher 0.1",
+            ),
+            (
+                "MATCH (a)-[:T*1..2]->(b) RETURN b",
+                "syntax error: variable-length paths is outside Mini-Cypher 0.1",
+            ),
+            (
+                "MATCH (n) SET n:Person",
+                "syntax error: SET labels is outside Mini-Cypher 0.1",
+            ),
+            (
+                "MATCH (n) SET n = {name: 'Ada'}",
+                "syntax error: SET map assignment is outside Mini-Cypher 0.1",
+            ),
+            (
+                "MATCH (n) SET n += {name: 'Ada'}",
+                "syntax error: SET map update is outside Mini-Cypher 0.1",
+            ),
+            (
+                "MATCH (n) RETURN count(*)",
+                "syntax error: aggregation is outside Mini-Cypher 0.1",
+            ),
+            (
+                "RETURN EXISTS { MATCH (n) }",
+                "syntax error: EXISTS is outside Mini-Cypher 0.1",
+            ),
+            (
+                "RETURN [x IN [1] | x] AS xs",
+                "syntax error: list comprehension is outside Mini-Cypher 0.1",
+            ),
+            (
+                "MATCH (n) RETURN [(n)-->(m) | m] AS ms",
+                "syntax error: pattern comprehension is outside Mini-Cypher 0.1",
+            ),
+        ] {
+            let err = compile_query(cypher).expect_err("syntax should be outside 0.1");
+            assert_eq!(err.to_string(), expected, "{cypher}");
+        }
     }
 
     #[test]
@@ -383,16 +379,23 @@ mod tests {
     }
 
     #[test]
-    fn with_star_allows_empty_scope() {
-        compile_query("MATCH () WITH * CREATE ()")
-            .expect("WITH * should preserve row stream even when scope is empty");
+    fn with_star_is_outside_0_1() {
+        let err = compile_query("MATCH () WITH * CREATE ()")
+            .expect_err("WITH should be outside Mini-Cypher 0.1");
+        assert_eq!(
+            err.to_string(),
+            "syntax error: WITH is outside Mini-Cypher 0.1"
+        );
     }
 
     #[test]
-    fn labels_on_path_rejected_at_compile_time() {
+    fn named_paths_are_rejected_at_compile_time() {
         let err = compile_query("MATCH p = (a) RETURN labels(p) AS l")
-            .expect_err("labels(path) should fail at compile time");
-        assert_eq!(err.to_string(), "syntax error: InvalidArgumentType");
+            .expect_err("named paths should be outside 0.1");
+        assert_eq!(
+            err.to_string(),
+            "syntax error: named paths is outside Mini-Cypher 0.1"
+        );
     }
 
     #[test]
@@ -407,11 +410,5 @@ mod tests {
         let err = compile_query("RETURN {k1: k2} AS literal")
             .expect_err("map value variable must be in scope");
         assert_eq!(err.to_string(), "syntax error: UndefinedVariable (k2)");
-    }
-
-    #[test]
-    fn delete_allows_nested_map_list_entity_expression() {
-        compile_query("MATCH ()-[r]->() WITH {key: {key: [r]}} AS rels DELETE rels.key.key[0]")
-            .expect("DELETE should accept nested map/list expressions that may yield entities");
     }
 }

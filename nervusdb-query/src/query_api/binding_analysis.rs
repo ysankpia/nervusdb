@@ -216,28 +216,6 @@ pub(super) fn extract_output_var_kinds(plan: &Plan, vars: &mut BTreeMap<String, 
                 merge_binding_kind(vars, p.to_string(), BindingKind::Path);
             }
         }
-        Plan::MatchOutVarLen {
-            src_alias,
-            dst_alias,
-            edge_alias,
-            path_alias,
-            input,
-            ..
-        } => {
-            if let Some(p) = input {
-                extract_output_var_kinds(p, vars);
-            }
-            merge_binding_kind(vars, src_alias.to_string(), BindingKind::Node);
-            merge_binding_kind(vars, dst_alias.to_string(), BindingKind::Node);
-            if let Some(e) = edge_alias {
-                merge_binding_kind(vars, e.to_string(), BindingKind::RelationshipList);
-            }
-            if let Some(p) = path_alias
-                && !is_internal_path_alias(p)
-            {
-                merge_binding_kind(vars, p.to_string(), BindingKind::Path);
-            }
-        }
         Plan::MatchBoundRel {
             input,
             rel_alias,
@@ -256,23 +234,8 @@ pub(super) fn extract_output_var_kinds(plan: &Plan, vars: &mut BTreeMap<String, 
                 merge_binding_kind(vars, p.to_string(), BindingKind::Path);
             }
         }
-        Plan::Filter { input, .. }
-        | Plan::Skip { input, .. }
-        | Plan::Limit { input, .. }
-        | Plan::OrderBy { input, .. }
-        | Plan::Distinct { input } => extract_output_var_kinds(input, vars),
-        Plan::OptionalWhereFixup {
-            outer,
-            filtered,
-            null_aliases,
-        } => {
-            extract_output_var_kinds(filtered, vars);
-            extract_output_var_kinds(outer, vars);
-            for alias in null_aliases {
-                if !is_internal_path_alias(alias) {
-                    vars.insert(alias.clone(), BindingKind::Unknown);
-                }
-            }
+        Plan::Filter { input, .. } | Plan::Limit { input, .. } => {
+            extract_output_var_kinds(input, vars)
         }
         Plan::Project { input, projections } => {
             extract_output_var_kinds(input, vars);
@@ -283,32 +246,6 @@ pub(super) fn extract_output_var_kinds(plan: &Plan, vars: &mut BTreeMap<String, 
                 projected_aliases.insert(alias.clone());
             }
             vars.retain(|name, _| projected_aliases.contains(name));
-        }
-        Plan::Aggregate {
-            input,
-            group_by,
-            aggregates,
-        } => {
-            extract_output_var_kinds(input, vars);
-            let mut output_names = std::collections::BTreeSet::new();
-            for key in group_by {
-                let kind = vars.get(key).copied().unwrap_or(BindingKind::Unknown);
-                vars.insert(key.clone(), kind);
-                output_names.insert(key.clone());
-            }
-            for (_, alias) in aggregates {
-                vars.insert(alias.clone(), BindingKind::Unknown);
-                output_names.insert(alias.clone());
-            }
-            vars.retain(|name, _| output_names.contains(name));
-        }
-        Plan::Unwind { input, alias, .. } => {
-            extract_output_var_kinds(input, vars);
-            vars.insert(alias.to_string(), BindingKind::Unknown);
-        }
-        Plan::Union { left, right, .. } => {
-            extract_output_var_kinds(left, vars);
-            extract_output_var_kinds(right, vars);
         }
         Plan::CartesianProduct { left, right } => {
             extract_output_var_kinds(left, vars);
@@ -346,12 +283,7 @@ pub(super) fn extract_output_var_kinds(plan: &Plan, vars: &mut BTreeMap<String, 
                 merge_binding_kind(vars, path_var.clone(), BindingKind::Path);
             }
         }
-        Plan::Delete { input, .. }
-        | Plan::SetProperty { input, .. }
-        | Plan::SetPropertiesFromMap { input, .. }
-        | Plan::SetLabels { input, .. }
-        | Plan::RemoveProperty { input, .. }
-        | Plan::RemoveLabels { input, .. } => {
+        Plan::Delete { input, .. } | Plan::SetProperty { input, .. } => {
             extract_output_var_kinds(input, vars);
         }
     }

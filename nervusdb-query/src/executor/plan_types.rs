@@ -1,8 +1,7 @@
 use super::{
-    AggregateFunction, CartesianProductIter, ChainIter, Direction, DistinctIter, ExpandIter,
-    Expression, FilterIter, FilteredMatchOutIter, GraphSnapshot, LimitIter, MatchBoundRelIter,
-    MatchOutVarLenIter, NodeScanIter, Pattern, ProjectIter, RelationshipDirection, Result,
-    ResultRowsIter, Row, SkipIter, UnionDistinctIter, UnwindIter, ValuesIter,
+    CartesianProductIter, ExpandIter, Expression, FilterIter, FilteredMatchOutIter, GraphSnapshot,
+    LimitIter, MatchBoundRelIter, NodeScanIter, Pattern, ProjectIter, RelationshipDirection,
+    Result, Row, ValuesIter,
 };
 use std::sync::Arc;
 
@@ -34,25 +33,6 @@ pub enum Plan {
         optional_unbind: Vec<String>,
         path_alias: Option<Arc<str>>,
     },
-    /// `MATCH (a)-[:rel*min..max]->(b) RETURN ...` (variable length)
-    MatchOutVarLen {
-        input: Option<Box<Plan>>,
-        src_alias: Arc<str>,
-        rels: Vec<String>,
-        edge_alias: Option<Arc<str>>,
-        dst_alias: Arc<str>,
-        dst_labels: Vec<String>,
-        src_prebound: bool,
-        direction: RelationshipDirection,
-        min_hops: u32,
-        max_hops: Option<u32>,
-        limit: Option<u32>,
-        project: Vec<String>,
-        project_external: bool,
-        optional: bool,
-        optional_unbind: Vec<String>,
-        path_alias: Option<Arc<str>>,
-    },
     MatchBoundRel {
         input: Box<Plan>,
         rel_alias: Arc<str>,
@@ -71,55 +51,16 @@ pub enum Plan {
         input: Box<Plan>,
         predicate: Expression,
     },
-    /// 修复 OPTIONAL MATCH + WHERE 语义：按外层行回填 null 行
-    OptionalWhereFixup {
-        outer: Box<Plan>,
-        filtered: Box<Plan>,
-        null_aliases: Vec<String>,
-    },
     /// Project expressions to new variables
     Project {
         input: Box<Plan>,
         projections: Vec<(String, Expression)>, // (Result/Alias Name, Expression to Eval)
-    },
-    /// Aggregation: COUNT, SUM, AVG with optional grouping
-    Aggregate {
-        input: Box<Plan>,
-        group_by: Vec<String>,                        // Variables to group by
-        aggregates: Vec<(AggregateFunction, String)>, // (Function, Alias)
-    },
-    /// `ORDER BY` - sort results
-    OrderBy {
-        input: Box<Plan>,
-        items: Vec<(Expression, Direction)>, // (Expression to sort by, ASC|DESC)
-    },
-    /// `SKIP` - skip first n rows
-    Skip {
-        input: Box<Plan>,
-        skip: Expression,
     },
     /// `LIMIT` - limit result count
     Limit {
         input: Box<Plan>,
         limit: Expression,
     },
-    /// `RETURN DISTINCT` - deduplicate results
-    Distinct {
-        input: Box<Plan>,
-    },
-    /// `UNWIND` - expand a list into multiple rows
-    Unwind {
-        input: Box<Plan>,
-        expression: Expression,
-        alias: Arc<str>,
-    },
-    /// `UNION` / `UNION ALL` - combine results from two queries
-    Union {
-        left: Box<Plan>,
-        right: Box<Plan>,
-        all: bool, // true = UNION ALL (keep duplicates), false = UNION (distinct)
-    },
-
     /// `DELETE` - delete nodes/edges (with input plan for variable resolution)
     Delete {
         input: Box<Plan>,
@@ -130,26 +71,6 @@ pub enum Plan {
     SetProperty {
         input: Box<Plan>,
         items: Vec<(String, String, Expression)>, // (variable, key, value_expression)
-    },
-    /// `SET n = {...}` / `SET n += {...}` - replace or append properties from map expression
-    SetPropertiesFromMap {
-        input: Box<Plan>,
-        items: Vec<(String, Expression, bool)>, // (variable, map_expression, append)
-    },
-    /// `SET n:Label` - add labels on nodes
-    SetLabels {
-        input: Box<Plan>,
-        items: Vec<(String, Vec<String>)>, // (variable, labels)
-    },
-    /// `REMOVE n.prop` - remove properties from nodes/edges
-    RemoveProperty {
-        input: Box<Plan>,
-        items: Vec<(String, String)>, // (variable, key)
-    },
-    /// `REMOVE n:Label` - remove labels from nodes
-    RemoveLabels {
-        input: Box<Plan>,
-        items: Vec<(String, Vec<String>)>, // (variable, labels)
     },
     /// `CartesianProduct` - multiply two plans (join without shared variables)
     CartesianProduct {
@@ -173,16 +94,9 @@ pub enum PlanIterator<'a, S: GraphSnapshot> {
     NodeScan(NodeScanIter<'a, S>),
     Filter(FilterIter<'a, S>),
     Project(Box<ProjectIter<'a, S>>),
-    Distinct(Box<DistinctIter<'a, S>>),
-    UnionDistinct(Box<UnionDistinctIter<'a, S>>),
-    Skip(Box<SkipIter<'a, S>>),
     Limit(Box<LimitIter<'a, S>>),
-    Unwind(Box<UnwindIter<'a, S>>),
     Values(Box<ValuesIter>),
-    ResultRows(Box<ResultRowsIter>),
-    Chain(Box<ChainIter<'a, S>>),
     Expand(Box<ExpandIter<'a, S>>),
-    MatchOutVarLen(Box<MatchOutVarLenIter<'a, S>>),
     MatchOutFiltered(Box<FilteredMatchOutIter<'a, S>>),
     MatchBoundRel(Box<MatchBoundRelIter<'a, S>>),
     CartesianProduct(Box<CartesianProductIter<'a, S>>),
@@ -197,16 +111,9 @@ impl<'a, S: GraphSnapshot> Iterator for PlanIterator<'a, S> {
             PlanIterator::NodeScan(iter) => iter.next(),
             PlanIterator::Filter(iter) => iter.next(),
             PlanIterator::Project(iter) => iter.next(),
-            PlanIterator::Distinct(iter) => iter.next(),
-            PlanIterator::UnionDistinct(iter) => iter.next(),
-            PlanIterator::Skip(iter) => iter.next(),
             PlanIterator::Limit(iter) => iter.next(),
-            PlanIterator::Unwind(iter) => iter.next(),
             PlanIterator::Values(iter) => iter.next(),
-            PlanIterator::ResultRows(iter) => iter.next(),
-            PlanIterator::Chain(iter) => iter.next(),
             PlanIterator::Expand(iter) => iter.next(),
-            PlanIterator::MatchOutVarLen(iter) => iter.next(),
             PlanIterator::MatchOutFiltered(iter) => iter.next(),
             PlanIterator::MatchBoundRel(iter) => iter.next(),
             PlanIterator::CartesianProduct(iter) => iter.next(),

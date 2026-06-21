@@ -297,7 +297,7 @@ impl Snapshot {
             .iter(&self.keyspaces.adj_out)
             .filter_map(|guard| guard.key().ok())
             .filter_map(|key| edge_key_from_adj_out(key.as_ref()))
-            .filter(move |edge| rel.is_none_or(|r| edge.rel == r))
+            .filter(move |edge| rel.map_or(true, |r| edge.rel == r))
             .filter(|edge| self.node_is_live(edge.src) && self.node_is_live(edge.dst))
     }
 }

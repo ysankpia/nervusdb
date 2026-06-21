@@ -1,6 +1,5 @@
 use super::{
-    Error, GraphSnapshot, Plan, Result, WriteableGraph, execute_create, execute_delete,
-    execute_remove, execute_remove_labels, execute_set, execute_set_from_maps, execute_set_labels,
+    Error, GraphSnapshot, Plan, Result, WriteableGraph, execute_create, execute_delete, execute_set,
 };
 
 pub(super) fn execute_write<S: GraphSnapshot>(
@@ -19,29 +18,10 @@ pub(super) fn execute_write<S: GraphSnapshot>(
             expressions,
         } => execute_delete(snapshot, input, txn, *detach, expressions, params),
         Plan::SetProperty { input, items } => execute_set(snapshot, input, txn, items, params),
-        Plan::SetPropertiesFromMap { input, items } => {
-            execute_set_from_maps(snapshot, input, txn, items, params)
+        Plan::Filter { input, .. } | Plan::Project { input, .. } | Plan::Limit { input, .. } => {
+            execute_write(input, snapshot, txn, params)
         }
-        Plan::SetLabels { input, items } => execute_set_labels(snapshot, input, txn, items, params),
-        Plan::RemoveProperty { input, items } => {
-            execute_remove(snapshot, input, txn, items, params)
-        }
-        Plan::RemoveLabels { input, items } => {
-            execute_remove_labels(snapshot, input, txn, items, params)
-        }
-        Plan::Filter { input, .. }
-        | Plan::Project { input, .. }
-        | Plan::Limit { input, .. }
-        | Plan::Skip { input, .. }
-        | Plan::OrderBy { input, .. }
-        | Plan::Distinct { input }
-        | Plan::Unwind { input, .. }
-        | Plan::Aggregate { input, .. } => execute_write(input, snapshot, txn, params),
-        Plan::OptionalWhereFixup {
-            outer, filtered, ..
-        } => execute_write(outer, snapshot, txn, params)
-            .or_else(|_| execute_write(filtered, snapshot, txn, params)),
-        Plan::MatchOut { input, .. } | Plan::MatchOutVarLen { input, .. } => {
+        Plan::MatchOut { input, .. } => {
             if let Some(inner) = input.as_deref() {
                 execute_write(inner, snapshot, txn, params)
             } else {
@@ -51,12 +31,10 @@ pub(super) fn execute_write<S: GraphSnapshot>(
             }
         }
         Plan::MatchBoundRel { input, .. } => execute_write(input, snapshot, txn, params),
-        Plan::CartesianProduct { left, right } | Plan::Union { left, right, .. } => {
-            execute_write(left, snapshot, txn, params)
-                .or_else(|_| execute_write(right, snapshot, txn, params))
-        }
+        Plan::CartesianProduct { left, right } => execute_write(left, snapshot, txn, params)
+            .or_else(|_| execute_write(right, snapshot, txn, params)),
         _ => Err(Error::Other(
-            "Only CREATE, DELETE, SET, and REMOVE plans can be executed with execute_write".into(),
+            "Only CREATE, DELETE, and SET plans can be executed with execute_write".into(),
         )),
     }
 }

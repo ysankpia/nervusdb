@@ -1,22 +1,8 @@
 use super::{
-    Error, GraphSnapshot, Params, PreparedQuery, Result, Row, Value, WriteSemantics, execute_plan,
-    execute_write, plan_contains_write,
+    Error, GraphSnapshot, Params, PreparedQuery, Result, Row, Value, execute_plan, execute_write,
 };
 
 impl PreparedQuery {
-    fn should_clear_write_rows(plan: &crate::executor::Plan) -> bool {
-        matches!(
-            plan,
-            crate::executor::Plan::Create { .. }
-                | crate::executor::Plan::Delete { .. }
-                | crate::executor::Plan::SetProperty { .. }
-                | crate::executor::Plan::SetPropertiesFromMap { .. }
-                | crate::executor::Plan::SetLabels { .. }
-                | crate::executor::Plan::RemoveProperty { .. }
-                | crate::executor::Plan::RemoveLabels { .. }
-        )
-    }
-
     /// Executes a read query and returns a streaming iterator.
     ///
     /// The returned iterator yields `Result<Row>`, where each row
@@ -71,49 +57,7 @@ impl PreparedQuery {
             ));
         }
         params.begin_execution();
-        match self.write {
-            WriteSemantics::Default => execute_write(&self.plan, snapshot, txn, params),
-            WriteSemantics::Merge => Err(Error::Other(
-                "MERGE not yet supported in 0.1 slim build".into(),
-            )),
-        }
-    }
-
-    pub fn execute_mixed<S: GraphSnapshot>(
-        &self,
-        snapshot: &S,
-        txn: &mut impl crate::executor::WriteableGraph,
-        params: &Params,
-    ) -> Result<(
-        Vec<std::collections::HashMap<String, crate::executor::Value>>,
-        u32,
-    )> {
-        if self.explain.is_some() {
-            return Err(Error::Other(
-                "EXPLAIN cannot be executed as a mixed query".into(),
-            ));
-        }
-        params.begin_execution();
-
-        if plan_contains_write(&self.plan) {
-            return Err(Error::Other(
-                "mixed write+read queries not yet supported in 0.1 slim build".into(),
-            ));
-        }
-
-        let rows: Vec<_> = crate::executor::execute_plan(snapshot, &self.plan, params).collect();
-        let mut results = Vec::new();
-
-        for row_res in rows {
-            let row = row_res?;
-            let mut map = std::collections::HashMap::new();
-            for (k, v) in row.columns().iter().cloned() {
-                map.insert(k, v);
-            }
-            results.push(map);
-        }
-
-        Ok((results, 0))
+        execute_write(&self.plan, snapshot, txn, params)
     }
 
     pub fn is_explain(&self) -> bool {

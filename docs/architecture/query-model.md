@@ -1,16 +1,15 @@
 # Query Model
 
-NervusDB 0.1 targets Mini-Cypher only. The query layer may contain historical
-support for broader Cypher work, but that code is not the product target before
-0.1.
+NervusDB 0.1 targets Mini-Cypher only. The main query path must not keep
+executable broader Cypher behavior before 0.1.
 
 The current product contract is `docs/reference/mini-cypher.md`. Syntax accepted
-outside that reference is compatibility residue unless a future ADR promotes it
-with product scope, architecture notes, tests, and validation policy.
+outside that reference is a bug unless a future ADR promotes it with product
+scope, architecture notes, tests, and validation policy.
 
 ## Responsibilities
 
-- Parser: accept the documented Mini-Cypher surface.
+- Parser: accept the documented Mini-Cypher surface and reject non-0.1 syntax.
 - Planner: produce simple plans for label scan, neighbor traversal, filters,
   projection, limit, write operations, and explain.
 - Executor: return deterministic rows and apply supported writes against the
@@ -48,10 +47,11 @@ belong in `nervusdb-api`.
 ## Before 0.1
 
 Do not add new procedures, subqueries, pattern comprehension, broad aggregation,
-or full openCypher edge semantics. Query work should either improve correctness
-inside `docs/reference/mini-cypher.md` or isolate historical behavior.
+or full openCypher edge semantics. Query work should improve correctness inside
+`docs/reference/mini-cypher.md` or require a new ADR.
 
 Advanced tests for optional match, `WITH`, `UNION`, `UNWIND`, aggregation,
 procedures, subqueries, pattern comprehension, and openCypher TCK material are
-compatibility evidence only. They are not the 0.1 acceptance suite and are not
-required in the default development loop.
+historical evidence only. They are not the 0.1 acceptance suite, must not keep
+executable main-path code alive, and are not required in the default development
+loop.

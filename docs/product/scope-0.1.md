@@ -49,12 +49,13 @@ Mini-Cypher 0.1 covers:
 - simple projection
 - `LIMIT`
 - basic `CREATE`
-- basic `SET`
+- basic `SET n.key = value`
 - basic `DELETE`
 - `EXPLAIN` for supported plans
 
-Code may temporarily accept more syntax. That behavior is experimental residue
-unless `docs/reference/mini-cypher.md` promotes it.
+The default query path must reject syntax outside this list. Extra parser,
+planner, or executor behavior is not allowed to remain executable in the main
+0.1 path unless a future ADR promotes it with tests and docs.
 
 ## Out Of Scope Before 0.1
 
@@ -66,8 +67,9 @@ unless `docs/reference/mini-cypher.md` promotes it.
 - Full openCypher compatibility.
 - openCypher TCK pass rate as product success.
 - Procedures, subqueries, pattern comprehension, and broad aggregation.
-- `OPTIONAL MATCH`, `WITH`, `UNION`, `UNWIND`, `ORDER BY`, and `SKIP` as core
-  gates.
+- `OPTIONAL MATCH`, `WITH`, `UNION`, `UNWIND`, `MERGE`, `FOREACH`, `CALL`,
+  `REMOVE`, `ORDER BY`, `SKIP`, `RETURN DISTINCT`, named paths, and
+  variable-length paths as executable main-path behavior.
 - Stable Python, Node.js, or C APIs.
 - Vector/HNSW as a default product path.
 - Advanced optimizer work outside Mini-Cypher.

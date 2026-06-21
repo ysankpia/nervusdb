@@ -13,6 +13,13 @@ fn is_reduce_call(call: &crate::ast::FunctionCall) -> bool {
     call.name.eq_ignore_ascii_case("__reduce")
 }
 
+fn is_aggregation_function_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "count" | "sum" | "avg" | "min" | "max" | "collect" | "percentiledisc" | "percentilecont"
+    )
+}
+
 pub(super) fn validate_where_expression_bindings(
     expr: &Expression,
     known_bindings: &BTreeMap<String, BindingKind>,
@@ -39,7 +46,7 @@ pub(super) fn validate_where_expression_bindings(
 fn ensure_no_aggregation_functions(expr: &Expression) -> Result<()> {
     match expr {
         Expression::FunctionCall(call) => {
-            if super::parse_aggregate_function(call)?.is_some() {
+            if is_aggregation_function_name(&call.name) {
                 return Err(Error::Other("syntax error: InvalidAggregation".to_string()));
             }
             for arg in &call.args {

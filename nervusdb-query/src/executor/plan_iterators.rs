@@ -1,6 +1,5 @@
 use super::{GraphSnapshot, InternalNodeId, Plan, PlanIterator, Result, Row, Value, execute_plan};
 use crate::ast::Expression;
-use std::collections::HashSet;
 
 pub struct NodeScanIter<'a, S: GraphSnapshot> {
     pub(super) snapshot: &'a S,
@@ -45,6 +44,9 @@ impl<'a, S: GraphSnapshot> Iterator for ProjectIter<'a, S> {
             Some(Err(err)) => return Some(Err(err)),
             None => return None,
         };
+        if let Err(err) = self.params.check_timeout("Project.next") {
+            return Some(Err(err));
+        }
         let mut new_row = Row::default();
         for (alias, expr) in self.projections {
             if let Err(err) = super::plan_mid::ensure_runtime_expression_compatible(
@@ -60,72 +62,6 @@ impl<'a, S: GraphSnapshot> Iterator for ProjectIter<'a, S> {
             new_row = new_row.with(alias.clone(), val);
         }
         Some(Ok(new_row))
-    }
-}
-
-pub struct DistinctIter<'a, S: GraphSnapshot> {
-    pub(super) input: Box<PlanIterator<'a, S>>,
-    pub(super) seen: HashSet<Vec<Value>>,
-}
-
-impl<'a, S: GraphSnapshot> Iterator for DistinctIter<'a, S> {
-    type Item = Result<Row>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            match self.input.next() {
-                Some(Ok(row)) => {
-                    if self.seen.insert(row.value_key()) {
-                        return Some(Ok(row));
-                    }
-                }
-                Some(Err(err)) => return Some(Err(err)),
-                None => return None,
-            }
-        }
-    }
-}
-
-pub struct UnionDistinctIter<'a, S: GraphSnapshot> {
-    pub(super) input: std::iter::Chain<PlanIterator<'a, S>, PlanIterator<'a, S>>,
-    pub(super) seen: HashSet<Vec<Value>>,
-}
-
-impl<'a, S: GraphSnapshot> Iterator for UnionDistinctIter<'a, S> {
-    type Item = Result<Row>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            match self.input.next() {
-                Some(Ok(row)) => {
-                    if self.seen.insert(row.value_key()) {
-                        return Some(Ok(row));
-                    }
-                }
-                Some(Err(err)) => return Some(Err(err)),
-                None => return None,
-            }
-        }
-    }
-}
-
-pub struct SkipIter<'a, S: GraphSnapshot> {
-    pub(super) input: Box<PlanIterator<'a, S>>,
-    pub(super) remaining: usize,
-}
-
-impl<'a, S: GraphSnapshot> Iterator for SkipIter<'a, S> {
-    type Item = Result<Row>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while self.remaining > 0 {
-            match self.input.next() {
-                Some(Ok(_)) => self.remaining -= 1,
-                Some(Err(err)) => return Some(Err(err)),
-                None => return None,
-            }
-        }
-        self.input.next()
     }
 }
 
@@ -161,101 +97,6 @@ impl Iterator for ValuesIter {
     }
 }
 
-pub struct ResultRowsIter {
-    pub(super) rows: std::vec::IntoIter<Result<Row>>,
-}
-
-impl Iterator for ResultRowsIter {
-    type Item = Result<Row>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.rows.next()
-    }
-}
-
-pub struct ChainIter<'a, S: GraphSnapshot> {
-    pub(super) left: Box<PlanIterator<'a, S>>,
-    pub(super) right: Box<PlanIterator<'a, S>>,
-    pub(super) draining_left: bool,
-}
-
-impl<'a, S: GraphSnapshot> Iterator for ChainIter<'a, S> {
-    type Item = Result<Row>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.draining_left {
-            if let Some(next) = self.left.next() {
-                return Some(next);
-            }
-            self.draining_left = false;
-        }
-        self.right.next()
-    }
-}
-
-pub struct UnwindIter<'a, S: GraphSnapshot> {
-    pub(super) snapshot: &'a S,
-    pub(super) input: Box<PlanIterator<'a, S>>,
-    pub(super) expression: &'a Expression,
-    pub(super) alias: &'a str,
-    pub(super) params: &'a crate::query_api::Params,
-    pub(super) current_row: Option<Row>,
-    pub(super) current_items: std::vec::IntoIter<Value>,
-}
-
-impl<'a, S: GraphSnapshot> Iterator for UnwindIter<'a, S> {
-    type Item = Result<Row>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if let Some(item) = self.current_items.next() {
-                if let Some(row) = &self.current_row {
-                    return Some(Ok(row.clone().with(self.alias, item)));
-                }
-            }
-
-            self.current_row = None;
-
-            let row = match self.input.next() {
-                Some(Ok(row)) => row,
-                Some(Err(err)) => return Some(Err(err)),
-                None => return None,
-            };
-
-            if let Err(err) = self.params.check_timeout("Unwind.eval") {
-                return Some(Err(err));
-            }
-            if let Err(err) = super::plan_mid::ensure_runtime_expression_compatible(
-                self.expression,
-                &row,
-                self.snapshot,
-                self.params,
-            ) {
-                return Some(Err(err));
-            }
-
-            let val = crate::evaluator::evaluate_expression_value(
-                self.expression,
-                &row,
-                self.snapshot,
-                self.params,
-            );
-
-            match val {
-                Value::List(list) => {
-                    if let Err(err) = self.params.check_collection_size("Unwind.list", list.len()) {
-                        return Some(Err(err));
-                    }
-                    self.current_row = Some(row);
-                    self.current_items = list.into_iter();
-                }
-                Value::Null => {}
-                other => return Some(Ok(row.with(self.alias, other))),
-            }
-        }
-    }
-}
-
 impl<'a, S: GraphSnapshot> Iterator for FilterIter<'a, S> {
     type Item = Result<Row>;
 
@@ -263,6 +104,9 @@ impl<'a, S: GraphSnapshot> Iterator for FilterIter<'a, S> {
         loop {
             match self.input.next() {
                 Some(Ok(row)) => {
+                    if let Err(err) = self.params.check_timeout("Filter.next") {
+                        return Some(Err(err));
+                    }
                     if let Err(err) = super::plan_mid::ensure_runtime_expression_compatible(
                         self.predicate,
                         &row,

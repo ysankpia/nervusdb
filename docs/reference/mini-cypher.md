@@ -1,12 +1,8 @@
 # Mini-Cypher 0.1 Reference
 
 Mini-Cypher is the only query language surface that counts toward NervusDB 0.1.
-Existing parser or executor support outside this document is historical or
-experimental until this file changes.
-
-If current code accepts syntax outside this document, that behavior is
-compatibility residue. It is not a 0.1 product promise and must not drive default
-development work.
+The main parser, planner, and executor path must reject syntax outside this
+document. Future expansion requires an ADR, tests, and documentation updates.
 
 ## Supported Surface
 
@@ -37,7 +33,7 @@ Write queries:
 - `CREATE (n:Label {key: 'value'})`
 - `CREATE (a:Label {key: 'value'})-[:TYPE]->(b:Label {key: 'value'})`
 - basic `DELETE` for supported node/edge paths
-- basic `SET` for supported node property assignments
+- basic `SET n.key = value` for supported node or edge property assignments
 
 Filters:
 
@@ -55,9 +51,18 @@ Do not add or promote these before 0.1:
 - `WITH`
 - `UNION`
 - `UNWIND`
+- `MERGE`
+- `FOREACH`
+- `CALL`
+- `REMOVE`
+- `RETURN DISTINCT`
+- `ORDER BY`
+- `SKIP`
 - aggregation
+- `EXISTS`
 - subqueries
 - procedures
+- list comprehension
 - pattern comprehension
 - named paths
 - variable-length paths
@@ -84,3 +89,6 @@ The core acceptance tests should map directly to this document:
 
 Old openCypher TCK results are compatibility evidence only. They are not the
 definition of completion for this query surface.
+
+Unsupported syntax should fail fast with an `outside Mini-Cypher 0.1` error
+instead of producing an executable plan.

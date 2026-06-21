@@ -1,8 +1,8 @@
 use super::label_constraint::{node_matches_label_constraint, resolve_label_constraint};
-use super::read_path::{ExpandIter, MatchOutIter, MatchOutVarLenIter};
+use super::read_path::{ExpandIter, MatchOutIter};
 use super::{
     GraphSnapshot, InternalNodeId, LabelConstraint, LimitIter, Plan, PlanIterator, RelTypeId,
-    RelationshipDirection, Result, Row, Value, execute_plan,
+    Result, Row, Value, execute_plan,
 };
 
 fn value_node_id(value: &Value) -> Option<InternalNodeId> {
@@ -141,57 +141,5 @@ pub(super) fn execute_match_out<'a, S: GraphSnapshot + 'a>(
         } else {
             filtered
         }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn execute_match_out_var_len<'a, S: GraphSnapshot + 'a>(
-    snapshot: &'a S,
-    input: &'a Option<Box<Plan>>,
-    src_alias: &'a str,
-    rels: &[String],
-    edge_alias: &'a Option<std::sync::Arc<str>>,
-    dst_alias: &'a str,
-    dst_labels: &[String],
-    src_prebound: bool,
-    direction: &RelationshipDirection,
-    min_hops: u32,
-    max_hops: Option<u32>,
-    limit: Option<u32>,
-    optional: bool,
-    optional_unbind: &[String],
-    path_alias: &'a Option<std::sync::Arc<str>>,
-    params: &'a crate::query_api::Params,
-) -> PlanIterator<'a, S> {
-    let input_iter = input
-        .as_ref()
-        .map(|plan| execute_plan(snapshot, plan, params));
-    let rel_ids = resolve_rel_ids(snapshot, rels);
-    let dst_label_constraint = resolve_label_constraint(snapshot, dst_labels);
-
-    let base = MatchOutVarLenIter::new(
-        snapshot,
-        input_iter.map(|iter| Box::new(iter) as Box<dyn Iterator<Item = Result<Row>>>),
-        src_alias,
-        rel_ids,
-        edge_alias.as_deref(),
-        dst_alias,
-        dst_label_constraint,
-        direction.clone(),
-        min_hops,
-        max_hops,
-        limit,
-        optional,
-        src_prebound,
-        optional_unbind.to_vec(),
-        path_alias.as_deref(),
-    );
-    if let Some(limit) = limit {
-        PlanIterator::Limit(Box::new(LimitIter {
-            input: Box::new(PlanIterator::MatchOutVarLen(Box::new(base))),
-            remaining: limit as usize,
-        }))
-    } else {
-        PlanIterator::MatchOutVarLen(Box::new(base))
     }
 }

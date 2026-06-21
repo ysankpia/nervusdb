@@ -28,14 +28,11 @@
 //! | Category | Examples |
 //! |----------|----------|
 //! | Node scan | `MATCH (n)`, `MATCH (n:Person)` |
-//! | Traversal | `(a)-[:TYPE]->(b)`, 2-hop, OPTIONAL MATCH |
+//! | Traversal | `(a)-[:TYPE]->(b)`, documented 2-hop patterns |
 //! | Property filter | `WHERE n.age = 30`, `WHERE n.name = 'Alice'` |
-//! | Aggregation | `RETURN count(*)`, `sum(n.x)`, `avg(n.x)`, `min(n.x)`, `max(n.x)` |
-//! | Ordering | `ORDER BY n.name DESC` |
-//! | Pagination | `SKIP 5 LIMIT 10` |
-//! | Projection | `RETURN n, n.name, n.age + 1` |
-//! | Write | `CREATE`, `SET n.x = v`, `DELETE n`, `REMOVE n.x` |
-//! | Labels | `SET n:Label`, `REMOVE n:Label` |
+//! | Pagination | `LIMIT 10` |
+//! | Projection | `RETURN n`, `RETURN n.name` |
+//! | Write | `CREATE`, basic `SET n.x = v`, basic `DELETE n` |
 //! | Plan debug | `EXPLAIN MATCH (n) RETURN n` |
 //!
 //! # Architecture

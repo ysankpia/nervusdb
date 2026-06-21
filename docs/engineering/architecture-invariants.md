@@ -16,7 +16,8 @@ docs.
 
 3. **nervusdb-query owns only the Mini-Cypher path before 0.1.** Parser,
    planner, and executor serve the documented Mini-Cypher surface. Query
-   behavior outside that surface is compatibility residue and not a 0.1 promise.
+   behavior outside that surface must fail fast or live outside the current
+   main path until a future ADR promotes it.
 
 4. **nervusdb-api is the boundary between query and storage.** It defines
    shared IDs, `PropertyValue`, `GraphSnapshot`, `GraphStore`, and write-boundary

@@ -39,93 +39,18 @@ pub(super) fn compile_set_plan_v2(input: Plan, set: crate::ast::SetClause) -> Re
         };
     }
 
-    let mut map_items = Vec::new();
-    for item in set.map_items {
-        if !known_bindings.contains_key(&item.variable) {
-            return Err(Error::Other(format!(
-                "syntax error: UndefinedVariable ({})",
-                item.variable
-            )));
-        }
-
-        let mut refs = std::collections::HashSet::new();
-        extract_variables_from_expr(&item.value, &mut refs);
-        for var in refs {
-            if !known_bindings.contains_key(&var) {
-                return Err(Error::Other(format!(
-                    "syntax error: UndefinedVariable ({})",
-                    var
-                )));
-            }
-        }
-
-        ensure_no_pattern_predicate(&item.value)?;
-        map_items.push((item.variable, item.value, item.append));
+    if !set.map_items.is_empty() {
+        return Err(Error::Other(
+            "syntax error: SET map assignment is outside Mini-Cypher 0.1".to_string(),
+        ));
     }
-    if !map_items.is_empty() {
-        plan = Plan::SetPropertiesFromMap {
-            input: Box::new(plan),
-            items: map_items,
-        };
-    }
-
-    let mut label_items = Vec::new();
-    for item in set.labels {
-        if !known_bindings.contains_key(&item.variable) {
-            return Err(Error::Other(format!(
-                "syntax error: UndefinedVariable ({})",
-                item.variable
-            )));
-        }
-        label_items.push((item.variable, item.labels));
-    }
-    if !label_items.is_empty() {
-        plan = Plan::SetLabels {
-            input: Box::new(plan),
-            items: label_items,
-        };
+    if !set.labels.is_empty() {
+        return Err(Error::Other(
+            "syntax error: SET labels is outside Mini-Cypher 0.1".to_string(),
+        ));
     }
 
     Ok(plan)
-}
-
-pub(super) fn compile_remove_plan_v2(
-    input: Plan,
-    remove: crate::ast::RemoveClause,
-) -> Result<Plan> {
-    let mut plan = input;
-
-    let mut prop_items = Vec::with_capacity(remove.properties.len());
-    for prop in remove.properties {
-        prop_items.push((prop.variable, prop.property));
-    }
-    if !prop_items.is_empty() {
-        plan = Plan::RemoveProperty {
-            input: Box::new(plan),
-            items: prop_items,
-        };
-    }
-
-    let mut label_items = Vec::new();
-    for item in remove.labels {
-        label_items.push((item.variable, item.labels));
-    }
-    if !label_items.is_empty() {
-        plan = Plan::RemoveLabels {
-            input: Box::new(plan),
-            items: label_items,
-        };
-    }
-
-    Ok(plan)
-}
-
-pub(super) fn compile_unwind_plan(input: Plan, unwind: crate::ast::UnwindClause) -> Plan {
-    Plan::Unwind {
-        input: Box::new(input),
-        expression: unwind.expression,
-        alias: unwind.alias.into(),
-    }
 }
 
 pub(super) fn compile_delete_plan_v2(

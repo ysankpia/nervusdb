@@ -1,4 +1,4 @@
-use super::{EdgeKey, ExternalId, InternalNodeId, Result, convert_api_property_to_value};
+use super::{EdgeKey, ExternalId, InternalNodeId};
 use serde::ser::{SerializeMap, SerializeSeq};
 use smallvec::SmallVec;
 use std::collections::HashMap;

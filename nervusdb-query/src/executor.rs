@@ -1,6 +1,4 @@
-use crate::ast::{
-    AggregateFunction, Direction, Expression, PathElement, Pattern, RelationshipDirection,
-};
+use crate::ast::{Expression, PathElement, Pattern, RelationshipDirection};
 use crate::error::{Error, Result};
 use crate::evaluator::evaluate_expression_value;
 mod core_types;
@@ -14,26 +12,20 @@ mod plan_iterators;
 mod plan_mid;
 mod plan_tail;
 mod plan_types;
-mod property_bridge;
 mod read_path;
 mod write_dispatch;
-mod write_forwarders;
 mod write_path;
+use create_delete_ops::{execute_create, execute_delete};
 use label_constraint::{LabelConstraint, node_matches_label_constraint, resolve_label_constraint};
 use match_bound_rel_plan::MatchBoundRelIter;
 use match_out_plan::FilteredMatchOutIter;
 pub use nervusdb_api::LabelId;
 use nervusdb_api::{EdgeKey, ExternalId, GraphSnapshot, InternalNodeId, RelTypeId};
 use plan_iterators::{
-    CartesianProductIter, ChainIter, DistinctIter, FilterIter, LimitIter, NodeScanIter,
-    ProjectIter, ResultRowsIter, SkipIter, UnionDistinctIter, UnwindIter, ValuesIter,
+    CartesianProductIter, FilterIter, LimitIter, NodeScanIter, ProjectIter, ValuesIter,
 };
-use property_bridge::api_property_map_to_query;
-use read_path::{ExpandIter, MatchOutVarLenIter};
-use write_forwarders::{convert_executor_value_to_property, execute_create, execute_delete};
-use write_path::{
-    execute_remove, execute_remove_labels, execute_set, execute_set_from_maps, execute_set_labels,
-};
+use read_path::ExpandIter;
+use write_path::{convert_executor_value_to_property, execute_set};
 
 const UNLABELED_LABEL_ID: LabelId = LabelId::MAX;
 pub use core_types::{NodeValue, PathValue, ReifiedPathValue, RelationshipValue, Row, Value};
