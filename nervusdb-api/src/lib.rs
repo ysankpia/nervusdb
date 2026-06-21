@@ -430,10 +430,10 @@ pub trait GraphSnapshot {
         }))
     }
 
-    /// Lookup nodes using an index.
+    /// Lookup nodes using a property index when an implementation provides one.
     ///
-    /// Returns `Some(Vec<InternalNodeId>)` if the index exists and the lookup succeeds.
-    /// Returns `None` if the index does not exist.
+    /// Property indexes are not part of the 0.1 core contract. Returning `None`
+    /// means the caller must preserve correctness without an index.
     ///
     /// # Arguments
     /// * `label` - The label name (e.g., "Person")
@@ -487,14 +487,12 @@ pub trait GraphSnapshot {
         None
     }
 
-    /// Get all properties for a node.
-    /// Returns properties merged from all runs (newest takes precedence).
+    /// Get all properties for a node in this snapshot.
     fn node_properties(&self, _iid: InternalNodeId) -> Option<BTreeMap<String, PropertyValue>> {
         None
     }
 
-    /// Get all properties for an edge.
-    /// Get all edge properties merged from all runs (newest takes precedence).
+    /// Get all properties for an edge in this snapshot.
     fn edge_properties(&self, _edge: EdgeKey) -> Option<BTreeMap<String, PropertyValue>> {
         None
     }

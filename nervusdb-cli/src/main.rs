@@ -48,11 +48,11 @@ enum OutputFormat {
 
 #[derive(Parser)]
 struct V2QueryArgs {
-    /// Database base path (v2 will derive `<path>.ndb`/`<path>.wal` if needed)
+    /// Local database directory
     #[arg(long)]
     db: PathBuf,
 
-    /// Cypher query string (v2 M3 supports only a minimal subset)
+    /// Mini-Cypher query string supported by the 0.1 surface
     #[arg(long, conflicts_with = "file")]
     cypher: Option<String>,
 
@@ -60,7 +60,7 @@ struct V2QueryArgs {
     #[arg(long)]
     file: Option<PathBuf>,
 
-    /// Parameters as a JSON object (M3: parsed but currently ignored by supported queries)
+    /// Parameters as a JSON object
     #[arg(long)]
     params_json: Option<String>,
 
@@ -70,11 +70,11 @@ struct V2QueryArgs {
 
 #[derive(Parser)]
 struct V2WriteArgs {
-    /// Database base path (v2 will derive `<path>.ndb`/`<path>.wal` if needed)
+    /// Local database directory
     #[arg(long)]
     db: PathBuf,
 
-    /// Cypher CREATE or DELETE query string (v2 M3)
+    /// Mini-Cypher write string supported by the 0.1 surface
     #[arg(long, conflicts_with = "file")]
     cypher: Option<String>,
 
@@ -82,7 +82,7 @@ struct V2WriteArgs {
     #[arg(long)]
     file: Option<PathBuf>,
 
-    /// Parameters as a JSON object (M3: supports scalar values)
+    /// Parameters as a JSON object with scalar values
     #[arg(long)]
     params_json: Option<String>,
 }

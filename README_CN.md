@@ -17,8 +17,8 @@
 NervusDB 正在收缩到一个能完成的 0.1 主线：
 
 - Rust 嵌入式 API
-- 本地文件存储
-- WAL 崩溃恢复
+- 本地数据库目录存储
+- Fjall 支撑的提交持久化和崩溃/重开 smoke
 - 节点 / 边 / label / 属性持久化
 - label scan 和邻居遍历
 - 小而明确的 Mini-Cypher
@@ -76,13 +76,14 @@ write 输出类似 `{"count":3}` 的小 JSON 状态对象。0.1 的导入 smoke 
 ```text
 nervusdb          public Rust facade
 nervusdb-api      storage/query boundary traits
-nervusdb-storage  page store, WAL, snapshots, recovery, indexes
-nervusdb-query    Mini-Cypher parser/planner/executor path plus frozen history
+nervusdb-storage  Fjall-backed graph keyspaces, snapshots, recovery
+nervusdb-query    Mini-Cypher parser/planner/executor for the 0.1 surface
 nervusdb-cli      local debug/import/query/write tool
 ```
 
 Python、Node.js、C 绑定、完整 openCypher TCK、向量搜索、一致性门禁、
-perf/chaos/soak/fuzz 矩阵和 release window 仍保留在仓库中，但不属于默认产品路径。
+perf/chaos/soak/fuzz 矩阵、release window 和 Fjall 之前的存储设计记录仍保留在
+仓库中，但不属于默认产品路径。
 
 ## 开发
 

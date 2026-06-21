@@ -213,19 +213,25 @@ pub struct PreparedQuery {
     explain: Option<String>,
 }
 
-/// Parses and prepares a Cypher query for execution.
+/// Parses and prepares a Mini-Cypher 0.1 query for execution.
 ///
-/// # Supported Cypher (v2 M3)
+/// # Supported Mini-Cypher 0.1
 ///
 /// - `RETURN 1` - Constant return
-/// - `MATCH (n)-[:<u32>]->(m) RETURN n, m LIMIT k` - Single-hop pattern match
-/// - `MATCH (n)-[:<u32>]->(m) WHERE n.prop = 'value' RETURN n, m` - With WHERE filter
-/// - `CREATE (n)` / `CREATE (n {k: v})` - Create nodes
-/// - `CREATE (a)-[:1]->(b)` - Create edges
-/// - `MATCH (n)-[:1]->(m) DELETE n` / `DETACH DELETE n` - Delete nodes/edges
-/// - `EXPLAIN <query>` - Show compiled plan (no execution)
+/// - `MATCH (n)` and `MATCH (n:Label)` - node and label scans
+/// - `MATCH (a)-[:TYPE]->(b)` - directed one-hop traversal
+/// - `MATCH (a)-[:TYPE]->(b)-[:TYPE]->(c)` - documented two-hop traversal
+/// - `WHERE n.prop = 'value'` or `WHERE n.prop = 1` - simple equality filters
+/// - `RETURN` of bound variables and simple properties
+/// - `LIMIT`
+/// - basic `CREATE`
+/// - basic `SET n.key = value`
+/// - basic `DELETE`
+/// - `EXPLAIN <query>` - show compiled plan for supported queries
 ///
-/// Returns an error for unsupported Cypher constructs.
+/// Returns an `outside Mini-Cypher 0.1` error for unsupported openCypher
+/// constructs. The supported surface is defined in
+/// `docs/reference/mini-cypher.md`.
 pub fn prepare(cypher: &str) -> Result<PreparedQuery> {
     prepare_entry::prepare(cypher)
 }

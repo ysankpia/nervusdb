@@ -38,7 +38,7 @@ NervusDB owns graph semantics. Fjall owns low-level persistence mechanics.
 - page B+Tree
 - CSR segments
 - L0 run publication and overlay merge
-- property sinking into page stores
+- old property sinking paths
 - old storage format tests
 - index catalog/backfill as a core path
 - `.ndb + .wal` public path semantics
@@ -180,6 +180,25 @@ If any check is skipped, `PROGRESS.md` must record why and what replaces it.
 Result: complete. All required checks passed, and `cargo test --workspace` was
 also run successfully.
 
+### D6: Public Surface Synchronization
+
+Make the public-facing repository surface match the committed Fjall and query
+scope changes.
+
+Done when:
+
+- README and README_CN describe local database directory storage
+- CLI help describes `--db` as a directory
+- rustdoc no longer describes old run merging, Pager/WAL files, or the old M3
+  query surface as current behavior
+- current architecture/codebase docs describe Fjall keyspaces and Mini-Cypher
+  0.1 instead of pre-Fjall internals
+- focused validation passes after the cleanup
+
+Result: complete. README, README_CN, CLI help, rustdoc, current code
+architecture, current codebase analysis, and progress records now describe the
+committed Fjall directory-storage model and Mini-Cypher 0.1 query surface.
+
 ## Validation Evidence
 
 Executed on 2026-06-21:
@@ -197,6 +216,14 @@ bash scripts/core_crash_recovery.sh
 cargo fmt --all -- --check
 bash scripts/check.sh
 cargo test --workspace
+cargo fmt --all -- --check
+cargo check -p nervusdb-cli -p nervusdb-api -p nervusdb-query -p nervusdb
+bash scripts/check.sh
+cargo test -p nervusdb-storage --test core_0_1_storage
+cargo test -p nervusdb --test core_0_1_examples
+bash scripts/core_examples.sh
+bash scripts/core_crash_recovery.sh
+cargo test --workspace
 ```
 
 ## Forbidden Work
@@ -211,9 +238,11 @@ cargo test --workspace
 
 ## Current Known Risks
 
-- Existing query tests include advanced behavior that exceeds 0.1 scope.
-- Existing facade docs expose `.ndb/.wal` paths.
-- Existing bd PB tasks still describe pager/page-cache work; ADR 0005 supersedes
-  that direction for current 0.1 architecture.
-- Existing storage tests may need to be rewritten around graph semantics rather
-  than page-format details.
+- `Db::compact`, `Db::checkpoint`, `Db::close`, `Db::create_index`, and
+  `GraphSnapshot::lookup_index` remain non-core maintenance/experimental hooks.
+  They need a future API decision before 0.1 release.
+- Large-scale storage evidence remains manual. Release candidates should still
+  run the documented large smoke and crash/reopen checks on recorded hardware.
+- Historical completed plans and ADR context still mention old storage or
+  advanced query work as past evidence. Current scope must be taken from this
+  plan, ADR 0005, product scope, and the current architecture docs.

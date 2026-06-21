@@ -189,8 +189,8 @@ impl Db {
 
     /// Ask the storage backend to persist pending state.
     ///
-    /// In the Fjall backend this is a durability flush, not a NervusDB-owned
-    /// B+Tree/CSR compaction step.
+    /// In the Fjall backend this is a durability flush for committed graph
+    /// data. It is not part of the 0.1 query or storage-format contract.
     pub fn compact(&self) -> Result<()> {
         self.engine.compact().map_err(Error::from)
     }

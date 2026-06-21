@@ -53,7 +53,7 @@ both of which run `bash scripts/check.sh`.
 nervusdb/           — root workspace
 ├── nervusdb/       — public Rust facade
 ├── nervusdb-api/   — graph traits
-├── nervusdb-storage/ — page store, WAL, recovery
+├── nervusdb-storage/ — Fjall-backed graph keyspaces and recovery
 ├── nervusdb-query/ — Mini-Cypher parser/planner/executor
 ├── nervusdb-cli/   — local CLI tool
 ├── nervusdb-pyo3/  — Python bindings (experimental)

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted, amended by ADR 0005 and the 2026-06-21 query pruning work.
 
 ## Context
 
@@ -23,7 +23,7 @@ path is the embedded Rust core:
 
 - local database open/reopen
 - node, relationship, label, and property persistence
-- WAL-backed crash recovery
+- Fjall-backed committed persistence and crash/reopen smoke
 - one-hop/two-hop traversal
 - Mini-Cypher only
 - CLI smoke/debug/import support
@@ -37,8 +37,9 @@ do not run on a schedule and do not define product readiness before 0.1.
 - Default CI is smaller and must stay tied to `scripts/check.sh`.
 - Scheduled pressure workflows become manual-only.
 - Root documentation and quick starts show Rust + CLI core paths only.
-- Existing advanced code is preserved for now, but new growth in frozen areas
+- Frozen advanced code does not have to be preserved. If it is executable in the
+  main path and not part of Mini-Cypher 0.1, it should be rejected, archived, or
+  deleted rather than treated as a future asset. New growth in frozen areas
   requires a new decision record.
 - Future hard isolation can use features, workspace exclusions, or crate moves
   after the soft isolation is stable.
-

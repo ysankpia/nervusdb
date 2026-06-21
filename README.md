@@ -17,8 +17,8 @@ crash, and reopen. No server. No network service. No platform ceremony.
 NervusDB is being cut back to a finishable 0.1 line:
 
 - Rust embedded API
-- local file storage
-- WAL-backed crash recovery
+- local database directory storage
+- Fjall-backed committed persistence and crash/reopen smoke
 - node / edge / label / property persistence
 - label scans and neighbor traversal
 - a small Mini-Cypher surface
@@ -80,14 +80,15 @@ before 0.1.
 ```text
 nervusdb          public Rust facade
 nervusdb-api      storage/query boundary traits
-nervusdb-storage  page store, WAL, snapshots, recovery, indexes
-nervusdb-query    Mini-Cypher parser/planner/executor path plus frozen history
+nervusdb-storage  Fjall-backed graph keyspaces, snapshots, recovery
+nervusdb-query    Mini-Cypher parser/planner/executor for the 0.1 surface
 nervusdb-cli      local debug/import/query/write tool
 ```
 
 Experimental or historical areas remain in the repository but are not the
 default product path: Python, Node.js, C bindings, full openCypher TCK, vector
-search, parity gates, perf/chaos/soak/fuzz matrices, and release windows.
+search, parity gates, perf/chaos/soak/fuzz matrices, release windows, and
+pre-Fjall storage design notes.
 
 ## Development
 
