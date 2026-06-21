@@ -11,10 +11,8 @@ Fjall-backed logical graph keyspaces.
 
 ## Now
 
-- Review and commit the Fjall refactor.
-- Clean query warning/MSRV clippy debt separately.
-- Decide whether `Db::compact/checkpoint/close` remain explicit maintenance
-  wrappers or are simplified after 0.1.
+- Keep the post-Fjall API surface small: `checkpoint` and `close` stay as
+  lifecycle helpers; old compaction and property-index hooks stay out.
 - Run release-scale manual smoke when the API surface is otherwise stable.
 
 ## Next
@@ -45,8 +43,6 @@ Fjall-backed logical graph keyspaces.
 
 ## Open Questions
 
-- Whether `Db::compact/checkpoint/close` remain compatibility methods or become
-  no-op/maintenance wrappers under Fjall.
 - Whether property equality indexes deserve a post-0.1 `prop_index` ADR.
 - Whether old bd PB tasks should be closed as superseded once ADR 0005 is fully
   implemented.

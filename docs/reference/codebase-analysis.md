@@ -70,7 +70,8 @@ Current storage rules:
 - parallel edges are not supported before 0.1.
 - label IDs and relationship type IDs are separate namespaces.
 - property keys are original strings, not hashes.
-- property indexes are not 0.1 core.
+- property indexes are not 0.1 core and have no public API hook before a future
+  ADR defines them.
 
 ## Query Shape
 
@@ -110,8 +111,8 @@ Frozen before 0.1:
 | Risk | Status | Action |
 |---|---|---|
 | Public docs drift after storage replacement | Active cleanup | Keep README, rustdoc, CLI help, and docs aligned with directory storage |
-| Property index hooks | Accepted debt | Keep experimental; do not use for 0.1 query correctness |
-| Maintenance hooks (`compact`, `checkpoint`, `close`) | Open decision | Keep as explicit persistence wrappers unless a future API cleanup removes or promotes them |
+| Property index hooks | Retired debt | Removed from the public API until a future ADR defines `prop_index` |
+| Lifecycle persistence helpers | Accepted API | `checkpoint` and `close` are explicit helpers over Fjall persistence |
 | Historical docs in current paths | Active cleanup | Mark as historical or replace with current source maps |
 | Large-scale durability evidence | Manual gate | Run documented large and crash/reopen checks for release candidates |
 

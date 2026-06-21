@@ -4,8 +4,6 @@
 
 | Area | Debt | Impact | Plan |
 |---|---|---|---|
-| Property index ambiguity | `create_index/lookup_index` exists but is not 0.1 core | Scope drift and planner/storage ambiguity | Classify as experimental; no `prop_index` until future ADR |
-| Query warning debt | `nervusdb-query` has unused imports, unused helpers, and MSRV-related clippy warnings | Noise in validation output; can hide real warnings later | Separate cleanup PR; do not mix with storage refactor |
 | Experimental advanced query code | Parser/executor still contain features outside 0.1 core | Future tests can accidentally promote non-core behavior again | Keep out of core gates; document only when a future ADR promotes it |
 | Tombstone secondary cleanup | Node tombstone hides nodes but does not eagerly remove every secondary key | Disk space and internal keyspace drift until future cleanup | Define delete/tombstone compaction after core API stabilizes |
 | No large release-scale smoke | 10k node / 50k edge smoke passes, but no documented 1M node / 5M edge acceptance result | Cannot prove release-scale readiness | Run and record large smoke after Fjall core stabilizes |
@@ -45,3 +43,5 @@
 | Label scan path | 010-fjall-storage-refactor | `GraphSnapshot::nodes_with_label` and Fjall `label_nodes` keyspace are implemented |
 | Label/reltype namespace | 010-fjall-storage-refactor | Labels and reltypes use separate Fjall keyspaces and independent counters |
 | Core query scope drift in 0.1 gates | 010-fjall-storage-refactor | Core tests/examples no longer require optional match, aggregation, ordering/skip, or index backfill |
+| Query warning debt | Query pruning | `cargo clippy -p nervusdb-query --lib -- -D warnings` passed after residue cleanup |
+| Property index ambiguity | API surface cleanup | `create_index` and `lookup_index` were removed; no public `prop_index` hook remains before a future ADR |

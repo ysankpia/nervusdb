@@ -430,24 +430,6 @@ pub trait GraphSnapshot {
         }))
     }
 
-    /// Lookup nodes using a property index when an implementation provides one.
-    ///
-    /// Property indexes are not part of the 0.1 core contract. Returning `None`
-    /// means the caller must preserve correctness without an index.
-    ///
-    /// # Arguments
-    /// * `label` - The label name (e.g., "Person")
-    /// * `field` - The property field name (e.g., "name")
-    /// * `value` - The value to match
-    fn lookup_index(
-        &self,
-        _label: &str,
-        _field: &str,
-        _value: &PropertyValue,
-    ) -> Option<Vec<InternalNodeId>> {
-        None
-    }
-
     /// Resolve an internal node ID to its external ID.
     ///
     /// Returns `Some(external_id)` if the node exists and has an external ID,

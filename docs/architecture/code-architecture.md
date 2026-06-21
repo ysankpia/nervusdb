@@ -70,7 +70,8 @@ Core rules:
 - Edge identity is `(src_iid, rel_type_id, dst_iid)`.
 - Parallel edges are not a 0.1 feature.
 - Property keys are stored as original strings, not hashes.
-- Property indexes are not 0.1 core.
+- Property indexes are not 0.1 core and have no public API hook before a future
+  ADR defines them.
 
 The storage contract is documented in `docs/architecture/storage-model.md` and
 `docs/reference/storage-format.md`.
@@ -105,9 +106,8 @@ storage-level `label_nodes` keyspace matters in practice.
 - `nervusdb_query::prepare`
 - `nervusdb_query::query_collect`
 
-Maintenance hooks such as `compact`, `checkpoint`, `close`, `create_index`, and
-`lookup_index` are not 0.1 core stability promises unless promoted by a future
-ADR.
+`checkpoint` and `close` are lifecycle helpers over Fjall persistence. The old
+`compact` name and property-index hooks were removed from the 0.1 public API.
 
 ## Do Not Reintroduce
 
@@ -116,6 +116,8 @@ ADR.
 - query-to-storage direct dependencies
 - hashed property keys as logical identity
 - shared label/relationship type ID space
+- public no-op property index hooks
+- old compaction naming for Fjall persistence
 - executable advanced query paths outside the Mini-Cypher 0.1 contract
 - full openCypher TCK pass rate as a 0.1 success metric
 

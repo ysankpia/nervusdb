@@ -15,6 +15,8 @@ Database lifecycle:
 
 - `Db::open(path)` opens a local database directory.
 - `Db::storage_dir()` or equivalent path accessor may expose that directory.
+- `Db::checkpoint()` asks the backend to persist committed graph state.
+- `Db::close()` performs a best-effort checkpoint before consuming the handle.
 
 Read path:
 
@@ -55,19 +57,19 @@ Query path:
 - `Db::open_paths`
 - `Db::ndb_path`
 - `Db::wal_path`
+- `Db::compact`
+- `Db::create_index`
+- `GraphSnapshot::lookup_index`
 
-These belong to the old `.ndb + .wal` model. New code should use directory
-paths.
+The path APIs belong to the old `.ndb + .wal` model. New code should use
+directory paths. `compact` used an old storage-engine name that does not match
+the Fjall backend. Property index hooks were removed because property indexes
+are not part of the Mini-Cypher 0.1 contract.
 
 ## Experimental Or Maintenance API
 
 The following APIs are not part of the 0.1 core stability promise:
 
-- `Db::compact`
-- `Db::checkpoint`
-- `Db::close`
-- `Db::create_index`
-- `GraphSnapshot::lookup_index`
 - backup, vacuum, and bulkload concepts
 - binding-facing compatibility wrappers
 

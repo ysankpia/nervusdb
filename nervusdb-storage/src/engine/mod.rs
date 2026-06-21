@@ -141,17 +141,13 @@ impl GraphEngine {
         self.get_id_name(&self.keyspaces.reltypes, id)
     }
 
-    pub fn create_index(&self, _label: &str, _field: &str) -> Result<()> {
-        Ok(())
-    }
-
-    pub fn compact(&self) -> Result<()> {
+    pub fn persist(&self) -> Result<()> {
         self.db.persist(PersistMode::SyncAll)?;
         Ok(())
     }
 
     pub fn checkpoint_on_close(&self) -> Result<()> {
-        self.compact()
+        self.persist()
     }
 
     fn get_name_id(&self, keyspace: &Keyspace, name: &str) -> Option<u32> {

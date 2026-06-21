@@ -238,9 +238,10 @@ cargo test --workspace
 
 ## Current Known Risks
 
-- `Db::compact`, `Db::checkpoint`, `Db::close`, `Db::create_index`, and
-  `GraphSnapshot::lookup_index` remain non-core maintenance/experimental hooks.
-  They need a future API decision before 0.1 release.
+- `Db::checkpoint` and `Db::close` remain explicit lifecycle helpers over Fjall
+  persistence. `Db::compact`, `Db::create_index`, and
+  `GraphSnapshot::lookup_index` were removed before 0.1 to avoid false
+  compaction/index promises.
 - Large-scale storage evidence remains manual. Release candidates should still
   run the documented large smoke and crash/reopen checks on recorded hardware.
 - Historical completed plans and ADR context still mention old storage or

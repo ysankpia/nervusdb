@@ -123,10 +123,12 @@ ordering, update/delete cleanup, and planner use. They are not required for the
 - Old `.ndb/.wal` data is not migrated.
 - `Db::open(path)` opens a directory.
 - `open_paths(ndb, wal)`, `ndb_path()`, and `wal_path()` are not 0.1 core APIs.
-- `Db::compact()` and `Db::checkpoint()` are maintenance compatibility only; the
-  Fjall backend does not expose NervusDB-managed page compaction.
-- `Db::create_index()` and `GraphSnapshot::lookup_index()` are not 0.1 core
-  promises.
+- `Db::checkpoint()` and `Db::close()` are explicit lifecycle helpers over
+  Fjall persistence.
+- `Db::compact()` was removed because it used an old storage-engine term that
+  does not describe the Fjall backend.
+- `Db::create_index()` and `GraphSnapshot::lookup_index()` were removed because
+  property indexes are not 0.1 core promises.
 - Storage validation focuses on graph semantics: reopen, label scan, traversal,
   properties, snapshot isolation, and crash/reopen smoke.
 

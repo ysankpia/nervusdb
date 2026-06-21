@@ -75,5 +75,6 @@ docs.
 
 - During the Fjall refactor, old storage files may exist in the working tree
   until D4. They are not the current architecture once ADR 0005 is accepted.
-- `lookup_index` and `create_index` may remain as compatibility hooks, but
-  property indexes are not 0.1 core until a future ADR defines them.
+- Public no-op property index hooks are not allowed in the 0.1 core. Property
+  indexes require a future ADR defining key layout, value ordering,
+  update/delete cleanup, and planner use.

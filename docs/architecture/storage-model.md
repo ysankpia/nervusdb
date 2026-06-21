@@ -84,10 +84,11 @@ rather than exposing stale counts.
 
 ## Indexes
 
-Property range indexes and equality indexes are not 0.1 core. `lookup_index`
-and `create_index` are compatibility/experimental paths until a future ADR
-defines `prop_index` key layout, value ordering, update/delete cleanup, and
-planner use.
+Property range indexes and equality indexes are not 0.1 core. The public
+`create_index` and `lookup_index` hooks were removed before 0.1 because they
+implied a storage and planner contract that does not exist yet. A future ADR
+must define `prop_index` key layout, value ordering, update/delete cleanup, and
+planner use before property indexes return.
 
 ## Required Validation For Storage Changes
 

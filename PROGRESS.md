@@ -13,14 +13,14 @@ bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
-Fjall storage refactor, non-0.1 query residue pruning, and post-refactor public
-surface synchronization are complete in the working tree.
+Fjall storage refactor, non-0.1 query residue pruning, post-refactor public
+surface synchronization, and 0.1 API hook cleanup are complete in the working
+tree.
 
 ## Now
 
-- Review and commit the D6 public-surface cleanup.
-- Decide whether maintenance hooks stay as experimental API or are removed before
-  0.1 release preparation.
+- Validate and commit the 0.1 API hook cleanup.
+- Prepare a release-readiness pass once the cleanup commit lands.
 
 ## Done
 
@@ -54,14 +54,16 @@ surface synchronization are complete in the working tree.
   current architecture docs, current codebase analysis, and progress records
   now match the committed Fjall directory-storage model and Mini-Cypher 0.1
   query surface.
+- API hook cleanup completed in the working tree: `Db::compact`,
+  `Db::create_index`, and `GraphSnapshot::lookup_index` were removed from the
+  public API. `Db::checkpoint` and `Db::close` remain as explicit lifecycle
+  helpers over Fjall persistence.
 
 ## Next
 
-- Decide whether `Db::compact/checkpoint/close` should stay as explicit Fjall
-  persist wrappers or be simplified post-0.1.
-- Decide whether `Db::create_index` and `GraphSnapshot::lookup_index` should
-  remain as experimental no-op/lookup hooks or be removed before 0.1.
-- Prepare a 0.1 readiness checklist only after this D6 cleanup is committed.
+- Commit the API hook cleanup after validation.
+- Prepare a 0.1 readiness checklist after this cleanup lands.
+- Run release-scale manual smoke on recorded hardware before release prep.
 
 ## Blockers
 
@@ -101,14 +103,17 @@ None yet.
 | 2026-06-21 | `bash scripts/core_examples.sh` | Passed: 10 CLI/file-driven examples |
 | 2026-06-21 | `bash scripts/core_crash_recovery.sh` | Passed: 5 kill/reopen iterations |
 | 2026-06-21 | `cargo test --workspace` | Passed after D6 public-surface cleanup |
+| 2026-06-21 | `cargo fmt --all -- --check` | Passed after API hook cleanup |
+| 2026-06-21 | `cargo check -p nervusdb-api -p nervusdb-storage -p nervusdb -p nervusdb-cli -p nervusdb-query` | Passed after API hook cleanup |
+| 2026-06-21 | `bash scripts/check.sh` | Passed after API hook cleanup |
+| 2026-06-21 | `cargo test -p nervusdb-storage --test core_0_1_storage` | Passed: 10 storage contract tests |
+| 2026-06-21 | `bash scripts/core_crash_recovery.sh` | Passed after API hook cleanup |
+| 2026-06-21 | `cargo test --workspace` | Passed after API hook cleanup |
 
 ## Last Checkpoint
 
 2026-06-21: Fjall-backed directory storage and non-0.1 query pruning are both
-committed. D6 public-surface cleanup is complete and validated in the working
-tree. The current code path no longer ships the old Pager/WAL/B+Tree/CSR storage
-engine, the main query path no longer executes advanced openCypher residue, and
-the public-facing docs now describe directory storage plus Mini-Cypher 0.1.
-Remaining work is an API decision on maintenance hooks such as `compact`,
-`checkpoint`, `close`, `create_index`, and `lookup_index` before release
-preparation.
+committed. D6 public-surface cleanup is committed. API hook cleanup is complete
+and validated in the working tree: false compaction/index hooks are gone, and
+the remaining lifecycle helpers are `checkpoint` and `close`. Remaining work is
+commit, then a 0.1 release-readiness pass.

@@ -54,7 +54,7 @@ fn real_main() -> Result<(), String> {
 #[cfg(not(target_arch = "wasm32"))]
 fn print_usage() {
     eprintln!(
-        "Usage:\n  nervusdb-v2-crash-test driver <dir> [--iterations N] [--min-ms A] [--max-ms B] [--batch N] [--node-pool N] [--rel-pool N]\n  nervusdb-v2-crash-test writer <dir> [--batch N] [--node-pool N] [--rel-pool N] [--compact-every N] [--seed S]\n  nervusdb-v2-crash-test verify <dir> [--node-pool N]"
+        "Usage:\n  nervusdb-v2-crash-test driver <dir> [--iterations N] [--min-ms A] [--max-ms B] [--batch N] [--node-pool N] [--rel-pool N]\n  nervusdb-v2-crash-test writer <dir> [--batch N] [--node-pool N] [--rel-pool N] [--persist-every N] [--seed S]\n  nervusdb-v2-crash-test verify <dir> [--node-pool N]"
     );
 }
 
@@ -79,7 +79,7 @@ struct WriterArgs {
     batch_size: usize,
     node_pool: u64,
     rel_pool: u32,
-    compact_every: usize,
+    persist_every: usize,
     seed: u64,
 }
 
@@ -142,7 +142,7 @@ fn parse_writer_args(mut args: impl Iterator<Item = String>) -> Result<WriterArg
         batch_size: 200,
         node_pool: 200,
         rel_pool: 16,
-        compact_every: 10,
+        persist_every: 10,
         seed: default_seed(),
     };
 
@@ -151,8 +151,8 @@ fn parse_writer_args(mut args: impl Iterator<Item = String>) -> Result<WriterArg
             "--batch" => out.batch_size = parse_usize(&next_value(&mut args, &arg)?, &arg)?,
             "--node-pool" => out.node_pool = parse_u64(&next_value(&mut args, &arg)?, &arg)?,
             "--rel-pool" => out.rel_pool = parse_u32(&next_value(&mut args, &arg)?, &arg)?,
-            "--compact-every" => {
-                out.compact_every = parse_usize(&next_value(&mut args, &arg)?, &arg)?;
+            "--persist-every" | "--compact-every" => {
+                out.persist_every = parse_usize(&next_value(&mut args, &arg)?, &arg)?;
             }
             "--seed" => out.seed = parse_u64(&next_value(&mut args, &arg)?, &arg)?,
             _ => {
@@ -279,7 +279,7 @@ fn driver(args: DriverArgs) -> Result<(), String> {
             .arg(args.node_pool.to_string())
             .arg("--rel-pool")
             .arg(args.rel_pool.to_string())
-            .arg("--compact-every")
+            .arg("--persist-every")
             .arg("10")
             .arg("--seed")
             .arg(default_seed().to_string())
@@ -339,7 +339,7 @@ fn bootstrap(path: &Path, node_pool: u64, _rel_pool: u32) -> Result<(), String> 
     tx.create_edge(a, rel, b);
     tx.set_node_property(a, "seed".to_string(), "bootstrap".into());
     tx.commit().map_err(|e| e.to_string())?;
-    engine.compact().map_err(|e| e.to_string())?;
+    engine.persist().map_err(|e| e.to_string())?;
     drop(engine);
 
     verify(VerifyArgs {
@@ -386,8 +386,8 @@ fn writer(args: WriterArgs) -> Result<(), String> {
 
         let _ = tx.commit();
         tx_counter += 1;
-        if args.compact_every > 0 && tx_counter % args.compact_every == 0 {
-            let _ = engine.compact();
+        if args.persist_every > 0 && tx_counter % args.persist_every == 0 {
+            let _ = engine.persist();
         }
     }
 }

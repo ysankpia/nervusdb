@@ -187,17 +187,9 @@ impl Db {
         }
     }
 
-    /// Ask the storage backend to persist pending state.
-    ///
-    /// In the Fjall backend this is a durability flush for committed graph
-    /// data. It is not part of the 0.1 query or storage-format contract.
-    pub fn compact(&self) -> Result<()> {
-        self.engine.compact().map_err(Error::from)
-    }
-
-    /// Create a durability checkpoint (equivalent to compact in MVP).
+    /// Persist committed graph data through the storage backend.
     pub fn checkpoint(&self) -> Result<()> {
-        self.engine.compact().map_err(Error::from)
+        self.engine.persist().map_err(Error::from)
     }
 
     /// Close the database after a best-effort checkpoint.
@@ -207,17 +199,6 @@ impl Db {
     pub fn close(self) -> Result<()> {
         self.engine.checkpoint_on_close().map_err(Error::from)?;
         Ok(())
-    }
-
-    /// Non-core index hook retained for experimental callers.
-    ///
-    /// Property indexes are not part of the 0.1 core contract. The Fjall
-    /// backend currently treats this as a no-op; query correctness must not
-    /// depend on this method.
-    pub fn create_index(&self, label: &str, property: &str) -> Result<()> {
-        self.engine
-            .create_index(label, property)
-            .map_err(Error::from)
     }
 }
 
@@ -308,15 +289,6 @@ impl GraphSnapshot for DbSnapshot {
 
     fn resolve_rel_type_name(&self, id: RelTypeId) -> Option<String> {
         self.0.resolve_rel_type_name(id)
-    }
-
-    fn lookup_index(
-        &self,
-        label: &str,
-        field: &str,
-        value: &PropertyValue,
-    ) -> Option<Vec<InternalNodeId>> {
-        self.0.lookup_index(label, field, value)
     }
 
     fn node_count(&self, label: Option<LabelId>) -> u64 {

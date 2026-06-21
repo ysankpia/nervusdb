@@ -67,8 +67,7 @@ The recovery proof is graph-level. Tests verify what users can observe through
 
 - Long-term cross-version compatibility policy.
 - Byte-level guarantees for backend files.
-- Backup, vacuum, compaction, and checkpoint behavior as user-facing 0.1
-  promises.
+- Backup, vacuum, and backend compaction behavior as user-facing 0.1 promises.
 - Property index formats and planner integration.
 
 Changes here require storage-model docs and crash/reopen validation.

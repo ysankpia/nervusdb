@@ -8,7 +8,7 @@
 | Architecture | 4 | Code now matches the Fjall directory-storage contract; query/storage meet through `nervusdb-api`; old storage code was deleted. |
 | Validation | 4 | Fjall reopen, label scan, traversal, property, snapshot, crash recovery, examples, default check, and workspace tests passed. |
 | Documentation | 4 | Current docs now name the storage reset and scope boundaries directly. |
-| Maintainability | 4 | The storage crate is reduced to Fjall glue plus graph semantics; remaining warning debt is isolated mostly in query. |
+| Maintainability | 4 | The storage crate is reduced to Fjall glue plus graph semantics; false index and compaction hooks were removed from the public API. |
 
 ## Dimension Details
 
@@ -41,8 +41,8 @@ Strengths:
 
 Gaps:
 
-- `Db::compact/checkpoint/close` remain compatibility-style maintenance wrappers
-  over Fjall persistence and should be simplified or documented further later.
+- Large release-scale storage evidence is still manual rather than part of the
+  default validation path.
 
 ### Validation — 4
 
@@ -56,8 +56,8 @@ Strengths:
 
 Gaps:
 
-- Query crate still emits warning noise, including MSRV/clippy warnings, which
-  should be cleaned separately.
+- Large acceptance runs remain manual and should be recorded for release
+  candidates.
 
 ### Documentation — 4
 
