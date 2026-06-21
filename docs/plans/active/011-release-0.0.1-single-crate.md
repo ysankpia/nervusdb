@@ -2,8 +2,8 @@
 
 ## Status
 
-In progress. The single-crate package shape has been implemented and locally
-validated. Push, CI, tag, and crates.io publish are still pending.
+Complete. NervusDB 0.0.1 was tagged, released on GitHub, and published to
+crates.io as a single public `nervusdb` crate.
 
 ## Goal
 
@@ -117,12 +117,13 @@ Current local evidence:
 
 ## Completion Evidence
 
-- release commit hash
-- CI link or status
-- benchmark artifact path
-- dry-run result
-- tag hash
-- crates.io release URL
+- release commit hash: `aa9315af`
+- CI status: GitHub Actions `main` run `27913320141` passed
+- benchmark artifact path: `artifacts/core-bench/core-bench-small-20260621-173958.json`
+- dry-run result: `cargo publish -p nervusdb --dry-run --registry crates-io` passed
+- tag: `v0.0.1`
+- GitHub release: `https://github.com/ysankpia/nervusdb/releases/tag/v0.0.1`
+- crates.io release: `https://crates.io/crates/nervusdb`
 
 ## Remaining Risks
 

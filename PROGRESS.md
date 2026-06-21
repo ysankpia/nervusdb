@@ -2,7 +2,7 @@
 
 ## Current Objective
 
-Prepare NervusDB 0.0.1 for release as a single public `nervusdb` crate.
+NervusDB 0.0.1 has been released as a single public `nervusdb` crate.
 
 ## Active Plan
 
@@ -12,18 +12,14 @@ bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
-Fjall storage refactor, non-0.1 query residue pruning, post-refactor public
-surface synchronization, and 0.1 API hook cleanup are complete. The 0.0.1
-single-crate package shape is implemented locally: `nervusdb` owns the real
-implementation, while `nervusdb-api`, `nervusdb-storage`, and `nervusdb-query`
-are `publish = false` wrapper crates.
+0.0.1 release is complete. The current public package is `nervusdb = "0.0.1"`.
+The workspace-local crates `nervusdb-api`, `nervusdb-storage`, and
+`nervusdb-query` remain `publish = false` wrappers.
 
 ## Now
 
-- Push `main` and wait for GitHub Actions when release publication is approved.
-- Medium benchmark was attempted and explicitly deferred because it did not
-  finish within the interactive release window.
-- Do not start 0.0.2 code before 0.0.1 release readiness is complete.
+- Keep 0.0.1 stable unless a release-blocking bug is found.
+- Start 0.0.2 only from a new plan/ADR, not by reopening old zombie features.
 
 ## Done
 
@@ -76,11 +72,16 @@ are `publish = false` wrapper crates.
 - Clean publish dry-run passed after commit:
   `cargo publish -p nervusdb --dry-run --registry crates-io`.
 - Release notes for `v0.0.1` were written in `docs/releases/v0.0.1.md`.
+- Tag `v0.0.1` created and pushed at `aa9315af`.
+- GitHub release created:
+  `https://github.com/ysankpia/nervusdb/releases/tag/v0.0.1`.
+- crates.io package published:
+  `https://crates.io/crates/nervusdb`.
 
 ## Next
 
-- Tag `v0.0.1`, create the GitHub release, and publish to crates.io when release
-  is explicitly authorized.
+- Plan 0.0.2 from real post-release needs. Do not treat the deferred medium
+  benchmark as a silent pass.
 
 ## Blockers
 
@@ -138,10 +139,14 @@ None yet.
 | 2026-06-22 | `cargo publish -p nervusdb --dry-run --registry crates-io` | Passed clean after commit `0cd081fc`; local patch warnings expected |
 | 2026-06-22 | GitHub Actions `main` push run `27912993929` | Passed |
 | 2026-06-22 | `bash scripts/core_bench.sh --nodes 100000 --degree 5 --iters 1000` | Deferred; no JSON artifact, run stopped after not finishing in the interactive release window |
+| 2026-06-22 | GitHub Actions `main` push run `27913320141` | Passed |
+| 2026-06-22 | `git tag -a v0.0.1` and `git push origin v0.0.1` | Passed; tag points at `aa9315af` |
+| 2026-06-22 | `gh release create v0.0.1 --verify-tag --title "NervusDB v0.0.1" --notes-file docs/releases/v0.0.1.md --latest=false` | Passed |
+| 2026-06-22 | `cargo publish -p nervusdb --registry crates-io` | Published `nervusdb v0.0.1` |
+| 2026-06-22 | `cargo search nervusdb --limit 10 --registry crates-io` | Confirmed `nervusdb = "0.0.1"` appears in crates.io search |
 
 ## Last Checkpoint
 
-2026-06-22: Single-crate public package shape is implemented, committed, and
-validated. GitHub Actions passed on `main`. Medium benchmark was attempted and
-deferred. Remaining work is tag, GitHub release, and crates.io publish when
-explicitly authorized.
+2026-06-22: NervusDB 0.0.1 was tagged, released on GitHub, and published to
+crates.io as the single public `nervusdb` crate. Old GitHub releases were kept
+as legacy history, not deleted.
