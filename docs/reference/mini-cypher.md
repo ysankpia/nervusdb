@@ -33,6 +33,8 @@ Write queries:
 - `CREATE (n:Label {key: 'value'})`
 - `CREATE (a:Label {key: 'value'})-[:TYPE]->(b:Label {key: 'value'})`
 - basic `DELETE` for supported node/edge paths
+- plain `DELETE n` rejects connected nodes; use `DETACH DELETE n` when deleting
+  a node should also remove its relationships
 - basic `SET n.key = value` for supported node or edge property assignments
 
 Filters:

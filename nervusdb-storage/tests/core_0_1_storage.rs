@@ -37,7 +37,7 @@ fn core_0_1_committed_graph_survives_reopen() {
         let mut tx = engine.begin_write();
         let a = tx.create_node(10, person).unwrap();
         let b = tx.create_node(20, person).unwrap();
-        tx.create_edge(a, rel, b);
+        tx.create_edge(a, rel, b).unwrap();
         tx.commit().unwrap();
     }
 
@@ -70,13 +70,15 @@ fn core_0_1_uncommitted_graph_is_not_visible_after_reopen() {
         let mut tx = engine.begin_write();
         let a = tx.create_node(10, person).unwrap();
         let b = tx.create_node(20, person).unwrap();
-        tx.create_edge(a, knows, b);
+        tx.create_edge(a, knows, b).unwrap();
         tx.set_node_property(
             a,
             "name".to_string(),
             PropertyValue::String("Alice".to_string()),
-        );
-        tx.set_edge_property(a, knows, b, "since".to_string(), PropertyValue::Int(2024));
+        )
+        .unwrap();
+        tx.set_edge_property(a, knows, b, "since".to_string(), PropertyValue::Int(2024))
+            .unwrap();
     }
 
     let engine = GraphEngine::open(&path).unwrap();
@@ -105,7 +107,7 @@ fn core_0_1_label_and_reltype_namespaces_are_separate() {
         let mut tx = engine.begin_write();
         let a = tx.create_node(10, person).unwrap();
         let b = tx.create_node(20, person).unwrap();
-        tx.create_edge(a, knows, b);
+        tx.create_edge(a, knows, b).unwrap();
         tx.commit().unwrap();
     }
 
@@ -132,9 +134,12 @@ fn core_0_1_label_scan_uses_label_nodes_keyspace() {
         let alice = tx.create_node(10, person).unwrap();
         let bob = tx.create_node(20, person).unwrap();
         let acme = tx.create_node(30, company).unwrap();
-        tx.set_node_property(alice, "name".to_string(), "Alice".into());
-        tx.set_node_property(bob, "name".to_string(), "Bob".into());
-        tx.set_node_property(acme, "name".to_string(), "Acme".into());
+        tx.set_node_property(alice, "name".to_string(), "Alice".into())
+            .unwrap();
+        tx.set_node_property(bob, "name".to_string(), "Bob".into())
+            .unwrap();
+        tx.set_node_property(acme, "name".to_string(), "Acme".into())
+            .unwrap();
         tx.commit().unwrap();
     }
 
@@ -162,14 +167,17 @@ fn core_0_1_node_and_edge_properties_survive_reopen() {
         let mut tx = engine.begin_write();
         let a = tx.create_node(10, person).unwrap();
         let b = tx.create_node(20, person).unwrap();
-        tx.create_edge(a, knows, b);
+        tx.create_edge(a, knows, b).unwrap();
         tx.set_node_property(
             a,
             "name".to_string(),
             PropertyValue::String("Alice".to_string()),
-        );
-        tx.set_node_property(a, "age".to_string(), PropertyValue::Int(30));
-        tx.set_edge_property(a, knows, b, "since".to_string(), PropertyValue::Int(2024));
+        )
+        .unwrap();
+        tx.set_node_property(a, "age".to_string(), PropertyValue::Int(30))
+            .unwrap();
+        tx.set_edge_property(a, knows, b, "since".to_string(), PropertyValue::Int(2024))
+            .unwrap();
         tx.commit().unwrap();
         edge_key = EdgeKey {
             src: a,
@@ -269,7 +277,7 @@ fn core_0_1_duplicate_edge_is_idempotent_not_parallel() {
     let a = tx.create_node(10, person).unwrap();
     let b = tx.create_node(20, person).unwrap();
     for _ in 0..8 {
-        tx.create_edge(a, knows, b);
+        tx.create_edge(a, knows, b).unwrap();
     }
     tx.commit().unwrap();
 
@@ -285,6 +293,221 @@ fn core_0_1_duplicate_edge_is_idempotent_not_parallel() {
     );
     assert_eq!(snapshot.incoming_neighbors(b, Some(knows)).count(), 1);
     assert_eq!(snapshot.edge_count(Some(knows)), 1);
+}
+
+#[test]
+fn core_0_1_rejects_dangling_edges_and_missing_entity_properties() {
+    let dir = tempdir().unwrap();
+    let path = db_dir(&dir);
+    let engine = GraphEngine::open(&path).unwrap();
+    let person = engine.get_or_create_label("Person").unwrap();
+    let knows = engine.get_or_create_rel_type("KNOWS").unwrap();
+
+    let mut tx = engine.begin_write();
+    let a = tx.create_node(10, person).unwrap();
+
+    assert!(matches!(
+        tx.create_edge(a, knows, 999).unwrap_err(),
+        Error::NodeNotFound(999)
+    ));
+    assert!(matches!(
+        tx.create_edge(998, knows, a).unwrap_err(),
+        Error::NodeNotFound(998)
+    ));
+    assert!(matches!(
+        tx.set_node_property(999, "name".to_string(), "Ghost".into())
+            .unwrap_err(),
+        Error::NodeNotFound(999)
+    ));
+    assert!(matches!(
+        tx.set_edge_property(a, knows, 999, "since".to_string(), 2024.into())
+            .unwrap_err(),
+        Error::EdgeNotFound { .. }
+    ));
+}
+
+#[test]
+fn core_0_1_tombstone_edge_cleans_edge_properties_after_reopen() {
+    let dir = tempdir().unwrap();
+    let path = db_dir(&dir);
+    let edge;
+    let knows;
+    {
+        let engine = GraphEngine::open(&path).unwrap();
+        let person = engine.get_or_create_label("Person").unwrap();
+        knows = engine.get_or_create_rel_type("KNOWS").unwrap();
+        let mut tx = engine.begin_write();
+        let a = tx.create_node(10, person).unwrap();
+        let b = tx.create_node(20, person).unwrap();
+        tx.create_edge(a, knows, b).unwrap();
+        tx.set_edge_property(a, knows, b, "since".to_string(), 2024.into())
+            .unwrap();
+        tx.commit().unwrap();
+        edge = EdgeKey {
+            src: a,
+            rel: knows,
+            dst: b,
+        };
+    }
+
+    {
+        let engine = GraphEngine::open(&path).unwrap();
+        let mut tx = engine.begin_write();
+        tx.tombstone_edge(edge.src, edge.rel, edge.dst).unwrap();
+        tx.commit().unwrap();
+    }
+
+    let engine = GraphEngine::open(&path).unwrap();
+    let snapshot = engine.snapshot();
+    assert!(snapshot.neighbors(edge.src, Some(knows)).next().is_none());
+    assert!(
+        snapshot
+            .incoming_neighbors(edge.dst, Some(knows))
+            .next()
+            .is_none()
+    );
+    assert_eq!(snapshot.edge_property(edge, "since"), None);
+    assert_eq!(snapshot.edge_properties(edge), None);
+    assert_eq!(snapshot.edge_count(Some(knows)), 0);
+}
+
+#[test]
+fn core_0_1_tombstone_node_detach_cleans_graph_state_after_reopen() {
+    let dir = tempdir().unwrap();
+    let path = db_dir(&dir);
+    let person;
+    let company;
+    let knows;
+    let alice;
+    let bob;
+    let carol;
+    {
+        let engine = GraphEngine::open(&path).unwrap();
+        person = engine.get_or_create_label("Person").unwrap();
+        company = engine.get_or_create_label("Company").unwrap();
+        knows = engine.get_or_create_rel_type("KNOWS").unwrap();
+        let mut tx = engine.begin_write();
+        alice = tx.create_node(10, person).unwrap();
+        bob = tx.create_node(20, person).unwrap();
+        carol = tx.create_node(30, person).unwrap();
+        tx.add_node_label(alice, company).unwrap();
+        tx.set_node_property(alice, "name".to_string(), "Alice".into())
+            .unwrap();
+        tx.set_node_property(bob, "name".to_string(), "Bob".into())
+            .unwrap();
+        tx.create_edge(alice, knows, bob).unwrap();
+        tx.create_edge(carol, knows, alice).unwrap();
+        tx.set_edge_property(alice, knows, bob, "since".to_string(), 2024.into())
+            .unwrap();
+        tx.set_edge_property(carol, knows, alice, "since".to_string(), 2025.into())
+            .unwrap();
+        tx.commit().unwrap();
+    }
+
+    {
+        let engine = GraphEngine::open(&path).unwrap();
+        let mut tx = engine.begin_write();
+        tx.tombstone_node(alice).unwrap();
+        tx.commit().unwrap();
+    }
+
+    let engine = GraphEngine::open(&path).unwrap();
+    let snapshot = engine.snapshot();
+    assert!(engine.lookup_internal_id(10).is_none());
+    assert!(snapshot.is_tombstoned_node(alice));
+    assert_eq!(snapshot.resolve_external(alice), None);
+    assert_eq!(snapshot.node_property(alice, "name"), None);
+    assert_eq!(snapshot.node_properties(alice), None);
+    assert_eq!(snapshot.resolve_node_labels(alice), None);
+    assert!(!snapshot.nodes().any(|node| node == alice));
+    assert!(!snapshot.nodes_with_label(person).any(|node| node == alice));
+    assert!(!snapshot.nodes_with_label(company).any(|node| node == alice));
+    assert!(snapshot.neighbors(alice, Some(knows)).next().is_none());
+    assert!(
+        snapshot
+            .incoming_neighbors(alice, Some(knows))
+            .next()
+            .is_none()
+    );
+    assert!(snapshot.neighbors(carol, Some(knows)).next().is_none());
+    assert_eq!(
+        snapshot.edge_property(
+            EdgeKey {
+                src: alice,
+                rel: knows,
+                dst: bob
+            },
+            "since"
+        ),
+        None
+    );
+    assert_eq!(
+        snapshot.edge_property(
+            EdgeKey {
+                src: carol,
+                rel: knows,
+                dst: alice
+            },
+            "since"
+        ),
+        None
+    );
+    assert_eq!(snapshot.node_count(Some(person)), 2);
+    assert_eq!(snapshot.edge_count(Some(knows)), 0);
+}
+
+#[test]
+fn core_0_1_created_then_tombstoned_node_leaves_no_visible_graph_state() {
+    let dir = tempdir().unwrap();
+    let path = db_dir(&dir);
+    let engine = GraphEngine::open(&path).unwrap();
+    let person = engine.get_or_create_label("Person").unwrap();
+    let knows = engine.get_or_create_rel_type("KNOWS").unwrap();
+
+    let mut tx = engine.begin_write();
+    let a = tx.create_node(10, person).unwrap();
+    let b = tx.create_node(20, person).unwrap();
+    tx.create_edge(a, knows, b).unwrap();
+    tx.tombstone_node(a).unwrap();
+    assert!(matches!(
+        tx.set_node_property(a, "name".to_string(), "Alice".into())
+            .unwrap_err(),
+        Error::NodeNotFound(id) if id == a
+    ));
+    tx.commit().unwrap();
+
+    let snapshot = engine.snapshot();
+    assert!(engine.lookup_internal_id(10).is_none());
+    assert_eq!(engine.lookup_internal_id(20), Some(b));
+    assert!(!snapshot.nodes_with_label(person).any(|node| node == a));
+    assert!(snapshot.neighbors(a, Some(knows)).next().is_none());
+    assert!(snapshot.incoming_neighbors(b, Some(knows)).next().is_none());
+}
+
+#[test]
+fn core_0_1_created_then_tombstoned_edge_leaves_no_visible_graph_state() {
+    let dir = tempdir().unwrap();
+    let path = db_dir(&dir);
+    let engine = GraphEngine::open(&path).unwrap();
+    let person = engine.get_or_create_label("Person").unwrap();
+    let knows = engine.get_or_create_rel_type("KNOWS").unwrap();
+
+    let mut tx = engine.begin_write();
+    let a = tx.create_node(10, person).unwrap();
+    let b = tx.create_node(20, person).unwrap();
+    tx.create_edge(a, knows, b).unwrap();
+    tx.tombstone_edge(a, knows, b).unwrap();
+    assert!(matches!(
+        tx.set_edge_property(a, knows, b, "since".to_string(), 2024.into())
+            .unwrap_err(),
+        Error::EdgeNotFound { .. }
+    ));
+    tx.commit().unwrap();
+
+    let snapshot = engine.snapshot();
+    assert!(snapshot.neighbors(a, Some(knows)).next().is_none());
+    assert!(snapshot.incoming_neighbors(b, Some(knows)).next().is_none());
+    assert_eq!(snapshot.edge_count(Some(knows)), 0);
 }
 
 #[test]
@@ -350,12 +573,13 @@ fn core_0_1_reopen_is_repeatable() {
         let mut tx = engine.begin_write();
         let a = tx.create_node(10, person).unwrap();
         let b = tx.create_node(20, person).unwrap();
-        tx.create_edge(a, knows, b);
+        tx.create_edge(a, knows, b).unwrap();
         tx.set_node_property(
             a,
             "name".to_string(),
             PropertyValue::String("Alice".to_string()),
-        );
+        )
+        .unwrap();
         tx.commit().unwrap();
     }
 

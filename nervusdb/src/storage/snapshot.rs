@@ -36,7 +36,7 @@ impl Snapshot {
             .map(|value| value.as_ref().to_vec())
     }
 
-    fn node_is_live(&self, iid: InternalNodeId) -> bool {
+    pub(crate) fn node_is_live(&self, iid: InternalNodeId) -> bool {
         self.get(&self.keyspaces.nodes, key_u32(iid))
             .and_then(|value| parse_node_value(&value))
             .is_some_and(|(_, flags)| flags & KEY_FLAG_TOMBSTONE == 0)
@@ -131,6 +131,14 @@ impl Snapshot {
             .and_then(|value| parse_prop_value(&value).ok())
     }
 
+    pub(crate) fn edge_is_live(&self, edge: EdgeKey) -> bool {
+        self.node_is_live(edge.src)
+            && self.node_is_live(edge.dst)
+            && self
+                .get(&self.keyspaces.adj_out, edge_prefix(edge))
+                .is_some()
+    }
+
     pub fn node_properties(&self, iid: InternalNodeId) -> Option<BTreeMap<String, PropertyValue>> {
         let mut props = BTreeMap::new();
         for guard in self.inner.prefix(&self.keyspaces.node_props, key_u32(iid)) {
@@ -170,6 +178,24 @@ impl Snapshot {
 
     pub(crate) fn collect_edge_property_keys(&self, edge: EdgeKey) -> Vec<Vec<u8>> {
         self.collect_prefix_keys(&self.keyspaces.edge_props, edge_prefix(edge))
+    }
+
+    pub(crate) fn collect_node_property_keys(&self, node: InternalNodeId) -> Vec<Vec<u8>> {
+        self.collect_prefix_keys(&self.keyspaces.node_props, key_u32(node))
+    }
+
+    pub(crate) fn collect_raw_outgoing_edges(&self, node: InternalNodeId) -> Vec<EdgeKey> {
+        self.collect_prefix_keys(&self.keyspaces.adj_out, key_u32(node))
+            .into_iter()
+            .filter_map(|key| edge_key_from_adj_out(&key))
+            .collect()
+    }
+
+    pub(crate) fn collect_raw_incoming_edges(&self, node: InternalNodeId) -> Vec<EdgeKey> {
+        self.collect_prefix_keys(&self.keyspaces.adj_in, key_u32(node))
+            .into_iter()
+            .filter_map(|key| edge_key_from_adj_in(&key))
+            .collect()
     }
 
     pub fn nodes(&self) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {

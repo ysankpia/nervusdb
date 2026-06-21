@@ -387,19 +387,24 @@ impl<'a> WriteTxn<'a> {
         rel: RelTypeId,
         dst: InternalNodeId,
     ) -> Result<()> {
-        self.inner.create_edge(src, rel, dst);
-        Ok(())
+        self.inner.create_edge(src, rel, dst).map_err(Error::from)
     }
 
-    /// Soft-delete a node. The node becomes invisible to queries but its
-    /// data is retained until compaction.
-    pub fn tombstone_node(&mut self, node: InternalNodeId) {
-        self.inner.tombstone_node(node);
+    /// Delete a node and detach-clean its labels, properties, and incident edges.
+    pub fn tombstone_node(&mut self, node: InternalNodeId) -> Result<()> {
+        self.inner.tombstone_node(node).map_err(Error::from)
     }
 
-    /// Soft-delete an edge.
-    pub fn tombstone_edge(&mut self, src: InternalNodeId, rel: RelTypeId, dst: InternalNodeId) {
-        self.inner.tombstone_edge(src, rel, dst);
+    /// Delete an edge and its properties.
+    pub fn tombstone_edge(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+    ) -> Result<()> {
+        self.inner
+            .tombstone_edge(src, rel, dst)
+            .map_err(Error::from)
     }
 
     /// Set a property on a node. Overwrites existing value.
@@ -409,8 +414,9 @@ impl<'a> WriteTxn<'a> {
         key: String,
         value: PropertyValue,
     ) -> Result<()> {
-        self.inner.set_node_property(node, key, value);
-        Ok(())
+        self.inner
+            .set_node_property(node, key, value)
+            .map_err(Error::from)
     }
 
     /// Set a property on an edge. Overwrites existing value.
@@ -422,14 +428,16 @@ impl<'a> WriteTxn<'a> {
         key: String,
         value: PropertyValue,
     ) -> Result<()> {
-        self.inner.set_edge_property(src, rel, dst, key, value);
-        Ok(())
+        self.inner
+            .set_edge_property(src, rel, dst, key, value)
+            .map_err(Error::from)
     }
 
     /// Remove a property from a node. No-op if the property doesn't exist.
     pub fn remove_node_property(&mut self, node: InternalNodeId, key: &str) -> Result<()> {
-        self.inner.remove_node_property(node, key);
-        Ok(())
+        self.inner
+            .remove_node_property(node, key)
+            .map_err(Error::from)
     }
 
     /// Remove a property from an edge. No-op if the property doesn't exist.
@@ -440,8 +448,9 @@ impl<'a> WriteTxn<'a> {
         dst: InternalNodeId,
         key: &str,
     ) -> Result<()> {
-        self.inner.remove_edge_property(src, rel, dst, key);
-        Ok(())
+        self.inner
+            .remove_edge_property(src, rel, dst, key)
+            .map_err(Error::from)
     }
 
     /// Commit this transaction atomically.
@@ -491,8 +500,9 @@ impl WriteableGraph for WriteTxn<'_> {
         rel: RelTypeId,
         dst: InternalNodeId,
     ) -> crate::api::GraphWriteResult<()> {
-        self.inner.create_edge(src, rel, dst);
-        Ok(())
+        self.inner
+            .create_edge(src, rel, dst)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     }
 
     fn set_node_property(
@@ -501,8 +511,9 @@ impl WriteableGraph for WriteTxn<'_> {
         key: String,
         value: PropertyValue,
     ) -> crate::api::GraphWriteResult<()> {
-        self.inner.set_node_property(node, key, value);
-        Ok(())
+        self.inner
+            .set_node_property(node, key, value)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     }
 
     fn set_edge_property(
@@ -513,8 +524,9 @@ impl WriteableGraph for WriteTxn<'_> {
         key: String,
         value: PropertyValue,
     ) -> crate::api::GraphWriteResult<()> {
-        self.inner.set_edge_property(src, rel, dst, key, value);
-        Ok(())
+        self.inner
+            .set_edge_property(src, rel, dst, key, value)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     }
 
     fn remove_node_property(
@@ -522,8 +534,9 @@ impl WriteableGraph for WriteTxn<'_> {
         node: InternalNodeId,
         key: &str,
     ) -> crate::api::GraphWriteResult<()> {
-        self.inner.remove_node_property(node, key);
-        Ok(())
+        self.inner
+            .remove_node_property(node, key)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     }
 
     fn remove_edge_property(
@@ -533,13 +546,15 @@ impl WriteableGraph for WriteTxn<'_> {
         dst: InternalNodeId,
         key: &str,
     ) -> crate::api::GraphWriteResult<()> {
-        self.inner.remove_edge_property(src, rel, dst, key);
-        Ok(())
+        self.inner
+            .remove_edge_property(src, rel, dst, key)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     }
 
     fn tombstone_node(&mut self, node: InternalNodeId) -> crate::api::GraphWriteResult<()> {
-        self.inner.tombstone_node(node);
-        Ok(())
+        self.inner
+            .tombstone_node(node)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     }
 
     fn tombstone_edge(
@@ -548,8 +563,9 @@ impl WriteableGraph for WriteTxn<'_> {
         rel: RelTypeId,
         dst: InternalNodeId,
     ) -> crate::api::GraphWriteResult<()> {
-        self.inner.tombstone_edge(src, rel, dst);
-        Ok(())
+        self.inner
+            .tombstone_edge(src, rel, dst)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     }
 
     fn get_or_create_label_id(&mut self, name: &str) -> crate::api::GraphWriteResult<LabelId> {

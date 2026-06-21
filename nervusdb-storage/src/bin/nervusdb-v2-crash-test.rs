@@ -336,8 +336,9 @@ fn bootstrap(path: &Path, node_pool: u64, _rel_pool: u32) -> Result<(), String> 
 
     let a = ensure_node(&engine, &mut tx, 1, label)?;
     let b = ensure_node(&engine, &mut tx, node_pool.max(2), label)?;
-    tx.create_edge(a, rel, b);
-    tx.set_node_property(a, "seed".to_string(), "bootstrap".into());
+    tx.create_edge(a, rel, b).map_err(|e| e.to_string())?;
+    tx.set_node_property(a, "seed".to_string(), "bootstrap".into())
+        .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
     engine.persist().map_err(|e| e.to_string())?;
     drop(engine);
@@ -363,7 +364,8 @@ fn writer(args: WriterArgs) -> Result<(), String> {
         for _ in 0..4 {
             let external_id = 1 + rng.gen_range(args.node_pool);
             if let Ok(iid) = tx.create_node(external_id, label) {
-                tx.set_node_property(iid, "kind".to_string(), "crash".into());
+                tx.set_node_property(iid, "kind".to_string(), "crash".into())
+                    .map_err(|e| e.to_string())?;
             }
         }
 
@@ -380,8 +382,9 @@ fn writer(args: WriterArgs) -> Result<(), String> {
             let rel = tx
                 .get_or_create_rel_type(&format!("CRASH_REL_{rel_idx}"))
                 .map_err(|e| e.to_string())?;
-            tx.create_edge(src, rel, dst);
-            tx.set_edge_property(src, rel, dst, "written".to_string(), true.into());
+            tx.create_edge(src, rel, dst).map_err(|e| e.to_string())?;
+            tx.set_edge_property(src, rel, dst, "written".to_string(), true.into())
+                .map_err(|e| e.to_string())?;
         }
 
         let _ = tx.commit();

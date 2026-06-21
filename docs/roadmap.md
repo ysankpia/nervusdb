@@ -2,25 +2,22 @@
 
 ## Current Phase
 
-NervusDB 0.0.1 has been released as the single public `nervusdb` crate. The
-next line is 0.0.2 write-path and bulk-import work.
+NervusDB 0.0.2 has been released as the single public `nervusdb` crate. The
+next line is 0.0.3 graph integrity work.
 
 ## Now
 
-- Make benchmark output stage-aware.
-- Improve bulk write staging without changing public API or `SyncAll`
-  durability.
-- Use the 0.0.1 100k/500k benchmark as the baseline.
+- Reject dangling edges and mutations on missing graph entities.
+- Make direct Rust API node deletion detach-clean related keyspaces.
+- Preserve 0.0.2 write-path performance and default `SyncAll` durability.
 
 ## Next
 
-- Reach at least 2x faster 100k/500k insert throughput before 0.0.2 release.
-- Record stage timing and artifact paths in the active 0.0.2 plan and
-  `PROGRESS.md`.
+- Complete 0.0.3 storage and query regression tests for graph integrity.
+- Record validation evidence in the active 0.0.3 plan and `PROGRESS.md`.
 
 ## Later
 
-- Correctness work: dangling-edge rejection and tombstone cleanup.
 - Property equality index ADR after write-path cost is understood.
 - Benchmark regression detection for the core path.
 - Release mechanics and publish documentation.
@@ -38,6 +35,7 @@ next line is 0.0.2 write-path and bulk-import work.
 | 0.1 credible | Q2 2026 | Examples runnable, recovery proven, 10k/50k smoke passes |
 | 0.0.1 release | Q2 2026 | Single `nervusdb` crate published to crates.io, docs complete, validation repeatable |
 | 0.0.2 write path | Q2 2026 | 100k/500k benchmark stage timing and at least 2x insert improvement |
+| 0.0.3 graph integrity | Q2 2026 | Dangling-edge rejection and tombstone cleanup tests pass |
 
 ## Open Questions
 

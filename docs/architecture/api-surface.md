@@ -43,8 +43,8 @@ Write path:
 - `WriteTxn::set_edge_property`
 - `WriteTxn::remove_node_property`
 - `WriteTxn::remove_edge_property`
-- `WriteTxn::tombstone_node`
-- `WriteTxn::tombstone_edge`
+- `WriteTxn::tombstone_node` returning `Result<()>`
+- `WriteTxn::tombstone_edge` returning `Result<()>`
 - `WriteTxn::commit`
 
 Query path:

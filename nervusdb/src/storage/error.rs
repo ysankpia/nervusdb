@@ -22,6 +22,9 @@ pub enum Error {
     #[error("node not found: {0}")]
     NodeNotFound(u32),
 
+    #[error("edge not found: {src}-[{rel}]->{dst}")]
+    EdgeNotFound { src: u32, rel: u32, dst: u32 },
+
     #[error("property decode error: {0}")]
     PropertyDecode(String),
 }

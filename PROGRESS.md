@@ -2,26 +2,26 @@
 
 ## Current Objective
 
-NervusDB 0.0.2 is focused on write-path and bulk-import performance.
+NervusDB 0.0.3 is focused on graph integrity.
 
 ## Active Plan
 
-`docs/plans/active/013-write-path-and-bulk-import-0.0.2.md`
+`docs/plans/active/014-graph-integrity-0.0.3.md`
 
 bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
 0.0.2 has been tagged, released on GitHub, and published to crates.io as the
-single public `nervusdb` crate. The public API and `PersistMode::SyncAll`
-durability remain unchanged from 0.0.1.
+single public `nervusdb` crate. 0.0.3 is now tightening graph write invariants
+and delete cleanup.
 
 ## Now
 
-- Keep property indexes, tombstone cleanup, dangling-edge enforcement, EdgeId,
-  unsafe/buffered durability modes, and advanced query work out of 0.0.2.
-- Plan the next release from measured needs, not from the older 0.0.2 candidate
-  roadmap.
+- Reject dangling edges and mutations on missing or tombstoned graph entities.
+- Make direct Rust API node deletion detach-clean related keyspaces.
+- Keep property indexes, EdgeId, unsafe/buffered durability modes, vectors,
+  multi-writer work, and advanced query work out of 0.0.3.
 
 ## Done
 
@@ -100,6 +100,14 @@ durability remain unchanged from 0.0.1.
     platform-era material is now historical evidence through git history only.
   - updated current docs so deleted archive/fuzz material cannot be mistaken for
     current 0.1 scope.
+- 0.0.3 graph integrity implemented in the working tree:
+  - storage rejects dangling edges and mutations on missing or tombstoned graph
+    entities.
+  - direct Rust API `tombstone_node` now detach-cleans labels, properties,
+    incident adjacency, and incident edge properties.
+  - `tombstone_edge` cleans edge properties.
+  - Mini-Cypher plain `DELETE n` still rejects connected nodes, while
+    `DETACH DELETE n` removes the node and relationships.
 
 ## Next
 
@@ -108,6 +116,8 @@ durability remain unchanged from 0.0.1.
 - Wait for GitHub Dependabot to rescan after the stale `fuzz/Cargo.lock`
   removal is pushed.
 - Update GitHub Actions if the Node.js 20 deprecation annotation becomes noisy.
+- Decide whether 0.0.3 should be released immediately after review, or whether
+  property equality index design should wait for a separate 0.0.4 ADR.
 
 ## Blockers
 
@@ -194,10 +204,20 @@ None yet.
 | 2026-06-22 | `cargo search nervusdb --limit 5 --registry crates-io` | Confirmed `nervusdb = "0.0.2"` appears in crates.io search |
 | 2026-06-22 | `cargo fmt --all -- --check` | Passed after removing stale fuzz workspace and legacy platform-era archive docs |
 | 2026-06-22 | `bash scripts/check.sh` | Passed after removing stale fuzz workspace and legacy platform-era archive docs |
+| 2026-06-22 | `cargo fmt --all -- --check` | Passed after 0.0.3 graph integrity changes |
+| 2026-06-22 | `cargo check -p nervusdb --examples` | Passed after 0.0.3 graph integrity changes |
+| 2026-06-22 | `cargo test -p nervusdb-storage --test core_0_1_storage` | Passed: 16 storage integrity tests |
+| 2026-06-22 | `cargo test -p nervusdb --test core_0_1_rust_api` | Passed after 0.0.3 graph integrity changes |
+| 2026-06-22 | `cargo test -p nervusdb --test core_0_1_mini_cypher` | Passed: 12 Mini-Cypher tests including DELETE/DETACH DELETE regression |
+| 2026-06-22 | `cargo test -p nervusdb --test core_0_1_examples` | Passed: 10 example tests |
+| 2026-06-22 | `bash scripts/check.sh` | Passed after 0.0.3 graph integrity changes |
+| 2026-06-22 | `bash scripts/core_crash_recovery.sh` | Passed: 5 kill/reopen iterations |
+| 2026-06-22 | `bash scripts/core_examples.sh` | Passed: 10 CLI/file-driven examples |
+| 2026-06-22 | `cargo test --workspace` | Passed after 0.0.3 graph integrity changes |
 
 ## Last Checkpoint
 
-2026-06-22: Post-0.0.2 cleanup removed the obsolete `fuzz/` workspace and the
-legacy platform-era archive docs from the working tree. The current tree should
-use git history for that material only when historical evidence is explicitly
-needed; it should not infer product scope from deleted platform-era files.
+2026-06-22: 0.0.3 graph integrity is implemented in the working tree. Storage
+now rejects dangling edges and invalid mutations, direct Rust API node deletion
+detach-cleans related keyspaces, and Mini-Cypher DELETE/DETACH DELETE behavior
+is covered by regression tests. Full workspace validation passed.

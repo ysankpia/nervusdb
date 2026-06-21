@@ -66,13 +66,18 @@ writes do not become visible through the public API.
 ## Delete Semantics
 
 0.1 delete support is graph-level tombstone/delete behavior, not a public
-compaction promise. If a node is tombstoned, it must not be returned by
-`nodes()` or label scans, and traversal must not expose edges whose endpoint is
-tombstoned.
+compaction promise. Direct Rust API `tombstone_node(node)` uses detach-clean
+semantics: it marks the node tombstoned and removes related node properties,
+node label keys, label scan keys, incident adjacency keys, and incident edge
+properties in the same commit batch.
 
-If the current implementation cannot fully clean related secondary keyspaces in
-the same transaction, the gap must be documented as technical debt and covered
-by tests for the visible behavior.
+Mini-Cypher keeps its user-facing distinction: plain `DELETE n` rejects
+connected nodes, while `DETACH DELETE n` removes the node and relationships.
+
+If a node is tombstoned, it must not be returned by `nodes()` or label scans,
+and traversal must not expose edges whose endpoint is tombstoned. New writes
+must reject dangling edges and mutations on missing or tombstoned graph
+entities.
 
 ## Counts
 

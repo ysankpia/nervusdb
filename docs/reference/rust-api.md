@@ -42,8 +42,10 @@ Write path:
 - `WriteTxn::set_edge_property`
 - `WriteTxn::remove_node_property`
 - `WriteTxn::remove_edge_property`
-- `WriteTxn::tombstone_node`
-- `WriteTxn::tombstone_edge`
+- `WriteTxn::tombstone_node` returns `Result<()>` and detach-cleans labels,
+  properties, incident edges, and incident edge properties.
+- `WriteTxn::tombstone_edge` returns `Result<()>` and removes the edge plus
+  edge properties.
 - `WriteTxn::commit`
 
 Query path:
@@ -95,13 +97,14 @@ txn.set_node_property(
     PropertyValue::String("Alice".to_string()),
 )?;
 txn.create_edge(alice, knows, bob)?;
+txn.tombstone_edge(alice, knows, bob)?;
 txn.commit()?;
 
 let snapshot = db.snapshot();
 let people: Vec<_> = snapshot.nodes_with_label(person).collect();
 let outgoing: Vec<_> = snapshot.neighbors(alice, Some(knows)).collect();
 assert_eq!(people.len(), 2);
-assert_eq!(outgoing.len(), 1);
+assert_eq!(outgoing.len(), 0);
 # Ok::<(), nervusdb::Error>(())
 ```
 

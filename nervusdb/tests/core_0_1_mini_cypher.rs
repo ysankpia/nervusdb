@@ -306,6 +306,82 @@ fn core_0_1_create_edge_query_then_match() -> QueryResult<()> {
 }
 
 #[test]
+fn core_0_1_delete_connected_node_requires_detach() -> QueryResult<()> {
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path()).unwrap();
+
+    {
+        let snapshot = db.snapshot();
+        let create =
+            prepare("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})")?;
+        let mut txn = db.begin_write();
+        create.execute_write(&snapshot, &mut txn, &Params::new())?;
+        txn.commit().unwrap();
+    }
+
+    {
+        let snapshot = db.snapshot();
+        let delete = prepare("MATCH (n:Person) WHERE n.name = 'Alice' DELETE n")?;
+        let mut txn = db.begin_write();
+        let err = delete
+            .execute_write(&snapshot, &mut txn, &Params::new())
+            .unwrap_err();
+        assert!(err.to_string().contains("without DETACH DELETE"));
+    }
+
+    Ok(())
+}
+
+#[test]
+fn core_0_1_detach_delete_connected_node_removes_relationships() -> QueryResult<()> {
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path()).unwrap();
+
+    {
+        let snapshot = db.snapshot();
+        let create =
+            prepare("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})")?;
+        let mut txn = db.begin_write();
+        create.execute_write(&snapshot, &mut txn, &Params::new())?;
+        txn.commit().unwrap();
+    }
+
+    {
+        let snapshot = db.snapshot();
+        let delete = prepare("MATCH (n:Person) WHERE n.name = 'Alice' DETACH DELETE n")?;
+        let mut txn = db.begin_write();
+        assert_eq!(
+            delete.execute_write(&snapshot, &mut txn, &Params::new())?,
+            2
+        );
+        txn.commit().unwrap();
+    }
+
+    let alice = query_collect(
+        &db.snapshot(),
+        "MATCH (n:Person) WHERE n.name = 'Alice' RETURN n",
+        &Params::new(),
+    )?;
+    assert!(alice.is_empty());
+
+    let bob = query_collect(
+        &db.snapshot(),
+        "MATCH (n:Person) WHERE n.name = 'Bob' RETURN n",
+        &Params::new(),
+    )?;
+    assert_eq!(bob.len(), 1);
+
+    let edges = query_collect(
+        &db.snapshot(),
+        "MATCH (a:Person)-[:KNOWS]->(b) RETURN b.name LIMIT 10",
+        &Params::new(),
+    )?;
+    assert!(edges.is_empty());
+
+    Ok(())
+}
+
+#[test]
 fn core_0_1_multi_statement_txn() -> QueryResult<()> {
     let dir = tempdir().unwrap();
     let db = Db::open(dir.path()).unwrap();

@@ -87,6 +87,7 @@ impl GraphEngine {
             engine: self,
             _guard: guard,
             created_nodes: Vec::new(),
+            created_node_ids: HashSet::new(),
             pending_next_node_id: None,
             staged_external_ids: HashSet::new(),
             label_additions: Vec::new(),
@@ -221,6 +222,7 @@ pub struct WriteTxn<'a> {
     engine: &'a GraphEngine,
     _guard: MutexGuard<'a, ()>,
     created_nodes: Vec<CreatedNode>,
+    created_node_ids: HashSet<InternalNodeId>,
     pending_next_node_id: Option<u64>,
     staged_external_ids: HashSet<ExternalId>,
     label_additions: Vec<(InternalNodeId, LabelId)>,
@@ -234,7 +236,111 @@ pub struct WriteTxn<'a> {
     removed_edge_props: Vec<(EdgeKey, String)>,
 }
 
+#[derive(Debug, Default)]
+struct NodeCleanup {
+    label_keys: Vec<Vec<u8>>,
+    label_node_keys: Vec<Vec<u8>>,
+    node_prop_keys: Vec<Vec<u8>>,
+    incident_edges: BTreeSet<EdgeKey>,
+}
+
 impl<'a> WriteTxn<'a> {
+    fn edge_not_found(edge: EdgeKey) -> Error {
+        Error::EdgeNotFound {
+            src: edge.src,
+            rel: edge.rel,
+            dst: edge.dst,
+        }
+    }
+
+    fn node_deleted_in_txn(&self, node: InternalNodeId) -> bool {
+        self.tombstoned_nodes.contains(&node)
+    }
+
+    fn edge_deleted_in_txn(&self, edge: EdgeKey) -> bool {
+        self.tombstoned_edges.contains(&edge)
+            || self.tombstoned_nodes.contains(&edge.src)
+            || self.tombstoned_nodes.contains(&edge.dst)
+    }
+
+    fn node_live_in_txn(&self, node: InternalNodeId) -> bool {
+        if self.node_deleted_in_txn(node) {
+            return false;
+        }
+        if self.created_node_ids.contains(&node) {
+            return true;
+        }
+        self.engine.begin_read().node_is_live(node)
+    }
+
+    fn edge_live_in_txn(&self, edge: EdgeKey) -> bool {
+        if self.edge_deleted_in_txn(edge) {
+            return false;
+        }
+        if !self.node_live_in_txn(edge.src) || !self.node_live_in_txn(edge.dst) {
+            return false;
+        }
+        self.created_edges.contains(&edge) || self.engine.begin_read().edge_is_live(edge)
+    }
+
+    fn node_live_for_commit(&self, node: InternalNodeId, snapshot: &Snapshot) -> bool {
+        if self.node_deleted_in_txn(node) {
+            return false;
+        }
+        self.created_node_ids.contains(&node) || snapshot.node_is_live(node)
+    }
+
+    fn edge_live_for_commit(
+        &self,
+        edge: EdgeKey,
+        snapshot: &Snapshot,
+        created_edges: &[EdgeKey],
+    ) -> bool {
+        if self.edge_deleted_in_txn(edge) {
+            return false;
+        }
+        self.node_live_for_commit(edge.src, snapshot)
+            && self.node_live_for_commit(edge.dst, snapshot)
+            && (created_edges.contains(&edge) || snapshot.edge_is_live(edge))
+    }
+
+    fn edge_known_before_delete(
+        &self,
+        edge: EdgeKey,
+        snapshot: &Snapshot,
+        created_edges: &[EdgeKey],
+    ) -> bool {
+        created_edges.contains(&edge) || snapshot.edge_is_live(edge)
+    }
+
+    fn external_id_for_commit(
+        &self,
+        node: InternalNodeId,
+        snapshot: &Snapshot,
+    ) -> Option<ExternalId> {
+        self.created_nodes
+            .iter()
+            .find(|created| created.iid == node)
+            .map(|created| created.external_id)
+            .or_else(|| snapshot.resolve_external(node))
+    }
+
+    fn ensure_node_live(&self, node: InternalNodeId) -> Result<()> {
+        if self.node_live_in_txn(node) {
+            Ok(())
+        } else {
+            Err(Error::NodeNotFound(node))
+        }
+    }
+
+    fn ensure_edge_live(&self, edge: EdgeKey) -> Result<()> {
+        if self.edge_live_in_txn(edge) {
+            Ok(())
+        } else {
+            Err(Self::edge_not_found(edge))
+        }
+    }
+
     pub fn create_node(
         &mut self,
         external_id: ExternalId,
@@ -265,6 +371,7 @@ impl<'a> WriteTxn<'a> {
         let iid = next_node_id as u32;
         self.pending_next_node_id = Some(next_node_id + 1);
         self.staged_external_ids.insert(external_id);
+        self.created_node_ids.insert(iid);
         self.created_nodes.push(CreatedNode {
             iid,
             external_id,
@@ -274,6 +381,7 @@ impl<'a> WriteTxn<'a> {
     }
 
     pub fn add_node_label(&mut self, node: InternalNodeId, label_id: LabelId) -> Result<()> {
+        self.ensure_node_live(node)?;
         if let Some(created) = self.created_nodes.iter_mut().find(|n| n.iid == node) {
             created.labels.insert(label_id);
         } else {
@@ -283,6 +391,7 @@ impl<'a> WriteTxn<'a> {
     }
 
     pub fn remove_node_label(&mut self, node: InternalNodeId, label_id: LabelId) -> Result<()> {
+        self.ensure_node_live(node)?;
         if let Some(created) = self.created_nodes.iter_mut().find(|n| n.iid == node) {
             created.labels.remove(&label_id);
         } else {
@@ -291,20 +400,45 @@ impl<'a> WriteTxn<'a> {
         Ok(())
     }
 
-    pub fn create_edge(&mut self, src: InternalNodeId, rel: RelTypeId, dst: InternalNodeId) {
+    pub fn create_edge(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+    ) -> Result<()> {
+        self.ensure_node_live(src)?;
+        self.ensure_node_live(dst)?;
         self.created_edges.push(EdgeKey { src, rel, dst });
+        Ok(())
     }
 
-    pub fn tombstone_node(&mut self, node: InternalNodeId) {
+    pub fn tombstone_node(&mut self, node: InternalNodeId) -> Result<()> {
+        self.ensure_node_live(node)?;
         self.tombstoned_nodes.insert(node);
+        Ok(())
     }
 
-    pub fn tombstone_edge(&mut self, src: InternalNodeId, rel: RelTypeId, dst: InternalNodeId) {
-        self.tombstoned_edges.insert(EdgeKey { src, rel, dst });
+    pub fn tombstone_edge(
+        &mut self,
+        src: InternalNodeId,
+        rel: RelTypeId,
+        dst: InternalNodeId,
+    ) -> Result<()> {
+        let edge = EdgeKey { src, rel, dst };
+        self.ensure_edge_live(edge)?;
+        self.tombstoned_edges.insert(edge);
+        Ok(())
     }
 
-    pub fn set_node_property(&mut self, node: InternalNodeId, key: String, value: PropertyValue) {
+    pub fn set_node_property(
+        &mut self,
+        node: InternalNodeId,
+        key: String,
+        value: PropertyValue,
+    ) -> Result<()> {
+        self.ensure_node_live(node)?;
         self.node_props.insert((node, key), value);
+        Ok(())
     }
 
     pub fn set_edge_property(
@@ -314,13 +448,17 @@ impl<'a> WriteTxn<'a> {
         dst: InternalNodeId,
         key: String,
         value: PropertyValue,
-    ) {
-        self.edge_props
-            .insert((EdgeKey { src, rel, dst }, key), value);
+    ) -> Result<()> {
+        let edge = EdgeKey { src, rel, dst };
+        self.ensure_edge_live(edge)?;
+        self.edge_props.insert((edge, key), value);
+        Ok(())
     }
 
-    pub fn remove_node_property(&mut self, node: InternalNodeId, key: &str) {
+    pub fn remove_node_property(&mut self, node: InternalNodeId, key: &str) -> Result<()> {
+        self.ensure_node_live(node)?;
         self.removed_node_props.push((node, key.to_string()));
+        Ok(())
     }
 
     pub fn remove_edge_property(
@@ -329,9 +467,11 @@ impl<'a> WriteTxn<'a> {
         rel: RelTypeId,
         dst: InternalNodeId,
         key: &str,
-    ) {
-        self.removed_edge_props
-            .push((EdgeKey { src, rel, dst }, key.to_string()));
+    ) -> Result<()> {
+        let edge = EdgeKey { src, rel, dst };
+        self.ensure_edge_live(edge)?;
+        self.removed_edge_props.push((edge, key.to_string()));
+        Ok(())
     }
 
     pub fn get_or_create_label(&mut self, name: &str) -> Result<LabelId> {
@@ -365,9 +505,82 @@ impl<'a> WriteTxn<'a> {
             .batch()
             .durability(Some(PersistMode::SyncAll));
         let snapshot = self.engine.begin_read();
-        let mut created_edges = self.created_edges;
-        created_edges.sort_unstable();
-        created_edges.dedup();
+        let mut all_created_edges = self.created_edges.clone();
+        all_created_edges.sort_unstable();
+        all_created_edges.dedup();
+        let mut created_edges = all_created_edges.clone();
+        created_edges.retain(|edge| !self.edge_deleted_in_txn(*edge));
+
+        for edge in &created_edges {
+            if !self.node_live_for_commit(edge.src, &snapshot)
+                || !self.node_live_for_commit(edge.dst, &snapshot)
+            {
+                return Err(Self::edge_not_found(*edge));
+            }
+        }
+
+        for edge in &self.tombstoned_edges {
+            if !self.edge_known_before_delete(*edge, &snapshot, &all_created_edges) {
+                return Err(Self::edge_not_found(*edge));
+            }
+        }
+
+        for (node, _) in &self.label_additions {
+            if !self.node_live_for_commit(*node, &snapshot) {
+                return Err(Error::NodeNotFound(*node));
+            }
+        }
+        for (node, _) in &self.label_removals {
+            if !self.node_live_for_commit(*node, &snapshot) {
+                return Err(Error::NodeNotFound(*node));
+            }
+        }
+        for (node, _) in self.node_props.keys() {
+            if !self.node_live_for_commit(*node, &snapshot) {
+                return Err(Error::NodeNotFound(*node));
+            }
+        }
+        for (node, _) in &self.removed_node_props {
+            if !self.node_live_for_commit(*node, &snapshot) {
+                return Err(Error::NodeNotFound(*node));
+            }
+        }
+        for (edge, _) in self.edge_props.keys() {
+            if !self.edge_live_for_commit(*edge, &snapshot, &created_edges) {
+                return Err(Self::edge_not_found(*edge));
+            }
+        }
+        for (edge, _) in &self.removed_edge_props {
+            if !self.edge_live_for_commit(*edge, &snapshot, &created_edges) {
+                return Err(Self::edge_not_found(*edge));
+            }
+        }
+
+        let mut node_cleanups: HashMap<InternalNodeId, NodeCleanup> = HashMap::new();
+        let mut detached_edges: BTreeSet<EdgeKey> = BTreeSet::new();
+        for node in &self.tombstoned_nodes {
+            let mut cleanup = NodeCleanup::default();
+            for label in snapshot.node_labels(*node) {
+                cleanup.label_keys.push(node_label_key(*node, label));
+                cleanup.label_node_keys.push(label_node_key(label, *node));
+            }
+            cleanup
+                .node_prop_keys
+                .extend(snapshot.collect_node_property_keys(*node));
+            cleanup
+                .incident_edges
+                .extend(snapshot.collect_raw_outgoing_edges(*node));
+            cleanup
+                .incident_edges
+                .extend(snapshot.collect_raw_incoming_edges(*node));
+            for edge in &created_edges {
+                if edge.src == *node || edge.dst == *node {
+                    cleanup.incident_edges.insert(*edge);
+                }
+            }
+            detached_edges.extend(cleanup.incident_edges.iter().copied());
+            node_cleanups.insert(*node, cleanup);
+        }
 
         if let Some(next_node_id) = self.pending_next_node_id {
             batch.insert(
@@ -378,6 +591,9 @@ impl<'a> WriteTxn<'a> {
         }
 
         for node in &self.created_nodes {
+            if self.tombstoned_nodes.contains(&node.iid) {
+                continue;
+            }
             batch.insert(
                 &self.engine.keyspaces.nodes,
                 key_u32(node.iid),
@@ -403,6 +619,9 @@ impl<'a> WriteTxn<'a> {
         }
 
         for (node, label) in &self.label_additions {
+            if self.tombstoned_nodes.contains(node) {
+                continue;
+            }
             batch.insert(
                 &self.engine.keyspaces.node_labels,
                 node_label_key(*node, *label),
@@ -416,6 +635,9 @@ impl<'a> WriteTxn<'a> {
         }
 
         for (node, label) in &self.label_removals {
+            if self.tombstoned_nodes.contains(node) {
+                continue;
+            }
             batch.remove(
                 &self.engine.keyspaces.node_labels,
                 node_label_key(*node, *label),
@@ -440,7 +662,19 @@ impl<'a> WriteTxn<'a> {
         }
 
         for node in &self.tombstoned_nodes {
-            if let Some(external_id) = snapshot.resolve_external(*node) {
+            if let Some(cleanup) = node_cleanups.get(node) {
+                for key in &cleanup.label_keys {
+                    batch.remove(&self.engine.keyspaces.node_labels, key);
+                }
+                for key in &cleanup.label_node_keys {
+                    batch.remove(&self.engine.keyspaces.label_nodes, key);
+                }
+                for key in &cleanup.node_prop_keys {
+                    batch.remove(&self.engine.keyspaces.node_props, key);
+                }
+            }
+
+            if let Some(external_id) = self.external_id_for_commit(*node, &snapshot) {
                 batch.insert(
                     &self.engine.keyspaces.nodes,
                     key_u32(*node),
@@ -449,7 +683,18 @@ impl<'a> WriteTxn<'a> {
             }
         }
 
+        for edge in &detached_edges {
+            batch.remove(&self.engine.keyspaces.adj_out, adj_out_key(*edge));
+            batch.remove(&self.engine.keyspaces.adj_in, adj_in_key(*edge));
+            for key in snapshot.collect_edge_property_keys(*edge) {
+                batch.remove(&self.engine.keyspaces.edge_props, key);
+            }
+        }
+
         for ((node, key), value) in &self.node_props {
+            if self.tombstoned_nodes.contains(node) {
+                continue;
+            }
             batch.insert(
                 &self.engine.keyspaces.node_props,
                 node_prop_prefix(*node, key),
@@ -458,17 +703,20 @@ impl<'a> WriteTxn<'a> {
         }
 
         for ((edge, key), value) in &self.edge_props {
-            let mut storage_key = edge_prefix(*edge);
-            storage_key.extend_from_slice(&(key.len() as u32).to_be_bytes());
-            storage_key.extend_from_slice(key.as_bytes());
+            if detached_edges.contains(edge) || self.tombstoned_edges.contains(edge) {
+                continue;
+            }
             batch.insert(
                 &self.engine.keyspaces.edge_props,
-                storage_key,
+                edge_prop_key(*edge, key),
                 value.encode(),
             );
         }
 
         for (node, key) in &self.removed_node_props {
+            if self.tombstoned_nodes.contains(node) {
+                continue;
+            }
             batch.remove(
                 &self.engine.keyspaces.node_props,
                 node_prop_prefix(*node, key),
@@ -476,15 +724,22 @@ impl<'a> WriteTxn<'a> {
         }
 
         for (edge, key) in &self.removed_edge_props {
-            let mut storage_key = edge_prefix(*edge);
-            storage_key.extend_from_slice(&(key.len() as u32).to_be_bytes());
-            storage_key.extend_from_slice(key.as_bytes());
-            batch.remove(&self.engine.keyspaces.edge_props, storage_key);
+            if detached_edges.contains(edge) || self.tombstoned_edges.contains(edge) {
+                continue;
+            }
+            batch.remove(&self.engine.keyspaces.edge_props, edge_prop_key(*edge, key));
         }
 
         batch.commit()?;
         Ok(())
     }
+}
+
+fn edge_prop_key(edge: EdgeKey, key: &str) -> Vec<u8> {
+    let mut storage_key = edge_prefix(edge);
+    storage_key.extend_from_slice(&(key.len() as u32).to_be_bytes());
+    storage_key.extend_from_slice(key.as_bytes());
+    storage_key
 }
 
 fn open_keyspaces(db: &Database) -> Result<Keyspaces> {
