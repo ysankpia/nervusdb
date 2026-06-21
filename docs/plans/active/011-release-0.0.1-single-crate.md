@@ -110,16 +110,19 @@ Current local evidence:
 - `cargo publish -p nervusdb --dry-run --registry crates-io` passed after
   commit. The local `[patch.crates-io]` warnings are expected because the
   publish package no longer depends on the wrapper crates.
-- The attempted medium benchmark
-  `bash scripts/core_bench.sh --nodes 100000 --degree 5 --iters 1000` was
-  stopped after it did not finish within the interactive release window. It is
-  deferred for post-release tuning and is not used as 0.0.1 evidence.
+- Medium benchmark
+  `bash scripts/core_bench.sh --nodes 100000 --degree 5 --iters 1000` completed
+  after release note drafting. Artifact:
+  `artifacts/core-bench/core-bench-small-20260621-182012.json`.
+  It recorded 100,000 nodes, 500,000 edges, 438.130s insert time,
+  1,141 insert edges/sec, 1,742,616 hot traversal edges/sec, and 976,857 cold
+  traversal edges/sec.
 
 ## Completion Evidence
 
 - release commit hash: `aa9315af`
 - CI status: GitHub Actions `main` run `27913320141` passed
-- benchmark artifact path: `artifacts/core-bench/core-bench-small-20260621-173958.json`
+- benchmark artifact path: `artifacts/core-bench/core-bench-small-20260621-182012.json`
 - dry-run result: `cargo publish -p nervusdb --dry-run --registry crates-io` passed
 - tag: `v0.0.1`
 - GitHub release: `https://github.com/ysankpia/nervusdb/releases/tag/v0.0.1`

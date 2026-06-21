@@ -80,8 +80,8 @@ The workspace-local crates `nervusdb-api`, `nervusdb-storage`, and
 
 ## Next
 
-- Plan 0.0.2 from real post-release needs. Do not treat the deferred medium
-  benchmark as a silent pass.
+- Plan 0.0.2 from real post-release needs. Treat the completed medium benchmark
+  as evidence that read/traversal is strong and bulk import needs focused work.
 
 ## Blockers
 
@@ -138,7 +138,7 @@ None yet.
 | 2026-06-22 | `cargo publish -p nervusdb --dry-run --registry crates-io --allow-dirty` | Passed; dirty flag needed only because package files were not committed yet |
 | 2026-06-22 | `cargo publish -p nervusdb --dry-run --registry crates-io` | Passed clean after commit `0cd081fc`; local patch warnings expected |
 | 2026-06-22 | GitHub Actions `main` push run `27912993929` | Passed |
-| 2026-06-22 | `bash scripts/core_bench.sh --nodes 100000 --degree 5 --iters 1000` | Deferred; no JSON artifact, run stopped after not finishing in the interactive release window |
+| 2026-06-22 | `bash scripts/core_bench.sh --nodes 100000 --degree 5 --iters 1000` | Passed in later manual run; artifact `artifacts/core-bench/core-bench-small-20260621-182012.json`; 100k nodes, 500k edges, insert 438.130s, hot 1,742,616 edges/sec, cold 976,857 edges/sec |
 | 2026-06-22 | GitHub Actions `main` push run `27913320141` | Passed |
 | 2026-06-22 | `git tag -a v0.0.1` and `git push origin v0.0.1` | Passed; tag points at `aa9315af` |
 | 2026-06-22 | `gh release create v0.0.1 --verify-tag --title "NervusDB v0.0.1" --notes-file docs/releases/v0.0.1.md --latest=false` | Passed |
@@ -149,4 +149,5 @@ None yet.
 
 2026-06-22: NervusDB 0.0.1 was tagged, released on GitHub, and published to
 crates.io as the single public `nervusdb` crate. Old GitHub releases were kept
-as legacy history, not deleted.
+as legacy history, not deleted. The medium benchmark later completed and showed
+strong traversal throughput with slow bulk import.
