@@ -45,6 +45,7 @@ adj_out     [src][rel][dst] -> empty
 adj_in      [dst][rel][src] -> empty
 node_props  [iid][key_len][key_bytes] -> encoded PropertyValue
 edge_props  [src][rel][dst][key_len][key_bytes] -> encoded PropertyValue
+idx_node_props [label_id][key_len][key_bytes][value_len][value_bytes][iid] -> empty
 ```
 
 ## Value Encoding
@@ -52,6 +53,9 @@ edge_props  [src][rel][dst][key_len][key_bytes] -> encoded PropertyValue
 `PropertyValue` encoding is owned by `nervusdb::api`. Storage must not create a
 second public property-value type. Any encoding change that affects persisted
 values requires a format epoch decision and compatibility handling.
+
+`idx_node_props` reuses `PropertyValue::encode()` only as exact-match identity.
+It does not define range ordering for encoded values.
 
 ## Recovery Assumptions
 
@@ -68,6 +72,6 @@ The recovery proof is graph-level. Tests verify what users can observe through
 - Long-term cross-version compatibility policy.
 - Byte-level guarantees for backend files.
 - Backup, vacuum, and backend compaction behavior as user-facing 0.1 promises.
-- Property index formats and planner integration.
+- Range index formats and public index-management APIs.
 
 Changes here require storage-model docs and crash/reopen validation.

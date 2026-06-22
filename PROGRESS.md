@@ -2,25 +2,28 @@
 
 ## Current Objective
 
-NervusDB 0.0.3 graph integrity has been released.
+NervusDB 0.0.4 is focused on internal node property equality indexing.
 
 ## Active Plan
 
-`docs/plans/active/014-graph-integrity-0.0.3.md`
+`docs/plans/active/015-property-equality-index-0.0.4.md`
 
 bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
 0.0.3 has been tagged, released on GitHub, and published to crates.io as the
-single public `nervusdb` crate.
+single public `nervusdb` crate. 0.0.4 now targets exact node property lookup
+through an internally maintained index.
 
 ## Now
 
-- Decide the next correctness target after graph integrity. Property equality
-  index design is the likely candidate, but it needs a separate ADR/plan.
+- Add ADR 0007 and active plan 015 for internal node property equality indexing.
+- Implement `idx_node_props` without restoring public index-management APIs.
+- Prove label-qualified exact property lookup is correct and at least 10x faster
+  than scan baseline on the 100k-node benchmark.
 - Keep property indexes, EdgeId, unsafe/buffered durability modes, vectors,
-  multi-writer work, and advanced query work out of released 0.0.3.
+  multi-writer work, and advanced query work out of 0.0.4.
 
 ## Done
 
@@ -113,6 +116,10 @@ single public `nervusdb` crate.
   - tag: `v0.0.3`
   - GitHub release: `https://github.com/ysankpia/nervusdb/releases/tag/v0.0.3`
   - crates.io: `https://crates.io/crates/nervusdb`
+- 0.0.4 property equality index planning started:
+  - ADR: `docs/decisions/0007-node-property-equality-index.md`
+  - active plan: `docs/plans/active/015-property-equality-index-0.0.4.md`
+  - completed 0.0.3 plan moved to `docs/plans/completed/014-graph-integrity-0.0.3.md`
 
 ## Next
 
@@ -121,8 +128,10 @@ single public `nervusdb` crate.
 - Wait for GitHub Dependabot to rescan after the stale `fuzz/Cargo.lock`
   removal is pushed.
 - Update GitHub Actions if the Node.js 20 deprecation annotation becomes noisy.
-- Start property equality index design only as a later ADR after v0.0.3 is
-  published.
+- Implement storage-neutral snapshot API and Fjall `idx_node_props`.
+- Add query planner/executor downshift for label-qualified scalar literal
+  equality.
+- Add benchmark fields and record 0.0.4 scan vs indexed lookup evidence.
 
 ## Blockers
 
@@ -232,8 +241,6 @@ None yet.
 
 ## Last Checkpoint
 
-2026-06-22: 0.0.3 graph integrity was released as the single public
-`nervusdb` crate. Storage rejects dangling edges and invalid mutations, direct
-Rust API node deletion detach-cleans related keyspaces, and Mini-Cypher
-DELETE/DETACH DELETE behavior is covered by regression tests. GitHub Actions,
-publish dry-run, GitHub Release, and crates.io publication all passed.
+2026-06-22: 0.0.4 property equality index work started. The release target is
+internal exact node property lookup through `idx_node_props`, not public index
+management, range indexes, edge indexes, or broader Cypher.

@@ -39,6 +39,21 @@ not rely only on scanning every node and filtering labels in the query layer.
 The storage layer owns the `label_nodes` keyspace. The query layer owns only the
 decision to request nodes for a resolved label.
 
+## Property Equality Anchor Rule
+
+`MATCH (n:Label) WHERE n.key = literal` and
+`MATCH (n:Label {key: literal})` may use
+`GraphSnapshot::nodes_with_label_and_property(label_id, key, value)`.
+
+The query layer decides that the pattern is a supported exact-match anchor. The
+storage layer owns whether that call is served by `idx_node_props` or by the
+default scan/filter fallback. The query layer must not import Fjall keyspaces or
+storage implementation types.
+
+Only scalar literals are index anchors in 0.0.4. Parameters, range predicates,
+edge property predicates, list/map literals, and unlabelled property filters
+remain scan/filter behavior.
+
 ## Boundary Rule
 
 `nervusdb::query` must not depend on `nervusdb::storage` implementation types.

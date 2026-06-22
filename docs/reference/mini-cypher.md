@@ -25,6 +25,11 @@ Storage expectation:
 - `MATCH (n:Label)` resolves the label ID and uses
   `GraphSnapshot::nodes_with_label(label_id)`. It is not allowed to rely only
   on full node scans as the 0.1 storage contract.
+- `MATCH (n:Label) WHERE n.key = scalar_literal` and
+  `MATCH (n:Label {key: scalar_literal})` may use
+  `GraphSnapshot::nodes_with_label_and_property(label_id, key, value)` as an
+  exact-match anchor. Remaining predicates still run through the normal filter
+  path.
 
 Write queries:
 
@@ -41,6 +46,7 @@ Filters:
 
 - simple equality against string and integer literals
 - simple parameter equality where already supported by the query API
+- scalar label-qualified property equality may be index-backed
 - boolean and null equality are not part of the 0.1 contract
 - conjunctions are not part of the 0.1 contract unless a future plan promotes
   them with tests

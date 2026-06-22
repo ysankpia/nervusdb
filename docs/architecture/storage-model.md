@@ -28,6 +28,7 @@ NervusDB byte-level format.
 | `adj_in` | `[dst][rel][src]` | empty | incoming traversal |
 | `node_props` | `[iid][key_len][key_bytes]` | encoded `PropertyValue` | node properties |
 | `edge_props` | `[src][rel][dst][key_len][key_bytes]` | encoded `PropertyValue` | edge properties |
+| `idx_node_props` | `[label_id][key_len][key_bytes][value_len][value_bytes][iid]` | empty | internal node property exact-match lookup |
 
 Integer key parts use big-endian encoding so prefix scans preserve numeric
 ordering. Property keys are stored as original UTF-8 bytes with length framing.
@@ -89,11 +90,16 @@ rather than exposing stale counts.
 
 ## Indexes
 
-Property range indexes and equality indexes are not 0.1 core. The public
-`create_index` and `lookup_index` hooks were removed before 0.1 because they
-implied a storage and planner contract that does not exist yet. A future ADR
-must define `prop_index` key layout, value ordering, update/delete cleanup, and
-planner use before property indexes return.
+0.0.4 adds an internally maintained node property equality index for
+`MATCH (n:Label) WHERE n.key = literal`. It is not a public schema feature and
+does not restore `create_index` or `lookup_index`.
+
+`idx_node_props` uses encoded `PropertyValue` bytes for exact equality only.
+Those bytes are not an ordering contract, so range predicates such as
+`n.age > 30` remain scan/filter behavior and are not index-backed.
+
+Property range indexes, edge property indexes, composite indexes, and unique
+constraints are still out of scope.
 
 ## Required Validation For Storage Changes
 

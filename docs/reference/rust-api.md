@@ -25,6 +25,7 @@ Read path:
 - `DbSnapshot` as the `GraphSnapshot` implementation returned by `Db::snapshot`
 - `GraphSnapshot::nodes`
 - `GraphSnapshot::nodes_with_label`
+- `GraphSnapshot::nodes_with_label_and_property`
 - `GraphSnapshot::neighbors`
 - `GraphSnapshot::incoming_neighbors`
 - `ReadTxn::neighbors`
