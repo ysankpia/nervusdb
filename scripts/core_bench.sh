@@ -80,9 +80,16 @@ for field in \
   stage_reopen_verify_ms \
   stage_neighbors_hot_ms \
   stage_neighbors_cold_ms \
+  stage_property_lookup_scan_ms \
+  stage_property_lookup_index_ms \
   stage_write_txn_ms \
   insert_total_ms \
-  estimated_kv_writes
+  estimated_kv_writes \
+  property_lookup_iters \
+  property_lookup_rows \
+  property_lookup_scan_p99_us \
+  property_lookup_index_p99_us \
+  property_lookup_speedup
 do
   if [[ "$json_line" != *"\"$field\":"* ]]; then
     echo "[core-bench] missing JSON field: $field" >&2

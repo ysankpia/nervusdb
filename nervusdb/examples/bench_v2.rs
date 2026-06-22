@@ -4,7 +4,7 @@
 //! public `nervusdb::Db` facade so benchmark scripts do not depend on local
 //! `publish = false` wrapper crates.
 
-use nervusdb::{Db, GraphSnapshot};
+use nervusdb::{Db, GraphSnapshot, PropertyValue};
 use std::time::Instant;
 use tempfile::tempdir;
 
@@ -27,6 +27,14 @@ struct NeighborBenchResult {
 
 #[derive(Debug, Clone, Copy)]
 struct WriteTxnBenchResult {
+    avg_us: f64,
+    p95_us: f64,
+    p99_us: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PropertyLookupBenchResult {
+    rows_total: u64,
     avg_us: f64,
     p95_us: f64,
     p99_us: f64,
@@ -156,6 +164,25 @@ fn summarize_write_txn_bench(latencies_us: Vec<f64>) -> WriteTxnBenchResult {
     }
 }
 
+fn summarize_property_lookup_bench(
+    rows_total: u64,
+    latencies_us: Vec<f64>,
+) -> PropertyLookupBenchResult {
+    let avg_us = if latencies_us.is_empty() {
+        0.0
+    } else {
+        latencies_us.iter().sum::<f64>() / latencies_us.len() as f64
+    };
+    let p95_us = percentile_us(latencies_us.clone(), 0.95);
+    let p99_us = percentile_us(latencies_us, 0.99);
+    PropertyLookupBenchResult {
+        rows_total,
+        avg_us,
+        p95_us,
+        p99_us,
+    }
+}
+
 fn elapsed_ms(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1_000.0
 }
@@ -189,12 +216,36 @@ fn main() {
     let stage_neighbors_cold_start = Instant::now();
     let neighbors_cold = bench_neighbors_cold(&db, &insert.nodes, insert.rel, cfg.iters);
     let stage_neighbors_cold_ms = elapsed_ms(stage_neighbors_cold_start);
+    let property_lookup_iters = cfg.iters;
+    let property_lookup_target = format!("node_{}", cfg.nodes - 1);
+    let stage_property_lookup_scan_start = Instant::now();
+    let property_lookup_scan = bench_property_lookup_scan(
+        &db,
+        insert.label,
+        &property_lookup_target,
+        property_lookup_iters,
+    );
+    let stage_property_lookup_scan_ms = elapsed_ms(stage_property_lookup_scan_start);
+    let stage_property_lookup_index_start = Instant::now();
+    let property_lookup_index = bench_property_lookup_index(
+        &db,
+        insert.label,
+        &property_lookup_target,
+        property_lookup_iters,
+    );
+    let stage_property_lookup_index_ms = elapsed_ms(stage_property_lookup_index_start);
+    assert_eq!(
+        property_lookup_scan.rows_total, property_lookup_index.rows_total,
+        "scan and index lookup must return the same row count"
+    );
+    let property_lookup_speedup =
+        stage_property_lookup_scan_ms / stage_property_lookup_index_ms.max(1e-9);
     let stage_write_txn_start = Instant::now();
     let write_txn = bench_write_txn(&db, insert.label, cfg.nodes as u64 + 1, cfg.write_iters);
     let stage_write_txn_ms = elapsed_ms(stage_write_txn_start);
     let read_query_p99_ms = neighbors_cold.p99_us / 1_000.0;
     let write_txn_p99_ms = write_txn.p99_us / 1_000.0;
-    let estimated_kv_writes = (4 * cfg.nodes) + (2 * total_edges);
+    let estimated_kv_writes = (6 * cfg.nodes) + (2 * total_edges);
 
     println!("=== NervusDB Core 0.1 Bench ===");
     println!(
@@ -235,9 +286,18 @@ fn main() {
         "write_txn: avg={:.2}us, p95={:.2}us, p99={:.2}us ({:.4}ms)",
         write_txn.avg_us, write_txn.p95_us, write_txn.p99_us, write_txn_p99_ms
     );
+    println!(
+        "property_lookup: scan={:.2}ms p99={:.2}us index={:.2}ms p99={:.2}us speedup={:.2}x rows={}",
+        stage_property_lookup_scan_ms,
+        property_lookup_scan.p99_us,
+        stage_property_lookup_index_ms,
+        property_lookup_index.p99_us,
+        property_lookup_speedup,
+        property_lookup_index.rows_total
+    );
 
     println!(
-        "{{\"nodes\":{},\"degree\":{},\"edges\":{},\"iters\":{},\"write_iters\":{},\"stage_open_ms\":{:.3},\"stage_get_schema_ms\":{:.3},\"stage_create_nodes_ms\":{:.3},\"stage_create_edges_ms\":{:.3},\"stage_commit_ms\":{:.3},\"stage_reopen_verify_ms\":{:.3},\"stage_neighbors_hot_ms\":{:.3},\"stage_neighbors_cold_ms\":{:.3},\"stage_write_txn_ms\":{:.3},\"insert_total_ms\":{:.3},\"insert_edges_per_sec\":{:.3},\"estimated_kv_writes\":{},\"neighbors_hot_edges_per_sec\":{:.3},\"neighbors_cold_edges_per_sec\":{:.3},\"neighbors_hot_avg_us\":{:.3},\"neighbors_hot_p95_us\":{:.3},\"neighbors_hot_p99_us\":{:.3},\"neighbors_cold_avg_us\":{:.3},\"neighbors_cold_p95_us\":{:.3},\"neighbors_cold_p99_us\":{:.3},\"write_txn_avg_us\":{:.3},\"write_txn_p95_us\":{:.3},\"write_txn_p99_us\":{:.3},\"write_txn_p99_ms\":{:.6},\"read_query_p99_ms\":{:.6}}}",
+        "{{\"nodes\":{},\"degree\":{},\"edges\":{},\"iters\":{},\"write_iters\":{},\"stage_open_ms\":{:.3},\"stage_get_schema_ms\":{:.3},\"stage_create_nodes_ms\":{:.3},\"stage_create_edges_ms\":{:.3},\"stage_commit_ms\":{:.3},\"stage_reopen_verify_ms\":{:.3},\"stage_neighbors_hot_ms\":{:.3},\"stage_neighbors_cold_ms\":{:.3},\"stage_property_lookup_scan_ms\":{:.3},\"stage_property_lookup_index_ms\":{:.3},\"stage_write_txn_ms\":{:.3},\"insert_total_ms\":{:.3},\"insert_edges_per_sec\":{:.3},\"estimated_kv_writes\":{},\"neighbors_hot_edges_per_sec\":{:.3},\"neighbors_cold_edges_per_sec\":{:.3},\"neighbors_hot_avg_us\":{:.3},\"neighbors_hot_p95_us\":{:.3},\"neighbors_hot_p99_us\":{:.3},\"neighbors_cold_avg_us\":{:.3},\"neighbors_cold_p95_us\":{:.3},\"neighbors_cold_p99_us\":{:.3},\"property_lookup_iters\":{},\"property_lookup_rows\":{},\"property_lookup_scan_avg_us\":{:.3},\"property_lookup_scan_p95_us\":{:.3},\"property_lookup_scan_p99_us\":{:.3},\"property_lookup_index_avg_us\":{:.3},\"property_lookup_index_p95_us\":{:.3},\"property_lookup_index_p99_us\":{:.3},\"property_lookup_speedup\":{:.3},\"write_txn_avg_us\":{:.3},\"write_txn_p95_us\":{:.3},\"write_txn_p99_us\":{:.3},\"write_txn_p99_ms\":{:.6},\"read_query_p99_ms\":{:.6}}}",
         cfg.nodes,
         cfg.degree,
         total_edges,
@@ -251,6 +311,8 @@ fn main() {
         stage_reopen_verify_ms,
         stage_neighbors_hot_ms,
         stage_neighbors_cold_ms,
+        stage_property_lookup_scan_ms,
+        stage_property_lookup_index_ms,
         stage_write_txn_ms,
         insert_total_ms,
         insert_edges_per_sec,
@@ -263,6 +325,15 @@ fn main() {
         neighbors_cold.avg_us,
         neighbors_cold.p95_us,
         neighbors_cold.p99_us,
+        property_lookup_iters,
+        property_lookup_index.rows_total,
+        property_lookup_scan.avg_us,
+        property_lookup_scan.p95_us,
+        property_lookup_scan.p99_us,
+        property_lookup_index.avg_us,
+        property_lookup_index.p95_us,
+        property_lookup_index.p99_us,
+        property_lookup_speedup,
         write_txn.avg_us,
         write_txn.p95_us,
         write_txn.p99_us,
@@ -282,7 +353,14 @@ fn bench_insert(db: &Db, cfg: Config) -> InsertBenchResult {
     let stage_create_nodes_start = Instant::now();
     for i in 0..cfg.nodes {
         let external_id = (i as u64) + 1;
-        nodes.push(tx.create_node(external_id, label).unwrap());
+        let node = tx.create_node(external_id, label).unwrap();
+        tx.set_node_property(
+            node,
+            "name".to_string(),
+            PropertyValue::String(format!("node_{i}")),
+        )
+        .unwrap();
+        nodes.push(node);
     }
     let stage_create_nodes_ms = elapsed_ms(stage_create_nodes_start);
 
@@ -342,6 +420,53 @@ fn bench_neighbors_cold(db: &Db, nodes: &[u32], rel: u32, iters: usize) -> Neigh
     }
     let secs = start.elapsed().as_secs_f64().max(1e-9);
     summarize_neighbor_bench(edges_total, secs, latencies_us)
+}
+
+fn bench_property_lookup_scan(
+    db: &Db,
+    label: u32,
+    target_name: &str,
+    iters: usize,
+) -> PropertyLookupBenchResult {
+    let snap = db.snapshot();
+    let target = PropertyValue::String(target_name.to_string());
+    let mut latencies_us = Vec::with_capacity(iters);
+    let mut rows_total: u64 = 0;
+    for _ in 0..iters {
+        let t0 = Instant::now();
+        let mut rows = 0u64;
+        for node in snap.nodes_with_label(label) {
+            if snap.node_property(node, "name").as_ref() == Some(&target) {
+                rows += 1;
+                break;
+            }
+        }
+        latencies_us.push(t0.elapsed().as_secs_f64() * 1_000_000.0);
+        rows_total += rows;
+    }
+    summarize_property_lookup_bench(rows_total, latencies_us)
+}
+
+fn bench_property_lookup_index(
+    db: &Db,
+    label: u32,
+    target_name: &str,
+    iters: usize,
+) -> PropertyLookupBenchResult {
+    let snap = db.snapshot();
+    let target = PropertyValue::String(target_name.to_string());
+    let mut latencies_us = Vec::with_capacity(iters);
+    let mut rows_total: u64 = 0;
+    for _ in 0..iters {
+        let t0 = Instant::now();
+        let rows = snap
+            .nodes_with_label_and_property(label, "name", &target)
+            .take(1)
+            .count() as u64;
+        latencies_us.push(t0.elapsed().as_secs_f64() * 1_000_000.0);
+        rows_total += rows;
+    }
+    summarize_property_lookup_bench(rows_total, latencies_us)
 }
 
 fn bench_write_txn(
