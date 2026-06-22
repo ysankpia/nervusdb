@@ -358,36 +358,52 @@ fn check_engine(engine: &GraphEngine) -> crate::storage::Result<CheckState> {
 
     for guard in snapshot.prefix(&keyspaces.adj_out, adj_out_scan_prefix()) {
         state.checked.adj_out += 1;
-        let Ok((key, _)) = guard.into_inner() else {
+        let Ok((key, value)) = guard.into_inner() else {
             state
                 .issues
                 .push(FsckIssue::new(FsckIssueKind::MalformedAdjOut));
             continue;
         };
-        let Some(edge) = edge_key_from_adj_out(key.as_ref()) else {
+        let Some((src, rel)) = parse_adj_out_key(key.as_ref()) else {
             state
                 .issues
                 .push(FsckIssue::new(FsckIssueKind::MalformedAdjOut));
             continue;
         };
-        state.adj_out.insert(edge);
+        let Some(dsts) = decode_adjacent_nodes(value.as_ref()) else {
+            state
+                .issues
+                .push(FsckIssue::new(FsckIssueKind::MalformedAdjOut));
+            continue;
+        };
+        for dst in dsts {
+            state.adj_out.insert(EdgeKey { src, rel, dst });
+        }
     }
 
     for guard in snapshot.prefix(&keyspaces.adj_in, adj_in_scan_prefix()) {
         state.checked.adj_in += 1;
-        let Ok((key, _)) = guard.into_inner() else {
+        let Ok((key, value)) = guard.into_inner() else {
             state
                 .issues
                 .push(FsckIssue::new(FsckIssueKind::MalformedAdjIn));
             continue;
         };
-        let Some(edge) = edge_key_from_adj_in(key.as_ref()) else {
+        let Some((dst, rel)) = parse_adj_in_key(key.as_ref()) else {
             state
                 .issues
                 .push(FsckIssue::new(FsckIssueKind::MalformedAdjIn));
             continue;
         };
-        state.adj_in.insert(edge);
+        let Some(srcs) = decode_adjacent_nodes(value.as_ref()) else {
+            state
+                .issues
+                .push(FsckIssue::new(FsckIssueKind::MalformedAdjIn));
+            continue;
+        };
+        for src in srcs {
+            state.adj_in.insert(EdgeKey { src, rel, dst });
+        }
     }
 
     for edge in state.adj_out.difference(&state.adj_in) {
@@ -663,7 +679,7 @@ mod tests {
         };
         {
             let mut batch = engine.db.batch().durability(Some(PersistMode::SyncAll));
-            batch.remove(&engine.keyspaces.adj_in, adj_in_key(edge));
+            batch.remove(&engine.keyspaces.adj_in, adj_in_key(edge.dst, edge.rel));
             batch.insert(
                 &engine.keyspaces.graph_data,
                 edge_prop_key(edge, "since"),

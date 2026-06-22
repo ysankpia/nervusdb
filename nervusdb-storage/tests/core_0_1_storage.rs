@@ -49,7 +49,7 @@ fn storage_epoch_2_database_is_rejected() {
 }
 
 #[test]
-fn storage_epoch_3_uses_meta_graph_data_and_adjacency_keyspaces() {
+fn storage_epoch_4_uses_meta_graph_data_and_adjacency_keyspaces() {
     let dir = tempdir().unwrap();
     let path = db_dir(&dir);
     {
@@ -80,6 +80,47 @@ fn storage_epoch_3_uses_meta_graph_data_and_adjacency_keyspaces() {
             "meta".to_string()
         ]
     );
+}
+
+#[test]
+fn close_checkpoints_journal_without_losing_committed_graph() {
+    let dir = tempdir().unwrap();
+    let path = db_dir(&dir);
+    let rel;
+
+    {
+        let engine = GraphEngine::open(&path).unwrap();
+        let label = engine.get_or_create_label("Node").unwrap();
+        rel = engine.get_or_create_rel_type("LINK").unwrap();
+        let mut tx = engine.begin_write();
+        let mut nodes = Vec::new();
+        for i in 0..512 {
+            let node = tx.create_node(i + 1, label).unwrap();
+            tx.set_node_property(node, "name".to_string(), format!("node_{i}").into())
+                .unwrap();
+            nodes.push(node);
+        }
+        for window in nodes.windows(2) {
+            tx.create_edge(window[0], rel, window[1]).unwrap();
+        }
+        tx.commit().unwrap();
+        engine.close().unwrap();
+    }
+
+    let journal_bytes = std::fs::read_dir(&path)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("jnl"))
+        .map(|path| std::fs::metadata(path).unwrap().len())
+        .sum::<u64>();
+    assert_eq!(journal_bytes, 0);
+
+    let engine = GraphEngine::open(&path).unwrap();
+    let snapshot = engine.snapshot();
+    assert_eq!(snapshot.node_count(None), 512);
+    assert_eq!(snapshot.edge_count(Some(rel)), 511);
+    assert_core_edge(&engine, 1, rel, 2);
 }
 
 #[test]

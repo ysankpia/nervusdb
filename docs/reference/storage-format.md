@@ -22,12 +22,14 @@ safely.
 Current development epoch:
 
 ```text
-STORAGE_FORMAT_EPOCH = 3
+STORAGE_FORMAT_EPOCH = 4
 ```
 
-Epoch 3 is a destructive 0.0.7 storage-layout change. Epoch 2 database
+Epoch 4 is a destructive 0.0.8 storage-layout change. It keeps the 0.0.7
+four-keyspace split, but changes adjacency records from one KV pair per edge to
+one packed adjacency-list value per `(node, rel)` pair. Older database
 directories are rejected with `StorageFormatMismatch`; there is no migration
-tool in 0.0.7.
+tool in 0.0.8.
 
 Fjall's own internal versioning is separate. NervusDB docs do not promise a
 stable byte layout for Fjall files.
@@ -73,8 +75,8 @@ adj_in      incoming adjacency keys
 ## Adjacency Keyspaces
 
 ```text
-adj_out [src:u32][rel:u32][dst:u32] -> empty
-adj_in  [dst:u32][rel:u32][src:u32] -> empty
+adj_out [src:u32][rel:u32] -> repeated dst:u32 BE
+adj_in  [dst:u32][rel:u32] -> repeated src:u32 BE
 ```
 
 Prefix scan contracts:
@@ -83,10 +85,10 @@ Prefix scan contracts:
 nodes()                          prefix [NODE]
 node_labels(iid)                 prefix [NODE_LABEL][iid]
 nodes_with_label(label)          prefix [LABEL_NODE][label]
-neighbors(src, None)             adj_out prefix [src]
-neighbors(src, Some(rel))        adj_out prefix [src][rel]
-incoming_neighbors(dst, None)    adj_in prefix [dst]
-incoming_neighbors(dst, Some(r)) adj_in prefix [dst][r]
+neighbors(src, None)             adj_out prefix [src], expand list values
+neighbors(src, Some(rel))        adj_out point get [src][rel], expand value
+incoming_neighbors(dst, None)    adj_in prefix [dst], expand list values
+incoming_neighbors(dst, Some(r)) adj_in point get [dst][r], expand value
 node_properties(iid)             prefix [NODE_PROP][iid]
 edge_properties(edge)            prefix [EDGE_PROP][src][rel][dst]
 property equality lookup         prefix [NODE_PROP_INDEX][label][key][value]
@@ -101,7 +103,7 @@ values requires a format epoch decision and compatibility handling.
 `idx_node_props` reuses `PropertyValue::encode()` only as exact-match identity.
 It does not define range ordering for encoded values.
 
-In epoch 3, `idx_node_props` is the logical `NODE_PROP_INDEX` tag inside
+In epoch 4, `idx_node_props` is the logical `NODE_PROP_INDEX` tag inside
 `graph_data`; it is not a separate physical Fjall keyspace.
 
 ## Recovery Assumptions
@@ -110,6 +112,9 @@ In epoch 3, `idx_node_props` is the logical `NODE_PROP_INDEX` tag inside
 - Uncommitted or partial writes do not become visible after recovery.
 - Recovery preserves nodes, edges, labels, relationship types, and properties.
 - Recovery errors surface as errors, not ignored state.
+- Explicit `Db::close()` is expected to make normal reopen cheap by flushing
+  keyspaces and checkpointing the active clean-shutdown journal. This is not a
+  public guarantee about Fjall's internal file names or journal format.
 
 The recovery proof is graph-level. Tests verify what users can observe through
 `Db`, `GraphSnapshot`, Mini-Cypher, and CLI.
@@ -120,6 +125,6 @@ The recovery proof is graph-level. Tests verify what users can observe through
 - Byte-level guarantees for backend files.
 - Backup, vacuum, and backend compaction behavior as user-facing 0.1 promises.
 - Range index formats and public index-management APIs.
-- Cross-version on-disk migration from epoch 2 to epoch 3.
+- Cross-version on-disk migration from earlier epochs to epoch 4.
 
 Changes here require storage-model docs and crash/reopen validation.

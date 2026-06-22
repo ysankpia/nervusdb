@@ -199,7 +199,7 @@ impl Db {
     /// Not implemented in `Drop` — call this explicitly to flush pending
     /// state before discarding the handle.
     pub fn close(self) -> Result<()> {
-        self.engine.checkpoint_on_close().map_err(Error::from)?;
+        self.engine.close().map_err(Error::from)?;
         Ok(())
     }
 }

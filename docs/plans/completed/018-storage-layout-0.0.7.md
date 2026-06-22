@@ -2,9 +2,13 @@
 
 ## Status
 
-Active implementation. ADR 0009 accepts a destructive epoch 3 storage layout:
+Completed and released as 0.0.7. ADR 0009 accepted a destructive epoch 3 storage layout:
 `meta + graph_data + adj_out + adj_in` physical Fjall keyspaces. General graph
 records are tagged in `graph_data`; adjacency keeps dedicated hot keyspaces.
+
+This release was intentionally scoped down from the original success line:
+clean reopen and footprint improved, but traversal regressed and was carried
+forward to 0.0.8.
 
 ## Goal
 

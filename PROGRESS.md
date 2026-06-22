@@ -2,31 +2,30 @@
 
 ## Current Objective
 
-NervusDB 0.0.7 storage-layout work is active. The goal is to collapse the
-physical Fjall layout from the old many-keyspace graph model to four hot/cold
-keyspaces without changing the public Rust API.
+NervusDB 0.0.8 performance closeout work is in release-candidate validation.
+The 0.0.7 traversal regression is fixed by packed adjacency lists, and the
+clean-reopen regression caused by Fjall active journal replay is fixed by a
+close-time journal checkpoint.
 
 ## Active Plan
 
-`docs/plans/active/018-storage-layout-0.0.7.md`
+`docs/plans/active/019-performance-closeout-0.0.8.md`
 
 bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
-0.0.7 is in release preparation as a destructive storage-format cleanup
-release, not feature expansion.
-`STORAGE_FORMAT_EPOCH` is now 3; epoch 2 database directories are rejected and
-must be rebuilt or reimported.
+0.0.7 has been published. 0.0.8 is a benchmark-driven performance closeout, not
+feature expansion.
 
 ## Now
 
-- Prepare `nervusdb = "0.0.7"` for downstream projects after release validation
-  passes and the tag/crates.io publication is complete.
-- Treat the 0.0.7 cross-database benchmark as current storage-layout evidence
-  after release, with the documented traversal regression caveat.
-- 0.0.7 release scope is now clean reopen and storage footprint, not universal
-  traversal/commit performance.
+- Use published `nervusdb = "0.0.7"` for external downstream experiments until
+  the 0.0.8 release is tagged and published; use the local working tree for
+  0.0.8 candidate validation.
+- Treat the latest 0.0.8 cross-database medium benchmark as the release
+  candidate evidence.
+- 0.0.8 must not add features or unsafe durability modes before release.
 - Keep public index-management APIs, range indexes, EdgeId, unsafe/buffered
   durability modes, vectors, multi-writer work, and advanced Cypher out of scope
   unless a new ADR explicitly changes priority.
@@ -263,23 +262,49 @@ must be rebuilt or reimported.
     and is not hidden as a success.
   - release notes added at `docs/releases/v0.0.7.md`.
   - workspace package versions updated to `0.0.7`.
-- 0.0.7 storage layout planning started:
-  - active plan: `docs/plans/active/018-storage-layout-0.0.7.md`.
-  - focus: durable commit, raw reopen, file count, and storage footprint.
-  - implementation is blocked on a storage-layout ADR.
-- 0.0.6 release completed:
-  - tag: `v0.0.6`
-  - GitHub release: `https://github.com/ysankpia/nervusdb/releases/tag/v0.0.6`
+- 0.0.7 release completed:
+  - tag: `v0.0.7`
+  - GitHub release: `https://github.com/ysankpia/nervusdb/releases/tag/v0.0.7`
   - crates.io: `https://crates.io/crates/nervusdb`
   - confirmed via `cargo search nervusdb --limit 5 --registry crates-io`.
+- 0.0.8 performance closeout implemented in the working tree:
+  - ADR: `docs/decisions/0010-packed-adjacency-lists.md`.
+  - active plan: `docs/plans/active/019-performance-closeout-0.0.8.md`.
+  - `STORAGE_FORMAT_EPOCH` bumped from `3` to `4`.
+  - adjacency now uses packed, sorted list values:
+    `adj_out [src][rel] -> repeated dst:u32 BE` and
+    `adj_in [dst][rel] -> repeated src:u32 BE`.
+  - rel-qualified `neighbors` and `incoming_neighbors` now use point reads of
+    one adjacency list instead of tiny LSM prefix scans.
+  - fsck-lite expands packed adjacency values when checking `adj_out` /
+    `adj_in` symmetry.
+  - `Db::close()` consumes the handle, persists with `SyncAll`, rotates the
+    four keyspaces, drops the Fjall handle, then truncates only the active
+    clean-shutdown journal. This is not a public checkpoint API and does not
+    weaken crash recovery.
+  - clean medium benchmark artifact:
+    `artifacts/cross-db-bench/cross-db-bench-medium-20260622-183205.ndjson`.
+  - clean medium result: load total `1,448.574ms`, durable commit
+    `1,328.054ms`, raw reopen `2.059ms`, count verify `82.373ms`, property
+    lookup p99 `3.334us`, one-hop hot `7,761,011.750 edges/sec`, one-hop cold
+    `5,402,095.819 edges/sec`, incoming cold `5,053,950.926 edges/sec`,
+    two-hop `4,905,668.123 paths/sec`, footprint `29,425,660` bytes /
+    `24` files, correctness hash `d4b70801ad0bb15b`.
+  - profile evidence artifact:
+    `artifacts/cross-db-bench/cross-db-bench-medium-20260622-183217.ndjson`.
+  - profile result: `WriteTxn::commit.batch_commit` is still about
+    `1,072.110ms` under `SyncAll`; this is the remaining Fjall durable
+    batch/fsync floor, not a NervusDB staging bug.
 
 ## Next
 
-- If database work continues, write a storage-layout ADR before any keyspace
-  merge or storage-format rewrite.
-- Wait for GitHub Dependabot to rescan after the stale `fuzz/Cargo.lock`
-  removal is pushed.
-- Update GitHub Actions if the Node.js 20 deprecation annotation becomes noisy.
+- Finish 0.0.8 validation and release preparation only if the focused checks
+  stay green.
+- After 0.0.8, stop proactive database work and use NervusDB in downstream
+  projects. Reopen database work only for concrete downstream blockers.
+- Do not start another storage-format rewrite, durability mode, query feature,
+  vector feature, or single-file backend without a new ADR and benchmark
+  evidence.
 
 ## Blockers
 
@@ -461,11 +486,21 @@ None.
 | 2026-06-22 | `gh release create v0.0.7 --verify-tag --title "NervusDB v0.0.7" --notes-file docs/releases/v0.0.7.md --latest=true` | Passed: `https://github.com/ysankpia/nervusdb/releases/tag/v0.0.7` |
 | 2026-06-22 | `cargo publish -p nervusdb --registry crates-io` | Published `nervusdb v0.0.7` |
 | 2026-06-22 | `cargo search nervusdb --limit 5 --registry crates-io` | Confirmed `nervusdb = "0.0.7"` appears in crates.io search |
+| 2026-06-22 | `cargo fmt --all -- --check` | Passed after 0.0.8 packed adjacency changes |
+| 2026-06-22 | `cargo check -p nervusdb --examples` | Passed after 0.0.8 packed adjacency changes |
+| 2026-06-22 | `cargo test -p nervusdb-storage --test core_0_1_storage` | Passed after 0.0.8 packed adjacency and close-time journal checkpoint changes |
+| 2026-06-22 | `cargo test -p nervusdb-storage --test core_0_1_storage close_checkpoints_journal_without_losing_committed_graph` | Passed: clean close truncates active journal and reopen preserves graph data |
+| 2026-06-22 | `cargo test -p nervusdb --test core_0_1_agent_memory --features unstable-admin` | Passed after 0.0.8 packed adjacency changes |
+| 2026-06-22 | `bash scripts/core_crash_recovery.sh` | Passed after 0.0.8 packed adjacency changes |
+| 2026-06-23 | `bash scripts/cross_db_bench.sh --system nervusdb --medium` | Passed; artifact `artifacts/cross-db-bench/cross-db-bench-medium-20260622-183205.ndjson`; two-hop `4,905,668.123 paths/sec`, raw reopen `2.059ms`, correctness hash `d4b70801ad0bb15b` |
+| 2026-06-23 | `NERVUSDB_PROFILE_STORAGE=1 bash scripts/cross_db_bench.sh --system nervusdb --medium` | Passed; artifact `artifacts/cross-db-bench/cross-db-bench-medium-20260622-183217.ndjson`; `batch_commit` `1,072.110ms` remains the dominant `SyncAll` floor |
+| 2026-06-23 | `cargo test -p nervusdb --lib --features unstable-admin admin::tests` | Passed: 7 fsck-lite tests after packed adjacency updates |
+| 2026-06-23 | `bash scripts/core_examples.sh` | Passed: 10 CLI/file-driven examples after 0.0.8 packed adjacency changes |
+| 2026-06-23 | `cargo test --workspace` | Passed after 0.0.8 packed adjacency and close-time journal checkpoint changes |
 
 ## Last Checkpoint
 
-2026-06-22: 0.0.7 has been tagged, released on GitHub, published to crates.io,
-and confirmed via `cargo search`. The release succeeds as storage epoch 3,
-clean-reopen, and footprint cleanup. It does not solve traversal throughput;
-that regression is documented in `docs/releases/v0.0.7.md` and must not be
-hidden in future planning.
+2026-06-22: 0.0.8 is in release-candidate validation. Packed adjacency fixed
+the 0.0.7 traversal regression, and clean close now avoids Fjall active-journal
+replay on normal reopen. The remaining durable commit cost is dominated by
+Fjall `SyncAll` batch persistence; do not hide it with unsafe durability modes.

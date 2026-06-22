@@ -15,8 +15,7 @@ NervusDB byte-level format.
 
 ## Physical Keyspaces
 
-0.0.7 collapses the graph from many Fjall keyspaces into four physical
-keyspaces:
+0.0.8 keeps the 0.0.7 four-keyspace split:
 
 | Keyspace | Purpose |
 |---|---|
@@ -27,8 +26,8 @@ keyspaces:
 
 The old epoch 2 layout used separate physical keyspaces for `nodes`,
 `ext2node`, `labels`, `reltypes`, `node_labels`, `label_nodes`, `adj_out`,
-`adj_in`, `node_props`, `edge_props`, and `idx_node_props`. Epoch 3 rejects
-epoch 2 directories with `StorageFormatMismatch` instead of migrating them.
+`adj_in`, `node_props`, `edge_props`, and `idx_node_props`. Epoch 4 rejects
+older directories with `StorageFormatMismatch` instead of migrating them.
 
 ## Tagged Graph Data
 
@@ -46,12 +45,15 @@ epoch 2 directories with `StorageFormatMismatch` instead of migrating them.
 | `0x41` | `EDGE_PROP` | `[tag][src][rel][dst][key_len][key]` | encoded `PropertyValue` | edge properties |
 | `0x50` | `NODE_PROP_INDEX` | `[tag][label_id][key_len][key][value_len][value][iid]` | empty | internal node property exact-match lookup |
 
-Adjacency keyspaces use raw big-endian keys for hot traversal locality:
+Adjacency keyspaces use raw big-endian keys and packed, sorted adjacency-list
+values. This makes the common `neighbors(node, Some(rel))` and
+`incoming_neighbors(node, Some(rel))` paths point reads instead of tiny prefix
+scans.
 
 | Keyspace | Key | Value | Purpose |
 |---|---|---|---|
-| `adj_out` | `[src][rel][dst]` | empty | outgoing traversal |
-| `adj_in` | `[dst][rel][src]` | empty | incoming traversal |
+| `adj_out` | `[src][rel]` | repeated `dst:u32` | outgoing traversal |
+| `adj_in` | `[dst][rel]` | repeated `src:u32` | incoming traversal |
 
 Integer key parts use big-endian encoding so prefix scans preserve numeric
 ordering. Property keys are stored as original UTF-8 bytes with length framing.
@@ -86,6 +88,12 @@ write transaction without commit discards its staged changes.
 Fjall provides the low-level persistence and recovery mechanics. NervusDB tests
 the graph-level outcome: committed graph data survives reopen, and incomplete
 writes do not become visible through the public API.
+
+`Db::close()` is the explicit clean-shutdown path. It persists committed state,
+flushes the four keyspaces, releases the Fjall handle, and checkpoints the
+active clean-shutdown journal so the next normal open does not replay work that
+has already been flushed. This is a lifecycle optimization, not a substitute for
+commit durability and not a byte-level file-format promise.
 
 ## Delete Semantics
 

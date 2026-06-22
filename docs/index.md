@@ -65,12 +65,13 @@ Current active direction: Fjall-backed local database directory storage for the
 
 ## Plans
 
-- Active 0.0.7 storage-layout plan: `docs/plans/active/018-storage-layout-0.0.7.md`
+- Active 0.0.8 performance closeout plan: `docs/plans/active/019-performance-closeout-0.0.8.md`
 - Active plans: `docs/plans/active/`
 - Completed plans: `docs/plans/completed/`
 - Technical debt: `docs/plans/tech-debt.md`
 - Plan template: `docs/plans/template.md`
 - Decision records: `docs/decisions/`
+  - 0010 packed adjacency lists: `docs/decisions/0010-packed-adjacency-lists.md`
 
 ## Bugs
 

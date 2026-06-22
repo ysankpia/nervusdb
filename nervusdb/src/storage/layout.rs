@@ -158,31 +158,18 @@ pub(crate) fn adj_out_prefix(src: InternalNodeId, rel: Option<RelTypeId>) -> Vec
     out
 }
 
-pub(crate) fn adj_out_key(edge: EdgeKey) -> Vec<u8> {
-    let mut out = Vec::with_capacity(12);
-    out.extend_from_slice(&edge.src.to_be_bytes());
-    out.extend_from_slice(&edge.rel.to_be_bytes());
-    out.extend_from_slice(&edge.dst.to_be_bytes());
+pub(crate) fn adj_out_key(src: InternalNodeId, rel: RelTypeId) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8);
+    out.extend_from_slice(&src.to_be_bytes());
+    out.extend_from_slice(&rel.to_be_bytes());
     out
 }
 
-pub(crate) fn edge_key_from_adj_out(key: &[u8]) -> Option<EdgeKey> {
-    if key.len() != 12 {
+pub(crate) fn parse_adj_out_key(key: &[u8]) -> Option<(InternalNodeId, RelTypeId)> {
+    if key.len() != 8 {
         return None;
     }
-    Some(EdgeKey {
-        src: decode_u32(&key[0..4])?,
-        rel: decode_u32(&key[4..8])?,
-        dst: decode_u32(&key[8..12])?,
-    })
-}
-
-pub(crate) fn dst_from_adj_out_key(key: &[u8]) -> Option<InternalNodeId> {
-    if key.len() == 12 {
-        decode_u32(&key[8..12])
-    } else {
-        None
-    }
+    Some((decode_u32(&key[0..4])?, decode_u32(&key[4..8])?))
 }
 
 #[cfg(feature = "unstable-admin")]
@@ -198,31 +185,34 @@ pub(crate) fn adj_in_prefix(dst: InternalNodeId, rel: Option<RelTypeId>) -> Vec<
     out
 }
 
-pub(crate) fn adj_in_key(edge: EdgeKey) -> Vec<u8> {
-    let mut out = Vec::with_capacity(12);
-    out.extend_from_slice(&edge.dst.to_be_bytes());
-    out.extend_from_slice(&edge.rel.to_be_bytes());
-    out.extend_from_slice(&edge.src.to_be_bytes());
+pub(crate) fn adj_in_key(dst: InternalNodeId, rel: RelTypeId) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8);
+    out.extend_from_slice(&dst.to_be_bytes());
+    out.extend_from_slice(&rel.to_be_bytes());
     out
 }
 
-pub(crate) fn edge_key_from_adj_in(key: &[u8]) -> Option<EdgeKey> {
-    if key.len() != 12 {
+pub(crate) fn parse_adj_in_key(key: &[u8]) -> Option<(InternalNodeId, RelTypeId)> {
+    if key.len() != 8 {
         return None;
     }
-    Some(EdgeKey {
-        dst: decode_u32(&key[0..4])?,
-        rel: decode_u32(&key[4..8])?,
-        src: decode_u32(&key[8..12])?,
-    })
+    Some((decode_u32(&key[0..4])?, decode_u32(&key[4..8])?))
 }
 
-pub(crate) fn src_from_adj_in_key(key: &[u8]) -> Option<InternalNodeId> {
-    if key.len() == 12 {
-        decode_u32(&key[8..12])
-    } else {
-        None
+pub(crate) fn encode_adjacent_nodes(nodes: &[InternalNodeId]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(nodes.len() * 4);
+    for node in nodes {
+        out.extend_from_slice(&node.to_be_bytes());
     }
+    out
+}
+
+pub(crate) fn decode_adjacent_nodes(bytes: &[u8]) -> Option<Vec<InternalNodeId>> {
+    let chunks = bytes.chunks_exact(4);
+    if !chunks.remainder().is_empty() {
+        return None;
+    }
+    chunks.map(decode_u32).collect()
 }
 
 #[cfg(feature = "unstable-admin")]

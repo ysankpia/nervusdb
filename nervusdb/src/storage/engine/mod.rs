@@ -8,6 +8,7 @@ use crate::storage::snapshot::Snapshot;
 use crate::storage::{Error, Result, STORAGE_FORMAT_EPOCH};
 use fjall::{Database, Keyspace, KeyspaceCreateOptions, PersistMode};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
@@ -153,7 +154,7 @@ impl GraphEngine {
         Ok(())
     }
 
-    pub fn checkpoint_on_close(&self) -> Result<()> {
+    pub fn close(self) -> Result<()> {
         self.persist()?;
         let started = profile::start();
         self.keyspaces.meta.rotate_memtable_and_wait()?;
@@ -161,7 +162,10 @@ impl GraphEngine {
         self.keyspaces.adj_out.rotate_memtable_and_wait()?;
         self.keyspaces.adj_in.rotate_memtable_and_wait()?;
         profile::event_since("GraphEngine::close.flush_keyspaces", started, &[]);
-        Ok(())
+
+        let path = self.path.clone();
+        drop(self);
+        checkpoint_journals_after_flush(&path)
     }
 
     fn get_name_id(&self, name_key: fn(&str) -> Vec<u8>, name: &str) -> Option<u32> {
@@ -370,6 +374,51 @@ fn snapshot_node_property_index_keys_for_property(
         .into_iter()
         .map(|label| node_prop_index_key(label, key, &value, node))
         .collect()
+}
+
+fn insert_sorted_unique(nodes: &mut Vec<InternalNodeId>, node: InternalNodeId) {
+    match nodes.binary_search(&node) {
+        Ok(_) => {}
+        Err(idx) => nodes.insert(idx, node),
+    }
+}
+
+fn remove_sorted(nodes: &mut Vec<InternalNodeId>, node: InternalNodeId) {
+    if let Ok(idx) = nodes.binary_search(&node) {
+        nodes.remove(idx);
+    }
+}
+
+fn adjacency_out_list<'a>(
+    staged: &'a mut HashMap<(InternalNodeId, RelTypeId), Vec<InternalNodeId>>,
+    snapshot: &Snapshot,
+    created_node_ids: &HashSet<InternalNodeId>,
+    src: InternalNodeId,
+    rel: RelTypeId,
+) -> &'a mut Vec<InternalNodeId> {
+    staged.entry((src, rel)).or_insert_with(|| {
+        if created_node_ids.contains(&src) {
+            Vec::new()
+        } else {
+            snapshot.adjacent_out_nodes(src, rel)
+        }
+    })
+}
+
+fn adjacency_in_list<'a>(
+    staged: &'a mut HashMap<(InternalNodeId, RelTypeId), Vec<InternalNodeId>>,
+    snapshot: &Snapshot,
+    created_node_ids: &HashSet<InternalNodeId>,
+    dst: InternalNodeId,
+    rel: RelTypeId,
+) -> &'a mut Vec<InternalNodeId> {
+    staged.entry((dst, rel)).or_insert_with(|| {
+        if created_node_ids.contains(&dst) {
+            Vec::new()
+        } else {
+            snapshot.adjacent_in_nodes(dst, rel)
+        }
+    })
 }
 
 impl<'a> WriteTxn<'a> {
@@ -841,14 +890,54 @@ impl<'a> WriteTxn<'a> {
         }
 
         let edge_writes_started = profile::start();
+        let mut staged_adj_out: HashMap<(InternalNodeId, RelTypeId), Vec<InternalNodeId>> =
+            HashMap::new();
+        let mut staged_adj_in: HashMap<(InternalNodeId, RelTypeId), Vec<InternalNodeId>> =
+            HashMap::new();
         for edge in &created_edges {
-            batch.insert(&self.engine.keyspaces.adj_out, adj_out_key(*edge), []);
-            batch.insert(&self.engine.keyspaces.adj_in, adj_in_key(*edge), []);
+            insert_sorted_unique(
+                adjacency_out_list(
+                    &mut staged_adj_out,
+                    &snapshot,
+                    &self.created_node_ids,
+                    edge.src,
+                    edge.rel,
+                ),
+                edge.dst,
+            );
+            insert_sorted_unique(
+                adjacency_in_list(
+                    &mut staged_adj_in,
+                    &snapshot,
+                    &self.created_node_ids,
+                    edge.dst,
+                    edge.rel,
+                ),
+                edge.src,
+            );
         }
 
         for edge in &self.tombstoned_edges {
-            batch.remove(&self.engine.keyspaces.adj_out, adj_out_key(*edge));
-            batch.remove(&self.engine.keyspaces.adj_in, adj_in_key(*edge));
+            remove_sorted(
+                adjacency_out_list(
+                    &mut staged_adj_out,
+                    &snapshot,
+                    &self.created_node_ids,
+                    edge.src,
+                    edge.rel,
+                ),
+                edge.dst,
+            );
+            remove_sorted(
+                adjacency_in_list(
+                    &mut staged_adj_in,
+                    &snapshot,
+                    &self.created_node_ids,
+                    edge.dst,
+                    edge.rel,
+                ),
+                edge.src,
+            );
             for key in snapshot.collect_edge_property_keys(*edge) {
                 batch.remove(&self.engine.keyspaces.graph_data, key);
             }
@@ -880,10 +969,52 @@ impl<'a> WriteTxn<'a> {
         }
 
         for edge in &detached_edges {
-            batch.remove(&self.engine.keyspaces.adj_out, adj_out_key(*edge));
-            batch.remove(&self.engine.keyspaces.adj_in, adj_in_key(*edge));
+            remove_sorted(
+                adjacency_out_list(
+                    &mut staged_adj_out,
+                    &snapshot,
+                    &self.created_node_ids,
+                    edge.src,
+                    edge.rel,
+                ),
+                edge.dst,
+            );
+            remove_sorted(
+                adjacency_in_list(
+                    &mut staged_adj_in,
+                    &snapshot,
+                    &self.created_node_ids,
+                    edge.dst,
+                    edge.rel,
+                ),
+                edge.src,
+            );
             for key in snapshot.collect_edge_property_keys(*edge) {
                 batch.remove(&self.engine.keyspaces.graph_data, key);
+            }
+        }
+        for ((src, rel), dsts) in &staged_adj_out {
+            let key = adj_out_key(*src, *rel);
+            if dsts.is_empty() {
+                batch.remove(&self.engine.keyspaces.adj_out, key);
+            } else {
+                batch.insert(
+                    &self.engine.keyspaces.adj_out,
+                    key,
+                    encode_adjacent_nodes(dsts),
+                );
+            }
+        }
+        for ((dst, rel), srcs) in &staged_adj_in {
+            let key = adj_in_key(*dst, *rel);
+            if srcs.is_empty() {
+                batch.remove(&self.engine.keyspaces.adj_in, key);
+            } else {
+                batch.insert(
+                    &self.engine.keyspaces.adj_in,
+                    key,
+                    encode_adjacent_nodes(srcs),
+                );
             }
         }
         profile::event_since(
@@ -893,6 +1024,8 @@ impl<'a> WriteTxn<'a> {
                 ("created_edges", created_edges.len() as u64),
                 ("tombstoned_edges", self.tombstoned_edges.len() as u64),
                 ("detached_edges", detached_edges.len() as u64),
+                ("adj_out_lists", staged_adj_out.len() as u64),
+                ("adj_in_lists", staged_adj_in.len() as u64),
             ],
         );
 
@@ -986,6 +1119,67 @@ fn open_keyspaces(db: &Database, meta: Keyspace) -> Result<Keyspaces> {
         adj_out: db.keyspace("adj_out", KeyspaceCreateOptions::default)?,
         adj_in: db.keyspace("adj_in", KeyspaceCreateOptions::default)?,
     })
+}
+
+fn journal_files(path: &Path) -> Result<Vec<(u64, PathBuf)>> {
+    let mut journals = Vec::new();
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) != Some("jnl") {
+            continue;
+        }
+        let Some(id) = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .and_then(|stem| stem.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        journals.push((id, path));
+    }
+    journals.sort_by_key(|(id, _)| *id);
+    Ok(journals)
+}
+
+fn checkpoint_journals_after_flush(path: &Path) -> Result<()> {
+    let started = profile::start();
+    let mut journals = journal_files(path)?;
+    let Some((_, active)) = journals.pop() else {
+        profile::event_since(
+            "GraphEngine::close.checkpoint_journal",
+            started,
+            &[("sealed", 0), ("truncated", 0)],
+        );
+        return Ok(());
+    };
+
+    let sealed = journals.len() as u64;
+    let file = OpenOptions::new().write(true).open(&active)?;
+    file.set_len(0)?;
+    file.sync_all()?;
+    sync_directory(path)?;
+
+    profile::event_since(
+        "GraphEngine::close.checkpoint_journal",
+        started,
+        &[("sealed", sealed), ("truncated", 1)],
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> Result<()> {
+    File::open(path)?.sync_all()?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) -> Result<()> {
+    Ok(())
 }
 
 fn ensure_meta(db: &Database, meta: &Keyspace) -> Result<()> {

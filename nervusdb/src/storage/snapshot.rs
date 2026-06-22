@@ -53,12 +53,8 @@ impl Snapshot {
         src: InternalNodeId,
         rel: Option<RelTypeId>,
     ) -> impl Iterator<Item = EdgeKey> + '_ {
-        EdgeScan::new(
-            "neighbors",
-            self.inner
-                .prefix(&self.keyspaces.adj_out, adj_out_prefix(src, rel)),
-            EdgeScanDirection::Outgoing { src, rel },
-        )
+        let (edges, records) = self.outgoing_edges(src, rel);
+        EdgeScan::new("neighbors", edges, records)
     }
 
     pub fn incoming_neighbors(
@@ -66,12 +62,8 @@ impl Snapshot {
         dst: InternalNodeId,
         rel: Option<RelTypeId>,
     ) -> impl Iterator<Item = EdgeKey> + '_ {
-        EdgeScan::new(
-            "incoming_neighbors",
-            self.inner
-                .prefix(&self.keyspaces.adj_in, adj_in_prefix(dst, rel)),
-            EdgeScanDirection::Incoming { dst, rel },
-        )
+        let (edges, records) = self.incoming_edges(dst, rel);
+        EdgeScan::new("incoming_neighbors", edges, records)
     }
 
     pub fn resolve_label_id(&self, name: &str) -> Option<LabelId> {
@@ -116,11 +108,12 @@ impl Snapshot {
     }
 
     pub(crate) fn edge_is_live(&self, edge: EdgeKey) -> bool {
-        self.node_is_live(edge.src)
-            && self.node_is_live(edge.dst)
-            && self
-                .get(&self.keyspaces.adj_out, adj_out_key(edge))
-                .is_some()
+        if !self.node_is_live(edge.src) || !self.node_is_live(edge.dst) {
+            return false;
+        }
+        self.adjacent_out_nodes(edge.src, edge.rel)
+            .binary_search(&edge.dst)
+            .is_ok()
     }
 
     pub fn node_properties(&self, iid: InternalNodeId) -> Option<BTreeMap<String, PropertyValue>> {
@@ -172,19 +165,11 @@ impl Snapshot {
     }
 
     pub(crate) fn collect_raw_outgoing_edges(&self, node: InternalNodeId) -> Vec<EdgeKey> {
-        self.inner
-            .prefix(&self.keyspaces.adj_out, adj_out_prefix(node, None))
-            .filter_map(|guard| guard.key().ok())
-            .filter_map(|key| edge_key_from_adj_out(key.as_ref()))
-            .collect()
+        self.outgoing_edges(node, None).0
     }
 
     pub(crate) fn collect_raw_incoming_edges(&self, node: InternalNodeId) -> Vec<EdgeKey> {
-        self.inner
-            .prefix(&self.keyspaces.adj_in, adj_in_prefix(node, None))
-            .filter_map(|guard| guard.key().ok())
-            .filter_map(|key| edge_key_from_adj_in(key.as_ref()))
-            .collect()
+        self.incoming_edges(node, None).0
     }
 
     pub fn nodes(&self) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {
@@ -330,7 +315,7 @@ impl GraphSnapshot for Snapshot {
 
     fn edge_count(&self, rel: Option<RelTypeId>) -> u64 {
         let started = profile::start();
-        let count = self.neighbors_for_count(rel).count() as u64;
+        let count = self.count_edges(rel);
         profile::event_since(
             "edge_count",
             started,
@@ -341,45 +326,138 @@ impl GraphSnapshot for Snapshot {
 }
 
 impl Snapshot {
-    fn neighbors_for_count(&self, rel: Option<RelTypeId>) -> impl Iterator<Item = EdgeKey> + '_ {
-        self.inner
-            .prefix(&self.keyspaces.adj_out, adj_out_scan_prefix())
-            .filter_map(|guard| guard.key().ok())
-            .filter_map(|key| edge_key_from_adj_out(key.as_ref()))
-            .filter(move |edge| rel.map_or(true, |r| edge.rel == r))
-    }
-}
-
-enum EdgeScanDirection {
-    Outgoing {
+    pub(crate) fn adjacent_out_nodes(
+        &self,
         src: InternalNodeId,
-        rel: Option<RelTypeId>,
-    },
-    Incoming {
+        rel: RelTypeId,
+    ) -> Vec<InternalNodeId> {
+        self.get(&self.keyspaces.adj_out, adj_out_key(src, rel))
+            .and_then(|value| decode_adjacent_nodes(&value))
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn adjacent_in_nodes(
+        &self,
         dst: InternalNodeId,
-        rel: Option<RelTypeId>,
-    },
+        rel: RelTypeId,
+    ) -> Vec<InternalNodeId> {
+        self.get(&self.keyspaces.adj_in, adj_in_key(dst, rel))
+            .and_then(|value| decode_adjacent_nodes(&value))
+            .unwrap_or_default()
+    }
+
+    fn outgoing_edges(&self, src: InternalNodeId, rel: Option<RelTypeId>) -> (Vec<EdgeKey>, u64) {
+        if let Some(rel) = rel {
+            let dsts = self.adjacent_out_nodes(src, rel);
+            let edges = dsts
+                .into_iter()
+                .map(|dst| EdgeKey { src, rel, dst })
+                .collect::<Vec<_>>();
+            let records = u64::from(!edges.is_empty());
+            return (edges, records);
+        }
+
+        let mut edges = Vec::new();
+        let mut records = 0;
+        for guard in self
+            .inner
+            .prefix(&self.keyspaces.adj_out, adj_out_prefix(src, None))
+        {
+            let Ok((key, value)) = guard.into_inner() else {
+                continue;
+            };
+            let Some((found_src, rel)) = parse_adj_out_key(key.as_ref()) else {
+                continue;
+            };
+            if found_src != src {
+                continue;
+            }
+            let Some(dsts) = decode_adjacent_nodes(value.as_ref()) else {
+                continue;
+            };
+            records += 1;
+            edges.extend(dsts.into_iter().map(|dst| EdgeKey { src, rel, dst }));
+        }
+        (edges, records)
+    }
+
+    fn incoming_edges(&self, dst: InternalNodeId, rel: Option<RelTypeId>) -> (Vec<EdgeKey>, u64) {
+        if let Some(rel) = rel {
+            let srcs = self.adjacent_in_nodes(dst, rel);
+            let edges = srcs
+                .into_iter()
+                .map(|src| EdgeKey { src, rel, dst })
+                .collect::<Vec<_>>();
+            let records = u64::from(!edges.is_empty());
+            return (edges, records);
+        }
+
+        let mut edges = Vec::new();
+        let mut records = 0;
+        for guard in self
+            .inner
+            .prefix(&self.keyspaces.adj_in, adj_in_prefix(dst, None))
+        {
+            let Ok((key, value)) = guard.into_inner() else {
+                continue;
+            };
+            let Some((found_dst, rel)) = parse_adj_in_key(key.as_ref()) else {
+                continue;
+            };
+            if found_dst != dst {
+                continue;
+            }
+            let Some(srcs) = decode_adjacent_nodes(value.as_ref()) else {
+                continue;
+            };
+            records += 1;
+            edges.extend(srcs.into_iter().map(|src| EdgeKey { src, rel, dst }));
+        }
+        (edges, records)
+    }
+
+    fn count_edges(&self, rel: Option<RelTypeId>) -> u64 {
+        let mut count = 0;
+        for guard in self
+            .inner
+            .prefix(&self.keyspaces.adj_out, adj_out_scan_prefix())
+        {
+            let Ok((key, value)) = guard.into_inner() else {
+                continue;
+            };
+            let Some((_, found_rel)) = parse_adj_out_key(key.as_ref()) else {
+                continue;
+            };
+            if rel.is_some_and(|rel| rel != found_rel) {
+                continue;
+            }
+            let Some(nodes) = decode_adjacent_nodes(value.as_ref()) else {
+                continue;
+            };
+            count += nodes.len() as u64;
+        }
+        count
+    }
 }
 
 struct EdgeScan {
     stage: &'static str,
-    iter: fjall::Iter,
-    direction: EdgeScanDirection,
+    iter: std::vec::IntoIter<EdgeKey>,
     started: Option<Instant>,
-    scanned: u64,
+    records: u64,
     decoded: u64,
     live: u64,
 }
 
 impl EdgeScan {
-    fn new(stage: &'static str, iter: fjall::Iter, direction: EdgeScanDirection) -> Self {
+    fn new(stage: &'static str, edges: Vec<EdgeKey>, records: u64) -> Self {
+        let decoded = edges.len() as u64;
         Self {
             stage,
-            iter,
-            direction,
+            iter: edges.into_iter(),
             started: profile::start(),
-            scanned: 0,
-            decoded: 0,
+            records,
+            decoded,
             live: 0,
         }
     }
@@ -389,39 +467,11 @@ impl Iterator for EdgeScan {
     type Item = EdgeKey;
 
     fn next(&mut self) -> Option<Self::Item> {
-        for guard in self.iter.by_ref() {
-            if self.started.is_some() {
-                self.scanned += 1;
-            }
-            let Ok(key) = guard.key() else {
-                continue;
-            };
-            let edge = match self.direction {
-                EdgeScanDirection::Outgoing {
-                    src,
-                    rel: Some(rel),
-                } => dst_from_adj_out_key(key.as_ref()).map(|dst| EdgeKey { src, rel, dst }),
-                EdgeScanDirection::Incoming {
-                    dst,
-                    rel: Some(rel),
-                } => src_from_adj_in_key(key.as_ref()).map(|src| EdgeKey { src, rel, dst }),
-                EdgeScanDirection::Outgoing { rel: None, .. } => {
-                    edge_key_from_adj_out(key.as_ref())
-                }
-                EdgeScanDirection::Incoming { rel: None, .. } => edge_key_from_adj_in(key.as_ref()),
-            };
-            let Some(edge) = edge else {
-                continue;
-            };
-            if self.started.is_some() {
-                self.decoded += 1;
-            }
-            if self.started.is_some() {
-                self.live += 1;
-            }
-            return Some(edge);
+        let edge = self.iter.next()?;
+        if self.started.is_some() {
+            self.live += 1;
         }
-        None
+        Some(edge)
     }
 }
 
@@ -430,7 +480,7 @@ impl Drop for EdgeScan {
         profile::edge_scan(
             self.stage,
             self.started,
-            self.scanned,
+            self.records,
             self.decoded,
             self.live,
         );

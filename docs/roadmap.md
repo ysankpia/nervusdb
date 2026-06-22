@@ -2,25 +2,22 @@
 
 ## Current Phase
 
-NervusDB 0.0.7 is in release preparation. The release is about storage epoch 3,
-clean reopen, and footprint reduction, not graph feature expansion.
+NervusDB 0.0.8 is in release-candidate validation. The release closes the
+0.0.7 traversal regression and clean-reopen issue without changing public API
+or durability semantics.
 
 ## Now
 
-- Implement and validate epoch 3 `meta + graph_data + adj_out + adj_in` storage
-  layout.
-- Keep public Rust API and Mini-Cypher behavior unchanged.
-- Reject epoch 2 database directories with `StorageFormatMismatch`; no migration
-  is planned before 0.1.
-- Prepare and publish 0.0.7 after release validation.
-- Document traversal regression honestly; do not present 0.0.7 as a universal
-  performance release.
+- Validate ADR 0010 packed adjacency lists and close-time journal checkpoint.
+- Keep public Rust API, Mini-Cypher behavior, and `SyncAll` durability unchanged.
+- Treat the remaining durable commit cost as Fjall `SyncAll` batch persistence
+  unless a future downstream workload proves a different owner.
+- Keep 0.0.8 out of feature expansion.
 
 ## Next
 
-- After 0.0.7, stop proactive database work and use NervusDB in downstream
-  Agent Memory / local graph projects. Open new database work only from concrete
-  downstream blockers.
+- After 0.0.8, stop proactive database work unless real downstream projects
+  expose a concrete blocker.
 
 ## Later
 
@@ -44,7 +41,8 @@ clean reopen, and footprint reduction, not graph feature expansion.
 | 0.0.4 property equality index | Q2 2026 | Implemented locally: 100k-node scan 68,519.803 ms, index 1.435 ms, 47,757.312x speedup |
 | 0.0.5 stability freeze | Q2 2026 | Released: fsck-lite, derived index repair, Agent Memory smoke, workspace tests passed |
 | 0.0.6 performance hot path | Q2 2026 | Released: load total 1,674.287 ms, update p99 5,010.542 us, detach delete p99 6,480.459 us, two-hop 3,356,928 paths/s on 100k/500k medium benchmark |
-| 0.0.7 storage cleanup | Q2 2026 | Release prep: epoch 3, clean reopen 3.185 ms, footprint 38.3 MB, traversal regression documented |
+| 0.0.7 storage cleanup | Q2 2026 | Released: epoch 3, clean reopen 3.185 ms, footprint 38.3 MB, traversal regression documented |
+| 0.0.8 performance closeout | Q2 2026 | RC: epoch 4 packed adjacency lists, raw reopen 2.059 ms, two-hop 4,905,668 paths/s, footprint 29.4 MB; remaining commit cost is Fjall `SyncAll` floor |
 
 ## Open Questions
 
