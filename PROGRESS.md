@@ -2,7 +2,7 @@
 
 ## Current Objective
 
-Prepare and publish NervusDB 0.0.5 as the stability-freeze release.
+NervusDB 0.0.5 has been released as the stability-freeze release.
 
 ## Active Plan
 
@@ -12,13 +12,13 @@ bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
-0.0.5 stability-freeze implementation is complete locally. Release preparation
-is in progress: version bump, release notes, publish dry-run, then tag/release
-and crates.io publish.
+0.0.5 has been released. NervusDB should now be used in downstream projects by
+default; new database work should wait for concrete blockers from those
+projects.
 
 ## Now
 
-- Publish 0.0.5 after release dry-run and remote CI pass.
+- Use `nervusdb = "0.0.5"` in downstream projects.
 - Keep public index-management APIs, range indexes, EdgeId, unsafe/buffered
   durability modes, vectors, multi-writer work, and advanced Cypher out of scope
   unless a new ADR explicitly changes priority.
@@ -160,10 +160,14 @@ and crates.io publish.
     lookup, traversal, update, detach delete, reopen, and feature-gated fsck.
   - small benchmark artifact:
     `artifacts/core-bench/core-bench-small-20260622-081528.json`.
+- 0.0.5 release completed:
+  - tag: `v0.0.5`
+  - GitHub release: `https://github.com/ysankpia/nervusdb/releases/tag/v0.0.5`
+  - crates.io: `https://crates.io/crates/nervusdb`
 
 ## Next
 
-- Complete 0.0.5 release preparation and publish.
+- Use NervusDB in the next downstream project.
 - Decide whether repeated read benchmark variance needs a separate benchmark
   plan only if a downstream project hits it.
 - Wait for GitHub Dependabot to rescan after the stale `fuzz/Cargo.lock`
@@ -312,9 +316,16 @@ None.
 | 2026-06-22 | `bash scripts/core_crash_recovery.sh` | Passed: 5 kill/reopen iterations after 0.0.5 changes |
 | 2026-06-22 | `bash scripts/core_bench.sh --small` | Passed; artifact `artifacts/core-bench/core-bench-small-20260622-081528.json`; property lookup speedup 483.069x on 1k nodes |
 | 2026-06-22 | `cargo test --workspace` | Passed after 0.0.5 changes |
+| 2026-06-22 | `cargo publish -p nervusdb --dry-run --registry crates-io --allow-dirty` | Passed before release-prep commit; unused local patch warnings expected |
+| 2026-06-22 | `cargo publish -p nervusdb --dry-run --registry crates-io` | Passed clean after release-prep commit; unused local patch warnings expected |
+| 2026-06-22 | GitHub Actions `main` push run `27940134969` | Passed for commit `0beba820` |
+| 2026-06-22 | `git tag -a v0.0.5` and `git push origin v0.0.5` | Passed; tag points at `0beba820` |
+| 2026-06-22 | `gh release create v0.0.5 --verify-tag --title "NervusDB v0.0.5" --notes-file docs/releases/v0.0.5.md --latest=true` | Passed |
+| 2026-06-22 | `cargo publish -p nervusdb --registry crates-io` | Published `nervusdb v0.0.5` |
+| 2026-06-22 | `cargo search nervusdb --limit 5 --registry crates-io` | Confirmed `nervusdb = "0.0.5"` appears in crates.io search |
 
 ## Last Checkpoint
 
-2026-06-22: 0.0.5 fsck-lite and Agent Memory smoke are implemented and
-validated locally. The active objective is release preparation and publication,
-not further database feature expansion.
+2026-06-22: 0.0.5 has been tagged, released on GitHub, published to crates.io,
+and confirmed via `cargo search`. Default next step is to use NervusDB in a
+downstream project, not to continue speculative database expansion.

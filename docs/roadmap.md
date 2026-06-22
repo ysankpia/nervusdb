@@ -2,22 +2,19 @@
 
 ## Current Phase
 
-NervusDB 0.0.5 is in release preparation as the stability-freeze line for the
-single public `nervusdb` crate.
+NervusDB 0.0.5 has been released as the stability-freeze line for the single
+public `nervusdb` crate.
 
 ## Now
 
-- Publish 0.0.5 after release dry-run and remote CI pass.
+- Use NervusDB in downstream projects.
 - Keep repair conservative: rebuild `label_nodes` and `idx_node_props`; report
   canonical-data problems without deleting user graph data.
 - Treat Agent Memory smoke as the stop-line proof for downstream use.
 
 ## Next
 
-- Stop proactive database work after 0.0.5 unless a real downstream blocker
-  appears.
-- Use NervusDB in downstream projects and let those projects decide the next
-  database task.
+- Let downstream projects decide the next database task.
 
 ## Later
 
@@ -39,7 +36,7 @@ single public `nervusdb` crate.
 | 0.0.2 write path | Q2 2026 | 100k/500k benchmark stage timing and at least 2x insert improvement |
 | 0.0.3 graph integrity | Q2 2026 | Dangling-edge rejection, tombstone cleanup tests, and release dry-run pass |
 | 0.0.4 property equality index | Q2 2026 | Implemented locally: 100k-node scan 68,519.803 ms, index 1.435 ms, 47,757.312x speedup |
-| 0.0.5 stability freeze | Q2 2026 | Implemented locally: fsck-lite, derived index repair, Agent Memory smoke, workspace tests passed |
+| 0.0.5 stability freeze | Q2 2026 | Released: fsck-lite, derived index repair, Agent Memory smoke, workspace tests passed |
 
 ## Open Questions
 
