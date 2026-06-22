@@ -2,6 +2,39 @@ use nervusdb::query::{Params, Result as QueryResult, Value, prepare, query_colle
 use nervusdb::{Db, GraphSnapshot, PropertyValue};
 use tempfile::tempdir;
 
+fn seed_people(db: &Db) {
+    let mut txn = db.begin_write();
+    let person = txn.get_or_create_label("Person").unwrap();
+    let alice = txn.create_node(1, person).unwrap();
+    let bob = txn.create_node(2, person).unwrap();
+    let ada = txn.create_node(3, person).unwrap();
+    txn.set_node_property(
+        alice,
+        "name".to_string(),
+        PropertyValue::String("Alice".to_string()),
+    )
+    .unwrap();
+    txn.set_node_property(alice, "age".to_string(), PropertyValue::Int(30))
+        .unwrap();
+    txn.set_node_property(
+        bob,
+        "name".to_string(),
+        PropertyValue::String("Bob".to_string()),
+    )
+    .unwrap();
+    txn.set_node_property(bob, "age".to_string(), PropertyValue::Int(40))
+        .unwrap();
+    txn.set_node_property(
+        ada,
+        "name".to_string(),
+        PropertyValue::String("Ada".to_string()),
+    )
+    .unwrap();
+    txn.set_node_property(ada, "age".to_string(), PropertyValue::Int(30))
+        .unwrap();
+    txn.commit().unwrap();
+}
+
 #[test]
 fn core_0_1_return_one() {
     let dir = tempdir().unwrap();
@@ -157,6 +190,78 @@ fn core_0_1_simple_string_and_integer_filters() {
         db.snapshot().node_property(node, "name"),
         Some(PropertyValue::String("Alice".to_string()))
     );
+}
+
+#[test]
+fn core_0_1_property_equality_index_query_shapes() -> QueryResult<()> {
+    let dir = tempdir().unwrap();
+    let db = Db::open(dir.path()).unwrap();
+    seed_people(&db);
+
+    let by_where = query_collect(
+        &db.snapshot(),
+        "MATCH (n:Person) WHERE n.name = 'Alice' RETURN n",
+        &Params::new(),
+    )?;
+    assert_eq!(by_where.len(), 1);
+    let node = by_where[0].get_node("n").expect("expected n binding");
+    assert_eq!(
+        db.snapshot().node_property(node, "name"),
+        Some(PropertyValue::String("Alice".to_string()))
+    );
+
+    let by_inline = query_collect(
+        &db.snapshot(),
+        "MATCH (n:Person {name: 'Alice'}) RETURN n",
+        &Params::new(),
+    )?;
+    assert_eq!(by_inline.len(), 1);
+    let node = by_inline[0].get_node("n").expect("expected n binding");
+    assert_eq!(
+        db.snapshot().node_property(node, "name"),
+        Some(PropertyValue::String("Alice".to_string()))
+    );
+
+    let missing = query_collect(
+        &db.snapshot(),
+        "MATCH (n:Person) WHERE n.name = 'Missing' RETURN n",
+        &Params::new(),
+    )?;
+    assert!(missing.is_empty());
+
+    let multi_predicate = query_collect(
+        &db.snapshot(),
+        "MATCH (n:Person) WHERE n.age = 30 AND n.name = 'Alice' RETURN n",
+        &Params::new(),
+    )?;
+    assert_eq!(multi_predicate.len(), 1);
+    let node = multi_predicate[0]
+        .get_node("n")
+        .expect("expected n binding");
+    assert_eq!(
+        db.snapshot().node_property(node, "name"),
+        Some(PropertyValue::String("Alice".to_string()))
+    );
+
+    let no_label_fallback = query_collect(
+        &db.snapshot(),
+        "MATCH (n) WHERE n.name = 'Alice' RETURN n",
+        &Params::new(),
+    )?;
+    assert_eq!(no_label_fallback.len(), 1);
+
+    let explain = query_collect(
+        &db.snapshot(),
+        "EXPLAIN MATCH (n:Person) WHERE n.name = 'Alice' RETURN n",
+        &Params::new(),
+    )?;
+    let plan = match &explain[0].columns()[0].1 {
+        Value::String(plan) => plan,
+        other => panic!("expected plan string, got {other:?}"),
+    };
+    assert!(plan.contains("property_eq=Some"));
+
+    Ok(())
 }
 
 #[test]

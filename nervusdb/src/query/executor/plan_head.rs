@@ -21,6 +21,7 @@ pub(super) fn execute_node_scan<'a, S: GraphSnapshot + 'a>(
     snapshot: &'a S,
     alias: &'a str,
     label: &'a Option<String>,
+    property_eq: &'a Option<(String, crate::api::PropertyValue)>,
     _optional: bool,
 ) -> PlanIterator<'a, S> {
     let label_id = if let Some(l) = label {
@@ -38,9 +39,12 @@ pub(super) fn execute_node_scan<'a, S: GraphSnapshot + 'a>(
 
     let iter = NodeScanIter {
         snapshot,
-        node_iter: match label_id {
-            Some(lid) => snapshot.nodes_with_label(lid),
-            None => snapshot.nodes(),
+        node_iter: match (label_id, property_eq) {
+            (Some(lid), Some((key, value))) => {
+                snapshot.nodes_with_label_and_property(lid, key, value)
+            }
+            (Some(lid), None) => snapshot.nodes_with_label(lid),
+            (None, _) => snapshot.nodes(),
         },
         alias,
     };

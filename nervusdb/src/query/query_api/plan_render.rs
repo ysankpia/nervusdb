@@ -26,10 +26,14 @@ pub(super) fn render_plan(plan: &Plan) -> String {
             Plan::NodeScan {
                 alias,
                 label,
+                property_eq,
                 optional,
             } => {
                 let opt = if *optional { " OPTIONAL" } else { "" };
-                let _ = writeln!(out, "{pad}NodeScan{opt}(alias={alias}, label={label:?})");
+                let _ = writeln!(
+                    out,
+                    "{pad}NodeScan{opt}(alias={alias}, label={label:?}, property_eq={property_eq:?})"
+                );
             }
             Plan::MatchOut {
                 input: _,

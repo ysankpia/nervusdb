@@ -3,6 +3,7 @@ use super::{
     build_optional_unbind_aliases, extract_output_var_kinds, first_relationship_is_bound,
     maybe_reanchor_pattern, pattern_has_bound_relationship, validate_match_pattern_bindings,
 };
+use crate::api::PropertyValue;
 use crate::query::query_api::ast_walk::extract_variables_from_expr;
 
 pub(super) fn compile_match_plan(
@@ -153,6 +154,7 @@ fn compile_pattern_chain(
             let start_plan = Plan::NodeScan {
                 alias: src_alias.clone().into(),
                 label: src_label.clone(),
+                property_eq: node_scan_property_eq(&src_alias, &src_label, &local_predicates),
                 optional,
             };
 
@@ -174,6 +176,7 @@ fn compile_pattern_chain(
         let start_plan = Plan::NodeScan {
             alias: src_alias.clone().into(),
             label: src_label.clone(),
+            property_eq: node_scan_property_eq(&src_alias, &src_label, &local_predicates),
             optional,
         };
 
@@ -361,6 +364,38 @@ fn compile_pattern_chain(
     }
 
     Ok(plan)
+}
+
+fn node_scan_property_eq(
+    alias: &str,
+    label: &Option<String>,
+    local_predicates: &BTreeMap<String, BTreeMap<String, Expression>>,
+) -> Option<(String, PropertyValue)> {
+    label.as_ref()?;
+    let predicates = local_predicates.get(alias)?;
+    predicates
+        .iter()
+        .filter_map(|(key, expr)| literal_to_index_value(expr).map(|value| (key.clone(), value)))
+        .next()
+}
+
+fn literal_to_index_value(expr: &Expression) -> Option<PropertyValue> {
+    match expr {
+        Expression::Literal(crate::query::ast::Literal::Null) => Some(PropertyValue::Null),
+        Expression::Literal(crate::query::ast::Literal::Boolean(value)) => {
+            Some(PropertyValue::Bool(*value))
+        }
+        Expression::Literal(crate::query::ast::Literal::Integer(value)) => {
+            Some(PropertyValue::Int(*value))
+        }
+        Expression::Literal(crate::query::ast::Literal::Float(value)) => {
+            Some(PropertyValue::Float(*value))
+        }
+        Expression::Literal(crate::query::ast::Literal::String(value)) => {
+            Some(PropertyValue::String(value.clone()))
+        }
+        _ => None,
+    }
 }
 
 fn is_bound_before_local(

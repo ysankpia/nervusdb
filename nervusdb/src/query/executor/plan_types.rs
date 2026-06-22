@@ -3,6 +3,7 @@ use super::{
     LimitIter, MatchBoundRelIter, NodeScanIter, Pattern, ProjectIter, RelationshipDirection,
     Result, Row, ValuesIter,
 };
+use crate::api::PropertyValue;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -13,6 +14,7 @@ pub enum Plan {
     NodeScan {
         alias: Arc<str>,
         label: Option<String>,
+        property_eq: Option<(String, PropertyValue)>,
         optional: bool,
     },
     /// `MATCH (a)-[:rel]->(b) RETURN ...`

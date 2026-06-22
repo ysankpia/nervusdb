@@ -16,8 +16,9 @@ pub(super) fn execute_plan<'a, S: GraphSnapshot + 'a>(
         Plan::NodeScan {
             alias,
             label,
+            property_eq,
             optional,
-        } => plan_head::execute_node_scan(snapshot, alias, label, *optional),
+        } => plan_head::execute_node_scan(snapshot, alias, label, property_eq, *optional),
         Plan::MatchOut {
             input,
             src_alias,

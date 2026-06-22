@@ -300,6 +300,7 @@ mod tests {
             input: Box::new(Plan::NodeScan {
                 alias: "a".to_string().into(),
                 label: None,
+                property_eq: None,
                 optional: false,
             }),
             projections: vec![("a".to_string(), Expression::Variable("a".to_string()))],
