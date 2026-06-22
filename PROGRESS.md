@@ -2,8 +2,7 @@
 
 ## Current Objective
 
-NervusDB 0.0.3 graph integrity is implemented and is being prepared for
-release.
+NervusDB 0.0.3 graph integrity has been released.
 
 ## Active Plan
 
@@ -13,17 +12,15 @@ bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
-0.0.2 has been tagged, released on GitHub, and published to crates.io as the
-single public `nervusdb` crate. 0.0.3 graph integrity changes are on `main`;
-release preparation is now updating package versions and release notes.
+0.0.3 has been tagged, released on GitHub, and published to crates.io as the
+single public `nervusdb` crate.
 
 ## Now
 
-- Prepare the `v0.0.3` release without adding new runtime features.
-- Keep the release focused on dangling-edge rejection, invalid mutation
-  rejection, and detach-clean direct Rust API node deletion.
+- Decide the next correctness target after graph integrity. Property equality
+  index design is the likely candidate, but it needs a separate ADR/plan.
 - Keep property indexes, EdgeId, unsafe/buffered durability modes, vectors,
-  multi-writer work, and advanced query work out of 0.0.3.
+  multi-writer work, and advanced query work out of released 0.0.3.
 
 ## Done
 
@@ -112,6 +109,10 @@ release preparation is now updating package versions and release notes.
     `DETACH DELETE n` removes the node and relationships.
 - 0.0.3 release preparation is in progress: workspace package versions and
   current install docs are being updated to `0.0.3`.
+- 0.0.3 release completed:
+  - tag: `v0.0.3`
+  - GitHub release: `https://github.com/ysankpia/nervusdb/releases/tag/v0.0.3`
+  - crates.io: `https://crates.io/crates/nervusdb`
 
 ## Next
 
@@ -120,7 +121,6 @@ release preparation is now updating package versions and release notes.
 - Wait for GitHub Dependabot to rescan after the stale `fuzz/Cargo.lock`
   removal is pushed.
 - Update GitHub Actions if the Node.js 20 deprecation annotation becomes noisy.
-- Complete v0.0.3 release dry-run, tag, GitHub release, and crates.io publish.
 - Start property equality index design only as a later ADR after v0.0.3 is
   published.
 
@@ -223,11 +223,17 @@ None yet.
 | 2026-06-22 | `cargo fmt --all -- --check` | Passed after 0.0.3 release preparation |
 | 2026-06-22 | `bash scripts/check.sh` | Passed after 0.0.3 release preparation |
 | 2026-06-22 | `cargo publish -p nervusdb --dry-run --registry crates-io --allow-dirty` | Passed after 0.0.3 release preparation; unused local patch warnings expected |
+| 2026-06-22 | `cargo publish -p nervusdb --dry-run --registry crates-io` | Passed clean after 0.0.3 version bump; unused local patch warnings expected |
+| 2026-06-22 | GitHub Actions `main` push run `27928160247` | Passed for commit `e1bc3726` |
+| 2026-06-22 | `git tag -a v0.0.3` and `git push origin v0.0.3` | Passed; tag points at `e1bc3726` |
+| 2026-06-22 | `gh release create v0.0.3 --verify-tag --title "NervusDB v0.0.3" --notes-file docs/releases/v0.0.3.md --latest=true` | Passed |
+| 2026-06-22 | `cargo publish -p nervusdb --registry crates-io` | Published `nervusdb v0.0.3` |
+| 2026-06-22 | `cargo search nervusdb --limit 5 --registry crates-io` | Confirmed `nervusdb = "0.0.3"` appears in crates.io search |
 
 ## Last Checkpoint
 
-2026-06-22: 0.0.3 graph integrity is implemented and pushed to `main`. Storage
-now rejects dangling edges and invalid mutations, direct Rust API node deletion
-detach-cleans related keyspaces, and Mini-Cypher DELETE/DETACH DELETE behavior
-is covered by regression tests. Full workspace validation and GitHub Actions
-passed. Release preparation is underway.
+2026-06-22: 0.0.3 graph integrity was released as the single public
+`nervusdb` crate. Storage rejects dangling edges and invalid mutations, direct
+Rust API node deletion detach-cleans related keyspaces, and Mini-Cypher
+DELETE/DETACH DELETE behavior is covered by regression tests. GitHub Actions,
+publish dry-run, GitHub Release, and crates.io publication all passed.
