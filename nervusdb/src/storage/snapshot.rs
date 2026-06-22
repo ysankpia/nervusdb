@@ -367,7 +367,6 @@ impl Snapshot {
             .filter_map(|guard| guard.key().ok())
             .filter_map(|key| edge_key_from_adj_out(key.as_ref()))
             .filter(move |edge| rel.map_or(true, |r| edge.rel == r))
-            .filter(|edge| self.node_is_live(edge.src) && self.node_is_live(edge.dst))
     }
 }
 
@@ -376,9 +375,8 @@ enum EdgeScanDirection {
     Incoming,
 }
 
-struct EdgeScan<'a> {
+struct EdgeScan {
     stage: &'static str,
-    snapshot: &'a Snapshot,
     iter: fjall::Iter,
     direction: EdgeScanDirection,
     started: Option<Instant>,
@@ -387,16 +385,15 @@ struct EdgeScan<'a> {
     live: u64,
 }
 
-impl<'a> EdgeScan<'a> {
+impl EdgeScan {
     fn new(
         stage: &'static str,
-        snapshot: &'a Snapshot,
+        _snapshot: &Snapshot,
         iter: fjall::Iter,
         direction: EdgeScanDirection,
     ) -> Self {
         Self {
             stage,
-            snapshot,
             iter,
             direction,
             started: profile::start(),
@@ -407,7 +404,7 @@ impl<'a> EdgeScan<'a> {
     }
 }
 
-impl Iterator for EdgeScan<'_> {
+impl Iterator for EdgeScan {
     type Item = EdgeKey;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -428,27 +425,23 @@ impl Iterator for EdgeScan<'_> {
             if self.started.is_some() {
                 self.decoded += 1;
             }
-            if self.snapshot.node_is_live(edge.src) && self.snapshot.node_is_live(edge.dst) {
-                if self.started.is_some() {
-                    self.live += 1;
-                }
-                return Some(edge);
+            if self.started.is_some() {
+                self.live += 1;
             }
+            return Some(edge);
         }
         None
     }
 }
 
-impl Drop for EdgeScan<'_> {
+impl Drop for EdgeScan {
     fn drop(&mut self) {
-        profile::event_since(
+        profile::edge_scan(
             self.stage,
             self.started,
-            &[
-                ("scanned", self.scanned),
-                ("decoded", self.decoded),
-                ("live", self.live),
-            ],
+            self.scanned,
+            self.decoded,
+            self.live,
         );
     }
 }
