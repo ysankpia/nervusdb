@@ -39,7 +39,7 @@ Expected user install:
 
 ```toml
 [dependencies]
-nervusdb = "0.0.6"
+nervusdb = "0.0.7"
 ```
 
 ## Release Procedure

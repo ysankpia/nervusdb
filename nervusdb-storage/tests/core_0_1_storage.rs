@@ -25,6 +25,64 @@ fn assert_core_edge(engine: &GraphEngine, src_ext: u64, rel: u32, dst_ext: u64) 
 }
 
 #[test]
+fn storage_epoch_2_database_is_rejected() {
+    let dir = tempdir().unwrap();
+    let path = db_dir(&dir);
+    std::fs::create_dir_all(&path).unwrap();
+    {
+        let db = Database::builder(&path).open().unwrap();
+        let meta = db.keyspace("meta", KeyspaceCreateOptions::default).unwrap();
+        let mut batch = db.batch().durability(Some(PersistMode::SyncAll));
+        batch.insert(&meta, b"format_epoch", 2u64.to_be_bytes());
+        batch.commit().unwrap();
+    }
+
+    let err = GraphEngine::open(&path).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::StorageFormatMismatch {
+            expected: STORAGE_FORMAT_EPOCH,
+            found: 2
+        }
+    ));
+}
+
+#[test]
+fn storage_epoch_3_uses_meta_graph_data_and_adjacency_keyspaces() {
+    let dir = tempdir().unwrap();
+    let path = db_dir(&dir);
+    {
+        let engine = GraphEngine::open(&path).unwrap();
+        let person = engine.get_or_create_label("Person").unwrap();
+        let mut tx = engine.begin_write();
+        let alice = tx.create_node(10, person).unwrap();
+        tx.set_node_property(alice, "name".to_string(), "Alice".into())
+            .unwrap();
+        tx.commit().unwrap();
+    }
+
+    let db = Database::builder(&path).open().unwrap();
+    let mut names = db
+        .list_keyspace_names()
+        .into_iter()
+        .map(|name| name.to_string())
+        .collect::<Vec<_>>();
+    names.sort();
+
+    assert_eq!(db.keyspace_count(), 4);
+    assert_eq!(
+        names,
+        vec![
+            "adj_in".to_string(),
+            "adj_out".to_string(),
+            "graph_data".to_string(),
+            "meta".to_string()
+        ]
+    );
+}
+
+#[test]
 fn core_0_1_committed_graph_survives_reopen() {
     let dir = tempdir().unwrap();
     let path = db_dir(&dir);

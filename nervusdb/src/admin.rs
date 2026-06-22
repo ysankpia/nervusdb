@@ -5,11 +5,8 @@
 //! maintenance commands.
 
 use crate::api::{EdgeKey, InternalNodeId, LabelId, PropertyValue, RelTypeId};
-use crate::storage::engine::{
-    GraphEngine, KEY_FLAG_TOMBSTONE, decode_u32, edge_key_from_adj_in, edge_key_from_adj_out,
-    label_node_key, node_prop_index_key, parse_iid_key, parse_node_value, parse_prop_value,
-    scalar_indexable_value,
-};
+use crate::storage::engine::{GraphEngine, scalar_indexable_value};
+use crate::storage::layout::*;
 use crate::{Error, Result};
 use fjall::{PersistMode, Readable};
 use serde::Serialize;
@@ -155,7 +152,7 @@ fn check_engine(engine: &GraphEngine) -> crate::storage::Result<CheckState> {
     let keyspaces = &engine.keyspaces;
     let mut state = CheckState::default();
 
-    for guard in snapshot.iter(&keyspaces.nodes) {
+    for guard in snapshot.prefix(&keyspaces.graph_data, node_scan_prefix()) {
         state.checked.nodes += 1;
         let Ok((key, value)) = guard.into_inner() else {
             state
@@ -163,7 +160,7 @@ fn check_engine(engine: &GraphEngine) -> crate::storage::Result<CheckState> {
                 .push(FsckIssue::new(FsckIssueKind::MalformedNode));
             continue;
         };
-        let Some(node) = parse_iid_key(key.as_ref()) else {
+        let Some(node) = parse_node_key(key.as_ref()) else {
             state
                 .issues
                 .push(FsckIssue::new(FsckIssueKind::MalformedNode));
@@ -180,7 +177,7 @@ fn check_engine(engine: &GraphEngine) -> crate::storage::Result<CheckState> {
         }
     }
 
-    for guard in snapshot.iter(&keyspaces.node_labels) {
+    for guard in snapshot.prefix(&keyspaces.graph_data, node_label_scan_prefix()) {
         state.checked.node_labels += 1;
         let Ok((key, _)) = guard.into_inner() else {
             state
@@ -188,7 +185,7 @@ fn check_engine(engine: &GraphEngine) -> crate::storage::Result<CheckState> {
                 .push(FsckIssue::new(FsckIssueKind::MalformedNodeLabel));
             continue;
         };
-        let Some((node, label)) = parse_node_label_storage_key(key.as_ref()) else {
+        let Some((node, label)) = parse_node_label_key(key.as_ref()) else {
             state
                 .issues
                 .push(FsckIssue::new(FsckIssueKind::MalformedNodeLabel));
@@ -208,7 +205,7 @@ fn check_engine(engine: &GraphEngine) -> crate::storage::Result<CheckState> {
         }
     }
 
-    for guard in snapshot.iter(&keyspaces.node_props) {
+    for guard in snapshot.prefix(&keyspaces.graph_data, node_prop_scan_prefix()) {
         state.checked.node_props += 1;
         let Ok((key, value)) = guard.into_inner() else {
             state
@@ -216,7 +213,7 @@ fn check_engine(engine: &GraphEngine) -> crate::storage::Result<CheckState> {
                 .push(FsckIssue::new(FsckIssueKind::MalformedNodeProperty));
             continue;
         };
-        let Some((node, property_key)) = parse_node_prop_storage_key(key.as_ref()) else {
+        let Some((node, property_key)) = parse_node_prop_key(key.as_ref()) else {
             state
                 .issues
                 .push(FsckIssue::new(FsckIssueKind::MalformedNodeProperty));
@@ -263,7 +260,7 @@ fn check_engine(engine: &GraphEngine) -> crate::storage::Result<CheckState> {
         }
     }
 
-    for guard in snapshot.iter(&keyspaces.label_nodes) {
+    for guard in snapshot.prefix(&keyspaces.graph_data, label_node_scan_prefix()) {
         state.checked.label_nodes += 1;
         let Ok((key, _)) = guard.into_inner() else {
             state
@@ -273,7 +270,7 @@ fn check_engine(engine: &GraphEngine) -> crate::storage::Result<CheckState> {
         };
         let raw_key = key.as_ref().to_vec();
         state.all_label_node_keys.push(raw_key.clone());
-        let Some((label, node)) = parse_label_node_storage_key(&raw_key) else {
+        let Some((label, node)) = parse_label_node_key(&raw_key) else {
             state
                 .issues
                 .push(FsckIssue::new(FsckIssueKind::MalformedLabelNode));
@@ -298,7 +295,7 @@ fn check_engine(engine: &GraphEngine) -> crate::storage::Result<CheckState> {
         .expected_label_nodes
         .difference(&state.actual_label_nodes)
     {
-        if let Some((label, node)) = parse_label_node_storage_key(key) {
+        if let Some((label, node)) = parse_label_node_key(key) {
             state.issues.push(
                 FsckIssue::new(FsckIssueKind::MissingLabelNodeIndex)
                     .with_node(node)
@@ -307,7 +304,7 @@ fn check_engine(engine: &GraphEngine) -> crate::storage::Result<CheckState> {
         }
     }
 
-    for guard in snapshot.iter(&keyspaces.idx_node_props) {
+    for guard in snapshot.prefix(&keyspaces.graph_data, node_prop_index_scan_prefix()) {
         state.checked.idx_node_props += 1;
         let Ok((key, _)) = guard.into_inner() else {
             state
@@ -317,7 +314,7 @@ fn check_engine(engine: &GraphEngine) -> crate::storage::Result<CheckState> {
         };
         let raw_key = key.as_ref().to_vec();
         state.all_node_prop_index_keys.push(raw_key.clone());
-        let Some(entry) = parse_node_prop_index_storage_key(&raw_key) else {
+        let Some(entry) = parse_node_prop_index_key(&raw_key) else {
             state
                 .issues
                 .push(FsckIssue::new(FsckIssueKind::MalformedNodePropertyIndex));
@@ -349,7 +346,7 @@ fn check_engine(engine: &GraphEngine) -> crate::storage::Result<CheckState> {
         .expected_node_prop_indexes
         .difference(&state.actual_node_prop_indexes)
     {
-        if let Some(entry) = parse_node_prop_index_storage_key(key) {
+        if let Some(entry) = parse_node_prop_index_key(key) {
             state.issues.push(
                 FsckIssue::new(FsckIssueKind::MissingNodePropertyIndex)
                     .with_node(entry.node)
@@ -359,7 +356,7 @@ fn check_engine(engine: &GraphEngine) -> crate::storage::Result<CheckState> {
         }
     }
 
-    for guard in snapshot.iter(&keyspaces.adj_out) {
+    for guard in snapshot.prefix(&keyspaces.adj_out, adj_out_scan_prefix()) {
         state.checked.adj_out += 1;
         let Ok((key, _)) = guard.into_inner() else {
             state
@@ -376,7 +373,7 @@ fn check_engine(engine: &GraphEngine) -> crate::storage::Result<CheckState> {
         state.adj_out.insert(edge);
     }
 
-    for guard in snapshot.iter(&keyspaces.adj_in) {
+    for guard in snapshot.prefix(&keyspaces.adj_in, adj_in_scan_prefix()) {
         state.checked.adj_in += 1;
         let Ok((key, _)) = guard.into_inner() else {
             state
@@ -404,7 +401,7 @@ fn check_engine(engine: &GraphEngine) -> crate::storage::Result<CheckState> {
             .push(FsckIssue::new(FsckIssueKind::AdjacencyMismatch).with_edge(*edge));
     }
 
-    for guard in snapshot.iter(&keyspaces.edge_props) {
+    for guard in snapshot.prefix(&keyspaces.graph_data, edge_prop_scan_prefix()) {
         state.checked.edge_props += 1;
         let Ok((key, _)) = guard.into_inner() else {
             state
@@ -412,7 +409,7 @@ fn check_engine(engine: &GraphEngine) -> crate::storage::Result<CheckState> {
                 .push(FsckIssue::new(FsckIssueKind::MalformedEdgeProperty));
             continue;
         };
-        let Some((edge, property_key)) = parse_edge_prop_storage_key(key.as_ref()) else {
+        let Some((edge, property_key)) = parse_edge_prop_key(key.as_ref()) else {
             state
                 .issues
                 .push(FsckIssue::new(FsckIssueKind::MalformedEdgeProperty));
@@ -436,16 +433,16 @@ fn repair_derived_indexes(
 ) -> crate::storage::Result<Vec<FsckRepair>> {
     let mut batch = engine.db.batch().durability(Some(PersistMode::SyncAll));
     for key in &state.all_label_node_keys {
-        batch.remove(&engine.keyspaces.label_nodes, key);
+        batch.remove(&engine.keyspaces.graph_data, key);
     }
     for key in &state.expected_label_nodes {
-        batch.insert(&engine.keyspaces.label_nodes, key, []);
+        batch.insert(&engine.keyspaces.graph_data, key, []);
     }
     for key in &state.all_node_prop_index_keys {
-        batch.remove(&engine.keyspaces.idx_node_props, key);
+        batch.remove(&engine.keyspaces.graph_data, key);
     }
     for key in &state.expected_node_prop_indexes {
-        batch.insert(&engine.keyspaces.idx_node_props, key, []);
+        batch.insert(&engine.keyspaces.graph_data, key, []);
     }
     batch.commit()?;
 
@@ -505,94 +502,10 @@ impl FsckIssue {
     }
 }
 
-#[derive(Debug)]
-struct NodePropIndexEntry {
-    label: LabelId,
-    property_key: String,
-    value: PropertyValue,
-    node: InternalNodeId,
-}
-
-fn parse_node_label_storage_key(key: &[u8]) -> Option<(InternalNodeId, LabelId)> {
-    if key.len() != 8 {
-        return None;
-    }
-    Some((decode_u32(&key[0..4])?, decode_u32(&key[4..8])?))
-}
-
-fn parse_label_node_storage_key(key: &[u8]) -> Option<(LabelId, InternalNodeId)> {
-    if key.len() != 8 {
-        return None;
-    }
-    Some((decode_u32(&key[0..4])?, decode_u32(&key[4..8])?))
-}
-
-fn parse_node_prop_storage_key(key: &[u8]) -> Option<(InternalNodeId, String)> {
-    if key.len() < 8 {
-        return None;
-    }
-    let node = decode_u32(&key[0..4])?;
-    let len = u32::from_be_bytes(key[4..8].try_into().ok()?) as usize;
-    if key.len() != 8 + len {
-        return None;
-    }
-    let property_key = String::from_utf8(key[8..].to_vec()).ok()?;
-    Some((node, property_key))
-}
-
-fn parse_node_prop_index_storage_key(key: &[u8]) -> Option<NodePropIndexEntry> {
-    if key.len() < 14 {
-        return None;
-    }
-    let label = decode_u32(&key[0..4])?;
-    let key_len = u16::from_be_bytes(key[4..6].try_into().ok()?) as usize;
-    let value_len_offset = 6 + key_len;
-    if key.len() < value_len_offset + 8 {
-        return None;
-    }
-    let property_key = String::from_utf8(key[6..6 + key_len].to_vec()).ok()?;
-    let value_len = u32::from_be_bytes(
-        key[value_len_offset..value_len_offset + 4]
-            .try_into()
-            .ok()?,
-    ) as usize;
-    let value_offset = value_len_offset + 4;
-    let node_offset = value_offset + value_len;
-    if key.len() != node_offset + 4 {
-        return None;
-    }
-    let value = PropertyValue::decode(&key[value_offset..node_offset]).ok()?;
-    let node = decode_u32(&key[node_offset..node_offset + 4])?;
-    Some(NodePropIndexEntry {
-        label,
-        property_key,
-        value,
-        node,
-    })
-}
-
-fn parse_edge_prop_storage_key(key: &[u8]) -> Option<(EdgeKey, String)> {
-    if key.len() < 16 {
-        return None;
-    }
-    let edge = EdgeKey {
-        src: decode_u32(&key[0..4])?,
-        rel: decode_u32(&key[4..8])?,
-        dst: decode_u32(&key[8..12])?,
-    };
-    let len = u32::from_be_bytes(key[12..16].try_into().ok()?) as usize;
-    if key.len() != 16 + len {
-        return None;
-    }
-    let property_key = String::from_utf8(key[16..].to_vec()).ok()?;
-    Some((edge, property_key))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::GraphSnapshot;
-    use crate::storage::engine::{adj_in_key, edge_prop_key};
     use tempfile::tempdir;
 
     fn seed_indexed_node(path: &Path) -> (InternalNodeId, LabelId) {
@@ -627,7 +540,7 @@ mod tests {
         {
             let engine = GraphEngine::open(dir.path()).unwrap();
             let mut batch = engine.db.batch().durability(Some(PersistMode::SyncAll));
-            batch.remove(&engine.keyspaces.label_nodes, label_node_key(person, alice));
+            batch.remove(&engine.keyspaces.graph_data, label_node_key(person, alice));
             batch.commit().unwrap();
         }
 
@@ -659,7 +572,7 @@ mod tests {
         {
             let engine = GraphEngine::open(dir.path()).unwrap();
             let mut batch = engine.db.batch().durability(Some(PersistMode::SyncAll));
-            batch.insert(&engine.keyspaces.label_nodes, label_node_key(99, 999), []);
+            batch.insert(&engine.keyspaces.graph_data, label_node_key(99, 999), []);
             batch.commit().unwrap();
         }
 
@@ -689,7 +602,7 @@ mod tests {
                 alice,
             );
             let mut batch = engine.db.batch().durability(Some(PersistMode::SyncAll));
-            batch.remove(&engine.keyspaces.idx_node_props, key);
+            batch.remove(&engine.keyspaces.graph_data, key);
             batch.commit().unwrap();
         }
 
@@ -715,7 +628,7 @@ mod tests {
             let stale_key =
                 node_prop_index_key(person, "name", &PropertyValue::String("Ghost".into()), 999);
             let mut batch = engine.db.batch().durability(Some(PersistMode::SyncAll));
-            batch.insert(&engine.keyspaces.idx_node_props, stale_key, []);
+            batch.insert(&engine.keyspaces.graph_data, stale_key, []);
             batch.commit().unwrap();
         }
 
@@ -752,13 +665,13 @@ mod tests {
             let mut batch = engine.db.batch().durability(Some(PersistMode::SyncAll));
             batch.remove(&engine.keyspaces.adj_in, adj_in_key(edge));
             batch.insert(
-                &engine.keyspaces.edge_props,
+                &engine.keyspaces.graph_data,
                 edge_prop_key(edge, "since"),
                 PropertyValue::Int(2024).encode(),
             );
             batch.insert(
-                &engine.keyspaces.node_props,
-                crate::storage::engine::node_prop_prefix(999, "name"),
+                &engine.keyspaces.graph_data,
+                node_prop_key(999, "name"),
                 PropertyValue::String("Ghost".into()).encode(),
             );
             batch.commit().unwrap();

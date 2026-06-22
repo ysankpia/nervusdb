@@ -2,15 +2,14 @@ use crate::api::{
     EdgeKey, ExternalId, GraphSnapshot, GraphStore, InternalNodeId, LabelId, PropertyValue,
     RelTypeId,
 };
+use crate::storage::layout::*;
 use crate::storage::profile;
-use crate::storage::snapshot::{Snapshot, id_key, name_key};
+use crate::storage::snapshot::Snapshot;
 use crate::storage::{Error, Result, STORAGE_FORMAT_EPOCH};
 use fjall::{Database, Keyspace, KeyspaceCreateOptions, PersistMode};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
-
-pub(crate) const KEY_FLAG_TOMBSTONE: u8 = 0b0000_0001;
 
 const META_FORMAT_EPOCH: &[u8] = b"format_epoch";
 const META_NEXT_NODE_ID: &[u8] = b"next_node_id";
@@ -20,17 +19,9 @@ const META_NEXT_REL_TYPE_ID: &[u8] = b"next_rel_type_id";
 #[derive(Clone)]
 pub(crate) struct Keyspaces {
     pub(crate) meta: Keyspace,
-    pub(crate) nodes: Keyspace,
-    pub(crate) ext2node: Keyspace,
-    pub(crate) labels: Keyspace,
-    pub(crate) reltypes: Keyspace,
-    pub(crate) node_labels: Keyspace,
-    pub(crate) label_nodes: Keyspace,
+    pub(crate) graph_data: Keyspace,
     pub(crate) adj_out: Keyspace,
     pub(crate) adj_in: Keyspace,
-    pub(crate) node_props: Keyspace,
-    pub(crate) edge_props: Keyspace,
-    pub(crate) idx_node_props: Keyspace,
 }
 
 impl std::fmt::Debug for Keyspaces {
@@ -63,15 +54,14 @@ impl GraphEngine {
         let db = Database::builder(&path).open()?;
         profile::event_since("GraphEngine::open.database", db_started, &[]);
         let keyspaces_started = profile::start();
-        let keyspaces = open_keyspaces(&db)?;
+        let meta = db.keyspace("meta", KeyspaceCreateOptions::default)?;
+        ensure_meta(&db, &meta)?;
+        let keyspaces = open_keyspaces(&db, meta)?;
         profile::event_since(
             "GraphEngine::open.keyspaces",
             keyspaces_started,
-            &[("keyspaces", 12)],
+            &[("keyspaces", 4)],
         );
-        let meta_started = profile::start();
-        ensure_meta(&db, &keyspaces)?;
-        profile::event_since("GraphEngine::open.meta", meta_started, &[]);
 
         let engine = Self {
             path,
@@ -120,8 +110,8 @@ impl GraphEngine {
     pub fn lookup_internal_id(&self, external_id: ExternalId) -> Option<InternalNodeId> {
         let iid = self
             .keyspaces
-            .ext2node
-            .get(key_u64(external_id))
+            .graph_data
+            .get(ext2node_key(external_id))
             .ok()
             .flatten()
             .and_then(|v| decode_u32(v.as_ref()))?;
@@ -134,28 +124,28 @@ impl GraphEngine {
 
     pub fn get_or_create_label(&self, name: &str) -> Result<LabelId> {
         let _guard = self.write_lock.lock().unwrap();
-        self.get_or_create_name(&self.keyspaces.labels, META_NEXT_LABEL_ID, name)
+        self.get_or_create_name(label_name_key, label_id_key, META_NEXT_LABEL_ID, name)
     }
 
     pub fn get_or_create_rel_type(&self, name: &str) -> Result<RelTypeId> {
         let _guard = self.write_lock.lock().unwrap();
-        self.get_or_create_name(&self.keyspaces.reltypes, META_NEXT_REL_TYPE_ID, name)
+        self.get_or_create_name(rel_name_key, rel_id_key, META_NEXT_REL_TYPE_ID, name)
     }
 
     pub fn get_label_id(&self, name: &str) -> Option<LabelId> {
-        self.get_name_id(&self.keyspaces.labels, name)
+        self.get_name_id(label_name_key, name)
     }
 
     pub fn get_rel_type_id(&self, name: &str) -> Option<RelTypeId> {
-        self.get_name_id(&self.keyspaces.reltypes, name)
+        self.get_name_id(rel_name_key, name)
     }
 
     pub fn get_label_name(&self, id: LabelId) -> Option<String> {
-        self.get_id_name(&self.keyspaces.labels, id)
+        self.get_id_name(label_id_key, id)
     }
 
     pub fn get_rel_type_name(&self, id: RelTypeId) -> Option<String> {
-        self.get_id_name(&self.keyspaces.reltypes, id)
+        self.get_id_name(rel_id_key, id)
     }
 
     pub fn persist(&self) -> Result<()> {
@@ -164,19 +154,28 @@ impl GraphEngine {
     }
 
     pub fn checkpoint_on_close(&self) -> Result<()> {
-        self.persist()
+        self.persist()?;
+        let started = profile::start();
+        self.keyspaces.meta.rotate_memtable_and_wait()?;
+        self.keyspaces.graph_data.rotate_memtable_and_wait()?;
+        self.keyspaces.adj_out.rotate_memtable_and_wait()?;
+        self.keyspaces.adj_in.rotate_memtable_and_wait()?;
+        profile::event_since("GraphEngine::close.flush_keyspaces", started, &[]);
+        Ok(())
     }
 
-    fn get_name_id(&self, keyspace: &Keyspace, name: &str) -> Option<u32> {
-        keyspace
+    fn get_name_id(&self, name_key: fn(&str) -> Vec<u8>, name: &str) -> Option<u32> {
+        self.keyspaces
+            .graph_data
             .get(name_key(name))
             .ok()
             .flatten()
             .and_then(|v| decode_u32(v.as_ref()))
     }
 
-    fn get_id_name(&self, keyspace: &Keyspace, id: u32) -> Option<String> {
-        keyspace
+    fn get_id_name(&self, id_key: fn(u32) -> Vec<u8>, id: u32) -> Option<String> {
+        self.keyspaces
+            .graph_data
             .get(id_key(id))
             .ok()
             .flatten()
@@ -185,18 +184,19 @@ impl GraphEngine {
 
     fn get_or_create_name(
         &self,
-        keyspace: &Keyspace,
+        name_key: fn(&str) -> Vec<u8>,
+        id_key: fn(u32) -> Vec<u8>,
         counter_key: &[u8],
         name: &str,
     ) -> Result<u32> {
-        if let Some(id) = self.get_name_id(keyspace, name) {
+        if let Some(id) = self.get_name_id(name_key, name) {
             return Ok(id);
         }
 
         let id = self.next_counter(counter_key)?;
         let mut batch = self.db.batch().durability(Some(PersistMode::SyncAll));
-        batch.insert(keyspace, name_key(name), id.to_be_bytes());
-        batch.insert(keyspace, id_key(id), name.as_bytes());
+        batch.insert(&self.keyspaces.graph_data, name_key(name), id.to_be_bytes());
+        batch.insert(&self.keyspaces.graph_data, id_key(id), name.as_bytes());
         batch.commit()?;
         Ok(id)
     }
@@ -604,12 +604,12 @@ impl<'a> WriteTxn<'a> {
 
     pub fn get_or_create_label(&mut self, name: &str) -> Result<LabelId> {
         self.engine
-            .get_or_create_name(&self.engine.keyspaces.labels, META_NEXT_LABEL_ID, name)
+            .get_or_create_name(label_name_key, label_id_key, META_NEXT_LABEL_ID, name)
     }
 
     pub fn get_or_create_rel_type(&mut self, name: &str) -> Result<RelTypeId> {
         self.engine
-            .get_or_create_name(&self.engine.keyspaces.reltypes, META_NEXT_REL_TYPE_ID, name)
+            .get_or_create_name(rel_name_key, rel_id_key, META_NEXT_REL_TYPE_ID, name)
     }
 
     pub fn staged_created_nodes_with_labels(&self) -> Vec<(InternalNodeId, Vec<String>)> {
@@ -756,23 +756,23 @@ impl<'a> WriteTxn<'a> {
             }
             created_node_writes += 1;
             batch.insert(
-                &self.engine.keyspaces.nodes,
-                key_u32(node.iid),
+                &self.engine.keyspaces.graph_data,
+                node_key(node.iid),
                 encode_node_value(node.external_id, 0),
             );
             batch.insert(
-                &self.engine.keyspaces.ext2node,
-                key_u64(node.external_id),
+                &self.engine.keyspaces.graph_data,
+                ext2node_key(node.external_id),
                 key_u32(node.iid),
             );
             for label in &node.labels {
                 batch.insert(
-                    &self.engine.keyspaces.node_labels,
+                    &self.engine.keyspaces.graph_data,
                     node_label_key(node.iid, *label),
                     [],
                 );
                 batch.insert(
-                    &self.engine.keyspaces.label_nodes,
+                    &self.engine.keyspaces.graph_data,
                     label_node_key(*label, node.iid),
                     [],
                 );
@@ -801,12 +801,12 @@ impl<'a> WriteTxn<'a> {
                 continue;
             }
             batch.insert(
-                &self.engine.keyspaces.node_labels,
+                &self.engine.keyspaces.graph_data,
                 node_label_key(*node, *label),
                 [],
             );
             batch.insert(
-                &self.engine.keyspaces.label_nodes,
+                &self.engine.keyspaces.graph_data,
                 label_node_key(*label, *node),
                 [],
             );
@@ -815,7 +815,7 @@ impl<'a> WriteTxn<'a> {
             for (key, value) in props {
                 if scalar_indexable_value(&value) {
                     batch.insert(
-                        &self.engine.keyspaces.idx_node_props,
+                        &self.engine.keyspaces.graph_data,
                         node_prop_index_key(*label, &key, &value, *node),
                         [],
                     );
@@ -828,15 +828,15 @@ impl<'a> WriteTxn<'a> {
                 continue;
             }
             batch.remove(
-                &self.engine.keyspaces.node_labels,
+                &self.engine.keyspaces.graph_data,
                 node_label_key(*node, *label),
             );
             batch.remove(
-                &self.engine.keyspaces.label_nodes,
+                &self.engine.keyspaces.graph_data,
                 label_node_key(*label, *node),
             );
             for key in snapshot_node_property_index_keys_for_label(*node, *label, &snapshot) {
-                batch.remove(&self.engine.keyspaces.idx_node_props, key);
+                batch.remove(&self.engine.keyspaces.graph_data, key);
             }
         }
 
@@ -850,30 +850,30 @@ impl<'a> WriteTxn<'a> {
             batch.remove(&self.engine.keyspaces.adj_out, adj_out_key(*edge));
             batch.remove(&self.engine.keyspaces.adj_in, adj_in_key(*edge));
             for key in snapshot.collect_edge_property_keys(*edge) {
-                batch.remove(&self.engine.keyspaces.edge_props, key);
+                batch.remove(&self.engine.keyspaces.graph_data, key);
             }
         }
 
         for node in &self.tombstoned_nodes {
             if let Some(cleanup) = node_cleanups.get(node) {
                 for key in &cleanup.label_keys {
-                    batch.remove(&self.engine.keyspaces.node_labels, key);
+                    batch.remove(&self.engine.keyspaces.graph_data, key);
                 }
                 for key in &cleanup.label_node_keys {
-                    batch.remove(&self.engine.keyspaces.label_nodes, key);
+                    batch.remove(&self.engine.keyspaces.graph_data, key);
                 }
                 for key in &cleanup.node_prop_keys {
-                    batch.remove(&self.engine.keyspaces.node_props, key);
+                    batch.remove(&self.engine.keyspaces.graph_data, key);
                 }
                 for key in &cleanup.node_prop_index_keys {
-                    batch.remove(&self.engine.keyspaces.idx_node_props, key);
+                    batch.remove(&self.engine.keyspaces.graph_data, key);
                 }
             }
 
             if let Some(external_id) = self.external_id_for_commit(*node, &snapshot) {
                 batch.insert(
-                    &self.engine.keyspaces.nodes,
-                    key_u32(*node),
+                    &self.engine.keyspaces.graph_data,
+                    node_key(*node),
                     encode_node_value(external_id, KEY_FLAG_TOMBSTONE),
                 );
             }
@@ -883,7 +883,7 @@ impl<'a> WriteTxn<'a> {
             batch.remove(&self.engine.keyspaces.adj_out, adj_out_key(*edge));
             batch.remove(&self.engine.keyspaces.adj_in, adj_in_key(*edge));
             for key in snapshot.collect_edge_property_keys(*edge) {
-                batch.remove(&self.engine.keyspaces.edge_props, key);
+                batch.remove(&self.engine.keyspaces.graph_data, key);
             }
         }
         profile::event_since(
@@ -903,15 +903,15 @@ impl<'a> WriteTxn<'a> {
             if !self.created_node_ids.contains(node) {
                 for old_key in snapshot_node_property_index_keys_for_property(*node, key, &snapshot)
                 {
-                    batch.remove(&self.engine.keyspaces.idx_node_props, old_key);
+                    batch.remove(&self.engine.keyspaces.graph_data, old_key);
                 }
             }
             if node_property_removed_in_txn(*node, key, &self.removed_node_props) {
                 continue;
             }
             batch.insert(
-                &self.engine.keyspaces.node_props,
-                node_prop_prefix(*node, key),
+                &self.engine.keyspaces.graph_data,
+                node_prop_key(*node, key),
                 value.encode(),
             );
             if scalar_indexable_value(value) {
@@ -923,7 +923,7 @@ impl<'a> WriteTxn<'a> {
                     &self.label_removals,
                 ) {
                     batch.insert(
-                        &self.engine.keyspaces.idx_node_props,
+                        &self.engine.keyspaces.graph_data,
                         node_prop_index_key(label, key, value, *node),
                         [],
                     );
@@ -936,7 +936,7 @@ impl<'a> WriteTxn<'a> {
                 continue;
             }
             batch.insert(
-                &self.engine.keyspaces.edge_props,
+                &self.engine.keyspaces.graph_data,
                 edge_prop_key(*edge, key),
                 value.encode(),
             );
@@ -947,19 +947,16 @@ impl<'a> WriteTxn<'a> {
                 continue;
             }
             for old_key in snapshot_node_property_index_keys_for_property(*node, key, &snapshot) {
-                batch.remove(&self.engine.keyspaces.idx_node_props, old_key);
+                batch.remove(&self.engine.keyspaces.graph_data, old_key);
             }
-            batch.remove(
-                &self.engine.keyspaces.node_props,
-                node_prop_prefix(*node, key),
-            );
+            batch.remove(&self.engine.keyspaces.graph_data, node_prop_key(*node, key));
         }
 
         for (edge, key) in &self.removed_edge_props {
             if detached_edges.contains(edge) || self.tombstoned_edges.contains(edge) {
                 continue;
             }
-            batch.remove(&self.engine.keyspaces.edge_props, edge_prop_key(*edge, key));
+            batch.remove(&self.engine.keyspaces.graph_data, edge_prop_key(*edge, key));
         }
         profile::event_since(
             "WriteTxn::commit.property_index_writes",
@@ -982,51 +979,35 @@ impl<'a> WriteTxn<'a> {
     }
 }
 
-pub(crate) fn edge_prop_key(edge: EdgeKey, key: &str) -> Vec<u8> {
-    let mut storage_key = edge_prefix(edge);
-    storage_key.extend_from_slice(&(key.len() as u32).to_be_bytes());
-    storage_key.extend_from_slice(key.as_bytes());
-    storage_key
-}
-
-fn open_keyspaces(db: &Database) -> Result<Keyspaces> {
+fn open_keyspaces(db: &Database, meta: Keyspace) -> Result<Keyspaces> {
     Ok(Keyspaces {
-        meta: db.keyspace("meta", KeyspaceCreateOptions::default)?,
-        nodes: db.keyspace("nodes", KeyspaceCreateOptions::default)?,
-        ext2node: db.keyspace("ext2node", KeyspaceCreateOptions::default)?,
-        labels: db.keyspace("labels", KeyspaceCreateOptions::default)?,
-        reltypes: db.keyspace("reltypes", KeyspaceCreateOptions::default)?,
-        node_labels: db.keyspace("node_labels", KeyspaceCreateOptions::default)?,
-        label_nodes: db.keyspace("label_nodes", KeyspaceCreateOptions::default)?,
+        meta,
+        graph_data: db.keyspace("graph_data", KeyspaceCreateOptions::default)?,
         adj_out: db.keyspace("adj_out", KeyspaceCreateOptions::default)?,
         adj_in: db.keyspace("adj_in", KeyspaceCreateOptions::default)?,
-        node_props: db.keyspace("node_props", KeyspaceCreateOptions::default)?,
-        edge_props: db.keyspace("edge_props", KeyspaceCreateOptions::default)?,
-        idx_node_props: db.keyspace("idx_node_props", KeyspaceCreateOptions::default)?,
     })
 }
 
-fn ensure_meta(db: &Database, keyspaces: &Keyspaces) -> Result<()> {
-    if let Some(found) = read_meta_u64(&keyspaces.meta, META_FORMAT_EPOCH)? {
+fn ensure_meta(db: &Database, meta: &Keyspace) -> Result<()> {
+    let meta_started = profile::start();
+    if let Some(found) = read_meta_u64(meta, META_FORMAT_EPOCH)? {
         if found != STORAGE_FORMAT_EPOCH {
             return Err(Error::StorageFormatMismatch {
                 expected: STORAGE_FORMAT_EPOCH,
                 found,
             });
         }
+        profile::event_since("GraphEngine::open.meta", meta_started, &[]);
         return Ok(());
     }
 
     let mut batch = db.batch().durability(Some(PersistMode::SyncAll));
-    batch.insert(
-        &keyspaces.meta,
-        META_FORMAT_EPOCH,
-        STORAGE_FORMAT_EPOCH.to_be_bytes(),
-    );
-    batch.insert(&keyspaces.meta, META_NEXT_NODE_ID, 0u64.to_be_bytes());
-    batch.insert(&keyspaces.meta, META_NEXT_LABEL_ID, 1u64.to_be_bytes());
-    batch.insert(&keyspaces.meta, META_NEXT_REL_TYPE_ID, 1u64.to_be_bytes());
+    batch.insert(meta, META_FORMAT_EPOCH, STORAGE_FORMAT_EPOCH.to_be_bytes());
+    batch.insert(meta, META_NEXT_NODE_ID, 0u64.to_be_bytes());
+    batch.insert(meta, META_NEXT_LABEL_ID, 1u64.to_be_bytes());
+    batch.insert(meta, META_NEXT_REL_TYPE_ID, 1u64.to_be_bytes());
     batch.commit()?;
+    profile::event_since("GraphEngine::open.meta", meta_started, &[]);
     Ok(())
 }
 
@@ -1046,182 +1027,4 @@ fn read_meta_u64(meta: &Keyspace, key: &[u8]) -> Result<Option<u64>> {
             Ok(u64::from_be_bytes(raw))
         })
         .transpose()
-}
-
-pub(crate) fn key_u32(value: u32) -> Vec<u8> {
-    value.to_be_bytes().to_vec()
-}
-
-pub(crate) fn key_u64(value: u64) -> Vec<u8> {
-    value.to_be_bytes().to_vec()
-}
-
-pub(crate) fn decode_u32(bytes: &[u8]) -> Option<u32> {
-    let raw: [u8; 4] = bytes.try_into().ok()?;
-    Some(u32::from_be_bytes(raw))
-}
-
-pub(crate) fn parse_iid_key(bytes: &[u8]) -> Option<InternalNodeId> {
-    decode_u32(bytes)
-}
-
-pub(crate) fn encode_node_value(external_id: ExternalId, flags: u8) -> Vec<u8> {
-    let mut out = Vec::with_capacity(9);
-    out.extend_from_slice(&external_id.to_be_bytes());
-    out.push(flags);
-    out
-}
-
-pub(crate) fn decode_node_value(bytes: &[u8]) -> Option<(ExternalId, u8)> {
-    parse_node_value(bytes)
-}
-
-pub(crate) fn parse_node_value(bytes: &[u8]) -> Option<(ExternalId, u8)> {
-    if bytes.len() < 9 {
-        return None;
-    }
-    let raw: [u8; 8] = bytes[..8].try_into().ok()?;
-    Some((u64::from_be_bytes(raw), bytes[8]))
-}
-
-pub(crate) fn node_label_key(node: InternalNodeId, label: LabelId) -> Vec<u8> {
-    let mut key = Vec::with_capacity(8);
-    key.extend_from_slice(&node.to_be_bytes());
-    key.extend_from_slice(&label.to_be_bytes());
-    key
-}
-
-pub(crate) fn label_node_key(label: LabelId, node: InternalNodeId) -> Vec<u8> {
-    let mut key = Vec::with_capacity(8);
-    key.extend_from_slice(&label.to_be_bytes());
-    key.extend_from_slice(&node.to_be_bytes());
-    key
-}
-
-pub(crate) fn parse_label_node_key(key: &[u8]) -> Option<InternalNodeId> {
-    if key.len() != 8 {
-        return None;
-    }
-    decode_u32(&key[4..8])
-}
-
-pub(crate) fn edge_prefix(edge: EdgeKey) -> Vec<u8> {
-    let mut key = Vec::with_capacity(12);
-    key.extend_from_slice(&edge.src.to_be_bytes());
-    key.extend_from_slice(&edge.rel.to_be_bytes());
-    key.extend_from_slice(&edge.dst.to_be_bytes());
-    key
-}
-
-pub(crate) fn adj_out_key(edge: EdgeKey) -> Vec<u8> {
-    edge_prefix(edge)
-}
-
-pub(crate) fn adj_in_key(edge: EdgeKey) -> Vec<u8> {
-    let mut key = Vec::with_capacity(12);
-    key.extend_from_slice(&edge.dst.to_be_bytes());
-    key.extend_from_slice(&edge.rel.to_be_bytes());
-    key.extend_from_slice(&edge.src.to_be_bytes());
-    key
-}
-
-pub(crate) fn edge_key_from_adj_out(key: &[u8]) -> Option<EdgeKey> {
-    if key.len() != 12 {
-        return None;
-    }
-    Some(EdgeKey {
-        src: decode_u32(&key[0..4])?,
-        rel: decode_u32(&key[4..8])?,
-        dst: decode_u32(&key[8..12])?,
-    })
-}
-
-pub(crate) fn edge_key_from_adj_in(key: &[u8]) -> Option<EdgeKey> {
-    if key.len() != 12 {
-        return None;
-    }
-    Some(EdgeKey {
-        dst: decode_u32(&key[0..4])?,
-        rel: decode_u32(&key[4..8])?,
-        src: decode_u32(&key[8..12])?,
-    })
-}
-
-pub(crate) fn node_prop_prefix(node: InternalNodeId, key: &str) -> Vec<u8> {
-    let mut out = Vec::with_capacity(8 + key.len());
-    out.extend_from_slice(&node.to_be_bytes());
-    out.extend_from_slice(&(key.len() as u32).to_be_bytes());
-    out.extend_from_slice(key.as_bytes());
-    out
-}
-
-pub(crate) fn node_prop_index_key(
-    label: LabelId,
-    key: &str,
-    value: &PropertyValue,
-    node: InternalNodeId,
-) -> Vec<u8> {
-    let encoded_value = value.encode();
-    let key_len = u16::try_from(key.len()).expect("property key length should fit in u16");
-    let value_len =
-        u32::try_from(encoded_value.len()).expect("property value length should fit in u32");
-    let mut out = Vec::with_capacity(14 + key.len() + encoded_value.len());
-    out.extend_from_slice(&label.to_be_bytes());
-    out.extend_from_slice(&key_len.to_be_bytes());
-    out.extend_from_slice(key.as_bytes());
-    out.extend_from_slice(&value_len.to_be_bytes());
-    out.extend_from_slice(&encoded_value);
-    out.extend_from_slice(&node.to_be_bytes());
-    out
-}
-
-pub(crate) fn node_prop_index_prefix(label: LabelId, key: &str, value: &PropertyValue) -> Vec<u8> {
-    let encoded_value = value.encode();
-    let key_len = u16::try_from(key.len()).expect("property key length should fit in u16");
-    let value_len =
-        u32::try_from(encoded_value.len()).expect("property value length should fit in u32");
-    let mut out = Vec::with_capacity(10 + key.len() + encoded_value.len());
-    out.extend_from_slice(&label.to_be_bytes());
-    out.extend_from_slice(&key_len.to_be_bytes());
-    out.extend_from_slice(key.as_bytes());
-    out.extend_from_slice(&value_len.to_be_bytes());
-    out.extend_from_slice(&encoded_value);
-    out
-}
-
-pub(crate) fn parse_node_prop_index_key(key: &[u8]) -> Option<InternalNodeId> {
-    if key.len() < 14 {
-        return None;
-    }
-    let key_len = u16::from_be_bytes(key[4..6].try_into().ok()?) as usize;
-    let value_len_offset = 6 + key_len;
-    if key.len() < value_len_offset + 8 {
-        return None;
-    }
-    let value_len = u32::from_be_bytes(
-        key[value_len_offset..value_len_offset + 4]
-            .try_into()
-            .ok()?,
-    ) as usize;
-    let node_offset = value_len_offset + 4 + value_len;
-    if key.len() != node_offset + 4 {
-        return None;
-    }
-    decode_u32(&key[node_offset..node_offset + 4])
-}
-
-pub(crate) fn parse_node_prop_key(key: &[u8], node: InternalNodeId) -> Option<String> {
-    if key.len() < 8 || decode_u32(&key[0..4])? != node {
-        return None;
-    }
-    let raw_len: [u8; 4] = key[4..8].try_into().ok()?;
-    let len = u32::from_be_bytes(raw_len) as usize;
-    if key.len() != 8 + len {
-        return None;
-    }
-    String::from_utf8(key[8..].to_vec()).ok()
-}
-
-pub(crate) fn parse_prop_value(bytes: &[u8]) -> Result<PropertyValue> {
-    PropertyValue::decode(bytes).map_err(|e| Error::PropertyDecode(e.to_string()))
 }

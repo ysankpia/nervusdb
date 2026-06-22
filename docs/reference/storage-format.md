@@ -19,6 +19,16 @@ logical format changes must bump the epoch and fail fast with a clear
 compatibility error when the on-disk graph contract cannot be interpreted
 safely.
 
+Current development epoch:
+
+```text
+STORAGE_FORMAT_EPOCH = 3
+```
+
+Epoch 3 is a destructive 0.0.7 storage-layout change. Epoch 2 database
+directories are rejected with `StorageFormatMismatch`; there is no migration
+tool in 0.0.7.
+
 Fjall's own internal versioning is separate. NervusDB docs do not promise a
 stable byte layout for Fjall files.
 
@@ -31,21 +41,55 @@ Property keys are stored as original strings. They are not hashed. Hashing
 property keys would break prefix/range semantics and introduce collision-driven
 wrong results.
 
-## Logical Keyspaces
+## Physical Keyspaces
 
 ```text
-meta        named metadata
-nodes       [iid] -> external id, flags
-ext2node    [external_id] -> iid
-labels      name/[name] <-> id/[label_id]
-reltypes    name/[name] <-> id/[rel_type_id]
-node_labels [iid][label_id] -> empty
-label_nodes [label_id][iid] -> empty
-adj_out     [src][rel][dst] -> empty
-adj_in      [dst][rel][src] -> empty
-node_props  [iid][key_len][key_bytes] -> encoded PropertyValue
-edge_props  [src][rel][dst][key_len][key_bytes] -> encoded PropertyValue
-idx_node_props [label_id][key_len][key_bytes][value_len][value_bytes][iid] -> empty
+meta        format epoch and ID counters
+graph_data  tagged non-adjacency graph records and derived indexes
+adj_out     outgoing adjacency keys
+adj_in      incoming adjacency keys
+```
+
+## Tagged `graph_data` Layout
+
+```text
+0x01 NODE             [tag][iid:u32] -> encode_node_value(external_id, flags)
+0x02 EXT2NODE         [tag][external_id:u64] -> iid:u32
+
+0x10 LABEL_NAME       [tag][name_len:u16][name_bytes] -> label_id:u32
+0x11 LABEL_ID         [tag][label_id:u32] -> name_bytes
+0x12 REL_NAME         [tag][name_len:u16][name_bytes] -> rel_id:u32
+0x13 REL_ID           [tag][rel_id:u32] -> name_bytes
+
+0x20 NODE_LABEL       [tag][iid:u32][label_id:u32] -> empty
+0x21 LABEL_NODE       [tag][label_id:u32][iid:u32] -> empty
+
+0x40 NODE_PROP        [tag][iid:u32][key_len:u32][key_bytes] -> encoded PropertyValue
+0x41 EDGE_PROP        [tag][src:u32][rel:u32][dst:u32][key_len:u32][key_bytes] -> encoded PropertyValue
+
+0x50 NODE_PROP_INDEX  [tag][label_id:u32][key_len:u16][key_bytes][value_len:u32][value_bytes][iid:u32] -> empty
+```
+
+## Adjacency Keyspaces
+
+```text
+adj_out [src:u32][rel:u32][dst:u32] -> empty
+adj_in  [dst:u32][rel:u32][src:u32] -> empty
+```
+
+Prefix scan contracts:
+
+```text
+nodes()                          prefix [NODE]
+node_labels(iid)                 prefix [NODE_LABEL][iid]
+nodes_with_label(label)          prefix [LABEL_NODE][label]
+neighbors(src, None)             adj_out prefix [src]
+neighbors(src, Some(rel))        adj_out prefix [src][rel]
+incoming_neighbors(dst, None)    adj_in prefix [dst]
+incoming_neighbors(dst, Some(r)) adj_in prefix [dst][r]
+node_properties(iid)             prefix [NODE_PROP][iid]
+edge_properties(edge)            prefix [EDGE_PROP][src][rel][dst]
+property equality lookup         prefix [NODE_PROP_INDEX][label][key][value]
 ```
 
 ## Value Encoding
@@ -56,6 +100,9 @@ values requires a format epoch decision and compatibility handling.
 
 `idx_node_props` reuses `PropertyValue::encode()` only as exact-match identity.
 It does not define range ordering for encoded values.
+
+In epoch 3, `idx_node_props` is the logical `NODE_PROP_INDEX` tag inside
+`graph_data`; it is not a separate physical Fjall keyspace.
 
 ## Recovery Assumptions
 
@@ -73,5 +120,6 @@ The recovery proof is graph-level. Tests verify what users can observe through
 - Byte-level guarantees for backend files.
 - Backup, vacuum, and backend compaction behavior as user-facing 0.1 promises.
 - Range index formats and public index-management APIs.
+- Cross-version on-disk migration from epoch 2 to epoch 3.
 
 Changes here require storage-model docs and crash/reopen validation.

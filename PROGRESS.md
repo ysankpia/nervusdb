@@ -2,30 +2,31 @@
 
 ## Current Objective
 
-NervusDB 0.0.6 performance hot-path work is in release preparation. The
-remaining storage-layout costs are recorded for 0.0.7.
+NervusDB 0.0.7 storage-layout work is active. The goal is to collapse the
+physical Fjall layout from the old many-keyspace graph model to four hot/cold
+keyspaces without changing the public Rust API.
 
 ## Active Plan
 
-`docs/plans/active/017-performance-hot-path-0.0.6.md`
-
-Next: `docs/plans/active/018-storage-layout-0.0.7.md`
+`docs/plans/active/018-storage-layout-0.0.7.md`
 
 bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
-0.0.6 is the stable published release. It contains benchmark attribution,
-storage profiling, index-cleanup hot-path fixes, traversal hot-path fixes, and
-the created-node label-map bulk property-index fix. 0.0.7 is now scoped as
-storage-layout work, not feature expansion.
+0.0.7 is in release preparation as a destructive storage-format cleanup
+release, not feature expansion.
+`STORAGE_FORMAT_EPOCH` is now 3; epoch 2 database directories are rejected and
+must be rebuilt or reimported.
 
 ## Now
 
-- Use `nervusdb = "0.0.6"` in downstream projects.
-- Treat the 0.0.6 cross-database benchmark as current performance evidence.
-- Do not start keyspace merge without a separate ADR; current evidence says it
-  is 0.0.7 storage-layout work, not part of 0.0.6.
+- Prepare `nervusdb = "0.0.7"` for downstream projects after release validation
+  passes and the tag/crates.io publication is complete.
+- Treat the 0.0.7 cross-database benchmark as current storage-layout evidence
+  after release, with the documented traversal regression caveat.
+- 0.0.7 release scope is now clean reopen and storage footprint, not universal
+  traversal/commit performance.
 - Keep public index-management APIs, range indexes, EdgeId, unsafe/buffered
   durability modes, vectors, multi-writer work, and advanced Cypher out of scope
   unless a new ADR explicitly changes priority.
@@ -218,6 +219,50 @@ storage-layout work, not feature expansion.
     `batch.commit` and raw reopen as the remaining hard storage gaps.
   - release notes added at `docs/releases/v0.0.6.md`.
   - workspace package versions updated to `0.0.6`.
+- 0.0.7 storage layout implementation started:
+  - ADR: `docs/decisions/0009-storage-keyspace-consolidation.md`.
+  - active plan: `docs/plans/active/018-storage-layout-0.0.7.md`.
+  - `STORAGE_FORMAT_EPOCH` bumped from `2` to `3`.
+  - physical Fjall keyspaces first collapsed to `meta` and `graph_data`; medium
+    benchmark evidence showed that pure two-keyspace layout fixed clean reopen
+    but regressed traversal locality.
+  - current direction is four physical keyspaces: `meta`, `graph_data`,
+    `adj_out`, and `adj_in`.
+  - `graph_data` uses one-byte logical tags for nodes, names, labels,
+    adjacency, properties, and node property equality index records.
+  - `GraphEngine::open` validates `meta/format_epoch` before opening
+    `graph_data`, so rejected epoch 2 directories are not polluted with the new
+    keyspace.
+  - fsck-lite scans tagged `graph_data` prefixes and still repairs only derived
+    label and node-property indexes.
+  - focused validation passed:
+    `cargo test -p nervusdb-storage --test core_0_1_storage` with 22 tests,
+    including epoch 2 rejection and keyspace-count coverage.
+  - broader focused validation passed:
+    `cargo fmt --all -- --check`,
+    `cargo check -p nervusdb --examples`,
+    `cargo test -p nervusdb --test core_0_1_mini_cypher`,
+    `cargo test -p nervusdb-cli`,
+    `cargo test -p nervusdb --test core_0_1_agent_memory`,
+    `cargo test -p nervusdb --features unstable-admin --test core_0_1_agent_memory`,
+    `bash scripts/check.sh`,
+    `bash scripts/core_examples.sh`,
+    `bash scripts/core_crash_recovery.sh`.
+  - `Db::close()` now performs a clean shutdown flush by persisting the journal
+    and waiting for `meta` and `graph_data` memtables to rotate; this preserves
+    commit durability semantics while avoiding heavy journal replay on clean
+    reopen.
+  - 4-keyspace medium benchmark artifact:
+    `artifacts/cross-db-bench/cross-db-bench-medium-20260622-150028.ndjson`.
+  - current result is not release-complete: raw reopen improved from
+    `3,249.434ms` to `3.185ms` and disk footprint from `84,595,889` to
+    `38,315,826` bytes, but durable commit is still `1,476.589ms`, file count is
+    `24`, and two-hop traversal regressed to `1,810,341 paths/sec`.
+  - release scope explicitly re-scoped: 0.0.7 is a clean-reopen and footprint
+    release. Traversal regression is documented in `docs/releases/v0.0.7.md`
+    and is not hidden as a success.
+  - release notes added at `docs/releases/v0.0.7.md`.
+  - workspace package versions updated to `0.0.7`.
 - 0.0.7 storage layout planning started:
   - active plan: `docs/plans/active/018-storage-layout-0.0.7.md`.
   - focus: durable commit, raw reopen, file count, and storage footprint.

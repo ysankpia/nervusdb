@@ -13,22 +13,45 @@ The public storage path is a local database directory opened by `Db::open(path)`
 Fjall's internal files are implementation details and are not a public
 NervusDB byte-level format.
 
-## Logical Keyspaces
+## Physical Keyspaces
+
+0.0.7 collapses the graph from many Fjall keyspaces into four physical
+keyspaces:
+
+| Keyspace | Purpose |
+|---|---|
+| `meta` | format epoch and ID counters |
+| `graph_data` | tagged graph records, names, properties, and derived indexes |
+| `adj_out` | outgoing adjacency keys |
+| `adj_in` | incoming adjacency keys |
+
+The old epoch 2 layout used separate physical keyspaces for `nodes`,
+`ext2node`, `labels`, `reltypes`, `node_labels`, `label_nodes`, `adj_out`,
+`adj_in`, `node_props`, `edge_props`, and `idx_node_props`. Epoch 3 rejects
+epoch 2 directories with `StorageFormatMismatch` instead of migrating them.
+
+## Tagged Graph Data
+
+| Tag | Logical partition | Key | Value | Purpose |
+|---:|---|---|---|---|
+| `0x01` | `NODE` | `[tag][iid]` | external id, flags | node existence and state |
+| `0x02` | `EXT2NODE` | `[tag][external_id]` | iid | external-to-internal lookup |
+| `0x10` | `LABEL_NAME` | `[tag][name_len][name]` | label id | label name lookup |
+| `0x11` | `LABEL_ID` | `[tag][label_id]` | name | label id lookup |
+| `0x12` | `REL_NAME` | `[tag][name_len][name]` | rel id | relationship type name lookup |
+| `0x13` | `REL_ID` | `[tag][rel_id]` | name | relationship type id lookup |
+| `0x20` | `NODE_LABEL` | `[tag][iid][label_id]` | empty | labels attached to a node |
+| `0x21` | `LABEL_NODE` | `[tag][label_id][iid]` | empty | storage-level label scan |
+| `0x40` | `NODE_PROP` | `[tag][iid][key_len][key]` | encoded `PropertyValue` | node properties |
+| `0x41` | `EDGE_PROP` | `[tag][src][rel][dst][key_len][key]` | encoded `PropertyValue` | edge properties |
+| `0x50` | `NODE_PROP_INDEX` | `[tag][label_id][key_len][key][value_len][value][iid]` | empty | internal node property exact-match lookup |
+
+Adjacency keyspaces use raw big-endian keys for hot traversal locality:
 
 | Keyspace | Key | Value | Purpose |
 |---|---|---|---|
-| `meta` | metadata name | encoded scalar | format epoch and ID counters |
-| `nodes` | `[iid]` | external id, flags | node existence and state |
-| `ext2node` | `[external_id]` | iid | external-to-internal lookup |
-| `labels` | `name/[name]`, `id/[label_id]` | id or name | label namespace |
-| `reltypes` | `name/[name]`, `id/[rel_id]` | id or name | relationship type namespace |
-| `node_labels` | `[iid][label_id]` | empty | labels attached to a node |
-| `label_nodes` | `[label_id][iid]` | empty | storage-level label scan |
 | `adj_out` | `[src][rel][dst]` | empty | outgoing traversal |
 | `adj_in` | `[dst][rel][src]` | empty | incoming traversal |
-| `node_props` | `[iid][key_len][key_bytes]` | encoded `PropertyValue` | node properties |
-| `edge_props` | `[src][rel][dst][key_len][key_bytes]` | encoded `PropertyValue` | edge properties |
-| `idx_node_props` | `[label_id][key_len][key_bytes][value_len][value_bytes][iid]` | empty | internal node property exact-match lookup |
 
 Integer key parts use big-endian encoding so prefix scans preserve numeric
 ordering. Property keys are stored as original UTF-8 bytes with length framing.
@@ -94,9 +117,10 @@ rather than exposing stale counts.
 `MATCH (n:Label) WHERE n.key = literal`. It is not a public schema feature and
 does not restore `create_index` or `lookup_index`.
 
-`idx_node_props` uses encoded `PropertyValue` bytes for exact equality only.
-Those bytes are not an ordering contract, so range predicates such as
-`n.age > 30` remain scan/filter behavior and are not index-backed.
+The logical `NODE_PROP_INDEX` partition uses encoded `PropertyValue` bytes for
+exact equality only. Those bytes are not an ordering contract, so range
+predicates such as `n.age > 30` remain scan/filter behavior and are not
+index-backed.
 
 Property range indexes, edge property indexes, composite indexes, and unique
 constraints are still out of scope.

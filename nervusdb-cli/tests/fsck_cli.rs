@@ -55,12 +55,12 @@ fn cli_fsck_repair_rebuilds_derived_property_index() {
 
     {
         let db = Database::builder(&db_path).open().unwrap();
-        let idx_node_props = db
-            .keyspace("idx_node_props", KeyspaceCreateOptions::default)
+        let graph_data = db
+            .keyspace("graph_data", KeyspaceCreateOptions::default)
             .unwrap();
         let key = node_prop_index_key(1, "name", &encoded_string("Alice"), 0);
         let mut batch = db.batch().durability(Some(PersistMode::SyncAll));
-        batch.remove(&idx_node_props, key);
+        batch.remove(&graph_data, key);
         batch.commit().unwrap();
     }
 
@@ -104,7 +104,8 @@ fn stderr(output: &std::process::Output) -> String {
 fn node_prop_index_key(label: u32, key: &str, encoded_value: &[u8], node: u32) -> Vec<u8> {
     let key_len = u16::try_from(key.len()).unwrap();
     let value_len = u32::try_from(encoded_value.len()).unwrap();
-    let mut out = Vec::with_capacity(14 + key.len() + encoded_value.len());
+    let mut out = Vec::with_capacity(15 + key.len() + encoded_value.len());
+    out.push(0x50);
     out.extend_from_slice(&label.to_be_bytes());
     out.extend_from_slice(&key_len.to_be_bytes());
     out.extend_from_slice(key.as_bytes());
