@@ -3,7 +3,8 @@ use crate::api::{
 };
 use crate::storage::engine::{
     KEY_FLAG_TOMBSTONE, Keyspaces, decode_node_value, edge_key_from_adj_in, edge_key_from_adj_out,
-    edge_prefix, key_u32, node_prop_prefix, parse_iid_key, parse_label_node_key,
+    edge_prefix, key_u32, node_prop_index_prefix, node_prop_prefix, parse_iid_key,
+    parse_label_node_key, parse_node_prop_index_key, parse_node_prop_index_property_key,
     parse_node_prop_key, parse_node_value, parse_prop_value,
 };
 use fjall::Readable;
@@ -184,6 +185,40 @@ impl Snapshot {
         self.collect_prefix_keys(&self.keyspaces.node_props, key_u32(node))
     }
 
+    pub(crate) fn collect_node_property_index_keys(&self, node: InternalNodeId) -> Vec<Vec<u8>> {
+        self.inner
+            .iter(&self.keyspaces.idx_node_props)
+            .filter_map(|guard| guard.key().ok().map(|key| key.as_ref().to_vec()))
+            .filter(|key| parse_node_prop_index_key(key).is_some_and(|iid| iid == node))
+            .collect()
+    }
+
+    pub(crate) fn collect_node_property_index_keys_for_label(
+        &self,
+        node: InternalNodeId,
+        label: LabelId,
+    ) -> Vec<Vec<u8>> {
+        self.collect_prefix_keys(&self.keyspaces.idx_node_props, key_u32(label))
+            .into_iter()
+            .filter(|key| parse_node_prop_index_key(key).is_some_and(|iid| iid == node))
+            .collect()
+    }
+
+    pub(crate) fn collect_node_property_index_keys_for_property(
+        &self,
+        node: InternalNodeId,
+        property_key: &str,
+    ) -> Vec<Vec<u8>> {
+        self.inner
+            .iter(&self.keyspaces.idx_node_props)
+            .filter_map(|guard| guard.key().ok().map(|key| key.as_ref().to_vec()))
+            .filter(|key| {
+                parse_node_prop_index_key(key).is_some_and(|iid| iid == node)
+                    && parse_node_prop_index_property_key(key).as_deref() == Some(property_key)
+            })
+            .collect()
+    }
+
     pub(crate) fn collect_raw_outgoing_edges(&self, node: InternalNodeId) -> Vec<EdgeKey> {
         self.collect_prefix_keys(&self.keyspaces.adj_out, key_u32(node))
             .into_iter()
@@ -243,6 +278,24 @@ impl GraphSnapshot for Snapshot {
             .collect_prefix_keys(&self.keyspaces.label_nodes, key_u32(label))
             .into_iter()
             .filter_map(|key| parse_label_node_key(&key))
+            .filter(|iid| self.node_is_live(*iid))
+            .collect();
+        Box::new(nodes.into_iter())
+    }
+
+    fn nodes_with_label_and_property(
+        &self,
+        label: LabelId,
+        key: &str,
+        value: &PropertyValue,
+    ) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {
+        let nodes: Vec<_> = self
+            .collect_prefix_keys(
+                &self.keyspaces.idx_node_props,
+                node_prop_index_prefix(label, key, value),
+            )
+            .into_iter()
+            .filter_map(|key| parse_node_prop_index_key(&key))
             .filter(|iid| self.node_is_live(*iid))
             .collect();
         Box::new(nodes.into_iter())

@@ -430,6 +430,26 @@ pub trait GraphSnapshot {
         }))
     }
 
+    /// Get an iterator over all non-tombstoned nodes with a label and exact
+    /// property value.
+    ///
+    /// Implementations should use a storage-level equality index when
+    /// available. The default implementation preserves correctness by filtering
+    /// `nodes_with_label`.
+    fn nodes_with_label_and_property(
+        &self,
+        label: LabelId,
+        key: &str,
+        value: &PropertyValue,
+    ) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {
+        let key = key.to_string();
+        let value = value.clone();
+        Box::new(
+            self.nodes_with_label(label)
+                .filter(move |iid| self.node_property(*iid, &key).is_some_and(|v| v == value)),
+        )
+    }
+
     /// Resolve an internal node ID to its external ID.
     ///
     /// Returns `Some(external_id)` if the node exists and has an external ID,

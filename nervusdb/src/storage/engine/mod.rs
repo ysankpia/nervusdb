@@ -5,7 +5,7 @@ use crate::api::{
 use crate::storage::snapshot::{Snapshot, id_key, name_key};
 use crate::storage::{Error, Result, STORAGE_FORMAT_EPOCH};
 use fjall::{Database, Keyspace, KeyspaceCreateOptions, PersistMode};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
@@ -29,6 +29,7 @@ pub(crate) struct Keyspaces {
     pub(crate) adj_in: Keyspace,
     pub(crate) node_props: Keyspace,
     pub(crate) edge_props: Keyspace,
+    pub(crate) idx_node_props: Keyspace,
 }
 
 impl std::fmt::Debug for Keyspaces {
@@ -241,7 +242,68 @@ struct NodeCleanup {
     label_keys: Vec<Vec<u8>>,
     label_node_keys: Vec<Vec<u8>>,
     node_prop_keys: Vec<Vec<u8>>,
+    node_prop_index_keys: Vec<Vec<u8>>,
     incident_edges: BTreeSet<EdgeKey>,
+}
+
+fn scalar_indexable_value(value: &PropertyValue) -> bool {
+    !matches!(value, PropertyValue::List(_) | PropertyValue::Map(_))
+}
+
+fn final_node_labels(
+    node: InternalNodeId,
+    snapshot: &Snapshot,
+    created_nodes: &[CreatedNode],
+    label_additions: &[(InternalNodeId, LabelId)],
+    label_removals: &[(InternalNodeId, LabelId)],
+) -> BTreeSet<LabelId> {
+    let mut labels: BTreeSet<LabelId> = created_nodes
+        .iter()
+        .find(|created| created.iid == node)
+        .map(|created| created.labels.clone())
+        .unwrap_or_else(|| snapshot.node_labels(node).into_iter().collect());
+
+    for (label_node, label) in label_additions {
+        if *label_node == node {
+            labels.insert(*label);
+        }
+    }
+    for (label_node, label) in label_removals {
+        if *label_node == node {
+            labels.remove(label);
+        }
+    }
+    labels
+}
+
+fn final_node_properties(
+    node: InternalNodeId,
+    snapshot: &Snapshot,
+    node_props: &HashMap<(InternalNodeId, String), PropertyValue>,
+    removed_node_props: &[(InternalNodeId, String)],
+) -> BTreeMap<String, PropertyValue> {
+    let mut props = snapshot.node_properties(node).unwrap_or_default();
+    for ((prop_node, key), value) in node_props {
+        if *prop_node == node {
+            props.insert(key.clone(), value.clone());
+        }
+    }
+    for (prop_node, key) in removed_node_props {
+        if *prop_node == node {
+            props.remove(key);
+        }
+    }
+    props
+}
+
+fn node_property_removed_in_txn(
+    node: InternalNodeId,
+    key: &str,
+    removed_node_props: &[(InternalNodeId, String)],
+) -> bool {
+    removed_node_props
+        .iter()
+        .any(|(removed_node, removed_key)| *removed_node == node && removed_key == key)
 }
 
 impl<'a> WriteTxn<'a> {
@@ -568,6 +630,9 @@ impl<'a> WriteTxn<'a> {
                 .node_prop_keys
                 .extend(snapshot.collect_node_property_keys(*node));
             cleanup
+                .node_prop_index_keys
+                .extend(snapshot.collect_node_property_index_keys(*node));
+            cleanup
                 .incident_edges
                 .extend(snapshot.collect_raw_outgoing_edges(*node));
             cleanup
@@ -632,6 +697,17 @@ impl<'a> WriteTxn<'a> {
                 label_node_key(*label, *node),
                 [],
             );
+            let props =
+                final_node_properties(*node, &snapshot, &self.node_props, &self.removed_node_props);
+            for (key, value) in props {
+                if scalar_indexable_value(&value) {
+                    batch.insert(
+                        &self.engine.keyspaces.idx_node_props,
+                        node_prop_index_key(*label, &key, &value, *node),
+                        [],
+                    );
+                }
+            }
         }
 
         for (node, label) in &self.label_removals {
@@ -646,6 +722,9 @@ impl<'a> WriteTxn<'a> {
                 &self.engine.keyspaces.label_nodes,
                 label_node_key(*label, *node),
             );
+            for key in snapshot.collect_node_property_index_keys_for_label(*node, *label) {
+                batch.remove(&self.engine.keyspaces.idx_node_props, key);
+            }
         }
 
         for edge in &created_edges {
@@ -672,6 +751,9 @@ impl<'a> WriteTxn<'a> {
                 for key in &cleanup.node_prop_keys {
                     batch.remove(&self.engine.keyspaces.node_props, key);
                 }
+                for key in &cleanup.node_prop_index_keys {
+                    batch.remove(&self.engine.keyspaces.idx_node_props, key);
+                }
             }
 
             if let Some(external_id) = self.external_id_for_commit(*node, &snapshot) {
@@ -695,11 +777,32 @@ impl<'a> WriteTxn<'a> {
             if self.tombstoned_nodes.contains(node) {
                 continue;
             }
+            for old_key in snapshot.collect_node_property_index_keys_for_property(*node, key) {
+                batch.remove(&self.engine.keyspaces.idx_node_props, old_key);
+            }
+            if node_property_removed_in_txn(*node, key, &self.removed_node_props) {
+                continue;
+            }
             batch.insert(
                 &self.engine.keyspaces.node_props,
                 node_prop_prefix(*node, key),
                 value.encode(),
             );
+            if scalar_indexable_value(value) {
+                for label in final_node_labels(
+                    *node,
+                    &snapshot,
+                    &self.created_nodes,
+                    &self.label_additions,
+                    &self.label_removals,
+                ) {
+                    batch.insert(
+                        &self.engine.keyspaces.idx_node_props,
+                        node_prop_index_key(label, key, value, *node),
+                        [],
+                    );
+                }
+            }
         }
 
         for ((edge, key), value) in &self.edge_props {
@@ -716,6 +819,9 @@ impl<'a> WriteTxn<'a> {
         for (node, key) in &self.removed_node_props {
             if self.tombstoned_nodes.contains(node) {
                 continue;
+            }
+            for old_key in snapshot.collect_node_property_index_keys_for_property(*node, key) {
+                batch.remove(&self.engine.keyspaces.idx_node_props, old_key);
             }
             batch.remove(
                 &self.engine.keyspaces.node_props,
@@ -755,6 +861,7 @@ fn open_keyspaces(db: &Database) -> Result<Keyspaces> {
         adj_in: db.keyspace("adj_in", KeyspaceCreateOptions::default)?,
         node_props: db.keyspace("node_props", KeyspaceCreateOptions::default)?,
         edge_props: db.keyspace("edge_props", KeyspaceCreateOptions::default)?,
+        idx_node_props: db.keyspace("idx_node_props", KeyspaceCreateOptions::default)?,
     })
 }
 
@@ -905,6 +1012,73 @@ pub(crate) fn node_prop_prefix(node: InternalNodeId, key: &str) -> Vec<u8> {
     out.extend_from_slice(&(key.len() as u32).to_be_bytes());
     out.extend_from_slice(key.as_bytes());
     out
+}
+
+pub(crate) fn node_prop_index_key(
+    label: LabelId,
+    key: &str,
+    value: &PropertyValue,
+    node: InternalNodeId,
+) -> Vec<u8> {
+    let encoded_value = value.encode();
+    let key_len = u16::try_from(key.len()).expect("property key length should fit in u16");
+    let value_len =
+        u32::try_from(encoded_value.len()).expect("property value length should fit in u32");
+    let mut out = Vec::with_capacity(14 + key.len() + encoded_value.len());
+    out.extend_from_slice(&label.to_be_bytes());
+    out.extend_from_slice(&key_len.to_be_bytes());
+    out.extend_from_slice(key.as_bytes());
+    out.extend_from_slice(&value_len.to_be_bytes());
+    out.extend_from_slice(&encoded_value);
+    out.extend_from_slice(&node.to_be_bytes());
+    out
+}
+
+pub(crate) fn node_prop_index_prefix(label: LabelId, key: &str, value: &PropertyValue) -> Vec<u8> {
+    let encoded_value = value.encode();
+    let key_len = u16::try_from(key.len()).expect("property key length should fit in u16");
+    let value_len =
+        u32::try_from(encoded_value.len()).expect("property value length should fit in u32");
+    let mut out = Vec::with_capacity(10 + key.len() + encoded_value.len());
+    out.extend_from_slice(&label.to_be_bytes());
+    out.extend_from_slice(&key_len.to_be_bytes());
+    out.extend_from_slice(key.as_bytes());
+    out.extend_from_slice(&value_len.to_be_bytes());
+    out.extend_from_slice(&encoded_value);
+    out
+}
+
+pub(crate) fn parse_node_prop_index_key(key: &[u8]) -> Option<InternalNodeId> {
+    if key.len() < 14 {
+        return None;
+    }
+    let key_len = u16::from_be_bytes(key[4..6].try_into().ok()?) as usize;
+    let value_len_offset = 6 + key_len;
+    if key.len() < value_len_offset + 8 {
+        return None;
+    }
+    let value_len = u32::from_be_bytes(
+        key[value_len_offset..value_len_offset + 4]
+            .try_into()
+            .ok()?,
+    ) as usize;
+    let node_offset = value_len_offset + 4 + value_len;
+    if key.len() != node_offset + 4 {
+        return None;
+    }
+    decode_u32(&key[node_offset..node_offset + 4])
+}
+
+pub(crate) fn parse_node_prop_index_property_key(key: &[u8]) -> Option<String> {
+    if key.len() < 14 {
+        return None;
+    }
+    let key_len = u16::from_be_bytes(key[4..6].try_into().ok()?) as usize;
+    let value_len_offset = 6 + key_len;
+    if key.len() < value_len_offset + 8 {
+        return None;
+    }
+    String::from_utf8(key[6..6 + key_len].to_vec()).ok()
 }
 
 pub(crate) fn parse_node_prop_key(key: &[u8], node: InternalNodeId) -> Option<String> {

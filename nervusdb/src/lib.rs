@@ -243,6 +243,15 @@ impl GraphSnapshot for DbSnapshot {
         self.0.nodes_with_label(label)
     }
 
+    fn nodes_with_label_and_property(
+        &self,
+        label: LabelId,
+        key: &str,
+        value: &PropertyValue,
+    ) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {
+        self.0.nodes_with_label_and_property(label, key, value)
+    }
+
     fn resolve_external(&self, iid: InternalNodeId) -> Option<ExternalId> {
         self.0.resolve_external(iid)
     }

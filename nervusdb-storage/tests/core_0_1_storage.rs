@@ -593,3 +593,196 @@ fn core_0_1_reopen_is_repeatable() {
         );
     }
 }
+
+#[test]
+fn core_0_1_node_property_equality_index_tracks_writes_and_reopen() {
+    let dir = tempdir().unwrap();
+    let path = db_dir(&dir);
+
+    let person;
+    let company;
+    {
+        let engine = GraphEngine::open(&path).unwrap();
+        person = engine.get_or_create_label("Person").unwrap();
+        company = engine.get_or_create_label("Company").unwrap();
+
+        let mut tx = engine.begin_write();
+        let alice = tx.create_node(10, person).unwrap();
+        let bob = tx.create_node(20, person).unwrap();
+        let acme = tx.create_node(30, company).unwrap();
+        tx.set_node_property(alice, "name".to_string(), "Alice".into())
+            .unwrap();
+        tx.set_node_property(bob, "name".to_string(), "Alice".into())
+            .unwrap();
+        tx.set_node_property(acme, "name".to_string(), "Alice".into())
+            .unwrap();
+        tx.commit().unwrap();
+    }
+
+    let engine = GraphEngine::open(&path).unwrap();
+    let snapshot = engine.snapshot();
+    let mut people: Vec<_> = snapshot
+        .nodes_with_label_and_property(person, "name", &"Alice".into())
+        .collect();
+    people.sort_unstable();
+    assert_eq!(people.len(), 2);
+    assert_eq!(
+        snapshot
+            .nodes_with_label_and_property(company, "name", &"Alice".into())
+            .count(),
+        1
+    );
+    assert!(
+        snapshot
+            .nodes_with_label_and_property(person, "name", &"Missing".into())
+            .next()
+            .is_none()
+    );
+}
+
+#[test]
+fn core_0_1_node_property_equality_index_tracks_property_update_and_remove() {
+    let dir = tempdir().unwrap();
+    let path = db_dir(&dir);
+    let engine = GraphEngine::open(&path).unwrap();
+    let person = engine.get_or_create_label("Person").unwrap();
+
+    let alice = {
+        let mut tx = engine.begin_write();
+        let alice = tx.create_node(10, person).unwrap();
+        tx.set_node_property(alice, "name".to_string(), "Alice".into())
+            .unwrap();
+        tx.commit().unwrap();
+        alice
+    };
+
+    {
+        let mut tx = engine.begin_write();
+        tx.set_node_property(alice, "name".to_string(), "Alicia".into())
+            .unwrap();
+        tx.commit().unwrap();
+    }
+
+    let snapshot = engine.snapshot();
+    assert!(
+        snapshot
+            .nodes_with_label_and_property(person, "name", &"Alice".into())
+            .next()
+            .is_none()
+    );
+    assert_eq!(
+        snapshot
+            .nodes_with_label_and_property(person, "name", &"Alicia".into())
+            .collect::<Vec<_>>(),
+        vec![alice]
+    );
+    drop(snapshot);
+
+    {
+        let mut tx = engine.begin_write();
+        tx.remove_node_property(alice, "name").unwrap();
+        tx.commit().unwrap();
+    }
+
+    let snapshot = engine.snapshot();
+    assert!(
+        snapshot
+            .nodes_with_label_and_property(person, "name", &"Alicia".into())
+            .next()
+            .is_none()
+    );
+}
+
+#[test]
+fn core_0_1_node_property_equality_index_tracks_label_and_tombstone_changes() {
+    let dir = tempdir().unwrap();
+    let path = db_dir(&dir);
+    let engine = GraphEngine::open(&path).unwrap();
+    let person = engine.get_or_create_label("Person").unwrap();
+    let company = engine.get_or_create_label("Company").unwrap();
+
+    let alice = {
+        let mut tx = engine.begin_write();
+        let alice = tx.create_node(10, person).unwrap();
+        tx.set_node_property(alice, "name".to_string(), "Alice".into())
+            .unwrap();
+        tx.commit().unwrap();
+        alice
+    };
+
+    {
+        let mut tx = engine.begin_write();
+        tx.add_node_label(alice, company).unwrap();
+        tx.commit().unwrap();
+    }
+    let snapshot = engine.snapshot();
+    assert_eq!(
+        snapshot
+            .nodes_with_label_and_property(company, "name", &"Alice".into())
+            .collect::<Vec<_>>(),
+        vec![alice]
+    );
+    drop(snapshot);
+
+    {
+        let mut tx = engine.begin_write();
+        tx.remove_node_label(alice, company).unwrap();
+        tx.commit().unwrap();
+    }
+    let snapshot = engine.snapshot();
+    assert!(
+        snapshot
+            .nodes_with_label_and_property(company, "name", &"Alice".into())
+            .next()
+            .is_none()
+    );
+    assert_eq!(
+        snapshot
+            .nodes_with_label_and_property(person, "name", &"Alice".into())
+            .collect::<Vec<_>>(),
+        vec![alice]
+    );
+    drop(snapshot);
+
+    {
+        let mut tx = engine.begin_write();
+        tx.tombstone_node(alice).unwrap();
+        tx.commit().unwrap();
+    }
+    drop(engine);
+
+    let engine = GraphEngine::open(&path).unwrap();
+    let snapshot = engine.snapshot();
+    assert!(
+        snapshot
+            .nodes_with_label_and_property(person, "name", &"Alice".into())
+            .next()
+            .is_none()
+    );
+}
+
+#[test]
+fn core_0_1_node_property_equality_index_uses_final_same_txn_state() {
+    let dir = tempdir().unwrap();
+    let path = db_dir(&dir);
+    let engine = GraphEngine::open(&path).unwrap();
+    let person = engine.get_or_create_label("Person").unwrap();
+
+    {
+        let mut tx = engine.begin_write();
+        let node = tx.create_node(10, person).unwrap();
+        tx.set_node_property(node, "name".to_string(), "Alice".into())
+            .unwrap();
+        tx.remove_node_property(node, "name").unwrap();
+        tx.commit().unwrap();
+    }
+
+    let snapshot = engine.snapshot();
+    assert!(
+        snapshot
+            .nodes_with_label_and_property(person, "name", &"Alice".into())
+            .next()
+            .is_none()
+    );
+    assert_eq!(snapshot.node_count(Some(person)), 1);
+}
