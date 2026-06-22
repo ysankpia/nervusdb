@@ -2,19 +2,20 @@
 
 ## Current Phase
 
-NervusDB 0.0.2 has been released as the single public `nervusdb` crate. The
-next line is 0.0.3 graph integrity work.
+NervusDB 0.0.3 is being prepared as the next single public `nervusdb` crate
+release. The line is graph integrity, not feature expansion.
 
 ## Now
 
-- Reject dangling edges and mutations on missing graph entities.
-- Make direct Rust API node deletion detach-clean related keyspaces.
+- Prepare the v0.0.3 release after graph integrity validation passed.
+- Keep v0.0.3 scoped to dangling-edge rejection, invalid mutation rejection,
+  and detach-clean direct Rust API node deletion.
 - Preserve 0.0.2 write-path performance and default `SyncAll` durability.
 
 ## Next
 
-- Complete 0.0.3 storage and query regression tests for graph integrity.
-- Record validation evidence in the active 0.0.3 plan and `PROGRESS.md`.
+- Publish v0.0.3 after release dry-run and GitHub Actions pass.
+- Start the next correctness plan only after v0.0.3 is published.
 
 ## Later
 
@@ -35,7 +36,7 @@ next line is 0.0.3 graph integrity work.
 | 0.1 credible | Q2 2026 | Examples runnable, recovery proven, 10k/50k smoke passes |
 | 0.0.1 release | Q2 2026 | Single `nervusdb` crate published to crates.io, docs complete, validation repeatable |
 | 0.0.2 write path | Q2 2026 | 100k/500k benchmark stage timing and at least 2x insert improvement |
-| 0.0.3 graph integrity | Q2 2026 | Dangling-edge rejection and tombstone cleanup tests pass |
+| 0.0.3 graph integrity | Q2 2026 | Dangling-edge rejection, tombstone cleanup tests, and release dry-run pass |
 
 ## Open Questions
 
