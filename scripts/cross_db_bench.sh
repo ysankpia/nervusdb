@@ -93,6 +93,9 @@ for system in "${systems[@]}"; do
     load_nodes_ms \
     load_edges_ms \
     commit_ms \
+    load_total_ms \
+    reopen_open_ms \
+    reopen_count_verify_ms \
     reopen_verify_ms \
     lookup_p99_us \
     one_hop_cold_edges_per_sec \

@@ -6,7 +6,7 @@
 
 use nervusdb::{Db, GraphSnapshot, PropertyValue};
 use rusqlite::{Connection, OptionalExtension, params};
-use serde_json::json;
+use serde_json::{Map, Value, json};
 use std::cmp::min;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -178,6 +178,8 @@ struct RunMetrics {
     load_nodes_ms: f64,
     load_edges_ms: f64,
     commit_ms: f64,
+    reopen_open_ms: f64,
+    reopen_count_verify_ms: f64,
     reopen_verify_ms: f64,
     lookup: LatencySummary,
     lookup_rows_total: u64,
@@ -191,6 +193,24 @@ struct RunMetrics {
     db_file_count: u64,
     correctness_hash: String,
     notes: Vec<String>,
+}
+
+impl RunMetrics {
+    fn load_total_ms(&self) -> f64 {
+        self.load_nodes_ms + self.load_edges_ms + self.commit_ms
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReopenVerifyResult {
+    open_ms: f64,
+    count_verify_ms: f64,
+}
+
+impl ReopenVerifyResult {
+    fn total_ms(self) -> f64 {
+        self.open_ms + self.count_verify_ms
+    }
 }
 
 fn main() -> AnyResult<()> {
@@ -215,8 +235,13 @@ fn main() -> AnyResult<()> {
         cfg.seed
     );
     println!(
-        "load: nodes={:.2}ms edges={:.2}ms commit={:.2}ms reopen={:.2}ms",
-        metrics.load_nodes_ms, metrics.load_edges_ms, metrics.commit_ms, metrics.reopen_verify_ms
+        "load: nodes={:.2}ms edges={:.2}ms commit={:.2}ms total={:.2}ms reopen_open={:.2}ms reopen_count_verify={:.2}ms",
+        metrics.load_nodes_ms,
+        metrics.load_edges_ms,
+        metrics.commit_ms,
+        metrics.load_total_ms(),
+        metrics.reopen_open_ms,
+        metrics.reopen_count_verify_ms
     );
     println!(
         "lookup: avg={:.2}us p50={:.2}us p95={:.2}us p99={:.2}us rows={}",
@@ -242,52 +267,131 @@ fn main() -> AnyResult<()> {
     );
     println!("correctness_hash={}", metrics.correctness_hash);
 
-    println!(
-        "{}",
-        json!({
-            "benchmark_version": BENCHMARK_VERSION,
-            "system": cfg.system.as_str(),
-            "system_version": metrics.system_version,
-            "profile": "safe",
-            "load_mode": "single_transaction",
-            "dataset": "custom",
-            "shape": "uniform_degree",
-            "seed": cfg.seed,
-            "nodes": cfg.nodes,
-            "degree": cfg.degree,
-            "edges": cfg.edge_count(),
-            "iters": cfg.iters,
-            "mutation_iters": cfg.mutation_count(),
-            "load_nodes_ms": round3(metrics.load_nodes_ms),
-            "load_edges_ms": round3(metrics.load_edges_ms),
-            "commit_ms": round3(metrics.commit_ms),
-            "reopen_verify_ms": round3(metrics.reopen_verify_ms),
-            "lookup_avg_us": round3(metrics.lookup.avg_us),
-            "lookup_p50_us": round3(metrics.lookup.p50_us),
-            "lookup_p95_us": round3(metrics.lookup.p95_us),
-            "lookup_p99_us": round3(metrics.lookup.p99_us),
-            "lookup_rows_total": metrics.lookup_rows_total,
-            "one_hop_hot_edges_per_sec": round3(metrics.one_hop_hot_edges_per_sec),
-            "one_hop_cold_edges_per_sec": round3(metrics.one_hop_cold_edges_per_sec),
-            "incoming_cold_edges_per_sec": round3(metrics.incoming_cold_edges_per_sec),
-            "two_hop_paths_per_sec": round3(metrics.two_hop_paths_per_sec),
-            "update_avg_us": round3(metrics.update.avg_us),
-            "update_p50_us": round3(metrics.update.p50_us),
-            "update_p95_us": round3(metrics.update.p95_us),
-            "update_p99_us": round3(metrics.update.p99_us),
-            "detach_delete_avg_us": round3(metrics.detach_delete.avg_us),
-            "detach_delete_p50_us": round3(metrics.detach_delete.p50_us),
-            "detach_delete_p95_us": round3(metrics.detach_delete.p95_us),
-            "detach_delete_p99_us": round3(metrics.detach_delete.p99_us),
-            "db_bytes": metrics.db_bytes,
-            "db_file_count": metrics.db_file_count,
-            "correctness_hash": metrics.correctness_hash,
-            "storage_path": metrics.storage_path.display().to_string(),
-            "notes": metrics.notes,
-        })
-    );
+    println!("{}", metrics_json(&cfg, &metrics));
 
     Ok(())
+}
+
+fn metrics_json(cfg: &Config, metrics: &RunMetrics) -> Value {
+    let mut out = Map::new();
+    out.insert("benchmark_version".to_string(), json!(BENCHMARK_VERSION));
+    out.insert("system".to_string(), json!(cfg.system.as_str()));
+    out.insert("system_version".to_string(), json!(metrics.system_version));
+    out.insert("profile".to_string(), json!("safe"));
+    out.insert("load_mode".to_string(), json!("single_transaction"));
+    out.insert("dataset".to_string(), json!("custom"));
+    out.insert("shape".to_string(), json!("uniform_degree"));
+    out.insert("seed".to_string(), json!(cfg.seed));
+    out.insert("nodes".to_string(), json!(cfg.nodes));
+    out.insert("degree".to_string(), json!(cfg.degree));
+    out.insert("edges".to_string(), json!(cfg.edge_count()));
+    out.insert("iters".to_string(), json!(cfg.iters));
+    out.insert("mutation_iters".to_string(), json!(cfg.mutation_count()));
+    out.insert(
+        "load_nodes_ms".to_string(),
+        json!(round3(metrics.load_nodes_ms)),
+    );
+    out.insert(
+        "load_edges_ms".to_string(),
+        json!(round3(metrics.load_edges_ms)),
+    );
+    out.insert("commit_ms".to_string(), json!(round3(metrics.commit_ms)));
+    out.insert(
+        "load_total_ms".to_string(),
+        json!(round3(metrics.load_total_ms())),
+    );
+    out.insert(
+        "reopen_open_ms".to_string(),
+        json!(round3(metrics.reopen_open_ms)),
+    );
+    out.insert(
+        "reopen_count_verify_ms".to_string(),
+        json!(round3(metrics.reopen_count_verify_ms)),
+    );
+    out.insert(
+        "reopen_verify_ms".to_string(),
+        json!(round3(metrics.reopen_verify_ms)),
+    );
+    out.insert(
+        "lookup_avg_us".to_string(),
+        json!(round3(metrics.lookup.avg_us)),
+    );
+    out.insert(
+        "lookup_p50_us".to_string(),
+        json!(round3(metrics.lookup.p50_us)),
+    );
+    out.insert(
+        "lookup_p95_us".to_string(),
+        json!(round3(metrics.lookup.p95_us)),
+    );
+    out.insert(
+        "lookup_p99_us".to_string(),
+        json!(round3(metrics.lookup.p99_us)),
+    );
+    out.insert(
+        "lookup_rows_total".to_string(),
+        json!(metrics.lookup_rows_total),
+    );
+    out.insert(
+        "one_hop_hot_edges_per_sec".to_string(),
+        json!(round3(metrics.one_hop_hot_edges_per_sec)),
+    );
+    out.insert(
+        "one_hop_cold_edges_per_sec".to_string(),
+        json!(round3(metrics.one_hop_cold_edges_per_sec)),
+    );
+    out.insert(
+        "incoming_cold_edges_per_sec".to_string(),
+        json!(round3(metrics.incoming_cold_edges_per_sec)),
+    );
+    out.insert(
+        "two_hop_paths_per_sec".to_string(),
+        json!(round3(metrics.two_hop_paths_per_sec)),
+    );
+    out.insert(
+        "update_avg_us".to_string(),
+        json!(round3(metrics.update.avg_us)),
+    );
+    out.insert(
+        "update_p50_us".to_string(),
+        json!(round3(metrics.update.p50_us)),
+    );
+    out.insert(
+        "update_p95_us".to_string(),
+        json!(round3(metrics.update.p95_us)),
+    );
+    out.insert(
+        "update_p99_us".to_string(),
+        json!(round3(metrics.update.p99_us)),
+    );
+    out.insert(
+        "detach_delete_avg_us".to_string(),
+        json!(round3(metrics.detach_delete.avg_us)),
+    );
+    out.insert(
+        "detach_delete_p50_us".to_string(),
+        json!(round3(metrics.detach_delete.p50_us)),
+    );
+    out.insert(
+        "detach_delete_p95_us".to_string(),
+        json!(round3(metrics.detach_delete.p95_us)),
+    );
+    out.insert(
+        "detach_delete_p99_us".to_string(),
+        json!(round3(metrics.detach_delete.p99_us)),
+    );
+    out.insert("db_bytes".to_string(), json!(metrics.db_bytes));
+    out.insert("db_file_count".to_string(), json!(metrics.db_file_count));
+    out.insert(
+        "correctness_hash".to_string(),
+        json!(metrics.correctness_hash),
+    );
+    out.insert(
+        "storage_path".to_string(),
+        json!(metrics.storage_path.display().to_string()),
+    );
+    out.insert("notes".to_string(), json!(metrics.notes));
+    Value::Object(out)
 }
 
 fn run_nervusdb(cfg: &Config, temp: &TempDir) -> AnyResult<RunMetrics> {
@@ -296,15 +400,9 @@ fn run_nervusdb(cfg: &Config, temp: &TempDir) -> AnyResult<RunMetrics> {
 
     let (node_ids, label, rel, load_nodes_ms, load_edges_ms, commit_ms) = load_nervusdb(&db, cfg)?;
 
-    let reopen_start = Instant::now();
     db.close()?;
+    let reopen = reopen_verify_nervusdb(&path, label, rel, cfg)?;
     let db = Db::open(&path)?;
-    {
-        let snapshot = db.snapshot();
-        assert_eq!(snapshot.node_count(Some(label)), cfg.nodes as u64);
-        assert_eq!(snapshot.edge_count(Some(rel)), cfg.edge_count() as u64);
-    }
-    let reopen_verify_ms = elapsed_ms(reopen_start);
 
     let lookup = bench_nervusdb_lookup(&db, label, &cfg.lookup_target_name(), cfg.iters);
     let hot = bench_nervusdb_outgoing_hot(&db, node_ids[0], rel, cfg.iters);
@@ -324,7 +422,9 @@ fn run_nervusdb(cfg: &Config, temp: &TempDir) -> AnyResult<RunMetrics> {
         load_nodes_ms,
         load_edges_ms,
         commit_ms,
-        reopen_verify_ms,
+        reopen_open_ms: reopen.open_ms,
+        reopen_count_verify_ms: reopen.count_verify_ms,
+        reopen_verify_ms: reopen.total_ms(),
         lookup_rows_total: lookup.1,
         lookup: lookup.0,
         one_hop_hot_edges_per_sec: hot,
@@ -336,7 +436,35 @@ fn run_nervusdb(cfg: &Config, temp: &TempDir) -> AnyResult<RunMetrics> {
         db_bytes,
         db_file_count,
         correctness_hash,
-        notes: vec!["NervusDB public Rust facade".to_string()],
+        notes: vec![
+            "NervusDB public Rust facade".to_string(),
+            "load_nodes_ms and load_edges_ms measure public API staging loops; commit_ms is the durable batch boundary".to_string(),
+        ],
+    })
+}
+
+fn reopen_verify_nervusdb(
+    path: &Path,
+    label: u32,
+    rel: u32,
+    cfg: &Config,
+) -> AnyResult<ReopenVerifyResult> {
+    let open_start = Instant::now();
+    let db = Db::open(path)?;
+    let open_ms = elapsed_ms(open_start);
+
+    let count_start = Instant::now();
+    {
+        let snapshot = db.snapshot();
+        assert_eq!(snapshot.node_count(Some(label)), cfg.nodes as u64);
+        assert_eq!(snapshot.edge_count(Some(rel)), cfg.edge_count() as u64);
+    }
+    let count_verify_ms = elapsed_ms(count_start);
+    db.close()?;
+
+    Ok(ReopenVerifyResult {
+        open_ms,
+        count_verify_ms,
     })
 }
 
@@ -565,21 +693,9 @@ fn run_sqlite_simple(cfg: &Config, temp: &TempDir) -> AnyResult<RunMetrics> {
     create_sqlite_simple_schema(&conn)?;
     let (load_nodes_ms, load_edges_ms, commit_ms) = load_sqlite_simple(&mut conn, cfg)?;
 
-    let reopen_start = Instant::now();
     drop(conn);
+    let reopen = reopen_verify_sqlite_simple(&path, cfg)?;
     let conn = open_sqlite(&path)?;
-    assert_eq!(
-        sqlite_count(
-            &conn,
-            "SELECT COUNT(*) FROM nodes WHERE label = 'BenchNode'"
-        )?,
-        cfg.nodes as u64
-    );
-    assert_eq!(
-        sqlite_count(&conn, "SELECT COUNT(*) FROM edges WHERE rel = 'LINK'")?,
-        cfg.edge_count() as u64
-    );
-    let reopen_verify_ms = elapsed_ms(reopen_start);
 
     let lookup = bench_sqlite_lookup_simple(&conn, cfg)?;
     let hot = bench_sqlite_one_hop_hot_simple(&conn, cfg)?;
@@ -599,7 +715,9 @@ fn run_sqlite_simple(cfg: &Config, temp: &TempDir) -> AnyResult<RunMetrics> {
         load_nodes_ms,
         load_edges_ms,
         commit_ms,
-        reopen_verify_ms,
+        reopen_open_ms: reopen.open_ms,
+        reopen_count_verify_ms: reopen.count_verify_ms,
+        reopen_verify_ms: reopen.total_ms(),
         lookup: lookup.0,
         lookup_rows_total: lookup.1,
         one_hop_hot_edges_per_sec: hot,
@@ -612,6 +730,31 @@ fn run_sqlite_simple(cfg: &Config, temp: &TempDir) -> AnyResult<RunMetrics> {
         db_file_count,
         correctness_hash,
         notes: vec!["SQLite direct nodes/edges relational schema".to_string()],
+    })
+}
+
+fn reopen_verify_sqlite_simple(path: &Path, cfg: &Config) -> AnyResult<ReopenVerifyResult> {
+    let open_start = Instant::now();
+    let conn = open_sqlite(path)?;
+    let open_ms = elapsed_ms(open_start);
+
+    let count_start = Instant::now();
+    assert_eq!(
+        sqlite_count(
+            &conn,
+            "SELECT COUNT(*) FROM nodes WHERE label = 'BenchNode'"
+        )?,
+        cfg.nodes as u64
+    );
+    assert_eq!(
+        sqlite_count(&conn, "SELECT COUNT(*) FROM edges WHERE rel = 'LINK'")?,
+        cfg.edge_count() as u64
+    );
+    let count_verify_ms = elapsed_ms(count_start);
+
+    Ok(ReopenVerifyResult {
+        open_ms,
+        count_verify_ms,
     })
 }
 
@@ -843,23 +986,9 @@ fn run_sqlite_materialized(cfg: &Config, temp: &TempDir) -> AnyResult<RunMetrics
     create_sqlite_materialized_schema(&conn)?;
     let (load_nodes_ms, load_edges_ms, commit_ms) = load_sqlite_materialized(&mut conn, cfg)?;
 
-    let reopen_start = Instant::now();
     drop(conn);
+    let reopen = reopen_verify_sqlite_materialized(&path, cfg)?;
     let conn = open_sqlite(&path)?;
-    assert_eq!(
-        sqlite_count(
-            &conn,
-            "SELECT COUNT(*)
-             FROM node_labels
-             WHERE label_id = 1"
-        )?,
-        cfg.nodes as u64
-    );
-    assert_eq!(
-        sqlite_count(&conn, "SELECT COUNT(*) FROM edges WHERE rel = 1")?,
-        cfg.edge_count() as u64
-    );
-    let reopen_verify_ms = elapsed_ms(reopen_start);
 
     let lookup = bench_sqlite_lookup_materialized(&conn, cfg)?;
     let hot = bench_sqlite_one_hop_hot_materialized(&conn, cfg)?;
@@ -879,7 +1008,9 @@ fn run_sqlite_materialized(cfg: &Config, temp: &TempDir) -> AnyResult<RunMetrics
         load_nodes_ms,
         load_edges_ms,
         commit_ms,
-        reopen_verify_ms,
+        reopen_open_ms: reopen.open_ms,
+        reopen_count_verify_ms: reopen.count_verify_ms,
+        reopen_verify_ms: reopen.total_ms(),
         lookup: lookup.0,
         lookup_rows_total: lookup.1,
         one_hop_hot_edges_per_sec: hot,
@@ -892,6 +1023,33 @@ fn run_sqlite_materialized(cfg: &Config, temp: &TempDir) -> AnyResult<RunMetrics
         db_file_count,
         correctness_hash,
         notes: vec!["SQLite materialized graph keyspaces and property index".to_string()],
+    })
+}
+
+fn reopen_verify_sqlite_materialized(path: &Path, cfg: &Config) -> AnyResult<ReopenVerifyResult> {
+    let open_start = Instant::now();
+    let conn = open_sqlite(path)?;
+    let open_ms = elapsed_ms(open_start);
+
+    let count_start = Instant::now();
+    assert_eq!(
+        sqlite_count(
+            &conn,
+            "SELECT COUNT(*)
+             FROM node_labels
+             WHERE label_id = 1"
+        )?,
+        cfg.nodes as u64
+    );
+    assert_eq!(
+        sqlite_count(&conn, "SELECT COUNT(*) FROM edges WHERE rel = 1")?,
+        cfg.edge_count() as u64
+    );
+    let count_verify_ms = elapsed_ms(count_start);
+
+    Ok(ReopenVerifyResult {
+        open_ms,
+        count_verify_ms,
     })
 }
 
