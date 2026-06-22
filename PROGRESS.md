@@ -2,7 +2,7 @@
 
 ## Current Objective
 
-NervusDB 0.0.4 has been released.
+Prepare and publish NervusDB 0.0.5 as the stability-freeze release.
 
 ## Active Plan
 
@@ -12,16 +12,18 @@ bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
-0.0.4 has been released. 0.0.5 is now the stability-freeze line: fsck-lite,
-derived index repair, and Agent Memory smoke before stopping proactive database
-work.
+0.0.5 stability-freeze implementation is complete locally. Release preparation
+is in progress: version bump, release notes, publish dry-run, then tag/release
+and crates.io publish.
 
 ## Now
 
-- Implement 0.0.5 stability freeze from ADR 0008 and active plan 016.
+- Publish 0.0.5 after release dry-run and remote CI pass.
 - Keep public index-management APIs, range indexes, EdgeId, unsafe/buffered
   durability modes, vectors, multi-writer work, and advanced Cypher out of scope
   unless a new ADR explicitly changes priority.
+- After 0.0.5, stop proactive database work unless a real downstream project
+  exposes a concrete blocker.
 
 ## Done
 
@@ -146,12 +148,24 @@ work.
   - active plan: `docs/plans/active/016-stability-freeze-0.0.5.md`
   - completed 0.0.4 plan moved to
     `docs/plans/completed/015-property-equality-index-0.0.4.md`
+- 0.0.5 stability freeze implemented locally:
+  - `4a5472b5 docs(plan): start 0.0.5 stability freeze`
+  - `532b04b5 feat(admin): add fsck-lite core`
+  - `c701327f feat(cli): expose v2 fsck command`
+  - `245b11cc test(core): add fsck and agent memory smoke`
+  - `nervusdb::admin` exists only behind `unstable-admin`.
+  - `nervusdb v2 fsck` supports `--repair` and `--json`.
+  - repair rebuilds only `label_nodes` and `idx_node_props`.
+  - Agent Memory smoke covers Character/Event/Fact graph usage, property-index
+    lookup, traversal, update, detach delete, reopen, and feature-gated fsck.
+  - small benchmark artifact:
+    `artifacts/core-bench/core-bench-small-20260622-081528.json`.
 
 ## Next
 
-- Implement fsck-lite and Agent Memory smoke.
-- Decide whether repeated read benchmark variance needs a separate
-  benchmark plan.
+- Complete 0.0.5 release preparation and publish.
+- Decide whether repeated read benchmark variance needs a separate benchmark
+  plan only if a downstream project hits it.
 - Wait for GitHub Dependabot to rescan after the stale `fuzz/Cargo.lock`
   removal is pushed.
 - Update GitHub Actions if the Node.js 20 deprecation annotation becomes noisy.
@@ -283,8 +297,24 @@ None.
 | 2026-06-22 | `gh release create v0.0.4 --verify-tag --title "NervusDB v0.0.4" --notes-file docs/releases/v0.0.4.md --latest=true` | Passed |
 | 2026-06-22 | `cargo publish -p nervusdb --registry crates-io` | Published `nervusdb v0.0.4` |
 | 2026-06-22 | `cargo search nervusdb --limit 5 --registry crates-io` | Confirmed `nervusdb = "0.0.4"` appears in crates.io search |
+| 2026-06-22 | `cargo fmt --all -- --check` | Passed after 0.0.5 fsck-lite and Agent Memory smoke |
+| 2026-06-22 | `cargo test -p nervusdb --lib --features unstable-admin admin::tests` | Passed: 7 fsck-lite focused tests |
+| 2026-06-22 | `cargo clippy -p nervusdb --lib --features unstable-admin -- -D warnings` | Passed after fsck-lite core |
+| 2026-06-22 | `cargo test -p nervusdb-cli` | Passed: CLI fsck text/unit tests and repair integration tests |
+| 2026-06-22 | `cargo test -p nervusdb --test core_0_1_agent_memory` | Passed: Agent Memory smoke |
+| 2026-06-22 | `cargo test -p nervusdb --features unstable-admin --test core_0_1_agent_memory` | Passed: Agent Memory smoke plus offline fsck |
+| 2026-06-22 | `bash scripts/core_smoke.sh` | Passed: CLI write/query/fsck plus Agent Memory smoke |
+| 2026-06-22 | `cargo check -p nervusdb --examples` | Passed after 0.0.5 changes |
+| 2026-06-22 | `cargo test -p nervusdb-storage --test core_0_1_storage` | Passed: 20 storage tests after 0.0.5 changes |
+| 2026-06-22 | `cargo test -p nervusdb --test core_0_1_mini_cypher` | Passed: 13 Mini-Cypher tests after 0.0.5 changes |
+| 2026-06-22 | `bash scripts/check.sh` | Passed after 0.0.5 changes |
+| 2026-06-22 | `bash scripts/core_examples.sh` | Passed: 10 CLI/file-driven examples after 0.0.5 changes |
+| 2026-06-22 | `bash scripts/core_crash_recovery.sh` | Passed: 5 kill/reopen iterations after 0.0.5 changes |
+| 2026-06-22 | `bash scripts/core_bench.sh --small` | Passed; artifact `artifacts/core-bench/core-bench-small-20260622-081528.json`; property lookup speedup 483.069x on 1k nodes |
+| 2026-06-22 | `cargo test --workspace` | Passed after 0.0.5 changes |
 
 ## Last Checkpoint
 
-2026-06-22: 0.0.5 stability freeze planning started. The active objective is
-fsck-lite plus Agent Memory smoke, not new database feature expansion.
+2026-06-22: 0.0.5 fsck-lite and Agent Memory smoke are implemented and
+validated locally. The active objective is release preparation and publication,
+not further database feature expansion.

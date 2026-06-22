@@ -6,7 +6,7 @@
 
 ```toml
 [dependencies]
-nervusdb = "0.0.4"
+nervusdb = "0.0.5"
 ```
 
 The query, storage, and API boundaries live inside that crate as modules:

@@ -39,5 +39,5 @@ Expected user install:
 
 ```toml
 [dependencies]
-nervusdb = "0.0.4"
+nervusdb = "0.0.5"
 ```
