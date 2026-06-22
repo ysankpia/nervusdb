@@ -35,6 +35,7 @@ behavior or examples.
 - Core examples: `bash scripts/core_examples.sh`
 - Core crash recovery: `bash scripts/core_crash_recovery.sh`
 - Core benchmark: `bash scripts/core_bench.sh --small`
+- Fsck / freeze smoke: `bash scripts/core_smoke.sh`
 - Full workspace test: `cargo test --workspace`
 - Broader clippy when needed: `cargo clippy --workspace --all-targets -- -W warnings`
 
@@ -48,6 +49,13 @@ Fjall storage changes should run at least:
 cargo test -p nervusdb-storage --test core_0_1_storage
 cargo test -p nervusdb --test core_0_1_rust_api
 bash scripts/core_crash_recovery.sh
+```
+
+Fsck or storage-index repair changes should also run:
+
+```bash
+cargo test -p nervusdb-cli
+bash scripts/core_smoke.sh
 ```
 
 ## Large 0.1 Acceptance Runs

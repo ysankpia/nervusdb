@@ -15,6 +15,7 @@ Per ADR 0006, the public release artifact is one crate: `nervusdb`.
 - Ten realistic examples are documented in `docs/reference/examples-0.1.md`.
 - Storage format and compatibility expectations are documented.
 - Manual benchmark evidence exists for the chosen release candidate.
+- Fsck / freeze smoke evidence exists when preparing `v0.0.5` or later.
 - `cargo publish -p nervusdb --dry-run` passes without requiring users to depend
   on internal implementation crates.
 

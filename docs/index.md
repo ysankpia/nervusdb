@@ -63,7 +63,7 @@ Current active direction: Fjall-backed local database directory storage for the
 - Active Fjall storage refactor: `docs/plans/active/010-fjall-storage-refactor.md`
 - Active 0.0.1 release plan: `docs/plans/active/011-release-0.0.1-single-crate.md`
 - Candidate core engine roadmap: `docs/plans/active/012-core-engine-roadmap-0.0.2-0.0.4.md`
-- Active 0.0.4 property equality index plan: `docs/plans/active/015-property-equality-index-0.0.4.md`
+- Active 0.0.5 stability freeze plan: `docs/plans/active/016-stability-freeze-0.0.5.md`
 - Active plans: `docs/plans/active/`
 - Completed plans: `docs/plans/completed/`
 - Technical debt: `docs/plans/tech-debt.md`

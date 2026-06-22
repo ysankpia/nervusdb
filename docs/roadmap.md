@@ -2,26 +2,25 @@
 
 ## Current Phase
 
-NervusDB 0.0.3 has been released as the single public `nervusdb` crate. The
-0.0.4 node property equality indexing is implemented and validated locally.
-Release preparation is the next step.
+NervusDB 0.0.4 has been released as the single public `nervusdb` crate. The
+next line is 0.0.5 stability freeze and fsck-lite.
 
 ## Now
 
-- Prepare 0.0.4 release metadata and version bump.
-- Keep the public crate shape as single-crate `nervusdb`.
-- Keep the index exact-match only and internal; do not add public index
-  management APIs during release prep.
+- Add offline `nervusdb v2 fsck` for checking and rebuilding derived indexes.
+- Keep repair conservative: rebuild `label_nodes` and `idx_node_props`; report
+  canonical-data problems without deleting user graph data.
+- Add Agent Memory smoke as the stop-line proof for downstream use.
 
 ## Next
 
-- Publish 0.0.4 only after dry-run and CI confirmation.
-- Start 0.0.5 planning around index audit/rebuild or benchmark regression
-  detection.
+- Publish 0.0.5 after fsck-lite, Agent Memory smoke, workspace tests, and dry
+  run pass.
+- Stop proactive database work after 0.0.5 unless a real downstream blocker
+  appears.
 
 ## Later
 
-- Index consistency audit / fsck-lite after 0.0.4.
 - Benchmark regression detection for the core path.
 - Release mechanics and publish documentation.
 - Community contribution guide.
@@ -40,10 +39,9 @@ Release preparation is the next step.
 | 0.0.2 write path | Q2 2026 | 100k/500k benchmark stage timing and at least 2x insert improvement |
 | 0.0.3 graph integrity | Q2 2026 | Dangling-edge rejection, tombstone cleanup tests, and release dry-run pass |
 | 0.0.4 property equality index | Q2 2026 | Implemented locally: 100k-node scan 68,519.803 ms, index 1.435 ms, 47,757.312x speedup |
+| 0.0.5 stability freeze | Q2 2026 | Fsck-lite, derived index repair, Agent Memory smoke, and release dry-run pass |
 
 ## Open Questions
 
-- Whether 0.0.5 should prioritize index audit/rebuild tooling or broader query
-  ergonomics after property equality lookup lands.
 - Whether old bd PB tasks should be closed as superseded once ADR 0005 is fully
   implemented.

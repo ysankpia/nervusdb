@@ -6,20 +6,19 @@ NervusDB 0.0.4 has been released.
 
 ## Active Plan
 
-`docs/plans/active/015-property-equality-index-0.0.4.md`
+`docs/plans/active/016-stability-freeze-0.0.5.md`
 
 bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
-0.0.4 has been tagged, released on GitHub, and published to crates.io as the
-single public `nervusdb` crate. It adds internally maintained exact node
-property equality lookup.
+0.0.4 has been released. 0.0.5 is now the stability-freeze line: fsck-lite,
+derived index repair, and Agent Memory smoke before stopping proactive database
+work.
 
 ## Now
 
-- Start 0.0.5 planning from the real remaining problem set, not from old
-  speculative roadmaps.
+- Implement 0.0.5 stability freeze from ADR 0008 and active plan 016.
 - Keep public index-management APIs, range indexes, EdgeId, unsafe/buffered
   durability modes, vectors, multi-writer work, and advanced Cypher out of scope
   unless a new ADR explicitly changes priority.
@@ -142,11 +141,15 @@ property equality lookup.
   - tag: `v0.0.4`
   - GitHub release: `https://github.com/ysankpia/nervusdb/releases/tag/v0.0.4`
   - crates.io: `https://crates.io/crates/nervusdb`
+- 0.0.5 stability freeze planning started:
+  - ADR: `docs/decisions/0008-stability-freeze-and-fsck-lite.md`
+  - active plan: `docs/plans/active/016-stability-freeze-0.0.5.md`
+  - completed 0.0.4 plan moved to
+    `docs/plans/completed/015-property-equality-index-0.0.4.md`
 
 ## Next
 
-- Plan 0.0.5. The likely honest candidates are index consistency audit /
-  fsck-lite, benchmark regression detection, or narrow query ergonomics.
+- Implement fsck-lite and Agent Memory smoke.
 - Decide whether repeated read benchmark variance needs a separate
   benchmark plan.
 - Wait for GitHub Dependabot to rescan after the stale `fuzz/Cargo.lock`
@@ -283,5 +286,5 @@ None.
 
 ## Last Checkpoint
 
-2026-06-22: 0.0.4 released. GitHub release and crates.io publication both
-confirmed. Next work should start with 0.0.5 planning.
+2026-06-22: 0.0.5 stability freeze planning started. The active objective is
+fsck-lite plus Agent Memory smoke, not new database feature expansion.
