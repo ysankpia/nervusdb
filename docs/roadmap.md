@@ -3,18 +3,21 @@
 ## Current Phase
 
 NervusDB 0.0.3 has been released as the single public `nervusdb` crate. The
-next line is 0.0.4 node property equality indexing.
+0.0.4 node property equality indexing is implemented and validated locally.
+Release preparation is the next step.
 
 ## Now
 
-- Add an internally maintained node property equality index.
-- Keep the index exact-match only and storage-neutral at the query boundary.
-- Preserve 0.0.2 write-path performance and default `SyncAll` durability.
+- Prepare 0.0.4 release metadata and version bump.
+- Keep the public crate shape as single-crate `nervusdb`.
+- Keep the index exact-match only and internal; do not add public index
+  management APIs during release prep.
 
 ## Next
 
-- Prove `MATCH (n:Label) WHERE n.key = literal` can anchor through the index.
-- Record benchmark evidence for scan baseline versus indexed lookup.
+- Publish 0.0.4 only after dry-run and CI confirmation.
+- Start 0.0.5 planning around index audit/rebuild or benchmark regression
+  detection.
 
 ## Later
 
@@ -36,7 +39,7 @@ next line is 0.0.4 node property equality indexing.
 | 0.0.1 release | Q2 2026 | Single `nervusdb` crate published to crates.io, docs complete, validation repeatable |
 | 0.0.2 write path | Q2 2026 | 100k/500k benchmark stage timing and at least 2x insert improvement |
 | 0.0.3 graph integrity | Q2 2026 | Dangling-edge rejection, tombstone cleanup tests, and release dry-run pass |
-| 0.0.4 property equality index | Q2 2026 | Exact property lookup is correct and at least 10x faster than scan baseline |
+| 0.0.4 property equality index | Q2 2026 | Implemented locally: 100k-node scan 68,519.803 ms, index 1.435 ms, 47,757.312x speedup |
 
 ## Open Questions
 

@@ -2,7 +2,7 @@
 
 ## Status
 
-Active.
+Implemented. Release preparation is still pending.
 
 ## Goal
 
@@ -43,6 +43,35 @@ query anchoring, not a broader query language or public index-management API.
   property lookup speedup of at least 10x over the scan baseline.
 - 100k/500k insert throughput must not fall below 50% of the best 0.0.2 recorded
   benchmark. If it does, 0.0.4 is blocked or must split index write-cost work.
+
+## Implementation Evidence
+
+- Planning/docs commit: `0f693a54 docs(plan): start 0.0.4 property equality index`.
+- Storage commit: `a51995f1 feat(storage): maintain node property equality index`.
+- Query commit: `8b4101e8 feat(query): anchor node scans by property equality`.
+- Benchmark commit: `adfd69b8 test(bench): measure property equality lookup`.
+- 100k/500k benchmark artifact:
+  `artifacts/core-bench/core-bench-custom-100000n-5d-20260622-050241.json`.
+- Property lookup scan baseline: 68,519.803 ms.
+- Property lookup indexed path: 1.435 ms.
+- Property lookup speedup: 47,757.312x.
+- Insert throughput with index maintenance: 222,707.841 edges/sec.
+
+## Validation Evidence
+
+- `cargo fmt --all -- --check` passed.
+- `cargo check -p nervusdb --examples` passed.
+- `cargo test -p nervusdb-storage --test core_0_1_storage` passed: 20 tests.
+- `cargo test -p nervusdb --test core_0_1_mini_cypher` passed: 13 tests.
+- `bash scripts/core_bench.sh --small` passed; artifact
+  `artifacts/core-bench/core-bench-small-20260622-044017.json`.
+- `bash scripts/check.sh` passed.
+- `cargo test -p nervusdb --test core_0_1_rust_api` passed.
+- `cargo test -p nervusdb --test core_0_1_examples` passed: 10 tests.
+- `bash scripts/core_examples.sh` passed: 10 examples.
+- `bash scripts/core_crash_recovery.sh` passed: 5 kill/reopen iterations.
+- `cargo test --workspace` passed.
+- `bash scripts/core_bench.sh --nodes 100000 --degree 5 --iters 1000` passed.
 
 ## Required Validation
 

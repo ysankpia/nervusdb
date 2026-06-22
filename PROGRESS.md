@@ -2,7 +2,8 @@
 
 ## Current Objective
 
-NervusDB 0.0.4 is focused on internal node property equality indexing.
+NervusDB 0.0.4 node property equality indexing is implemented. The remaining
+work is release preparation, not core feature work.
 
 ## Active Plan
 
@@ -13,17 +14,16 @@ bd epic: `nervusdb-a1z`
 ## Current Phase
 
 0.0.3 has been tagged, released on GitHub, and published to crates.io as the
-single public `nervusdb` crate. 0.0.4 now targets exact node property lookup
-through an internally maintained index.
+single public `nervusdb` crate. 0.0.4 implementation now has an internally
+maintained exact node property lookup index and benchmark evidence.
 
 ## Now
 
-- Add ADR 0007 and active plan 015 for internal node property equality indexing.
-- Implement `idx_node_props` without restoring public index-management APIs.
-- Prove label-qualified exact property lookup is correct and at least 10x faster
-  than scan baseline on the 100k-node benchmark.
-- Keep property indexes, EdgeId, unsafe/buffered durability modes, vectors,
-  multi-writer work, and advanced query work out of 0.0.4.
+- Prepare the 0.0.4 release only after reviewing whether the performance and
+  validation evidence below is sufficient.
+- Do not add public index-management APIs, range indexes, EdgeId,
+  unsafe/buffered durability modes, vectors, multi-writer work, or advanced
+  Cypher during 0.0.4 release prep.
 
 ## Done
 
@@ -120,22 +120,36 @@ through an internally maintained index.
   - ADR: `docs/decisions/0007-node-property-equality-index.md`
   - active plan: `docs/plans/active/015-property-equality-index-0.0.4.md`
   - completed 0.0.3 plan moved to `docs/plans/completed/014-graph-integrity-0.0.3.md`
+- 0.0.4 property equality index implemented:
+  - `0f693a54 docs(plan): start 0.0.4 property equality index`
+  - `a51995f1 feat(storage): maintain node property equality index`
+  - `8b4101e8 feat(query): anchor node scans by property equality`
+  - `adfd69b8 test(bench): measure property equality lookup`
+  - Storage maintains `idx_node_props` atomically with node properties, labels,
+    and node tombstones.
+  - Query anchors label-qualified scalar property equality through
+    `GraphSnapshot::nodes_with_label_and_property`.
+  - No public `create_index` / `lookup_index` API was restored.
+  - 100k/500k benchmark artifact:
+    `artifacts/core-bench/core-bench-custom-100000n-5d-20260622-050241.json`.
+  - Property lookup scan baseline: 68,519.803 ms.
+  - Property lookup indexed path: 1.435 ms.
+  - Property lookup speedup: 47,757.312x.
+  - Insert throughput with index maintenance: 222,707.841 edges/sec.
 
 ## Next
 
+- Prepare 0.0.4 release metadata, version bump, release notes, dry-run, tag,
+  GitHub release, and crates.io publish only after explicit release approval.
 - Decide whether repeated read benchmark variance needs a separate
   benchmark plan.
 - Wait for GitHub Dependabot to rescan after the stale `fuzz/Cargo.lock`
   removal is pushed.
 - Update GitHub Actions if the Node.js 20 deprecation annotation becomes noisy.
-- Implement storage-neutral snapshot API and Fjall `idx_node_props`.
-- Add query planner/executor downshift for label-qualified scalar literal
-  equality.
-- Add benchmark fields and record 0.0.4 scan vs indexed lookup evidence.
 
 ## Blockers
 
-None yet.
+None for 0.0.4 implementation. Release preparation has not started yet.
 
 ## Validation Log
 
@@ -238,9 +252,21 @@ None yet.
 | 2026-06-22 | `gh release create v0.0.3 --verify-tag --title "NervusDB v0.0.3" --notes-file docs/releases/v0.0.3.md --latest=true` | Passed |
 | 2026-06-22 | `cargo publish -p nervusdb --registry crates-io` | Published `nervusdb v0.0.3` |
 | 2026-06-22 | `cargo search nervusdb --limit 5 --registry crates-io` | Confirmed `nervusdb = "0.0.3"` appears in crates.io search |
+| 2026-06-22 | `cargo fmt --all -- --check` | Passed after 0.0.4 query planner and benchmark changes |
+| 2026-06-22 | `cargo check -p nervusdb --examples` | Passed after 0.0.4 benchmark changes |
+| 2026-06-22 | `cargo test -p nervusdb-storage --test core_0_1_storage` | Passed: 20 storage tests including property equality index maintenance |
+| 2026-06-22 | `cargo test -p nervusdb --test core_0_1_mini_cypher` | Passed: 13 Mini-Cypher tests including property equality index query shapes |
+| 2026-06-22 | `bash scripts/core_bench.sh --small` | Passed; artifact `artifacts/core-bench/core-bench-small-20260622-044017.json`; property lookup speedup 483.013x on 1k nodes |
+| 2026-06-22 | `bash scripts/check.sh` | Passed after 0.0.4 property equality index changes |
+| 2026-06-22 | `cargo test -p nervusdb --test core_0_1_rust_api` | Passed after 0.0.4 property equality index changes |
+| 2026-06-22 | `cargo test -p nervusdb --test core_0_1_examples` | Passed: 10 example tests after 0.0.4 property equality index changes |
+| 2026-06-22 | `bash scripts/core_examples.sh` | Passed: 10 CLI/file-driven examples after 0.0.4 property equality index changes |
+| 2026-06-22 | `bash scripts/core_crash_recovery.sh` | Passed: 5 kill/reopen iterations after 0.0.4 property equality index changes |
+| 2026-06-22 | `cargo test --workspace` | Passed after 0.0.4 property equality index changes |
+| 2026-06-22 | `bash scripts/core_bench.sh --nodes 100000 --degree 5 --iters 1000` | Passed; artifact `artifacts/core-bench/core-bench-custom-100000n-5d-20260622-050241.json`; 100k nodes, 500k edges, scan 68,519.803 ms, index 1.435 ms, speedup 47,757.312x, insert 222,707.841 edges/sec |
 
 ## Last Checkpoint
 
-2026-06-22: 0.0.4 property equality index work started. The release target is
-internal exact node property lookup through `idx_node_props`, not public index
-management, range indexes, edge indexes, or broader Cypher.
+2026-06-22: 0.0.4 property equality index implementation completed and
+validated. Release preparation is still separate: version bump, release notes,
+publish dry-run, tag, GitHub release, and crates.io publish have not been done.
