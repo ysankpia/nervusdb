@@ -5,7 +5,7 @@
 Research benchmark specification. This is not a NervusDB feature roadmap and is
 not a 0.0.6 plan.
 
-NervusDB `v0.0.5` remains the current stability-freeze line. This document exists
+NervusDB `v0.0.6` is the current performance-evidence line. This document exists
 to answer a separate question: if we compare NervusDB with SQLite used as a graph
 store and with practical embedded graph databases, what should be measured, and
 what would constitute honest evidence?
@@ -16,7 +16,7 @@ The first real comparison set should be:
 
 | System | Role | Include In First Harness | Reason |
 |---|---:|---:|---|
-| NervusDB 0.0.5 | Subject under test | yes | Current released embedded property graph crate |
+| NervusDB 0.0.6 | Subject under test | yes | Current embedded property graph crate under release preparation |
 | SQLite graph schema | Relational baseline | yes | Strong single-file embedded baseline and the right comparison for "SQLite for graph" |
 | SQLite graph schema with materialized graph indexes | Optimized relational baseline | yes | Tests whether a carefully designed SQLite schema already solves enough of the problem |
 | Kuzu | Embedded property graph baseline | yes | Closest graph-native embedded competitor |
@@ -268,7 +268,7 @@ Each run must emit one JSON object as the last line.
 {
   "benchmark_version": 1,
   "system": "nervusdb",
-  "system_version": "0.0.5",
+  "system_version": "0.0.6",
   "profile": "safe",
   "dataset": "M",
   "shape": "uniform_degree",

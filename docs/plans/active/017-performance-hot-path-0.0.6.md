@@ -16,6 +16,7 @@ then remove the storage hot-path costs already proven by code inspection.
 - Add env-gated internal storage profiling with no public API change.
 - Remove `idx_node_props` cleanup paths that scan the whole property index for a
   single node or property.
+- Remove repeated created-node label lookup from bulk property index writes.
 - Stream traversal prefix scans instead of materializing every neighbor key into
   a `Vec<Vec<u8>>`.
 - Preserve default `SyncAll` durability and existing Mini-Cypher behavior.
@@ -91,6 +92,9 @@ Storage changes:
 - Node property index cleanup no longer scans all of `idx_node_props` for
   property update/remove, label remove, or tombstone-node cleanup. It derives
   exact old index keys from canonical node labels and node properties.
+- Bulk property index writes no longer linearly search `created_nodes` for every
+  staged property. Commit builds a one-time created-node label map and skips old
+  index cleanup for nodes created in the same transaction.
 - `neighbors()` and `incoming_neighbors()` consume Fjall prefix iterators
   directly instead of first materializing all keys into `Vec<Vec<u8>>`.
 - Adjacency reads trust the 0.0.3 write-path graph integrity invariant and no
@@ -125,17 +129,44 @@ command: NERVUSDB_PROFILE_STORAGE=1 bash scripts/cross_db_bench.sh --system nerv
 artifact: artifacts/cross-db-bench/cross-db-bench-medium-20260622-115442.ndjson
 ```
 
-Profile evidence still points to bulk commit/open as the remaining hard gap:
+Initial profile evidence identified a second bulk property-index hot path:
+`final_node_labels()` linearly searched `created_nodes` for every staged
+property. That made the bulk property-index phase scale with
+`created_nodes * node_props` even after the old full-index cleanup scan was
+removed.
 
-- Initial 100k/500k load spent about `7.08s` in property/index staging and about
-  `1.25s` in `batch.commit` under the profiled run.
-- Raw reopen is about `2.8s`; count verification is about `76ms`.
-- Aggregated traversal scan time is no longer the dominant bottleneck after
-  removing per-edge liveness point reads.
+Follow-up profiled run:
 
-0.0.6 should not immediately merge keyspaces in this plan. The evidence says
-keyspace/open and bulk index write costs need a separate ADR if they become the
-next release focus.
+```text
+command: NERVUSDB_PROFILE_STORAGE=1 bash scripts/cross_db_bench.sh --system nervusdb --medium
+artifact: artifacts/cross-db-bench/cross-db-bench-medium-20260622-120913.ndjson
+```
+
+| Stage | Before follow-up | After follow-up |
+|---|---:|---:|
+| `WriteTxn::commit.property_index_writes` | ~7.08 s | 244.979 ms |
+| `WriteTxn::commit.batch_commit` | ~1.25 s | 1.408 s |
+| `WriteTxn::commit` | ~8.38 s | 1.699 s |
+
+Unprofiled follow-up run:
+
+```text
+command: bash scripts/cross_db_bench.sh --system nervusdb --medium
+artifact: artifacts/cross-db-bench/cross-db-bench-medium-20260622-120945.ndjson
+```
+
+- Load total is now `1,674.287 ms`, down from the earlier local
+  `8,789.159 ms` accepted run.
+- Two-hop traversal is `3,356,928.783 paths/s`.
+- Update p99 is `5,010.542 us`.
+- Detach delete p99 is `6,480.459 us`.
+- Raw reopen remains about `3.25s`; count verification is about `105ms`.
+
+The property/index staging bug is no longer the remaining hard gap. The next
+large costs are `batch.commit` and raw `GraphEngine::open.database`, both of
+which point toward storage-layout/Fjall-file-structure work. 0.0.6 should still
+not immediately merge keyspaces in this plan; that is a storage-format project
+that needs a separate ADR and migration/fsck story.
 
 ## Validation
 

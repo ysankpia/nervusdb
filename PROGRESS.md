@@ -2,29 +2,32 @@
 
 ## Current Objective
 
-NervusDB 0.0.6 performance hot-path work is implemented locally; release
-preparation has not started.
+NervusDB 0.0.6 performance hot-path work is in release preparation. The
+remaining storage-layout costs are recorded for 0.0.7.
 
 ## Active Plan
 
 `docs/plans/active/017-performance-hot-path-0.0.6.md`
 
+Next: `docs/plans/active/018-storage-layout-0.0.7.md`
+
 bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
-0.0.5 remains the stable published release. 0.0.6 benchmark attribution,
-storage profiling, index-cleanup hot-path fixes, and traversal hot-path fixes
-are implemented locally. The next decision is release prep versus stopping
-database work and using NervusDB downstream.
+0.0.5 remains the stable published release until 0.0.6 is published. 0.0.6
+benchmark attribution, storage profiling, index-cleanup hot-path fixes, and
+traversal hot-path fixes are implemented locally. A follow-up storage hot-path
+fix removed repeated created-node label lookup during bulk property index
+writes. 0.0.7 is now scoped as storage-layout work, not feature expansion.
 
 ## Now
 
-- Use `nervusdb = "0.0.5"` in downstream projects.
+- Publish `v0.0.6` after release validation passes.
+- Use `nervusdb = "0.0.6"` in downstream projects after publication.
 - Treat the 0.0.6 cross-database benchmark as current performance evidence.
-- Prepare `v0.0.6` only after normal release validation passes.
 - Do not start keyspace merge without a separate ADR; current evidence says it
-  is a possible next storage-format project, not part of 0.0.6.
+  is 0.0.7 storage-layout work, not part of 0.0.6.
 - Keep public index-management APIs, range indexes, EdgeId, unsafe/buffered
   durability modes, vectors, multi-writer work, and advanced Cypher out of scope
   unless a new ADR explicitly changes priority.
@@ -178,9 +181,21 @@ database work and using NervusDB downstream.
     `artifacts/cross-db-bench/cross-db-bench-medium-20260622-103209.ndjson`.
   - NervusDB, SQLite simple, and SQLite materialized shared correctness hash:
     `d4b70801ad0bb15b`.
-  - Baseline showed NervusDB lookup is microsecond-class, while commit,
-    mixed reopen/count verification, mutation latency, traversal throughput,
-    and disk footprint are the concrete performance gaps.
+- 0.0.6 storage hot-path follow-up completed in the working tree:
+  - current code no longer has the old full `idx_node_props` scan cleanup path.
+  - bulk property index writes now build a one-time created-node label map
+    instead of linearly searching `created_nodes` per property.
+  - staged properties on newly created nodes skip old-index cleanup because no
+    committed old index can exist.
+  - profiled medium artifact:
+    `artifacts/cross-db-bench/cross-db-bench-medium-20260622-120913.ndjson`.
+  - `WriteTxn::commit.property_index_writes` dropped from about `7.08s` to
+    `244.979ms` on 100k/500k bulk load.
+  - unprofiled medium artifact:
+    `artifacts/cross-db-bench/cross-db-bench-medium-20260622-120945.ndjson`.
+  - current NervusDB medium load total: `1,674.287ms`.
+  - current remaining hard costs: durable `batch.commit` around `1.4-1.6s` and
+    raw reopen around `3.0s+`; do not attack these without a storage-layout ADR.
 - 0.0.6 performance hot path implemented locally:
   - benchmark schema now splits `load_total_ms`, `reopen_open_ms`, and
     `reopen_count_verify_ms`.
@@ -201,16 +216,20 @@ database work and using NervusDB downstream.
     `5,001.000 us`.
   - profile artifact:
     `artifacts/cross-db-bench/cross-db-bench-medium-20260622-115442.ndjson`.
-  - profile evidence points to bulk property/index write staging, `batch.commit`,
-    and raw reopen as the remaining hard storage gaps; keyspace merge belongs
-    in a separate ADR if it becomes 0.0.7 scope.
+  - after the storage hot-path follow-up, profile evidence points to
+    `batch.commit` and raw reopen as the remaining hard storage gaps.
+  - release notes added at `docs/releases/v0.0.6.md`.
+  - workspace package versions updated to `0.0.6`.
+- 0.0.7 storage layout planning started:
+  - active plan: `docs/plans/active/018-storage-layout-0.0.7.md`.
+  - focus: durable commit, raw reopen, file count, and storage footprint.
+  - implementation is blocked on a storage-layout ADR.
 
 ## Next
 
-- Decide whether to cut/release `v0.0.6` now or keep it as local performance
-  hardening while starting downstream project work.
-- If the database work continues, write a separate keyspace/open/bulk-index ADR
-  before any storage-format merge.
+- Run 0.0.6 release validation, tag, GitHub release, and crates.io publish.
+- If database work continues after 0.0.6, write a storage-layout ADR before any
+  keyspace merge or storage-format rewrite.
 - Wait for GitHub Dependabot to rescan after the stale `fuzz/Cargo.lock`
   removal is pushed.
 - Update GitHub Actions if the Node.js 20 deprecation annotation becomes noisy.
@@ -364,9 +383,19 @@ None.
 | 2026-06-22 | `gh release create v0.0.5 --verify-tag --title "NervusDB v0.0.5" --notes-file docs/releases/v0.0.5.md --latest=true` | Passed |
 | 2026-06-22 | `cargo publish -p nervusdb --registry crates-io` | Published `nervusdb v0.0.5` |
 | 2026-06-22 | `cargo search nervusdb --limit 5 --registry crates-io` | Confirmed `nervusdb = "0.0.5"` appears in crates.io search |
+| 2026-06-22 | `cargo fmt --all -- --check` | Passed after 0.0.6 created-node label-map hot-path fix |
+| 2026-06-22 | `cargo clippy -p nervusdb --examples -- -D warnings` | Passed after 0.0.6 hot-path fix |
+| 2026-06-22 | `cargo test -p nervusdb-storage --test core_0_1_storage` | Passed: 20 storage tests after 0.0.6 hot-path fix |
+| 2026-06-22 | `cargo test -p nervusdb --test core_0_1_mini_cypher` | Passed: 13 Mini-Cypher tests after 0.0.6 hot-path fix |
+| 2026-06-22 | `cargo test -p nervusdb --test core_0_1_rust_api` | Passed after 0.0.6 hot-path fix |
+| 2026-06-22 | `cargo test -p nervusdb --test core_0_1_agent_memory` | Passed after 0.0.6 hot-path fix |
+| 2026-06-22 | `cargo test -p nervusdb --features unstable-admin --test core_0_1_agent_memory` | Passed after 0.0.6 hot-path fix |
+| 2026-06-22 | `NERVUSDB_PROFILE_STORAGE=1 bash scripts/cross_db_bench.sh --system nervusdb --medium` | Passed; artifact `artifacts/cross-db-bench/cross-db-bench-medium-20260622-120913.ndjson`; property_index_writes `244.979ms` |
+| 2026-06-22 | `bash scripts/cross_db_bench.sh --system nervusdb --medium` | Passed; artifact `artifacts/cross-db-bench/cross-db-bench-medium-20260622-120945.ndjson`; load total `1,674.287ms`, two-hop `3,356,928.783 paths/s` |
 
 ## Last Checkpoint
 
-2026-06-22: 0.0.5 has been tagged, released on GitHub, published to crates.io,
-and confirmed via `cargo search`. Default next step is to use NervusDB in a
-downstream project, not to continue speculative database expansion.
+2026-06-22: 0.0.6 is in release preparation. The remaining large performance
+costs are durable `batch.commit`, raw reopen, file count, and disk footprint.
+Those are recorded as 0.0.7 storage-layout work and must not be started without
+a storage-layout ADR.

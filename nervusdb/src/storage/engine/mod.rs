@@ -267,14 +267,13 @@ pub(crate) fn scalar_indexable_value(value: &PropertyValue) -> bool {
 fn final_node_labels(
     node: InternalNodeId,
     snapshot: &Snapshot,
-    created_nodes: &[CreatedNode],
+    created_node_labels: &HashMap<InternalNodeId, BTreeSet<LabelId>>,
     label_additions: &[(InternalNodeId, LabelId)],
     label_removals: &[(InternalNodeId, LabelId)],
 ) -> BTreeSet<LabelId> {
-    let mut labels: BTreeSet<LabelId> = created_nodes
-        .iter()
-        .find(|created| created.iid == node)
-        .map(|created| created.labels.clone())
+    let mut labels: BTreeSet<LabelId> = created_node_labels
+        .get(&node)
+        .cloned()
         .unwrap_or_else(|| snapshot.node_labels(node).into_iter().collect());
 
     for (label_node, label) in label_additions {
@@ -635,6 +634,11 @@ impl<'a> WriteTxn<'a> {
             .batch()
             .durability(Some(PersistMode::SyncAll));
         let snapshot = self.engine.begin_read();
+        let created_node_labels: HashMap<InternalNodeId, BTreeSet<LabelId>> = self
+            .created_nodes
+            .iter()
+            .map(|created| (created.iid, created.labels.clone()))
+            .collect();
         let validation_started = profile::start();
         let mut all_created_edges = self.created_edges.clone();
         all_created_edges.sort_unstable();
@@ -788,7 +792,7 @@ impl<'a> WriteTxn<'a> {
             if !final_node_labels(
                 *node,
                 &snapshot,
-                &self.created_nodes,
+                &created_node_labels,
                 &self.label_additions,
                 &self.label_removals,
             )
@@ -896,8 +900,11 @@ impl<'a> WriteTxn<'a> {
             if self.tombstoned_nodes.contains(node) {
                 continue;
             }
-            for old_key in snapshot_node_property_index_keys_for_property(*node, key, &snapshot) {
-                batch.remove(&self.engine.keyspaces.idx_node_props, old_key);
+            if !self.created_node_ids.contains(node) {
+                for old_key in snapshot_node_property_index_keys_for_property(*node, key, &snapshot)
+                {
+                    batch.remove(&self.engine.keyspaces.idx_node_props, old_key);
+                }
             }
             if node_property_removed_in_txn(*node, key, &self.removed_node_props) {
                 continue;
@@ -911,7 +918,7 @@ impl<'a> WriteTxn<'a> {
                 for label in final_node_labels(
                     *node,
                     &snapshot,
-                    &self.created_nodes,
+                    &created_node_labels,
                     &self.label_additions,
                     &self.label_removals,
                 ) {
