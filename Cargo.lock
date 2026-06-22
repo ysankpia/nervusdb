@@ -504,9 +504,11 @@ name = "nervusdb-cli"
 version = "0.0.4"
 dependencies = [
  "clap",
+ "fjall",
  "nervusdb",
  "rustyline",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

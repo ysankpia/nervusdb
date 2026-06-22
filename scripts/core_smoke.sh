@@ -25,5 +25,16 @@ out="$(
 printf '%s\n' "$out"
 printf '%s\n' "$out" | grep -q '"b.name":"Bob"'
 
-echo "[core-smoke] ok"
+echo "[core-smoke] fsck graph"
+fsck_out="$(
+  cargo run -p nervusdb-cli -- v2 fsck \
+    --db "$DB_PATH" \
+    --json
+)"
+printf '%s\n' "$fsck_out"
+printf '%s\n' "$fsck_out" | grep -q '"ok": true'
 
+echo "[core-smoke] agent memory scenario"
+cargo test -p nervusdb --test core_0_1_agent_memory -- --nocapture
+
+echo "[core-smoke] ok"
