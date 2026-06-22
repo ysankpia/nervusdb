@@ -43,3 +43,30 @@ For every meaningful benchmark, record:
 
 Do not use benchmark work to justify expanding vector, optimizer, or full-Cypher
 scope before 0.1.
+
+## Cross-Database Research
+
+Use `docs/research/embedded-graph-benchmark.md` when comparing NervusDB against
+SQLite-as-graph, Kuzu, or other embedded graph/database systems.
+
+Phase 1 harness:
+
+```bash
+bash scripts/cross_db_bench.sh --small
+bash scripts/cross_db_bench.sh --medium
+```
+
+Run one system only when diagnosing a backend:
+
+```bash
+bash scripts/cross_db_bench.sh --system sqlite-materialized --small
+```
+
+The script writes per-system JSON files and one NDJSON summary under
+`artifacts/cross-db-bench/`.
+
+Cross-database results are invalid unless they use the same generated data,
+same durability profile, same correctness hash, and clearly separated product
+classes. In particular, do not compare SQLite unsafe writes against NervusDB
+durable writes, and do not compare Kuzu bulk `COPY FROM` against row-by-row
+application writes without labeling the workload difference.

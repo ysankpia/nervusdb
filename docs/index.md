@@ -53,6 +53,11 @@ Current active direction: Fjall-backed local database directory storage for the
 - Codebase analysis: `docs/reference/codebase-analysis.md`
 - Glossary: `docs/reference/glossary.md`
 
+## Research
+
+- Embedded graph benchmark research plan:
+  `docs/research/embedded-graph-benchmark.md`
+
 ## Roadmap And Progress
 
 - Roadmap: `docs/roadmap.md`
