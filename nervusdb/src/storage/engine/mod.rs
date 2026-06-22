@@ -39,10 +39,10 @@ impl std::fmt::Debug for Keyspaces {
 }
 
 pub struct GraphEngine {
-    path: PathBuf,
-    db: Database,
-    keyspaces: Keyspaces,
-    write_lock: Mutex<()>,
+    pub(crate) path: PathBuf,
+    pub(crate) db: Database,
+    pub(crate) keyspaces: Keyspaces,
+    pub(crate) write_lock: Mutex<()>,
 }
 
 impl std::fmt::Debug for GraphEngine {
@@ -246,7 +246,7 @@ struct NodeCleanup {
     incident_edges: BTreeSet<EdgeKey>,
 }
 
-fn scalar_indexable_value(value: &PropertyValue) -> bool {
+pub(crate) fn scalar_indexable_value(value: &PropertyValue) -> bool {
     !matches!(value, PropertyValue::List(_) | PropertyValue::Map(_))
 }
 
@@ -841,7 +841,7 @@ impl<'a> WriteTxn<'a> {
     }
 }
 
-fn edge_prop_key(edge: EdgeKey, key: &str) -> Vec<u8> {
+pub(crate) fn edge_prop_key(edge: EdgeKey, key: &str) -> Vec<u8> {
     let mut storage_key = edge_prefix(edge);
     storage_key.extend_from_slice(&(key.len() as u32).to_be_bytes());
     storage_key.extend_from_slice(key.as_bytes());
@@ -943,14 +943,14 @@ pub(crate) fn parse_node_value(bytes: &[u8]) -> Option<(ExternalId, u8)> {
     Some((u64::from_be_bytes(raw), bytes[8]))
 }
 
-fn node_label_key(node: InternalNodeId, label: LabelId) -> Vec<u8> {
+pub(crate) fn node_label_key(node: InternalNodeId, label: LabelId) -> Vec<u8> {
     let mut key = Vec::with_capacity(8);
     key.extend_from_slice(&node.to_be_bytes());
     key.extend_from_slice(&label.to_be_bytes());
     key
 }
 
-fn label_node_key(label: LabelId, node: InternalNodeId) -> Vec<u8> {
+pub(crate) fn label_node_key(label: LabelId, node: InternalNodeId) -> Vec<u8> {
     let mut key = Vec::with_capacity(8);
     key.extend_from_slice(&label.to_be_bytes());
     key.extend_from_slice(&node.to_be_bytes());
@@ -972,11 +972,11 @@ pub(crate) fn edge_prefix(edge: EdgeKey) -> Vec<u8> {
     key
 }
 
-fn adj_out_key(edge: EdgeKey) -> Vec<u8> {
+pub(crate) fn adj_out_key(edge: EdgeKey) -> Vec<u8> {
     edge_prefix(edge)
 }
 
-fn adj_in_key(edge: EdgeKey) -> Vec<u8> {
+pub(crate) fn adj_in_key(edge: EdgeKey) -> Vec<u8> {
     let mut key = Vec::with_capacity(12);
     key.extend_from_slice(&edge.dst.to_be_bytes());
     key.extend_from_slice(&edge.rel.to_be_bytes());

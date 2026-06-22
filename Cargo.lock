@@ -486,6 +486,7 @@ dependencies = [
  "chrono",
  "fjall",
  "serde",
+ "serde_json",
  "smallvec",
  "tempfile",
  "thiserror",

@@ -73,6 +73,8 @@
 //! Storage path: a local database directory managed by Fjall. Fjall's internal
 //! files are not part of the NervusDB public format contract.
 
+#[cfg(feature = "unstable-admin")]
+pub mod admin;
 pub mod api;
 mod error;
 pub mod query;
