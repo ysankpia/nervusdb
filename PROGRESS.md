@@ -444,11 +444,28 @@ None.
 | 2026-06-22 | `gh release create v0.0.6 --verify-tag --title "NervusDB v0.0.6" --notes-file docs/releases/v0.0.6.md --latest=true` | Passed |
 | 2026-06-22 | `cargo publish -p nervusdb --registry crates-io` | Published `nervusdb v0.0.6` |
 | 2026-06-22 | `cargo search nervusdb --limit 5 --registry crates-io` | Confirmed `nervusdb = "0.0.6"` appears in crates.io search |
+| 2026-06-22 | `cargo fmt --all -- --check` | Passed after 0.0.7 release preparation |
+| 2026-06-22 | `cargo check -p nervusdb --examples` | Passed after 0.0.7 release preparation |
+| 2026-06-22 | `cargo test -p nervusdb-storage --test core_0_1_storage` | Passed: 22 storage tests including epoch 2 rejection and epoch 3 keyspace-count coverage |
+| 2026-06-22 | `cargo test -p nervusdb --test core_0_1_mini_cypher` | Passed: 13 Mini-Cypher tests |
+| 2026-06-22 | `cargo test -p nervusdb-cli` | Passed: CLI fsck tests |
+| 2026-06-22 | `cargo test -p nervusdb --test core_0_1_agent_memory` | Passed: Agent Memory smoke |
+| 2026-06-22 | `cargo test -p nervusdb --features unstable-admin --test core_0_1_agent_memory` | Passed: Agent Memory smoke plus admin/fsck path |
+| 2026-06-22 | `bash scripts/check.sh` | Passed after 0.0.7 release preparation |
+| 2026-06-22 | `bash scripts/core_examples.sh` | Passed: 10 CLI/file-driven examples |
+| 2026-06-22 | `bash scripts/core_crash_recovery.sh` | Passed: 5 kill/reopen iterations |
+| 2026-06-22 | `cargo test --workspace` | Passed after 0.0.7 release preparation |
+| 2026-06-22 | `cargo publish -p nervusdb --dry-run --registry crates-io` | Passed clean after release-prep commit; unused local patch warnings expected |
+| 2026-06-22 | GitHub Actions `main` push run `27965344261` | Passed for commit `1ab64213` |
+| 2026-06-22 | `git tag -a v0.0.7` and `git push origin v0.0.7` | Passed; tag points at `1ab64213` |
+| 2026-06-22 | `gh release create v0.0.7 --verify-tag --title "NervusDB v0.0.7" --notes-file docs/releases/v0.0.7.md --latest=true` | Passed: `https://github.com/ysankpia/nervusdb/releases/tag/v0.0.7` |
+| 2026-06-22 | `cargo publish -p nervusdb --registry crates-io` | Published `nervusdb v0.0.7` |
+| 2026-06-22 | `cargo search nervusdb --limit 5 --registry crates-io` | Confirmed `nervusdb = "0.0.7"` appears in crates.io search |
 
 ## Last Checkpoint
 
-2026-06-22: 0.0.6 has been tagged, released on GitHub, published to crates.io,
-and confirmed via `cargo search`. The remaining large performance costs are
-durable `batch.commit`, raw reopen, file count, and disk footprint. Those are
-recorded as 0.0.7 storage-layout work and must not be started without a
-storage-layout ADR.
+2026-06-22: 0.0.7 has been tagged, released on GitHub, published to crates.io,
+and confirmed via `cargo search`. The release succeeds as storage epoch 3,
+clean-reopen, and footprint cleanup. It does not solve traversal throughput;
+that regression is documented in `docs/releases/v0.0.7.md` and must not be
+hidden in future planning.
