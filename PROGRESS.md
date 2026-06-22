@@ -2,28 +2,30 @@
 
 ## Current Objective
 
-NervusDB 0.0.5 has been released as the stability-freeze release.
+NervusDB 0.0.6 performance hot-path work is in progress.
 
 ## Active Plan
 
-`docs/plans/active/016-stability-freeze-0.0.5.md`
+`docs/plans/active/017-performance-hot-path-0.0.6.md`
 
 bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
-0.0.5 has been released. NervusDB should now be used in downstream projects by
-default; new database work should wait for concrete blockers from those
-projects.
+0.0.5 remains the stable published release. Cross-database benchmarks exposed
+concrete performance gaps against SQLite graph schemas, so 0.0.6 is focused on
+benchmark attribution and storage hot-path fixes.
 
 ## Now
 
 - Use `nervusdb = "0.0.5"` in downstream projects.
+- Treat the cross-database benchmark as the 0.0.6 performance baseline.
+- Improve benchmark attribution before making storage-format conclusions.
+- Optimize storage hot paths without unsafe durability or Mini-Cypher scope
+  expansion.
 - Keep public index-management APIs, range indexes, EdgeId, unsafe/buffered
   durability modes, vectors, multi-writer work, and advanced Cypher out of scope
   unless a new ADR explicitly changes priority.
-- After 0.0.5, stop proactive database work unless a real downstream project
-  exposes a concrete blocker.
 
 ## Done
 
@@ -164,12 +166,22 @@ projects.
   - tag: `v0.0.5`
   - GitHub release: `https://github.com/ysankpia/nervusdb/releases/tag/v0.0.5`
   - crates.io: `https://crates.io/crates/nervusdb`
+- 0.0.6 performance baseline started:
+  - `83cfbb6b test(bench): add embedded graph cross-db baseline`
+  - Cross-database medium benchmark artifact:
+    `artifacts/cross-db-bench/cross-db-bench-medium-20260622-103209.ndjson`.
+  - NervusDB, SQLite simple, and SQLite materialized shared correctness hash:
+    `d4b70801ad0bb15b`.
+  - Baseline showed NervusDB lookup is microsecond-class, while commit,
+    mixed reopen/count verification, mutation latency, traversal throughput,
+    and disk footprint are the concrete performance gaps.
 
 ## Next
 
-- Use NervusDB in the next downstream project.
-- Decide whether repeated read benchmark variance needs a separate benchmark
-  plan only if a downstream project hits it.
+- Split cross-db benchmark load/reopen attribution.
+- Add env-gated storage profiling.
+- Remove storage hot-path full index scans and traversal materialization.
+- Decide whether keyspace merge needs an ADR only after profile evidence.
 - Wait for GitHub Dependabot to rescan after the stale `fuzz/Cargo.lock`
   removal is pushed.
 - Update GitHub Actions if the Node.js 20 deprecation annotation becomes noisy.

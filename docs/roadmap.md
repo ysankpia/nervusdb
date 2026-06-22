@@ -2,19 +2,20 @@
 
 ## Current Phase
 
-NervusDB 0.0.5 has been released as the stability-freeze line for the single
-public `nervusdb` crate.
+NervusDB 0.0.6 performance work is in progress after cross-database benchmarks
+showed concrete storage hot-path gaps against SQLite graph schemas.
 
 ## Now
 
-- Use NervusDB in downstream projects.
-- Keep repair conservative: rebuild `label_nodes` and `idx_node_props`; report
-  canonical-data problems without deleting user graph data.
-- Treat Agent Memory smoke as the stop-line proof for downstream use.
+- Keep 0.0.5 usable for downstream projects.
+- Fix benchmark attribution before drawing storage architecture conclusions.
+- Optimize proven storage hot paths without weakening `SyncAll` durability or
+  expanding Mini-Cypher.
 
 ## Next
 
-- Let downstream projects decide the next database task.
+- Use 0.0.6 benchmark/profile evidence to decide whether keyspace merge needs a
+  separate ADR.
 
 ## Later
 
@@ -37,6 +38,7 @@ public `nervusdb` crate.
 | 0.0.3 graph integrity | Q2 2026 | Dangling-edge rejection, tombstone cleanup tests, and release dry-run pass |
 | 0.0.4 property equality index | Q2 2026 | Implemented locally: 100k-node scan 68,519.803 ms, index 1.435 ms, 47,757.312x speedup |
 | 0.0.5 stability freeze | Q2 2026 | Released: fsck-lite, derived index repair, Agent Memory smoke, workspace tests passed |
+| 0.0.6 performance hot path | Q2 2026 | In progress: cross-db medium benchmark exposes commit/reopen/mutation/traversal gaps |
 
 ## Open Questions
 
