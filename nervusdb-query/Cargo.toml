@@ -1,6 +1,6 @@
 [package]
 name = "nervusdb-query"
-version = "0.0.3"
+version = "0.0.4"
 license = "AGPL-3.0-only"
 description = "NervusDB v2 query engine – Cypher parser, planner, and executor"
 repository = "https://github.com/LuQing-Studio/nervusdb"
@@ -9,7 +9,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-nervusdb = { path = "../nervusdb", version = "=0.0.3" }
+nervusdb = { path = "../nervusdb", version = "=0.0.4" }
 
 [dev-dependencies]
 tempfile = "3"

@@ -86,7 +86,7 @@ For the current line, users should depend on one crate:
 
 ```toml
 [dependencies]
-nervusdb = "0.0.3"
+nervusdb = "0.0.4"
 ```
 
 Do not publish `nervusdb-api`, `nervusdb-storage`, or `nervusdb-query` as

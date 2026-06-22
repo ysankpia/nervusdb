@@ -1,6 +1,6 @@
 [package]
 name = "nervusdb-cli"
-version = "0.0.3"
+version = "0.0.4"
 edition = "2024"
 license = "AGPL-3.0-only"
 description = "NervusDB CLI – Embedded graph database with Cypher query support"
@@ -15,5 +15,5 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 rustyline = "14.0"
-nervusdb = "=0.0.3"
+nervusdb = "=0.0.4"
 serde_json = "1.0"

@@ -2,8 +2,7 @@
 
 ## Current Objective
 
-NervusDB 0.0.4 node property equality indexing is implemented. The remaining
-work is release preparation, not core feature work.
+NervusDB 0.0.4 release preparation is in progress.
 
 ## Active Plan
 
@@ -15,12 +14,13 @@ bd epic: `nervusdb-a1z`
 
 0.0.3 has been tagged, released on GitHub, and published to crates.io as the
 single public `nervusdb` crate. 0.0.4 implementation now has an internally
-maintained exact node property lookup index and benchmark evidence.
+maintained exact node property lookup index and benchmark evidence. Package
+versions and release notes are being prepared for publication.
 
 ## Now
 
-- Prepare the 0.0.4 release only after reviewing whether the performance and
-  validation evidence below is sufficient.
+- Finish 0.0.4 release preparation: version bump, publish dry-run, push, CI,
+  tag, GitHub release, crates.io publish, and crates.io search confirmation.
 - Do not add public index-management APIs, range indexes, EdgeId,
   unsafe/buffered durability modes, vectors, multi-writer work, or advanced
   Cypher during 0.0.4 release prep.
@@ -136,11 +136,14 @@ maintained exact node property lookup index and benchmark evidence.
   - Property lookup indexed path: 1.435 ms.
   - Property lookup speedup: 47,757.312x.
   - Insert throughput with index maintenance: 222,707.841 edges/sec.
+- 0.0.4 release preparation started:
+  - workspace package versions updated to `0.0.4`.
+  - release notes added at `docs/releases/v0.0.4.md`.
 
 ## Next
 
-- Prepare 0.0.4 release metadata, version bump, release notes, dry-run, tag,
-  GitHub release, and crates.io publish only after explicit release approval.
+- Run `cargo publish -p nervusdb --dry-run --registry crates-io`.
+- Push `main`, wait for GitHub Actions, then tag and publish `v0.0.4`.
 - Decide whether repeated read benchmark variance needs a separate
   benchmark plan.
 - Wait for GitHub Dependabot to rescan after the stale `fuzz/Cargo.lock`
@@ -149,7 +152,7 @@ maintained exact node property lookup index and benchmark evidence.
 
 ## Blockers
 
-None for 0.0.4 implementation. Release preparation has not started yet.
+None for 0.0.4 implementation. Release publication is in progress.
 
 ## Validation Log
 
@@ -267,6 +270,6 @@ None for 0.0.4 implementation. Release preparation has not started yet.
 
 ## Last Checkpoint
 
-2026-06-22: 0.0.4 property equality index implementation completed and
-validated. Release preparation is still separate: version bump, release notes,
-publish dry-run, tag, GitHub release, and crates.io publish have not been done.
+2026-06-22: 0.0.4 release preparation started after property equality index
+implementation and validation. Version bump and release notes are in progress;
+publish dry-run, push, CI, tag, GitHub release, and crates.io publish remain.
