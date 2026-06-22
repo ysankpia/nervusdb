@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use nervusdb::Db;
 use nervusdb::GraphSnapshot;
+use nervusdb::admin::{FsckIssue, FsckIssueKind, FsckOptions, FsckRepairKind, FsckReport};
 use nervusdb::query::Value as V2Value;
 use nervusdb::query::prepare;
 use std::collections::HashMap;
@@ -32,6 +33,7 @@ enum V2Commands {
     Query(V2QueryArgs),
     Write(V2WriteArgs),
     Repl(V2ReplArgs),
+    Fsck(V2FsckArgs),
 }
 
 #[derive(Parser)]
@@ -39,6 +41,21 @@ struct V2ReplArgs {
     /// Database base path
     #[arg(long)]
     db: PathBuf,
+}
+
+#[derive(Parser)]
+struct V2FsckArgs {
+    /// Local database directory
+    #[arg(long)]
+    db: PathBuf,
+
+    /// Rebuild repairable derived indexes after checking
+    #[arg(long)]
+    repair: bool,
+
+    /// Emit a machine-readable JSON report
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -234,18 +251,162 @@ fn run_v2_write(args: V2WriteArgs) -> Result<(), String> {
     Ok(())
 }
 
+fn run_v2_fsck(args: V2FsckArgs) -> CliExit {
+    match nervusdb::admin::fsck(
+        &args.db,
+        FsckOptions {
+            repair: args.repair,
+        },
+    ) {
+        Ok(report) => match write_fsck_report(&report, args.json) {
+            Ok(()) if report.ok => CliExit::Ok,
+            Ok(()) => CliExit::Issues,
+            Err(message) => CliExit::Error(message),
+        },
+        Err(err) => CliExit::Error(err.to_string()),
+    }
+}
+
+fn write_fsck_report(report: &FsckReport, json: bool) -> Result<(), String> {
+    if json {
+        serde_json::to_writer_pretty(std::io::stdout().lock(), report)
+            .map_err(|e| e.to_string())?;
+        println!();
+        return Ok(());
+    }
+
+    println!("fsck: {}", if report.ok { "ok" } else { "failed" });
+    println!(
+        "checked: nodes={} node_labels={} label_nodes={} node_props={} idx_node_props={} adj_out={} adj_in={} edge_props={}",
+        report.checked.nodes,
+        report.checked.node_labels,
+        report.checked.label_nodes,
+        report.checked.node_props,
+        report.checked.idx_node_props,
+        report.checked.adj_out,
+        report.checked.adj_in,
+        report.checked.edge_props
+    );
+    println!("issues: {}", report.issues.len());
+    for issue in &report.issues {
+        println!("- {}", format_fsck_issue(issue));
+    }
+    println!("repairs: {}", report.repairs.len());
+    for repair in &report.repairs {
+        println!(
+            "- {} removed={} inserted={}",
+            format_fsck_repair_kind(repair.kind),
+            repair.removed,
+            repair.inserted
+        );
+    }
+    Ok(())
+}
+
+fn format_fsck_issue(issue: &FsckIssue) -> String {
+    let mut out = format_fsck_issue_kind(issue.kind).to_string();
+    if let Some(node) = issue.node {
+        out.push_str(&format!(" node={node}"));
+    }
+    if let Some(label) = issue.label {
+        out.push_str(&format!(" label={label}"));
+    }
+    if let Some(rel) = issue.rel {
+        out.push_str(&format!(" rel={rel}"));
+    }
+    if let Some(dst) = issue.dst {
+        out.push_str(&format!(" dst={dst}"));
+    }
+    if let Some(key) = &issue.property_key {
+        out.push_str(&format!(" key={key}"));
+    }
+    out
+}
+
+fn format_fsck_issue_kind(kind: FsckIssueKind) -> &'static str {
+    match kind {
+        FsckIssueKind::MissingLabelNodeIndex => "missing_label_node_index",
+        FsckIssueKind::StaleLabelNodeIndex => "stale_label_node_index",
+        FsckIssueKind::MissingNodePropertyIndex => "missing_node_property_index",
+        FsckIssueKind::StaleNodePropertyIndex => "stale_node_property_index",
+        FsckIssueKind::AdjacencyMismatch => "adjacency_mismatch",
+        FsckIssueKind::OrphanEdgeProperty => "orphan_edge_property",
+        FsckIssueKind::OrphanNodeProperty => "orphan_node_property",
+        FsckIssueKind::OrphanNodeLabel => "orphan_node_label",
+        FsckIssueKind::MalformedNode => "malformed_node",
+        FsckIssueKind::MalformedNodeLabel => "malformed_node_label",
+        FsckIssueKind::MalformedLabelNode => "malformed_label_node",
+        FsckIssueKind::MalformedNodeProperty => "malformed_node_property",
+        FsckIssueKind::MalformedNodePropertyIndex => "malformed_node_property_index",
+        FsckIssueKind::MalformedAdjOut => "malformed_adj_out",
+        FsckIssueKind::MalformedAdjIn => "malformed_adj_in",
+        FsckIssueKind::MalformedEdgeProperty => "malformed_edge_property",
+    }
+}
+
+fn format_fsck_repair_kind(kind: FsckRepairKind) -> &'static str {
+    match kind {
+        FsckRepairKind::RebuiltLabelNodes => "rebuilt_label_nodes",
+        FsckRepairKind::RebuiltNodePropertyIndex => "rebuilt_node_property_index",
+    }
+}
+
+enum CliExit {
+    Ok,
+    Command(Result<(), String>),
+    Issues,
+    Error(String),
+}
+
 fn main() {
     let cli = Cli::parse();
-    let result = match cli.command {
+    let exit = match cli.command {
         Commands::V2(args) => match args.command {
-            V2Commands::Query(args) => run_v2_query(args),
-            V2Commands::Write(args) => run_v2_write(args),
-            V2Commands::Repl(args) => repl::run_repl(&args.db),
+            V2Commands::Query(args) => CliExit::Command(run_v2_query(args)),
+            V2Commands::Write(args) => CliExit::Command(run_v2_write(args)),
+            V2Commands::Repl(args) => CliExit::Command(repl::run_repl(&args.db)),
+            V2Commands::Fsck(args) => run_v2_fsck(args),
         },
     };
 
-    if let Err(message) = result {
-        eprintln!("{message}");
-        std::process::exit(1);
+    match exit {
+        CliExit::Ok => {}
+        CliExit::Command(Ok(())) => {}
+        CliExit::Command(Err(message)) => {
+            eprintln!("{message}");
+            std::process::exit(1);
+        }
+        CliExit::Issues => std::process::exit(1),
+        CliExit::Error(message) => {
+            eprintln!("{message}");
+            std::process::exit(2);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nervusdb::admin::{FsckIssueKind, FsckRepairKind};
+
+    #[test]
+    fn fsck_text_kinds_are_snake_case() {
+        let issue = FsckIssue {
+            kind: FsckIssueKind::MissingNodePropertyIndex,
+            node: Some(42),
+            label: Some(1),
+            rel: None,
+            dst: None,
+            property_key: Some("name".to_string()),
+        };
+
+        assert_eq!(
+            format_fsck_issue(&issue),
+            "missing_node_property_index node=42 label=1 key=name"
+        );
+        assert_eq!(
+            format_fsck_repair_kind(FsckRepairKind::RebuiltNodePropertyIndex),
+            "rebuilt_node_property_index"
+        );
     }
 }
