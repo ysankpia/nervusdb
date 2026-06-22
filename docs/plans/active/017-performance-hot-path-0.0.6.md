@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress.
+Implemented locally; release prep not started.
 
 ## Goal
 
@@ -68,6 +68,74 @@ Observed NervusDB baseline:
   - update p99 `< 30,000 us`, or profile evidence explains remaining cost.
   - detach delete p99 `< 30,000 us`, or profile evidence explains remaining cost.
   - two-hop `>= 2,000,000 paths/s`, or profile evidence explains remaining cost.
+
+## Implementation Evidence
+
+Commits:
+
+```text
+83cfbb6b test(bench): add embedded graph cross-db baseline
+187e53a9 docs(plan): start 0.0.6 performance hot path
+32a3895d test(bench): split cross-db load and reopen timings
+3a8a7a8e perf(storage): profile and trim graph hot paths
+61f92163 perf(storage): trust maintained adjacency scans
+```
+
+Storage changes:
+
+- `cross_db_bench` now emits `load_total_ms`, `reopen_open_ms`, and
+  `reopen_count_verify_ms`; old `reopen_verify_ms` remains as the sum for
+  compatibility.
+- `NERVUSDB_PROFILE_STORAGE=1` emits internal open, count, commit, batch commit,
+  cleanup, property/index, and aggregated traversal scan timings to stderr.
+- Node property index cleanup no longer scans all of `idx_node_props` for
+  property update/remove, label remove, or tombstone-node cleanup. It derives
+  exact old index keys from canonical node labels and node properties.
+- `neighbors()` and `incoming_neighbors()` consume Fjall prefix iterators
+  directly instead of first materializing all keys into `Vec<Vec<u8>>`.
+- Adjacency reads trust the 0.0.3 write-path graph integrity invariant and no
+  longer perform two `node_is_live` point reads per edge. Corruption detection
+  remains fsck-lite's job; normal reads should not pay that cost.
+
+Medium acceptance run:
+
+```text
+command: bash scripts/cross_db_bench.sh --medium
+artifact: artifacts/cross-db-bench/cross-db-bench-medium-20260622-115122.ndjson
+dataset: 100,000 nodes / 500,000 edges / 10,000 read iterations / 100 mutation iterations
+correctness_hash: d4b70801ad0bb15b for NervusDB, SQLite simple, and SQLite materialized
+```
+
+| System | Load total ms | Reopen open ms | Reopen count verify ms | Two-hop paths/s | Update p99 us | Detach delete p99 us | Disk bytes / files |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| NervusDB | 8,789.159 | 2,835.628 | 76.482 | 3,085,997.505 | 3,998.917 | 5,001.000 | 84,595,889 / 31 |
+| SQLite simple | 580.107 | 0.292 | 13.635 | 7,299,536.479 | 1,473.458 | 117.167 | 29,319,168 / 1 |
+| SQLite materialized | 787.731 | 0.299 | 8.935 | 7,451,333.404 | 3,162.833 | 8,457.041 | 38,244,352 / 1 |
+
+NervusDB medium targets are met:
+
+- update p99 target `< 30,000 us`: actual `3,998.917 us`.
+- detach delete p99 target `< 30,000 us`: actual `5,001.000 us`.
+- two-hop target `>= 2,000,000 paths/s`: actual `3,085,997.505 paths/s`.
+
+Profile run:
+
+```text
+command: NERVUSDB_PROFILE_STORAGE=1 bash scripts/cross_db_bench.sh --system nervusdb --medium
+artifact: artifacts/cross-db-bench/cross-db-bench-medium-20260622-115442.ndjson
+```
+
+Profile evidence still points to bulk commit/open as the remaining hard gap:
+
+- Initial 100k/500k load spent about `7.08s` in property/index staging and about
+  `1.25s` in `batch.commit` under the profiled run.
+- Raw reopen is about `2.8s`; count verification is about `76ms`.
+- Aggregated traversal scan time is no longer the dominant bottleneck after
+  removing per-edge liveness point reads.
+
+0.0.6 should not immediately merge keyspaces in this plan. The evidence says
+keyspace/open and bulk index write costs need a separate ADR if they become the
+next release focus.
 
 ## Validation
 

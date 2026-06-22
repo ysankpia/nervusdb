@@ -2,7 +2,8 @@
 
 ## Current Objective
 
-NervusDB 0.0.6 performance hot-path work is in progress.
+NervusDB 0.0.6 performance hot-path work is implemented locally; release
+preparation has not started.
 
 ## Active Plan
 
@@ -12,17 +13,18 @@ bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
-0.0.5 remains the stable published release. Cross-database benchmarks exposed
-concrete performance gaps against SQLite graph schemas, so 0.0.6 is focused on
-benchmark attribution and storage hot-path fixes.
+0.0.5 remains the stable published release. 0.0.6 benchmark attribution,
+storage profiling, index-cleanup hot-path fixes, and traversal hot-path fixes
+are implemented locally. The next decision is release prep versus stopping
+database work and using NervusDB downstream.
 
 ## Now
 
 - Use `nervusdb = "0.0.5"` in downstream projects.
-- Treat the cross-database benchmark as the 0.0.6 performance baseline.
-- Improve benchmark attribution before making storage-format conclusions.
-- Optimize storage hot paths without unsafe durability or Mini-Cypher scope
-  expansion.
+- Treat the 0.0.6 cross-database benchmark as current performance evidence.
+- Prepare `v0.0.6` only after normal release validation passes.
+- Do not start keyspace merge without a separate ADR; current evidence says it
+  is a possible next storage-format project, not part of 0.0.6.
 - Keep public index-management APIs, range indexes, EdgeId, unsafe/buffered
   durability modes, vectors, multi-writer work, and advanced Cypher out of scope
   unless a new ADR explicitly changes priority.
@@ -168,6 +170,10 @@ benchmark attribution and storage hot-path fixes.
   - crates.io: `https://crates.io/crates/nervusdb`
 - 0.0.6 performance baseline started:
   - `83cfbb6b test(bench): add embedded graph cross-db baseline`
+  - `187e53a9 docs(plan): start 0.0.6 performance hot path`
+  - `32a3895d test(bench): split cross-db load and reopen timings`
+  - `3a8a7a8e perf(storage): profile and trim graph hot paths`
+  - `61f92163 perf(storage): trust maintained adjacency scans`
   - Cross-database medium benchmark artifact:
     `artifacts/cross-db-bench/cross-db-bench-medium-20260622-103209.ndjson`.
   - NervusDB, SQLite simple, and SQLite materialized shared correctness hash:
@@ -175,13 +181,36 @@ benchmark attribution and storage hot-path fixes.
   - Baseline showed NervusDB lookup is microsecond-class, while commit,
     mixed reopen/count verification, mutation latency, traversal throughput,
     and disk footprint are the concrete performance gaps.
+- 0.0.6 performance hot path implemented locally:
+  - benchmark schema now splits `load_total_ms`, `reopen_open_ms`, and
+    `reopen_count_verify_ms`.
+  - `NERVUSDB_PROFILE_STORAGE=1` emits env-gated storage-stage timings to
+    stderr without changing public API or normal JSON output.
+  - storage no longer scans all of `idx_node_props` for single node/property
+    cleanup; it removes exact derived index keys from canonical labels/properties.
+  - `neighbors()` and `incoming_neighbors()` stream Fjall prefix iterators and
+    trust 0.0.3 write-path adjacency integrity instead of doing per-edge
+    endpoint liveness point reads.
+  - acceptance artifact:
+    `artifacts/cross-db-bench/cross-db-bench-medium-20260622-115122.ndjson`.
+  - acceptance hash: `d4b70801ad0bb15b` for NervusDB, SQLite simple, and
+    SQLite materialized.
+  - NervusDB medium result: load total `8,789.159 ms`, raw reopen
+    `2,835.628 ms`, count verify `76.482 ms`, two-hop
+    `3,085,997.505 paths/sec`, update p99 `3,998.917 us`, detach delete p99
+    `5,001.000 us`.
+  - profile artifact:
+    `artifacts/cross-db-bench/cross-db-bench-medium-20260622-115442.ndjson`.
+  - profile evidence points to bulk property/index write staging, `batch.commit`,
+    and raw reopen as the remaining hard storage gaps; keyspace merge belongs
+    in a separate ADR if it becomes 0.0.7 scope.
 
 ## Next
 
-- Split cross-db benchmark load/reopen attribution.
-- Add env-gated storage profiling.
-- Remove storage hot-path full index scans and traversal materialization.
-- Decide whether keyspace merge needs an ADR only after profile evidence.
+- Decide whether to cut/release `v0.0.6` now or keep it as local performance
+  hardening while starting downstream project work.
+- If the database work continues, write a separate keyspace/open/bulk-index ADR
+  before any storage-format merge.
 - Wait for GitHub Dependabot to rescan after the stale `fuzz/Cargo.lock`
   removal is pushed.
 - Update GitHub Actions if the Node.js 20 deprecation annotation becomes noisy.

@@ -589,6 +589,30 @@ the same microsecond class, but commit, reopen, mutation latency, traversal
 throughput, and disk footprint are materially worse. The next investigation
 should focus on those concrete gaps before considering a C storage rewrite.
 
+0.0.6 hot-path evidence on 2026-06-22:
+
+```text
+command: bash scripts/cross_db_bench.sh --medium
+dataset: nodes=100,000 degree=5 edges=500,000 iters=10,000 mutation_iters=100
+systems: nervusdb, sqlite-simple, sqlite-materialized
+correctness_hash: d4b70801ad0bb15b for all three systems
+summary: artifacts/cross-db-bench/cross-db-bench-medium-20260622-115122.ndjson
+```
+
+| System | Load total ms | Raw reopen ms | Count verify ms | Lookup P99 us | One-hop cold edges/s | Two-hop paths/s | Update P99 us | Detach delete P99 us | Disk bytes | Files |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| NervusDB | 8,789.159 | 2,835.628 | 76.482 | 6.500 | 2,103,411 | 3,085,998 | 3,998.917 | 5,001.000 | 84,595,889 | 31 |
+| SQLite simple | 580.107 | 0.292 | 13.635 | 1.500 | 2,555,285 | 7,299,536 | 1,473.458 | 117.167 | 29,319,168 | 1 |
+| SQLite materialized | 787.731 | 0.299 | 8.935 | 1.541 | 2,676,892 | 7,451,333 | 3,162.833 | 8,457.041 | 38,244,352 | 1 |
+
+Interpretation after 0.0.6: the easy storage hot paths were real. Removing
+full property-index cleanup scans and redundant traversal materialization /
+endpoint liveness reads moved NervusDB mutation latency and traversal into an
+acceptable local-graph range for 0.x. SQLite is still much better on raw open,
+bulk load total time, disk footprint, and absolute traversal throughput.
+Those remaining gaps are storage-layout problems, not query-surface problems,
+and they need a separate ADR before any keyspace merge or storage-format rewrite.
+
 This phase answers the most important question: does a custom embedded graph
 database beat a serious SQLite design enough to justify its existence?
 

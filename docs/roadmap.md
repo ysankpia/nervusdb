@@ -2,20 +2,22 @@
 
 ## Current Phase
 
-NervusDB 0.0.6 performance work is in progress after cross-database benchmarks
-showed concrete storage hot-path gaps against SQLite graph schemas.
+NervusDB 0.0.6 performance hot-path work is implemented locally after
+cross-database benchmarks exposed concrete gaps against SQLite graph schemas.
+Release preparation has not started.
 
 ## Now
 
 - Keep 0.0.5 usable for downstream projects.
-- Fix benchmark attribution before drawing storage architecture conclusions.
-- Optimize proven storage hot paths without weakening `SyncAll` durability or
-  expanding Mini-Cypher.
+- Treat the 0.0.6 cross-database benchmark and storage profile as the current
+  performance evidence.
+- Prepare 0.0.6 release only after normal release validation passes.
+- Do not start keyspace merge without a separate ADR.
 
 ## Next
 
-- Use 0.0.6 benchmark/profile evidence to decide whether keyspace merge needs a
-  separate ADR.
+- Decide whether 0.0.7 should target keyspace/open/bulk-index write costs or
+  stop database work and use NervusDB downstream.
 
 ## Later
 
@@ -38,7 +40,7 @@ showed concrete storage hot-path gaps against SQLite graph schemas.
 | 0.0.3 graph integrity | Q2 2026 | Dangling-edge rejection, tombstone cleanup tests, and release dry-run pass |
 | 0.0.4 property equality index | Q2 2026 | Implemented locally: 100k-node scan 68,519.803 ms, index 1.435 ms, 47,757.312x speedup |
 | 0.0.5 stability freeze | Q2 2026 | Released: fsck-lite, derived index repair, Agent Memory smoke, workspace tests passed |
-| 0.0.6 performance hot path | Q2 2026 | In progress: cross-db medium benchmark exposes commit/reopen/mutation/traversal gaps |
+| 0.0.6 performance hot path | Q2 2026 | Implemented locally: update p99 3,998.917 us, detach delete p99 5,001.000 us, two-hop 3,085,997 paths/s on 100k/500k medium benchmark |
 
 ## Open Questions
 
