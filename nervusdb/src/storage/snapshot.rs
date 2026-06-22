@@ -4,11 +4,13 @@ use crate::api::{
 use crate::storage::engine::{
     KEY_FLAG_TOMBSTONE, Keyspaces, decode_node_value, edge_key_from_adj_in, edge_key_from_adj_out,
     edge_prefix, key_u32, node_prop_index_prefix, node_prop_prefix, parse_iid_key,
-    parse_label_node_key, parse_node_prop_index_key, parse_node_prop_index_property_key,
-    parse_node_prop_key, parse_node_value, parse_prop_value,
+    parse_label_node_key, parse_node_prop_index_key, parse_node_prop_key, parse_node_value,
+    parse_prop_value,
 };
+use crate::storage::profile;
 use fjall::Readable;
 use std::collections::BTreeMap;
+use std::time::Instant;
 
 #[derive(Clone)]
 pub struct Snapshot {
@@ -60,10 +62,12 @@ impl Snapshot {
             prefix.extend_from_slice(&rel.to_be_bytes());
         }
 
-        self.collect_prefix_keys(&self.keyspaces.adj_out, prefix)
-            .into_iter()
-            .filter_map(|key| edge_key_from_adj_out(&key))
-            .filter(|edge| self.node_is_live(edge.src) && self.node_is_live(edge.dst))
+        EdgeScan::new(
+            "neighbors",
+            self,
+            self.inner.prefix(&self.keyspaces.adj_out, prefix),
+            EdgeScanDirection::Outgoing,
+        )
     }
 
     pub fn incoming_neighbors(
@@ -76,10 +80,12 @@ impl Snapshot {
             prefix.extend_from_slice(&rel.to_be_bytes());
         }
 
-        self.collect_prefix_keys(&self.keyspaces.adj_in, prefix)
-            .into_iter()
-            .filter_map(|key| edge_key_from_adj_in(&key))
-            .filter(|edge| self.node_is_live(edge.src) && self.node_is_live(edge.dst))
+        EdgeScan::new(
+            "incoming_neighbors",
+            self,
+            self.inner.prefix(&self.keyspaces.adj_in, prefix),
+            EdgeScanDirection::Incoming,
+        )
     }
 
     pub fn resolve_label_id(&self, name: &str) -> Option<LabelId> {
@@ -185,63 +191,30 @@ impl Snapshot {
         self.collect_prefix_keys(&self.keyspaces.node_props, key_u32(node))
     }
 
-    pub(crate) fn collect_node_property_index_keys(&self, node: InternalNodeId) -> Vec<Vec<u8>> {
-        self.inner
-            .iter(&self.keyspaces.idx_node_props)
-            .filter_map(|guard| guard.key().ok().map(|key| key.as_ref().to_vec()))
-            .filter(|key| parse_node_prop_index_key(key).is_some_and(|iid| iid == node))
-            .collect()
-    }
-
-    pub(crate) fn collect_node_property_index_keys_for_label(
-        &self,
-        node: InternalNodeId,
-        label: LabelId,
-    ) -> Vec<Vec<u8>> {
-        self.collect_prefix_keys(&self.keyspaces.idx_node_props, key_u32(label))
-            .into_iter()
-            .filter(|key| parse_node_prop_index_key(key).is_some_and(|iid| iid == node))
-            .collect()
-    }
-
-    pub(crate) fn collect_node_property_index_keys_for_property(
-        &self,
-        node: InternalNodeId,
-        property_key: &str,
-    ) -> Vec<Vec<u8>> {
-        self.inner
-            .iter(&self.keyspaces.idx_node_props)
-            .filter_map(|guard| guard.key().ok().map(|key| key.as_ref().to_vec()))
-            .filter(|key| {
-                parse_node_prop_index_key(key).is_some_and(|iid| iid == node)
-                    && parse_node_prop_index_property_key(key).as_deref() == Some(property_key)
-            })
-            .collect()
-    }
-
     pub(crate) fn collect_raw_outgoing_edges(&self, node: InternalNodeId) -> Vec<EdgeKey> {
-        self.collect_prefix_keys(&self.keyspaces.adj_out, key_u32(node))
-            .into_iter()
-            .filter_map(|key| edge_key_from_adj_out(&key))
+        self.inner
+            .prefix(&self.keyspaces.adj_out, key_u32(node))
+            .filter_map(|guard| guard.key().ok())
+            .filter_map(|key| edge_key_from_adj_out(key.as_ref()))
             .collect()
     }
 
     pub(crate) fn collect_raw_incoming_edges(&self, node: InternalNodeId) -> Vec<EdgeKey> {
-        self.collect_prefix_keys(&self.keyspaces.adj_in, key_u32(node))
-            .into_iter()
-            .filter_map(|key| edge_key_from_adj_in(&key))
+        self.inner
+            .prefix(&self.keyspaces.adj_in, key_u32(node))
+            .filter_map(|guard| guard.key().ok())
+            .filter_map(|key| edge_key_from_adj_in(key.as_ref()))
             .collect()
     }
 
     pub fn nodes(&self) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {
-        let nodes: Vec<_> = self
-            .inner
-            .iter(&self.keyspaces.nodes)
-            .filter_map(|guard| guard.key().ok())
-            .filter_map(|key| parse_iid_key(key.as_ref()))
-            .filter(|iid| self.node_is_live(*iid))
-            .collect();
-        Box::new(nodes.into_iter())
+        Box::new(
+            self.inner
+                .iter(&self.keyspaces.nodes)
+                .filter_map(|guard| guard.key().ok())
+                .filter_map(|key| parse_iid_key(key.as_ref()))
+                .filter(|iid| self.node_is_live(*iid)),
+        )
     }
 
     pub fn is_tombstoned_node(&self, iid: InternalNodeId) -> bool {
@@ -274,13 +247,13 @@ impl GraphSnapshot for Snapshot {
     }
 
     fn nodes_with_label(&self, label: LabelId) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {
-        let nodes: Vec<_> = self
-            .collect_prefix_keys(&self.keyspaces.label_nodes, key_u32(label))
-            .into_iter()
-            .filter_map(|key| parse_label_node_key(&key))
-            .filter(|iid| self.node_is_live(*iid))
-            .collect();
-        Box::new(nodes.into_iter())
+        Box::new(
+            self.inner
+                .prefix(&self.keyspaces.label_nodes, key_u32(label))
+                .filter_map(|guard| guard.key().ok())
+                .filter_map(|key| parse_label_node_key(key.as_ref()))
+                .filter(|iid| self.node_is_live(*iid)),
+        )
     }
 
     fn nodes_with_label_and_property(
@@ -289,16 +262,16 @@ impl GraphSnapshot for Snapshot {
         key: &str,
         value: &PropertyValue,
     ) -> Box<dyn Iterator<Item = InternalNodeId> + '_> {
-        let nodes: Vec<_> = self
-            .collect_prefix_keys(
-                &self.keyspaces.idx_node_props,
-                node_prop_index_prefix(label, key, value),
-            )
-            .into_iter()
-            .filter_map(|key| parse_node_prop_index_key(&key))
-            .filter(|iid| self.node_is_live(*iid))
-            .collect();
-        Box::new(nodes.into_iter())
+        Box::new(
+            self.inner
+                .prefix(
+                    &self.keyspaces.idx_node_props,
+                    node_prop_index_prefix(label, key, value),
+                )
+                .filter_map(|guard| guard.key().ok())
+                .filter_map(|key| parse_node_prop_index_key(key.as_ref()))
+                .filter(|iid| self.node_is_live(*iid)),
+        )
     }
 
     fn resolve_external(&self, iid: InternalNodeId) -> Option<ExternalId> {
@@ -359,14 +332,31 @@ impl GraphSnapshot for Snapshot {
     }
 
     fn node_count(&self, label: Option<LabelId>) -> u64 {
-        match label {
+        let started = profile::start();
+        let count = match label {
             Some(label) => self.nodes_with_label(label).count() as u64,
             None => self.nodes().count() as u64,
-        }
+        };
+        profile::event_since(
+            "node_count",
+            started,
+            &[
+                ("label_filter", u64::from(label.is_some())),
+                ("count", count),
+            ],
+        );
+        count
     }
 
     fn edge_count(&self, rel: Option<RelTypeId>) -> u64 {
-        self.neighbors_for_count(rel).count() as u64
+        let started = profile::start();
+        let count = self.neighbors_for_count(rel).count() as u64;
+        profile::event_since(
+            "edge_count",
+            started,
+            &[("rel_filter", u64::from(rel.is_some())), ("count", count)],
+        );
+        count
     }
 }
 
@@ -378,6 +368,88 @@ impl Snapshot {
             .filter_map(|key| edge_key_from_adj_out(key.as_ref()))
             .filter(move |edge| rel.map_or(true, |r| edge.rel == r))
             .filter(|edge| self.node_is_live(edge.src) && self.node_is_live(edge.dst))
+    }
+}
+
+enum EdgeScanDirection {
+    Outgoing,
+    Incoming,
+}
+
+struct EdgeScan<'a> {
+    stage: &'static str,
+    snapshot: &'a Snapshot,
+    iter: fjall::Iter,
+    direction: EdgeScanDirection,
+    started: Option<Instant>,
+    scanned: u64,
+    decoded: u64,
+    live: u64,
+}
+
+impl<'a> EdgeScan<'a> {
+    fn new(
+        stage: &'static str,
+        snapshot: &'a Snapshot,
+        iter: fjall::Iter,
+        direction: EdgeScanDirection,
+    ) -> Self {
+        Self {
+            stage,
+            snapshot,
+            iter,
+            direction,
+            started: profile::start(),
+            scanned: 0,
+            decoded: 0,
+            live: 0,
+        }
+    }
+}
+
+impl Iterator for EdgeScan<'_> {
+    type Item = EdgeKey;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for guard in self.iter.by_ref() {
+            if self.started.is_some() {
+                self.scanned += 1;
+            }
+            let Ok(key) = guard.key() else {
+                continue;
+            };
+            let edge = match self.direction {
+                EdgeScanDirection::Outgoing => edge_key_from_adj_out(key.as_ref()),
+                EdgeScanDirection::Incoming => edge_key_from_adj_in(key.as_ref()),
+            };
+            let Some(edge) = edge else {
+                continue;
+            };
+            if self.started.is_some() {
+                self.decoded += 1;
+            }
+            if self.snapshot.node_is_live(edge.src) && self.snapshot.node_is_live(edge.dst) {
+                if self.started.is_some() {
+                    self.live += 1;
+                }
+                return Some(edge);
+            }
+        }
+        None
+    }
+}
+
+impl Drop for EdgeScan<'_> {
+    fn drop(&mut self) {
+        profile::event_since(
+            self.stage,
+            self.started,
+            &[
+                ("scanned", self.scanned),
+                ("decoded", self.decoded),
+                ("live", self.live),
+            ],
+        );
     }
 }
 

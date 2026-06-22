@@ -2,6 +2,7 @@ use crate::api::{
     EdgeKey, ExternalId, GraphSnapshot, GraphStore, InternalNodeId, LabelId, PropertyValue,
     RelTypeId,
 };
+use crate::storage::profile;
 use crate::storage::snapshot::{Snapshot, id_key, name_key};
 use crate::storage::{Error, Result, STORAGE_FORMAT_EPOCH};
 use fjall::{Database, Keyspace, KeyspaceCreateOptions, PersistMode};
@@ -55,18 +56,31 @@ impl std::fmt::Debug for GraphEngine {
 
 impl GraphEngine {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let started = profile::start();
         let path = path.as_ref().to_path_buf();
         std::fs::create_dir_all(&path)?;
+        let db_started = profile::start();
         let db = Database::builder(&path).open()?;
+        profile::event_since("GraphEngine::open.database", db_started, &[]);
+        let keyspaces_started = profile::start();
         let keyspaces = open_keyspaces(&db)?;
+        profile::event_since(
+            "GraphEngine::open.keyspaces",
+            keyspaces_started,
+            &[("keyspaces", 12)],
+        );
+        let meta_started = profile::start();
         ensure_meta(&db, &keyspaces)?;
+        profile::event_since("GraphEngine::open.meta", meta_started, &[]);
 
-        Ok(Self {
+        let engine = Self {
             path,
             db,
             keyspaces,
             write_lock: Mutex::new(()),
-        })
+        };
+        profile::event_since("GraphEngine::open", started, &[]);
+        Ok(engine)
     }
 
     #[inline]
@@ -304,6 +318,59 @@ fn node_property_removed_in_txn(
     removed_node_props
         .iter()
         .any(|(removed_node, removed_key)| *removed_node == node && removed_key == key)
+}
+
+fn snapshot_node_property_index_keys(node: InternalNodeId, snapshot: &Snapshot) -> Vec<Vec<u8>> {
+    let labels = snapshot.node_labels(node);
+    let Some(props) = snapshot.node_properties(node) else {
+        return Vec::new();
+    };
+    node_property_index_keys_for_props(node, &labels, &props)
+}
+
+fn node_property_index_keys_for_props(
+    node: InternalNodeId,
+    labels: &[LabelId],
+    props: &BTreeMap<String, PropertyValue>,
+) -> Vec<Vec<u8>> {
+    let mut keys = Vec::new();
+    for label in labels {
+        for (key, value) in props {
+            if scalar_indexable_value(value) {
+                keys.push(node_prop_index_key(*label, key, value, node));
+            }
+        }
+    }
+    keys
+}
+
+fn snapshot_node_property_index_keys_for_label(
+    node: InternalNodeId,
+    label: LabelId,
+    snapshot: &Snapshot,
+) -> Vec<Vec<u8>> {
+    let Some(props) = snapshot.node_properties(node) else {
+        return Vec::new();
+    };
+    node_property_index_keys_for_props(node, &[label], &props)
+}
+
+fn snapshot_node_property_index_keys_for_property(
+    node: InternalNodeId,
+    key: &str,
+    snapshot: &Snapshot,
+) -> Vec<Vec<u8>> {
+    let Some(value) = snapshot.node_property(node, key) else {
+        return Vec::new();
+    };
+    if !scalar_indexable_value(&value) {
+        return Vec::new();
+    }
+    snapshot
+        .node_labels(node)
+        .into_iter()
+        .map(|label| node_prop_index_key(label, key, &value, node))
+        .collect()
 }
 
 impl<'a> WriteTxn<'a> {
@@ -561,12 +628,14 @@ impl<'a> WriteTxn<'a> {
     }
 
     pub fn commit(self) -> Result<()> {
+        let commit_started = profile::start();
         let mut batch = self
             .engine
             .db
             .batch()
             .durability(Some(PersistMode::SyncAll));
         let snapshot = self.engine.begin_read();
+        let validation_started = profile::start();
         let mut all_created_edges = self.created_edges.clone();
         all_created_edges.sort_unstable();
         all_created_edges.dedup();
@@ -617,7 +686,19 @@ impl<'a> WriteTxn<'a> {
                 return Err(Self::edge_not_found(*edge));
             }
         }
+        profile::event_since(
+            "WriteTxn::commit.validation",
+            validation_started,
+            &[
+                ("created_edges", created_edges.len() as u64),
+                ("tombstoned_edges", self.tombstoned_edges.len() as u64),
+                ("tombstoned_nodes", self.tombstoned_nodes.len() as u64),
+                ("node_props", self.node_props.len() as u64),
+                ("edge_props", self.edge_props.len() as u64),
+            ],
+        );
 
+        let cleanup_started = profile::start();
         let mut node_cleanups: HashMap<InternalNodeId, NodeCleanup> = HashMap::new();
         let mut detached_edges: BTreeSet<EdgeKey> = BTreeSet::new();
         for node in &self.tombstoned_nodes {
@@ -631,7 +712,7 @@ impl<'a> WriteTxn<'a> {
                 .extend(snapshot.collect_node_property_keys(*node));
             cleanup
                 .node_prop_index_keys
-                .extend(snapshot.collect_node_property_index_keys(*node));
+                .extend(snapshot_node_property_index_keys(*node, &snapshot));
             cleanup
                 .incident_edges
                 .extend(snapshot.collect_raw_outgoing_edges(*node));
@@ -646,6 +727,14 @@ impl<'a> WriteTxn<'a> {
             detached_edges.extend(cleanup.incident_edges.iter().copied());
             node_cleanups.insert(*node, cleanup);
         }
+        profile::event_since(
+            "WriteTxn::commit.cleanup_collection",
+            cleanup_started,
+            &[
+                ("nodes", self.tombstoned_nodes.len() as u64),
+                ("detached_edges", detached_edges.len() as u64),
+            ],
+        );
 
         if let Some(next_node_id) = self.pending_next_node_id {
             batch.insert(
@@ -655,10 +744,13 @@ impl<'a> WriteTxn<'a> {
             );
         }
 
+        let created_node_writes_started = profile::start();
+        let mut created_node_writes = 0u64;
         for node in &self.created_nodes {
             if self.tombstoned_nodes.contains(&node.iid) {
                 continue;
             }
+            created_node_writes += 1;
             batch.insert(
                 &self.engine.keyspaces.nodes,
                 key_u32(node.iid),
@@ -682,9 +774,26 @@ impl<'a> WriteTxn<'a> {
                 );
             }
         }
+        profile::event_since(
+            "WriteTxn::commit.created_node_writes",
+            created_node_writes_started,
+            &[("nodes", created_node_writes)],
+        );
 
+        let property_index_writes_started = profile::start();
         for (node, label) in &self.label_additions {
             if self.tombstoned_nodes.contains(node) {
+                continue;
+            }
+            if !final_node_labels(
+                *node,
+                &snapshot,
+                &self.created_nodes,
+                &self.label_additions,
+                &self.label_removals,
+            )
+            .contains(label)
+            {
                 continue;
             }
             batch.insert(
@@ -722,11 +831,12 @@ impl<'a> WriteTxn<'a> {
                 &self.engine.keyspaces.label_nodes,
                 label_node_key(*label, *node),
             );
-            for key in snapshot.collect_node_property_index_keys_for_label(*node, *label) {
+            for key in snapshot_node_property_index_keys_for_label(*node, *label, &snapshot) {
                 batch.remove(&self.engine.keyspaces.idx_node_props, key);
             }
         }
 
+        let edge_writes_started = profile::start();
         for edge in &created_edges {
             batch.insert(&self.engine.keyspaces.adj_out, adj_out_key(*edge), []);
             batch.insert(&self.engine.keyspaces.adj_in, adj_in_key(*edge), []);
@@ -772,12 +882,21 @@ impl<'a> WriteTxn<'a> {
                 batch.remove(&self.engine.keyspaces.edge_props, key);
             }
         }
+        profile::event_since(
+            "WriteTxn::commit.edge_writes",
+            edge_writes_started,
+            &[
+                ("created_edges", created_edges.len() as u64),
+                ("tombstoned_edges", self.tombstoned_edges.len() as u64),
+                ("detached_edges", detached_edges.len() as u64),
+            ],
+        );
 
         for ((node, key), value) in &self.node_props {
             if self.tombstoned_nodes.contains(node) {
                 continue;
             }
-            for old_key in snapshot.collect_node_property_index_keys_for_property(*node, key) {
+            for old_key in snapshot_node_property_index_keys_for_property(*node, key, &snapshot) {
                 batch.remove(&self.engine.keyspaces.idx_node_props, old_key);
             }
             if node_property_removed_in_txn(*node, key, &self.removed_node_props) {
@@ -820,7 +939,7 @@ impl<'a> WriteTxn<'a> {
             if self.tombstoned_nodes.contains(node) {
                 continue;
             }
-            for old_key in snapshot.collect_node_property_index_keys_for_property(*node, key) {
+            for old_key in snapshot_node_property_index_keys_for_property(*node, key, &snapshot) {
                 batch.remove(&self.engine.keyspaces.idx_node_props, old_key);
             }
             batch.remove(
@@ -835,8 +954,23 @@ impl<'a> WriteTxn<'a> {
             }
             batch.remove(&self.engine.keyspaces.edge_props, edge_prop_key(*edge, key));
         }
+        profile::event_since(
+            "WriteTxn::commit.property_index_writes",
+            property_index_writes_started,
+            &[
+                ("label_additions", self.label_additions.len() as u64),
+                ("label_removals", self.label_removals.len() as u64),
+                ("node_props", self.node_props.len() as u64),
+                ("removed_node_props", self.removed_node_props.len() as u64),
+                ("edge_props", self.edge_props.len() as u64),
+                ("removed_edge_props", self.removed_edge_props.len() as u64),
+            ],
+        );
 
+        let batch_commit_started = profile::start();
         batch.commit()?;
+        profile::event_since("WriteTxn::commit.batch_commit", batch_commit_started, &[]);
+        profile::event_since("WriteTxn::commit", commit_started, &[]);
         Ok(())
     }
 }
@@ -1067,18 +1201,6 @@ pub(crate) fn parse_node_prop_index_key(key: &[u8]) -> Option<InternalNodeId> {
         return None;
     }
     decode_u32(&key[node_offset..node_offset + 4])
-}
-
-pub(crate) fn parse_node_prop_index_property_key(key: &[u8]) -> Option<String> {
-    if key.len() < 14 {
-        return None;
-    }
-    let key_len = u16::from_be_bytes(key[4..6].try_into().ok()?) as usize;
-    let value_len_offset = 6 + key_len;
-    if key.len() < value_len_offset + 8 {
-        return None;
-    }
-    String::from_utf8(key[6..6 + key_len].to_vec()).ok()
 }
 
 pub(crate) fn parse_node_prop_key(key: &[u8], node: InternalNodeId) -> Option<String> {

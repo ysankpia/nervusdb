@@ -1,6 +1,7 @@
 pub mod api;
 pub mod engine;
 mod error;
+mod profile;
 pub mod property;
 pub mod snapshot;
 
