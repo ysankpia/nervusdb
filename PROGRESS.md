@@ -2,7 +2,7 @@
 
 ## Current Objective
 
-NervusDB 0.0.4 release preparation is in progress.
+NervusDB 0.0.4 has been released.
 
 ## Active Plan
 
@@ -12,18 +12,17 @@ bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
-0.0.3 has been tagged, released on GitHub, and published to crates.io as the
-single public `nervusdb` crate. 0.0.4 implementation now has an internally
-maintained exact node property lookup index and benchmark evidence. Package
-versions and release notes are being prepared for publication.
+0.0.4 has been tagged, released on GitHub, and published to crates.io as the
+single public `nervusdb` crate. It adds internally maintained exact node
+property equality lookup.
 
 ## Now
 
-- Finish 0.0.4 release preparation: version bump, publish dry-run, push, CI,
-  tag, GitHub release, crates.io publish, and crates.io search confirmation.
-- Do not add public index-management APIs, range indexes, EdgeId,
-  unsafe/buffered durability modes, vectors, multi-writer work, or advanced
-  Cypher during 0.0.4 release prep.
+- Start 0.0.5 planning from the real remaining problem set, not from old
+  speculative roadmaps.
+- Keep public index-management APIs, range indexes, EdgeId, unsafe/buffered
+  durability modes, vectors, multi-writer work, and advanced Cypher out of scope
+  unless a new ADR explicitly changes priority.
 
 ## Done
 
@@ -139,11 +138,15 @@ versions and release notes are being prepared for publication.
 - 0.0.4 release preparation started:
   - workspace package versions updated to `0.0.4`.
   - release notes added at `docs/releases/v0.0.4.md`.
+- 0.0.4 release completed:
+  - tag: `v0.0.4`
+  - GitHub release: `https://github.com/ysankpia/nervusdb/releases/tag/v0.0.4`
+  - crates.io: `https://crates.io/crates/nervusdb`
 
 ## Next
 
-- Run `cargo publish -p nervusdb --dry-run --registry crates-io`.
-- Push `main`, wait for GitHub Actions, then tag and publish `v0.0.4`.
+- Plan 0.0.5. The likely honest candidates are index consistency audit /
+  fsck-lite, benchmark regression detection, or narrow query ergonomics.
 - Decide whether repeated read benchmark variance needs a separate
   benchmark plan.
 - Wait for GitHub Dependabot to rescan after the stale `fuzz/Cargo.lock`
@@ -152,7 +155,7 @@ versions and release notes are being prepared for publication.
 
 ## Blockers
 
-None for 0.0.4 implementation. Release publication is in progress.
+None.
 
 ## Validation Log
 
@@ -267,9 +270,18 @@ None for 0.0.4 implementation. Release publication is in progress.
 | 2026-06-22 | `bash scripts/core_crash_recovery.sh` | Passed: 5 kill/reopen iterations after 0.0.4 property equality index changes |
 | 2026-06-22 | `cargo test --workspace` | Passed after 0.0.4 property equality index changes |
 | 2026-06-22 | `bash scripts/core_bench.sh --nodes 100000 --degree 5 --iters 1000` | Passed; artifact `artifacts/core-bench/core-bench-custom-100000n-5d-20260622-050241.json`; 100k nodes, 500k edges, scan 68,519.803 ms, index 1.435 ms, speedup 47,757.312x, insert 222,707.841 edges/sec |
+| 2026-06-22 | `cargo fmt --all -- --check` | Passed after 0.0.4 version bump |
+| 2026-06-22 | `cargo check -p nervusdb --examples` | Passed after 0.0.4 version bump |
+| 2026-06-22 | `bash scripts/check.sh` | Passed after 0.0.4 release preparation |
+| 2026-06-22 | `cargo publish -p nervusdb --dry-run --registry crates-io --allow-dirty` | Passed before release-prep commit; unused local patch warnings expected |
+| 2026-06-22 | `cargo publish -p nervusdb --dry-run --registry crates-io` | Passed clean after release-prep commit; unused local patch warnings expected |
+| 2026-06-22 | GitHub Actions `main` push run `27931274177` | Passed for commit `6f19ab8c` |
+| 2026-06-22 | `git tag -a v0.0.4` and `git push origin v0.0.4` | Passed; tag points at `6f19ab8c` |
+| 2026-06-22 | `gh release create v0.0.4 --verify-tag --title "NervusDB v0.0.4" --notes-file docs/releases/v0.0.4.md --latest=true` | Passed |
+| 2026-06-22 | `cargo publish -p nervusdb --registry crates-io` | Published `nervusdb v0.0.4` |
+| 2026-06-22 | `cargo search nervusdb --limit 5 --registry crates-io` | Confirmed `nervusdb = "0.0.4"` appears in crates.io search |
 
 ## Last Checkpoint
 
-2026-06-22: 0.0.4 release preparation started after property equality index
-implementation and validation. Version bump and release notes are in progress;
-publish dry-run, push, CI, tag, GitHub release, and crates.io publish remain.
+2026-06-22: 0.0.4 released. GitHub release and crates.io publication both
+confirmed. Next work should start with 0.0.5 planning.
