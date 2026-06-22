@@ -2,27 +2,27 @@
 
 ## Current Objective
 
-NervusDB 0.0.8 performance closeout work is in release preparation.
-The 0.0.7 traversal regression is fixed by packed adjacency lists, and the
-clean-reopen regression caused by Fjall active journal replay is fixed by a
-close-time journal checkpoint.
+NervusDB 0.0.8 has been released. The default next step is to stop proactive
+database work and use NervusDB in downstream projects unless a concrete blocker
+appears.
 
 ## Active Plan
 
-`docs/plans/completed/019-performance-closeout-0.0.8.md`
+None. The latest completed plan is
+`docs/plans/completed/019-performance-closeout-0.0.8.md`.
 
 bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
-0.0.8 is in release preparation after benchmark-driven performance closeout validation.
+0.0.8 is published to GitHub Releases and crates.io.
 
 ## Now
 
-- Prepare published `nervusdb = "0.0.8"` for downstream projects.
-- Treat the latest 0.0.8 cross-database medium benchmark as the release
-  candidate evidence.
-- 0.0.8 must not add features or unsafe durability modes before release.
+- Use published `nervusdb = "0.0.8"` for downstream projects.
+- Treat `artifacts/cross-db-bench/cross-db-bench-medium-20260622-183205.ndjson`
+  as the 0.0.8 medium performance evidence.
+- Open new database work only from concrete downstream blockers.
 - Keep public index-management APIs, range indexes, EdgeId, unsafe/buffered
   durability modes, vectors, multi-writer work, and advanced Cypher out of scope
   unless a new ADR explicitly changes priority.
@@ -293,12 +293,18 @@ bd epic: `nervusdb-a1z`
     `1,072.110ms` under `SyncAll`; this is the remaining Fjall durable
     batch/fsync floor, not a NervusDB staging bug.
 
+- 0.0.8 release completed:
+  - tag: `v0.0.8`
+  - release-prep commit: `c6d02e36 chore(release): prepare v0.0.8`
+  - GitHub Actions release-prep run: `27981161875` passed
+  - GitHub release: `https://github.com/ysankpia/nervusdb/releases/tag/v0.0.8`
+  - crates.io: `https://crates.io/crates/nervusdb`
+  - confirmed via `cargo search nervusdb --limit 5 --registry crates-io`.
+
 ## Next
 
-- Finish 0.0.8 validation and release preparation only if the focused checks
-  stay green.
-- After 0.0.8, stop proactive database work and use NervusDB in downstream
-  projects. Reopen database work only for concrete downstream blockers.
+- Use NervusDB in downstream projects.
+- Reopen database work only for concrete downstream blockers.
 - Do not start another storage-format rewrite, durability mode, query feature,
   vector feature, or single-file backend without a new ADR and benchmark
   evidence.
@@ -497,7 +503,8 @@ None.
 
 ## Last Checkpoint
 
-2026-06-23: 0.0.8 is in release preparation. Packed adjacency fixed
-the 0.0.7 traversal regression, and clean close now avoids Fjall active-journal
-replay on normal reopen. The remaining durable commit cost is dominated by
-Fjall `SyncAll` batch persistence; do not hide it with unsafe durability modes.
+2026-06-23: 0.0.8 has been tagged, released on GitHub, published to crates.io,
+and confirmed via `cargo search`. Packed adjacency fixed the 0.0.7 traversal
+regression, clean close avoids Fjall active-journal replay on normal reopen,
+and the remaining durable commit cost is recorded as Fjall `SyncAll` batch
+persistence rather than hidden behind unsafe durability modes.
