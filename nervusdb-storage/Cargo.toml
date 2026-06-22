@@ -1,6 +1,6 @@
 [package]
 name = "nervusdb-storage"
-version = "0.0.7"
+version = "0.0.8"
 license = "AGPL-3.0-only"
 description = "NervusDB storage layer – Fjall-backed local property graph keyspaces"
 repository = "https://github.com/LuQing-Studio/nervusdb"
@@ -9,7 +9,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-nervusdb = { path = "../nervusdb", version = "=0.0.7" }
+nervusdb = { path = "../nervusdb", version = "=0.0.8" }
 
 [dev-dependencies]
 fjall = "3.1.5"

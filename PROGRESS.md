@@ -2,27 +2,24 @@
 
 ## Current Objective
 
-NervusDB 0.0.8 performance closeout work is in release-candidate validation.
+NervusDB 0.0.8 performance closeout work is in release preparation.
 The 0.0.7 traversal regression is fixed by packed adjacency lists, and the
 clean-reopen regression caused by Fjall active journal replay is fixed by a
 close-time journal checkpoint.
 
 ## Active Plan
 
-`docs/plans/active/019-performance-closeout-0.0.8.md`
+`docs/plans/completed/019-performance-closeout-0.0.8.md`
 
 bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
-0.0.7 has been published. 0.0.8 is a benchmark-driven performance closeout, not
-feature expansion.
+0.0.8 is in release preparation after benchmark-driven performance closeout validation.
 
 ## Now
 
-- Use published `nervusdb = "0.0.7"` for external downstream experiments until
-  the 0.0.8 release is tagged and published; use the local working tree for
-  0.0.8 candidate validation.
+- Prepare published `nervusdb = "0.0.8"` for downstream projects.
 - Treat the latest 0.0.8 cross-database medium benchmark as the release
   candidate evidence.
 - 0.0.8 must not add features or unsafe durability modes before release.
@@ -269,7 +266,7 @@ feature expansion.
   - confirmed via `cargo search nervusdb --limit 5 --registry crates-io`.
 - 0.0.8 performance closeout implemented in the working tree:
   - ADR: `docs/decisions/0010-packed-adjacency-lists.md`.
-  - active plan: `docs/plans/active/019-performance-closeout-0.0.8.md`.
+  - completed plan: `docs/plans/completed/019-performance-closeout-0.0.8.md`.
   - `STORAGE_FORMAT_EPOCH` bumped from `3` to `4`.
   - adjacency now uses packed, sorted list values:
     `adj_out [src][rel] -> repeated dst:u32 BE` and
@@ -500,7 +497,7 @@ None.
 
 ## Last Checkpoint
 
-2026-06-22: 0.0.8 is in release-candidate validation. Packed adjacency fixed
+2026-06-23: 0.0.8 is in release preparation. Packed adjacency fixed
 the 0.0.7 traversal regression, and clean close now avoids Fjall active-journal
 replay on normal reopen. The remaining durable commit cost is dominated by
 Fjall `SyncAll` batch persistence; do not hide it with unsafe durability modes.

@@ -2,7 +2,7 @@
 
 ## Status
 
-Release-candidate validation.
+Completed; release preparation is in progress.
 
 ## Goal
 

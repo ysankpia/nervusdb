@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-NervusDB 0.0.8 is in release-candidate validation. The release closes the
+NervusDB 0.0.8 is in release preparation. The release closes the
 0.0.7 traversal regression and clean-reopen issue without changing public API
 or durability semantics.
 
@@ -42,7 +42,7 @@ or durability semantics.
 | 0.0.5 stability freeze | Q2 2026 | Released: fsck-lite, derived index repair, Agent Memory smoke, workspace tests passed |
 | 0.0.6 performance hot path | Q2 2026 | Released: load total 1,674.287 ms, update p99 5,010.542 us, detach delete p99 6,480.459 us, two-hop 3,356,928 paths/s on 100k/500k medium benchmark |
 | 0.0.7 storage cleanup | Q2 2026 | Released: epoch 3, clean reopen 3.185 ms, footprint 38.3 MB, traversal regression documented |
-| 0.0.8 performance closeout | Q2 2026 | RC: epoch 4 packed adjacency lists, raw reopen 2.059 ms, two-hop 4,905,668 paths/s, footprint 29.4 MB; remaining commit cost is Fjall `SyncAll` floor |
+| 0.0.8 performance closeout | Q2 2026 | Release prep: epoch 4 packed adjacency lists, raw reopen 2.059 ms, two-hop 4,905,668 paths/s, footprint 29.4 MB; remaining commit cost is Fjall `SyncAll` floor |
 
 ## Open Questions
 

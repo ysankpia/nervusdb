@@ -65,7 +65,7 @@ Current active direction: Fjall-backed local database directory storage for the
 
 ## Plans
 
-- Active 0.0.8 performance closeout plan: `docs/plans/active/019-performance-closeout-0.0.8.md`
+- Completed 0.0.8 performance closeout plan: `docs/plans/completed/019-performance-closeout-0.0.8.md`
 - Active plans: `docs/plans/active/`
 - Completed plans: `docs/plans/completed/`
 - Technical debt: `docs/plans/tech-debt.md`
