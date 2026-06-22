@@ -15,16 +15,14 @@ bd epic: `nervusdb-a1z`
 
 ## Current Phase
 
-0.0.5 remains the stable published release until 0.0.6 is published. 0.0.6
-benchmark attribution, storage profiling, index-cleanup hot-path fixes, and
-traversal hot-path fixes are implemented locally. A follow-up storage hot-path
-fix removed repeated created-node label lookup during bulk property index
-writes. 0.0.7 is now scoped as storage-layout work, not feature expansion.
+0.0.6 is the stable published release. It contains benchmark attribution,
+storage profiling, index-cleanup hot-path fixes, traversal hot-path fixes, and
+the created-node label-map bulk property-index fix. 0.0.7 is now scoped as
+storage-layout work, not feature expansion.
 
 ## Now
 
-- Publish `v0.0.6` after release validation passes.
-- Use `nervusdb = "0.0.6"` in downstream projects after publication.
+- Use `nervusdb = "0.0.6"` in downstream projects.
 - Treat the 0.0.6 cross-database benchmark as current performance evidence.
 - Do not start keyspace merge without a separate ADR; current evidence says it
   is 0.0.7 storage-layout work, not part of 0.0.6.
@@ -224,12 +222,16 @@ writes. 0.0.7 is now scoped as storage-layout work, not feature expansion.
   - active plan: `docs/plans/active/018-storage-layout-0.0.7.md`.
   - focus: durable commit, raw reopen, file count, and storage footprint.
   - implementation is blocked on a storage-layout ADR.
+- 0.0.6 release completed:
+  - tag: `v0.0.6`
+  - GitHub release: `https://github.com/ysankpia/nervusdb/releases/tag/v0.0.6`
+  - crates.io: `https://crates.io/crates/nervusdb`
+  - confirmed via `cargo search nervusdb --limit 5 --registry crates-io`.
 
 ## Next
 
-- Run 0.0.6 release validation, tag, GitHub release, and crates.io publish.
-- If database work continues after 0.0.6, write a storage-layout ADR before any
-  keyspace merge or storage-format rewrite.
+- If database work continues, write a storage-layout ADR before any keyspace
+  merge or storage-format rewrite.
 - Wait for GitHub Dependabot to rescan after the stale `fuzz/Cargo.lock`
   removal is pushed.
 - Update GitHub Actions if the Node.js 20 deprecation annotation becomes noisy.
@@ -392,10 +394,16 @@ None.
 | 2026-06-22 | `cargo test -p nervusdb --features unstable-admin --test core_0_1_agent_memory` | Passed after 0.0.6 hot-path fix |
 | 2026-06-22 | `NERVUSDB_PROFILE_STORAGE=1 bash scripts/cross_db_bench.sh --system nervusdb --medium` | Passed; artifact `artifacts/cross-db-bench/cross-db-bench-medium-20260622-120913.ndjson`; property_index_writes `244.979ms` |
 | 2026-06-22 | `bash scripts/cross_db_bench.sh --system nervusdb --medium` | Passed; artifact `artifacts/cross-db-bench/cross-db-bench-medium-20260622-120945.ndjson`; load total `1,674.287ms`, two-hop `3,356,928.783 paths/s` |
+| 2026-06-22 | GitHub Actions `main` push run `27955075842` | Passed for commit `c7d9c140` |
+| 2026-06-22 | `git tag -a v0.0.6` and `git push origin v0.0.6` | Passed; tag points at `c7d9c140` |
+| 2026-06-22 | `gh release create v0.0.6 --verify-tag --title "NervusDB v0.0.6" --notes-file docs/releases/v0.0.6.md --latest=true` | Passed |
+| 2026-06-22 | `cargo publish -p nervusdb --registry crates-io` | Published `nervusdb v0.0.6` |
+| 2026-06-22 | `cargo search nervusdb --limit 5 --registry crates-io` | Confirmed `nervusdb = "0.0.6"` appears in crates.io search |
 
 ## Last Checkpoint
 
-2026-06-22: 0.0.6 is in release preparation. The remaining large performance
-costs are durable `batch.commit`, raw reopen, file count, and disk footprint.
-Those are recorded as 0.0.7 storage-layout work and must not be started without
-a storage-layout ADR.
+2026-06-22: 0.0.6 has been tagged, released on GitHub, published to crates.io,
+and confirmed via `cargo search`. The remaining large performance costs are
+durable `batch.commit`, raw reopen, file count, and disk footprint. Those are
+recorded as 0.0.7 storage-layout work and must not be started without a
+storage-layout ADR.
