@@ -3,14 +3,14 @@ members = [".", "bindings/python", "bindings/nodejs"]
 
 [package]
 name = "graphlite-rs"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 edition = "2021"
 authors = ["GraphLite-RS Contributors"]
 description = "A production-grade, embedded, single-file persistent property graph database engine in Rust"
 license = "AGPL-3.0-only"
 readme = "README.md"
-repository = "https://github.com/graphlite-rs/graphlite-rs"
-homepage = "https://github.com/graphlite-rs/graphlite-rs"
+repository = "https://github.com/ysankpia/graphlite"
+homepage = "https://github.com/ysankpia/graphlite"
 documentation = "https://docs.rs/graphlite-rs"
 keywords = ["graph", "database", "sqlite", "cypher", "embedded"]
 categories = ["database-implementations", "embedded-database"]
