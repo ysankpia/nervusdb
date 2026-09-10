@@ -63,19 +63,22 @@ That is usually enough to give you a straight answer.
 
 ---
 
-## Why contributions require a CLA
+## Why external contributions are not accepted
 
 Dual licensing is only possible while a single party holds sufficient rights to
 relicense the whole work. If someone contributes code under AGPL terms alone,
 that code can no longer be included in a commercial licence, and the dual-licence
 model collapses for the entire project.
 
-For that reason contributions are accepted under the
-[Contributor License Agreement](CLA.md), which grants the project the right to
-license your contribution under both AGPL and commercial terms. You keep
-ownership of your contribution; you are granting a licence, not assigning
-copyright.
+The usual answer is a Contributor License Agreement. This project deliberately
+does **not** collect them, to avoid that friction and legal surface. The
+trade-off is that **no external code is merged**: pull requests from outside the
+project are closed automatically.
 
-If you are unwilling to sign, that is a legitimate position — but such a
-contribution can only be merged if the project abandons dual licensing, so it
-would need to be discussed first.
+[CONTRIBUTING.md](CONTRIBUTING.md) explains what is welcome instead — bug reports
+with a reproduction, corrections to the documented numbers, and design
+discussion. Those are genuinely useful and are acted on.
+
+[CLA.md](CLA.md) still exists, but it applies **only** to a change the maintainer
+has explicitly invited (for example by asking for a specific patch). Opening a
+pull request on your own is not, and is not treated as, acceptance of it.

@@ -1,0 +1,66 @@
+name: Close external pull requests
+
+# This project does not accept external code contributions, by policy. Issues are
+# welcome and are fixed by the maintainer; see CONTRIBUTING.md.
+#
+# GitHub has no repository setting to disable pull requests, so they are refused
+# here instead. `pull_request_target` is required because it runs in the context
+# of the base repository with a write token, which a workflow triggered by a fork
+# cannot get. This workflow deliberately does NOT check out the pull request, so
+# no untrusted code is ever executed with that token.
+#
+# Triggered on `opened` only, never on `reopened`, so the maintainer can reopen a
+# specific pull request to review and merge it manually.
+
+on:
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  close:
+    name: Refuse external pull request
+    runs-on: ubuntu-latest
+    # Only act on authors who are not the owner, a member, or a collaborator.
+    if: >-
+      github.event.pull_request.author_association != 'OWNER' &&
+      github.event.pull_request.author_association != 'MEMBER' &&
+      github.event.pull_request.author_association != 'COLLABORATOR'
+    steps:
+      - name: Comment and close
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          gh pr comment "$PR" --repo "$REPO" --body "$(cat <<'EOF'
+          Thanks for taking the time to look at this project, and sorry for the
+          automated reply.
+
+          **This repository does not accept external code contributions.** The
+          project is dual-licensed (AGPL-3.0 plus a commercial licence), which
+          requires that a single party hold the rights to the whole work, so
+          contributed code cannot be merged even if it is good. Keeping the
+          licence story clean is the reason, not the quality of your patch.
+
+          What is genuinely welcome:
+
+          - **Bug reports.** Please open an issue with the command you ran, the
+            raw output, and, if you can, a minimal reproduction. Those are
+            extremely useful and are fixed by the maintainer.
+          - **Reproducible corrections to the documented numbers.** The
+            benchmarks in `benches/` print their own configuration; if you can
+            show a figure is wrong, that is a real contribution.
+          - **Discussion** of the design, the roadmap, or a limitation you hit.
+
+          Closing this pull request is not a judgement on your work. If you
+          believe the change is important, please open an issue describing the
+          problem instead, and it will be looked at.
+
+          See CONTRIBUTING.md for the details.
+          EOF
+          )"
+          gh pr close "$PR" --repo "$REPO"

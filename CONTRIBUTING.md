@@ -1,47 +1,104 @@
 # Contributing to GraphLite-RS
 
-Thanks for considering a contribution. This project has an unusual constraint
-worth understanding before you start, because it affects what can be merged.
+**This project does not accept external code contributions.** It is
+source-available and open for inspection, use and bug reports, but only the
+maintainer commits code. This page explains why, and what is genuinely welcome
+instead.
 
-## Before you contribute: the CLA
+If you were about to open a pull request, please read the first section before
+spending more time on it.
 
-GraphLite-RS is **dual-licensed** (AGPL-3.0 plus a commercial licence — see
-[LICENSING.md](LICENSING.md)). That model only works if a single party holds
-enough rights to relicense the whole work, so contributions are accepted under
-the [Contributor License Agreement](CLA.md).
+---
 
-In practice:
+## Why code contributions are not accepted
 
-- You **keep** the copyright to your work.
-- You grant the project the right to license it under both AGPL and commercial
-  terms.
-- For your first pull request, include this line in the description:
+GraphLite-RS is **dual-licensed**: AGPL-3.0 for open use, plus a commercial
+licence for cases AGPL does not permit (see [LICENSING.md](LICENSING.md)). That
+model only holds together while a **single party owns the rights to the whole
+work**.
 
-  ```
-  I have read the CLA and hereby agree to its terms.
-  Signed-off-by: Your Name <you@example.com>
-  ```
+The moment a patch from someone else is merged, that patch is theirs, licensed
+to the project under AGPL terms alone. It could then no longer be included in a
+commercial licence, and the dual-licence story would be broken for the entire
+project — not just for that file.
 
-If you are not willing to sign, that is a reasonable position, but it means your
-change can only be merged if the project drops dual licensing. Please open an
-issue to discuss it rather than submitting a PR that cannot be accepted.
+The usual fix is a Contributor License Agreement. This project deliberately does
+not use one, because it wants to avoid the friction and the legal surface that
+comes with collecting signed agreements. The trade-off is simple: **no external
+code is merged.**
 
-## Development setup
+This is a licensing decision, not a judgement about the quality of your work. A
+patch can be excellent and still not mergeable here.
 
-```bash
-git clone https://github.com/ysankpia/graphlite
-cd graphlite
-cargo build --workspace
-```
+Pull requests from outside the project are closed automatically by a workflow. If
+you have already opened one, that is why.
 
-No services, no external database, no environment variables required. The
-toolchain is stable Rust (1.98 or newer); the project has no dependencies beyond
-`serde`, `serde_json`, `bincode`, `crc32fast` and `thiserror`, and new
-dependencies need a strong justification (see "Architecture" below).
+## What is welcome
 
-## The checks your change must pass
+### Bug reports — the most valuable thing you can send
 
-CI runs exactly these; run them locally before opening a pull request.
+Open an issue. A good report contains:
+
+1. **What you ran**, verbatim (the exact command or code).
+2. **What happened**, with the raw output pasted, not summarised.
+3. **What you expected**, and why.
+4. If you can, a **minimal reproduction** — the smallest graph and sequence that
+   shows the problem.
+
+Reports in this form get fixed. Reproducibility is the currency here: a claim
+without a reproduction is a guess, and the project has had to correct
+unreproducible figures before, so it is strict about this.
+
+### Corrections to the documented numbers
+
+The benchmarks in `benches/` print their own configuration, so any figure in the
+README can be checked against them. If you can show that a documented number is
+wrong, or does not hold on your hardware, that is a real contribution — open an
+issue with the command you ran and the output.
+
+### Design discussion and limitations
+
+If you hit a limitation in [ROADMAP.md](ROADMAP.md), or disagree with a design
+decision, open an issue. Knowing which constraints actually bite in practice is
+useful, and it shapes what gets built next.
+
+### Security reports
+
+Please report privately rather than in a public issue — email
+**luhuizhx@gmail.com** with the details and a reproduction.
+
+## If you want to change the code yourself
+
+The AGPL gives you the right to modify and run this software. You do not need
+permission for that, and you do not need to send anything back unless you operate
+a modified version as a network service (AGPL §13).
+
+Practically:
+
+- **Keep it private / internal** — no obligation to publish anything.
+- **Modify it and run it only for yourself** — no obligation.
+- **Modify it and offer it as a network service** — you must offer your users the
+  source of your modified version.
+- **Distribute it, or embed it in something closed-source** — this is what the
+  commercial licence is for; see [LICENSING.md](LICENSING.md).
+
+A personal fork for your own experiments is fine and expected. It just does not
+flow back into this repository.
+
+## If the maintainer invites a specific change
+
+Rare, but possible: the maintainer may ask you to prepare a specific patch, or
+reopen a pull request to review and merge it. In that case the
+[CLA](CLA.md) applies and must be agreed to before the change is merged.
+
+Outside that invitation, please use an issue rather than a pull request.
+
+---
+
+## For reference: the checks this repository enforces
+
+Useful if you are submitting an invited change, or if you simply want your own
+fork to match. CI runs exactly these:
 
 ```bash
 cargo fmt --all -- --check
@@ -56,64 +113,42 @@ angle brackets in doc comments, and clippy's lint set moves with the compiler �
 if a new lint appears after a toolchain update, fix the code rather than pinning
 an older compiler.
 
-Please also run the throughput-sensitive suites in release mode, since their
-assertions only mean anything when optimised:
+Also run the throughput-sensitive suites in release mode, since their assertions
+only mean anything when optimised:
 
 ```bash
 cargo test --release --test batch_tx_tests
 cargo test --release --test edge_locality_tests
 ```
 
-## Architecture rules you must not break
+## Architecture rules
 
-[AGENTS.md](AGENTS.md) is the authoritative specification. The invariants that
-most often trip people up:
+[AGENTS.md](AGENTS.md) is the authoritative specification for anyone working in
+this codebase. The invariants that matter most:
 
 - **DiskGraph is the single source of truth.** Never add an in-memory graph,
   table or node collection as primary state. Resident memory must stay bounded by
   the configured buffer pool, whatever the dataset size.
-- **Two files only**: `{path}` and `{path}.wal`. No sidecar files, no auxiliary
-  indexes on disk.
-- **Fixed-size records.** `NodeRecord` is exactly 32 bytes, `EdgeRecord` exactly 64. Do not change their layout; property payloads live in slotted pages
-  referenced by a 24-bit page / 8-bit slot pointer.
+- **Two files only**: `{path}` and `{path}.wal`. No sidecar files.
+- **Fixed-size records.** `NodeRecord` is exactly 32 bytes, `EdgeRecord` exactly 64. Property payloads live in slotted pages referenced by a 24-bit page /
+  8-bit slot pointer.
 - **Never write `.unwrap()` or `.expect()` in library code.** Lock acquisition
   uses the poison-recovering accessors in `src/sync_ext.rs`.
-- **Only one handle per database.** `open` takes an exclusive lock; a contended
-  open must return `DatabaseLocked`, never proceed.
+- **Only one handle per database.** A contended `open` returns
+  `DatabaseLocked`, never proceeds.
 - No `todo!()` or `unimplemented!()`.
 
-## Tests: adversarial, not happy-path
+## Tests and performance claims
 
-A test that only exercises the happy path is treated as incomplete. Dependent on
-what you touch, cover:
+If you are preparing an invited change, two house rules apply.
 
-- self-collision (source equals target, self-loops, an input that is also an
-  output), duplicates, `N=0`, `N=1`, exactly-full buffers;
-- failure atomicity: if step K fails, nothing from steps 1..K-1 survives, and the
-  main database file is byte-identical;
-- a second, independent way to verify any claim you make (for example, chain
-  degree from walking pointers versus an independent scan of the edge id space).
+**Tests must be adversarial, not happy-path.** Cover self-collision, duplicates,
+`N=0`, `N=1`, exactly-full buffers; verify failure atomicity (if step K fails,
+nothing from steps 1..K-1 survives and the main file is byte-identical); and
+verify any claim a second, independent way. Never filter a boundary case out of a
+generator to make a test pass.
 
-Never filter a boundary case out of a generator to make a test pass. If a case
-you added breaks the code, that is the test doing its job.
-
-## Performance claims
-
-Do **not** state a throughput number without a runnable scenario and its
-measurement conditions. Add or extend a scenario under `benches/`, run it, and
-quote the number together with the hardware, storage type, buffer-pool size and —
-for node writes — the property payload, because removing properties roughly
-doubles node throughput.
-
-If you are correcting an existing number, say so in the pull request. The project
-has had to correct unreproducible figures before, and being able to reproduce a
-claim is a hard requirement here.
-
-## Commit and pull request conventions
-
-- Commit messages: `type(scope): summary` with a short imperative summary, e.g.
-  `fix(storage): reject a second handle on the same file`.
-- Explain the **root cause** in the body, not just the symptom you patched.
-- Keep a pull request focused on one change. Separate refactors from behaviour
-  changes so the latter can be reviewed on its own merits.
-- Report any check you did not run, and why.
+**Never state a throughput number without a runnable scenario and its
+conditions.** Add or extend a scenario under `benches/`, run it, and quote the
+number with the hardware, storage, buffer-pool size and — for node writes — the
+property payload, because removing properties roughly doubles node throughput.

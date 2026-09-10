@@ -1,6 +1,6 @@
 # Contributor License Agreement (CLA)
 
-Thank you for your interest in contributing to GraphLite-RS ("the Project"),
+Thank you for considering a contribution to GraphLite-RS ("the Project"),
 maintained by the Project Owner.
 
 > **Note on this document.** This is a plain-language CLA modelled on widely used
@@ -8,8 +8,23 @@ maintained by the Project Owner.
 > commercial dual-licensing programme, have a qualified lawyer review it,
 > especially the governing-law clause and any corporate signing process.
 
-By submitting a contribution to the Project (for example, a pull request, patch,
-or any other form of material), you accept the terms below.
+---
+
+## Scope: this CLA applies only to invited contributions
+
+**The Project does not accept unsolicited code contributions.** Pull requests
+from outside the Project are closed automatically, and opening one is not, and
+must not be read as, acceptance of this agreement. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the policy and for what is welcome
+instead (bug reports, reproducible corrections, design discussion).
+
+This agreement applies **only** when the Project Owner has explicitly invited you
+to prepare a change — for example by asking you for a specific patch, or by
+reopening and reviewing one of your pull requests. In that situation, the terms
+below govern your contribution.
+
+If you have not been invited, nothing in this document grants the Project any
+rights in your work, and nothing in it obliges you to anything.
 
 ---
 
@@ -17,8 +32,8 @@ or any other form of material), you accept the terms below.
 
 - **"You"** means the individual or legal entity making a Contribution.
 - **"Contribution"** means any original work of authorship, including any
-  modifications or additions to existing work, that You intentionally submit to
-  the Project.
+  modifications or additions to existing work, that You submit to the Project
+  **after being invited to do so** by the Project Owner.
 - **"Project Owner"** means the copyright holder of the Project, currently the
   maintainer publishing under the repository
   [github.com/ysankpia/graphlite](https://github.com/ysankpia/graphlite).
@@ -109,6 +124,12 @@ Because the Project is dual-licensed. A contribution under AGPL terms alone coul
 never be included in a commercial licence, which would make the dual-licence
 model impossible for the whole project.
 
-**Can I contribute without signing?**
-Technically yes, but such a contribution can only be merged if the Project
-abandons dual licensing. Raise it in an issue first so it can be discussed.
+**Does this apply if I open a pull request on my own?**
+No. Unsolicited pull requests are closed unread-for-merge and this agreement does
+not apply to them — opening one is not acceptance. See
+[CONTRIBUTING.md](CONTRIBUTING.md). This agreement takes effect only when the
+Project Owner has invited the change.
+
+**Can I use and modify the code myself?**
+Yes. The AGPL grants that right directly, and no CLA or permission is needed. See
+[LICENSING.md](LICENSING.md) for when modifications must be published.
