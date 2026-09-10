@@ -30,7 +30,17 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
-pub const DEFAULT_BUFFER_POOL_FRAMES: usize = 1024; // 1024 * 4KB = 4MB
+/// 微型缓冲池：1MB（256 帧），用于极低内存环境与受限内存回归测试
+pub const SMALL_POOL_FRAMES: usize = 256;
+/// 标准默认缓冲池：4MB（1024 帧）
+pub const DEFAULT_BUFFER_POOL_FRAMES: usize = 1024;
+/// 常规生产缓冲池：16MB（4096 帧）
+pub const MEDIUM_POOL_FRAMES: usize = 4096;
+/// 大规模离线导入缓冲池：64MB（16384 帧）
+pub const LARGE_POOL_FRAMES: usize = 16384;
+
+/// 每 MB 对应的 4KB 页帧数
+const FRAMES_PER_MB: usize = 256;
 
 /// 内部核心结构体（彻底剔除内存 HashMap 图，DiskGraph 为唯一数据源）
 pub struct GraphInner {
@@ -51,6 +61,14 @@ impl GraphLite {
     /// 打开或创建指定路径的图数据库 (默认 4MB Buffer Pool)
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, GraphError> {
         Self::open_with_pool_size(path, DEFAULT_BUFFER_POOL_FRAMES)
+    }
+
+    /// 以 MB 为单位打开图数据库（frames = mb × 256，下限 2 帧）。
+    ///
+    /// 便捷构造器：`open_with_pool_mb(path, 1)` 等价于 256 帧（1MB），
+    /// `open_with_pool_mb(path, 16)` 等价于 4096 帧（16MB）。
+    pub fn open_with_pool_mb<P: AsRef<Path>>(path: P, mb: usize) -> Result<Self, GraphError> {
+        Self::open_with_pool_size(path, (mb * FRAMES_PER_MB).max(2))
     }
 
     /// 打开图数据库并自定义 Buffer Pool 帧数上限（纯磁盘受控，无内存泄露）
@@ -809,8 +827,27 @@ impl Transaction {
         self.ops.push(TxAction::RemoveEdge { id });
     }
 
-    /// 提交事务：将修改原子应用至 DiskGraph，批量刷出 PageWrite 帧并提交
-    pub fn commit(mut self) -> Result<(), GraphError> {
+    /// 提交事务：将修改原子应用至 DiskGraph，批量刷出 PageWrite 帧并提交。
+    ///
+    /// 连续 `AddEdge` 段达到 `EDGE_BATCH_WEAVE_MIN` 时自动走两阶段批量织网，
+    /// 消除受限内存下的批内缓存抖动与假溢出。
+    pub fn commit(self) -> Result<(), GraphError> {
+        self.commit_internal(true)
+    }
+
+    /// 提交事务，但**禁用**批量织网，强制按客户端原序逐条插入每一条边。
+    ///
+    /// 仅供回归与等价性对照使用（验证批量织网与逐条路径产出完全相同的图结构）。
+    /// 生产路径请使用 [`Transaction::commit`]。
+    #[doc(hidden)]
+    pub fn commit_unclustered(self) -> Result<(), GraphError> {
+        self.commit_internal(false)
+    }
+
+    /// 事务提交内部实现：`enable_weave` 控制是否启用两阶段批量织网。
+    ///
+    /// 两条路径共用同一失败回滚与 WAL 提交尾部，保证回滚语义完全一致。
+    fn commit_internal(mut self, enable_weave: bool) -> Result<(), GraphError> {
         if self.committed {
             return Ok(());
         }
@@ -835,7 +872,8 @@ impl Transaction {
         while idx < ops.len() {
             // 连续 AddEdge 段达到阈值时走两阶段批量织网，消除批内缓存抖动。
             // 只合并**连续**段，绝不跨非边操作重排，保证 AddNode 先于 AddEdge 的依赖不变。
-            let is_edge = matches!(ops[idx], TxAction::AddEdge { .. });
+            // 混合事务因段内夹杂非边操作而天然不触发批量路径，无需额外安全性启发式。
+            let is_edge = enable_weave && matches!(ops[idx], TxAction::AddEdge { .. });
             if is_edge {
                 let mut end = idx;
                 while end < ops.len() && matches!(ops[end], TxAction::AddEdge { .. }) {
