@@ -1,0 +1,12 @@
+[package]
+name = "graphlite-python"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "graphlite"
+crate-type = ["cdylib"]
+
+[dependencies]
+graphlite_core = { package = "graphlite-rs", path = "../../" }
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py38"] }

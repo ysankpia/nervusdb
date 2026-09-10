@@ -1,0 +1,30 @@
+# Rust
+/target/
+
+# Node.js
+node_modules/
+*.node
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.dylib
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Databases
+*.db
+*.db.wal
+*.db.tmp
+*.paged
+
+# OS
+.DS_Store
+Thumbs.db

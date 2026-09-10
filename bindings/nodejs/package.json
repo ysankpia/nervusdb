@@ -1,0 +1,30 @@
+{
+  "name": "graphlite-node",
+  "version": "0.1.0",
+  "description": "Production-grade Node.js and TypeScript bindings for GraphLite-RS",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "name": "graphlite",
+    "triples": {
+      "default": true
+    }
+  },
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "test": "node test.mjs"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.4"
+  },
+  "keywords": [
+    "graph",
+    "database",
+    "sqlite",
+    "cypher",
+    "embedded",
+    "napi"
+  ],
+  "license": "MIT OR Apache-2.0"
+}

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "graphlite"
+version = "0.1.0"
+description = "A production-grade, embedded, single-file persistent property graph database engine in Rust"
+readme = "README.md"
+authors = [{ name = "GraphLite-RS Contributors" }]
+license = { text = "MIT OR Apache-2.0" }
+requires-python = ">=3.8"
+keywords = ["graph", "database", "sqlite", "cypher", "embedded"]
+classifiers = [
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: 3",
+  "Topic :: Database",
+]
+
+[tool.maturin]
+module-name = "graphlite"
+features = ["pyo3/extension-module"]
