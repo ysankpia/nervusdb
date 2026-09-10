@@ -300,7 +300,7 @@ fn test_forty_thousand_entity_density() -> Result<(), GraphError> {
 
     let num_nodes: u64 = 10_000;
     let num_edges: usize = 30_000;
-    let entities = num_nodes as u64 + num_edges as u64;
+    let entities = num_nodes + num_edges as u64;
     assert_eq!(entities, 40_000);
 
     {

@@ -506,3 +506,59 @@ fn test_mutation_durability_across_reopen() -> Result<(), GraphError> {
 
     Ok(())
 }
+
+// =========================================================================
+// dump_cypher 文本级重放：按分号切分逐条执行到全新库，图结构完全复原
+// =========================================================================
+#[test]
+fn test_dump_cypher_script_replay() -> Result<(), GraphError> {
+    let source = GraphLite::open(":memory:")?;
+    source.execute(
+        "CREATE (a:User {name: 'Alice', age: 25})-[:FOLLOWS {weight: 1.5}]->(b:User {name: 'Bob', age: 30})",
+    )?;
+
+    // 导出为脚本（流式写入缓冲）
+    let mut dump: Vec<u8> = Vec::new();
+    source.dump_cypher(&mut dump)?;
+    let script = String::from_utf8(dump).expect("dump must be UTF-8");
+
+    assert!(script.contains("CREATE"), "dump must contain CREATE");
+    assert!(
+        script.contains("MATCH"),
+        "dump must contain relationship MATCH"
+    );
+    assert!(script.contains("FOLLOWS"), "dump must contain edge type");
+    assert!(script.contains("Alice"), "dump must carry properties");
+
+    // 逐行过滤注释后，按分号切分逐条重放到全新库
+    let cleaned: String = script
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("--"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let target = GraphLite::open(":memory:")?;
+    for stmt in cleaned.split(';') {
+        let trimmed = stmt.trim();
+        if !trimmed.is_empty() {
+            target.execute(trimmed)?;
+        }
+    }
+
+    // 图结构必须完全复原
+    assert_eq!(target.node_count(), 2, "replay must restore both nodes");
+    assert_eq!(target.edge_count(), 1, "replay must restore the edge");
+    let res = target.query_cypher("MATCH (a:User)-[:FOLLOWS]->(b:User) RETURN a.name, b.name")?;
+    assert_eq!(res.row_count(), 1);
+    assert_eq!(res.rows[0].values[0], Value::from("Alice"));
+    assert_eq!(res.rows[0].values[1], Value::from("Bob"));
+    assert_eq!(
+        target
+            .query_cypher("MATCH (u:User {name: 'Alice'}) RETURN u.age")?
+            .rows[0]
+            .values[0],
+        Value::from(25)
+    );
+
+    Ok(())
+}

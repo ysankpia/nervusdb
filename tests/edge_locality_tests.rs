@@ -438,3 +438,155 @@ fn test_directory_pages_stay_resident() -> Result<(), GraphError> {
 
     Ok(())
 }
+
+// =========================================================================
+// 8. 算法数学等价：直接对照 commit() 与 commit_unclustered() 两条提交路径
+// =========================================================================
+#[test]
+fn test_weave_paths_algorithmic_mathematical_equality() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let woven_path = dir.path().join("woven.db");
+    let plain_path = dir.path().join("plain.db");
+
+    let n: u64 = 300;
+    // 带权拓扑，注入顺序刻意打乱（跨页离散）
+    let mut edges: Vec<(u64, u64, f64)> = Vec::new();
+    for i in 1..=n {
+        let t1 = (i * 3) % n + 1;
+        let t2 = (i * 7) % n + 1;
+        if i != t1 {
+            edges.push((i, t1, 1.5));
+        }
+        if i != t2 {
+            edges.push((i, t2, 2.5));
+        }
+    }
+    edges.reverse();
+
+    // A. 批量织网路径（默认 commit）
+    {
+        let db = GraphLite::open(&woven_path)?;
+        let mut tx = db.begin_transaction()?;
+        for _ in 1..=n {
+            tx.add_node(HashSet::from(["Person".to_string()]), HashMap::new())?;
+        }
+        for &(s, d, w) in &edges {
+            tx.add_edge(s, d, "CONNECT", HashMap::new(), w)?;
+        }
+        tx.commit()?;
+        db.checkpoint()?;
+    }
+
+    // B. 逐条原序路径（commit_unclustered）
+    {
+        let db = GraphLite::open(&plain_path)?;
+        let mut tx = db.begin_transaction()?;
+        for _ in 1..=n {
+            tx.add_node(HashSet::from(["Person".to_string()]), HashMap::new())?;
+        }
+        for &(s, d, w) in &edges {
+            tx.add_edge(s, d, "CONNECT", HashMap::new(), w)?;
+        }
+        tx.commit_unclustered()?;
+        db.checkpoint()?;
+    }
+
+    let woven = GraphLite::open(&woven_path)?;
+    let plain = GraphLite::open(&plain_path)?;
+
+    assert_eq!(woven.node_count(), plain.node_count());
+    assert_eq!(woven.edge_count(), plain.edge_count());
+
+    // 1. PageRank 逐节点误差死锁在 < 1e-12
+    let pr_woven = woven.pagerank_with(0.85, 200, 1e-12);
+    let pr_plain = plain.pagerank_with(0.85, 200, 1e-12);
+    assert_eq!(pr_woven.len(), pr_plain.len());
+    for (a, b) in pr_woven.iter().zip(pr_plain.iter()) {
+        assert_eq!(a.node_id, b.node_id, "node ordering diverged");
+        let diff = (a.score - b.score).abs();
+        assert!(
+            diff < 1e-12,
+            "PageRank drifted at node {}: |{} - {}| = {}",
+            a.node_id,
+            a.score,
+            b.score,
+            diff
+        );
+    }
+
+    // 2. WCC 划分绝对一致
+    let wcc_woven = woven.weakly_connected_components();
+    let wcc_plain = plain.weakly_connected_components();
+    assert_eq!(wcc_woven.len(), wcc_plain.len());
+    for comp in &wcc_woven {
+        assert!(
+            wcc_plain.contains(comp),
+            "component {:?} missing from unclustered build",
+            comp
+        );
+    }
+
+    // 3. K-Hop 节点集一致
+    for start in [1u64, 50, 100, 200, 299] {
+        let a = woven.k_hop_subgraph_with(start, 2, Direction::Both, Some("CONNECT"))?;
+        let b = plain.k_hop_subgraph_with(start, 2, Direction::Both, Some("CONNECT"))?;
+        assert_eq!(
+            a.nodes, b.nodes,
+            "K-Hop node set diverged at start {}",
+            start
+        );
+    }
+
+    Ok(())
+}
+
+// =========================================================================
+// 9. 混合事务天然不触发批量织网路径（段内夹杂非边操作）
+// =========================================================================
+#[test]
+fn test_mixed_transaction_never_takes_batch_path() -> Result<(), GraphError> {
+    let db = GraphLite::open(":memory:")?;
+
+    // 段内夹杂非边操作，使连续 AddEdge 段始终短于 EDGE_BATCH_WEAVE_MIN，
+    // 因此即便边数较多也不会走批量织网路径 —— 无需额外安全性启发式。
+    let mut tx = db.begin_transaction()?;
+    let n1 = tx.add_node(HashSet::from(["A".to_string()]), HashMap::new())?;
+    let n2 = tx.add_node(HashSet::from(["B".to_string()]), HashMap::new())?;
+    let e1 = tx.add_edge(n1, n2, "TEST", HashMap::new(), 1.0)?;
+    tx.update_node_property(n1, "status", "active");
+    tx.remove_edge(e1);
+    let n3 = tx.add_node(HashSet::from(["C".to_string()]), HashMap::new())?;
+    tx.add_edge(n2, n3, "FINAL", HashMap::new(), 2.0)?;
+    tx.commit()?;
+
+    // 最终图状态必须精确正确
+    assert_eq!(db.node_count(), 3);
+    assert_eq!(db.edge_count(), 1);
+    assert!(db.get_edge(e1).is_none(), "removed edge must be gone");
+    assert_eq!(
+        db.get_node(n1)
+            .unwrap()
+            .get_prop("status")
+            .and_then(|v| v.as_str()),
+        Some("active")
+    );
+
+    // 剩余边必须正确织入双向链表
+    let remaining = db
+        .get_node(n2)
+        .unwrap()
+        .outgoing
+        .iter()
+        .filter_map(|&eid| db.get_edge(eid))
+        .find(|e| e.edge_type == "FINAL")
+        .expect("FINAL edge must be linked from n2");
+    assert_eq!(remaining.src_id, n2);
+    assert_eq!(remaining.dst_id, n3);
+    assert!(
+        db.get_node(n3).unwrap().incoming.contains(&remaining.id),
+        "FINAL edge must be linked into n3 incoming chain"
+    );
+
+    // 冷重启后一致
+    Ok(())
+}
