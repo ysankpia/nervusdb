@@ -6,7 +6,9 @@ name = "graphlite-rs"
 version = "1.0.0-rc.1"
 edition = "2021"
 authors = ["GraphLite-RS Contributors"]
-description = "A production-grade, embedded, single-file persistent property graph database engine in Rust"
+description = "Embedded, single-file property graph database: the SQLite model applied to graphs"
+# This SPDX field reflects the open-source option only. A commercial licence is
+# also available; see LICENSING.md.
 license = "AGPL-3.0-only"
 readme = "README.md"
 repository = "https://github.com/ysankpia/graphlite"

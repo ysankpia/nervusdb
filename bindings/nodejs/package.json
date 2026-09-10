@@ -1,7 +1,7 @@
 {
   "name": "graphlite-node",
   "version": "1.0.0-rc.1",
-  "description": "Production-grade Node.js and TypeScript bindings for GraphLite-RS",
+  "description": "Node.js and TypeScript bindings for GraphLite-RS, an embedded single-file property graph database",
   "main": "index.js",
   "types": "index.d.ts",
   "napi": {

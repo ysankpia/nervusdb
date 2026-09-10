@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "graphlite"
 version = "1.0.0-rc.1"
-description = "A production-grade, embedded, single-file persistent property graph database engine in Rust"
+description = "Python bindings for GraphLite-RS, an embedded single-file property graph database"
 readme = "README.md"
 authors = [{ name = "GraphLite-RS Contributors" }]
 license = { text = "AGPL-3.0-only" }
