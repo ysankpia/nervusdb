@@ -39,9 +39,16 @@ Any modification that violates these rules must be rejected immediately:
    - Property payloads use the compact `PropCodec`/`PropReader` encoding (varint framing, ZigZag integers). Do **not** reintroduce `bincode(HashMap)` framing (~28 bytes/entity of pure overhead), and never intern property keys into `StringDict` (it would grow the header dictionary and risk overflow-page churn).
    - Deleting a record marks the slot dead; space is reclaimed by in-page `compact` when the page fills, and a fully drained page is chained into `first_free_prop_page`. Slot lookup hints live in a bounded `prop_page_hint` ring (`PROP_PAGE_HINT_CAPACITY`), which holds page numbers only, never graph topology.
 
-5. **Explicit Batched Transactions**
+5. **Explicit Batched Transactions & Memory Budgets**
    - Autocommitted single writes each cost one WAL append plus one fsync. Bulk ingestion must use `GraphLite::with_transaction` (Rust), `db.begin_transaction()` (Python/Node), and commit once so the whole batch shares **exactly one fsync**.
    - `BufferStats::wal_fsync_count` / `wal_frames_written` are the observable contract for this: a test asserting bulk-commit semantics asserts the fsync delta is exactly 1.
+   - Standard buffer pool constants are exposed in public API:
+     - `SMALL_POOL_FRAMES` (256 frames = 1MB)
+     - `DEFAULT_BUFFER_POOL_FRAMES` (1024 frames = 4MB)
+     - `MEDIUM_POOL_FRAMES` (4096 frames = 16MB)
+     - `LARGE_POOL_FRAMES` (16384 frames = 64MB)
+   - Convenience constructor: `GraphLite::open_with_pool_mb(path, mb)` sets frames to `(mb * 256).max(2)`.
+   - Test switch `Transaction::commit_unclustered()`: Forces per-edge sequential insertion to benchmark and assert mathematical/algorithmic equivalence against `commit()` two-phase batch weaving.
 
 6. **Two-Phase Batch Edge Weaving**
    - Edge batches with `EDGE_BATCH_WEAVE_MIN` or more consecutive `AddEdge` actions in one commit must go through `DiskGraph::insert_edges_batch`, never per-edge head insertion. Per-edge weaving touches the source node page, the target node page and the old head page for every edge; on a graph whose pages far exceed the pool the same page is evicted and re-read many times per batch, and each miss spills a full 4KB page to the WAL ("false spill").

@@ -16,6 +16,15 @@
 > 实测口径：10,000 节点 + 30,000 边，节点与边各带一条 ~150 字节字符串属性；
 > 「旧基线」= 实体数 × 4096B，即 1.0 的「每实体整页」布局。
 
+### 极端极限吞吐实测 (千万级节点大图 & 极速突发峰值)
+
+| 场景 / 规模                                            | 硬件与存储环境               | 缓冲池配置             | 吞吐表现                                        |
+| ----------------------------------------------------- | ---------------------------- | ---------------------- | ----------------------------------------------- |
+| **10,000,000（一千万）节点磁盘写入**                  | Apple Silicon / 高速 NVMe 外存 | 64MB（16,384 帧）      | **708,561 ops/s**（全量耗时 14.11s，峰值 85.5 万） |
+| **纯内存极速节点写入 (`:memory:`)**                   | 内存虚拟设备                 | 不限                   | **1,019,526 ops/s**（突破 **100 万/秒** 大关）  |
+| **离散随机边两阶段织网突发峰值 (50k 随机边)**         | 磁盘分页 + WAL               | 64MB（16,384 帧）      | **1,439,681 ops/s**（突发 **144 万/秒**，34.7ms）|
+| **1,000,000 节点 + 4,000,000 离散边持续写入**        | 磁盘分页 + WAL               | 64MB（16,384 帧）      | **~624,000 ops/s**（持续稳定）                  |
+
 ### 边写入局部性（1.1 补强）
 
 千万级离散边写入曾出现吞吐随规模衰减。根因不在缓存命中率，而是三处结构性缺陷：
@@ -330,11 +339,17 @@ graphlite-rs = "0.1.0"
 ```rust
 use std::collections::{HashMap, HashSet};
 
-use graphlite::{Direction, GraphLite, GraphError, Value};
+use graphlite::{
+    Direction, GraphLite, GraphError, Value,
+    SMALL_POOL_FRAMES, DEFAULT_BUFFER_POOL_FRAMES, MEDIUM_POOL_FRAMES, LARGE_POOL_FRAMES,
+};
 
 fn main() -> Result<(), GraphError> {
-    // 1. 打开数据库 (支持配置 Buffer Pool 大小，如 512 帧 = 2MB)
-    let db = GraphLite::open_with_pool_size("mydb.db", 1024)?;
+    // 1. 打开数据库：推荐使用按 MB 指定内存的便捷构造器 (如 16MB 缓冲池)
+    let db = GraphLite::open_with_pool_mb("mydb.db", 16)?;
+    // 也可以使用命名常量或指定精准物理帧数：
+    // let db = GraphLite::open_with_pool_size("mydb.db", DEFAULT_BUFFER_POOL_FRAMES)?; // 4MB / 1024 帧
+    // let db = GraphLite::open_with_pool_size("mydb.db", LARGE_POOL_FRAMES)?; // 64MB / 16384 帧
 
     // 2. 原生 Cypher 变更
     db.execute("CREATE (a:Person {name: 'Alice', age: 28})-[:KNOWS {weight: 1.5}]->(b:Person {name: 'Bob', age: 32})")?;
@@ -533,7 +548,7 @@ db.checkpoint();
 
 在此之上，1.0 新增四个专项验证套件：
 
-- **`cypher_advanced_tests.rs`（13 个用例）**：`SET` 属性/标签、`DETACH DELETE` 级联与 Freelist 槽位复用、`DELETE` 语义（含带边节点显式报错）、`ORDER BY` / `SKIP` / `LIMIT`、`count/sum/avg/min/max` 全局与分组聚合、变长多跳与无向边、多模式连接、`MATCH ... CREATE`、`RETURN *` 展开、变更持久化；
+- **`cypher_advanced_tests.rs`（14 个用例）**：`SET` 属性/标签、`DETACH DELETE` 级联与 Freelist 槽位复用、`DELETE` 语义（含带边节点显式报错）、`ORDER BY` / `SKIP` / `LIMIT`、`count/sum/avg/min/max` 全局与分组聚合、变长多跳与无向边、多模式连接、`MATCH ... CREATE`、`RETURN *` 展开、变更持久化、**Cypher 脚本全量导出与回灌重放一致性**；
 - **`analytics_tests.rs`（6 个用例）**：PageRank 星型/链式拓扑与分数归一、阻尼因子边界、WCC 多孤岛与环形图、K-Hop 子图方向与类型过滤，以及**在 1MB 受限缓冲池下**执行全部三类算法；
 - **`steal_spill_tests.rs`（5 个用例）**：超大事务在 1MB/2MB 下成功且帧占用受控、溢出后回滚的主库字节级零污染、检查点将 WAL 落盘并清空索引、溢出后遍历与分析准确性、多标签跨溢出重启一致性；
 - **`cli_tests.rs`（6 个用例）**：多行输入与续行提示符、ASCII 表格渲染、`.schema`/`.stats`/`.checkpoint`/`.help`、`.dump` 导出后**回灌到新库的数据一致性**、语法错误后会话存活。
@@ -542,7 +557,9 @@ db.checkpoint();
 
 - **`slotted_property_tests.rs`（7 个用例）**：多条小属性共用一页（400 条记录不得占满 400 页）、删除后槽位空间复用（文件体积不得成倍膨胀）、随机删除 + 重插后页内压实内容无损、**1KB 内联/溢出边界两侧**（900B / 1200B / 11KB 与边属性同规格）、**40,000 实体密度断言（压缩 ≥15×）**、1MB 缓冲池下的密度与帧占用、属性反复更新与删除的存储卫生；
 - **`batch_tx_tests.rs`（7 个用例）**：**单事务 10,000 次写入恰好触发一次 fsync**（对照逐条自动提交的 1:1 基线）、`:memory:` 批量吞吐达标（优化构建 20,000+ ops/s）、批量相对自动提交 >20×、批量回滚字节级零污染、`with_transaction` 闭包失败自动回滚、1MB 缓冲池下 10,000 节点 + 20,000 边批量事务（且恰好 2 次 fsync）、批量混合增删改的原子提交；
-- **`edge_locality_tests.rs`（7 个用例）**：批量织网与逐条插入的**图结构完全等价**（含自环、重复边、扇入扇出）、自环不破坏出边链、**跨批次链头正确延续**、受限内存下**假溢出消除**（spill/边 < 0.1）、批量写入后 PageRank/WCC/K-Hop **结果逐位一致**、批量织网失败原子回滚零污染、多级页目录页常驻与深度寻址。
+- **`edge_locality_tests.rs`（9 个用例）**：批量织网与逐条插入的**图结构完全等价**（含自环、重复边、扇入扇出）、自环不破坏出边链、**跨批次链头正确延续**、受限内存下**假溢出消除**（spill/边 < 0.1）、批量写入后 PageRank/WCC/K-Hop **结果逐位一致**、批量织网失败原子回滚零污染、多级页目录页常驻与深度寻址、**两种提交路径数学级算法等价断言（PageRank 漂移 < 1e-12 / WCC 拓扑完全一致）**、**混合事务安全路由防线**。
+
+> **当前全量测试覆盖**：26 + 14 + 6 + 5 + 6 + 7 + 7 + 9 = **80 个严苛集成测试全部通过**（0 失败，0 告警）。
 
 ### 运行全部测试
 
