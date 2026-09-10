@@ -19,6 +19,23 @@ pub struct NodeData {
     pub properties: HashMap<String, Value>,
 }
 
+/// 批量织网的单条边插入请求
+#[derive(Debug, Clone)]
+pub struct EdgeInsert {
+    pub edge_id: u64,
+    pub src_id: u64,
+    pub dst_id: u64,
+    pub edge_type: String,
+    pub properties: HashMap<String, Value>,
+    pub weight: f64,
+}
+
+/// 批量织网的写放大阈值：段长达到该规模才走两阶段批量路径。
+///
+/// 小批量（如单条边的自动提交）逐条头插的开销可忽略，且能避免为几条边
+/// 建立哈希表；只有大批量才值得换取「节点页每页只触碰一次」的收益。
+pub const EDGE_BATCH_WEAVE_MIN: usize = 64;
+
 /// 字符串字典管理器：将 Label 和 EdgeType 映射为 u32 ID
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StringDict {
@@ -309,6 +326,16 @@ impl DiskGraph {
 
             let header_bytes = frame.data;
             bpm.unpin_page(HEADER_PAGE_ID, false);
+
+            // Page 0 与已存在的多级页目录页一律登记为置换豁免，
+            // 保证寻址链在受限内存下常驻，不被普通数据页踢出。
+            bpm.protect_page(HEADER_PAGE_ID);
+            if node_dir != INVALID_PAGE_ID && node_dir != 0 {
+                bpm.protect_page(node_dir);
+            }
+            if edge_dir != INVALID_PAGE_ID && edge_dir != 0 {
+                bpm.protect_page(edge_dir);
+            }
 
             if self.dict_page_id != INVALID_PAGE_ID && self.dict_page_id != 0 {
                 let payload = Self::read_overflow_payload_internal(&mut bpm, self.dict_page_id)?;
@@ -859,6 +886,8 @@ impl DiskGraph {
                 set.insert(HEADER_PAGE_ID);
             }
             bpm.mark_page_uncommitted(HEADER_PAGE_ID);
+            // 页目录页承载每次寻址穿透，登记为置换豁免以杜绝反复重读
+            bpm.protect_page(dir_pid);
             root_dir = dir_pid;
         }
         let res = Self::get_or_allocate_page_from_dir(
@@ -934,6 +963,8 @@ impl DiskGraph {
                 set.insert(HEADER_PAGE_ID);
             }
             bpm.mark_page_uncommitted(HEADER_PAGE_ID);
+            // 页目录页承载每次寻址穿透，登记为置换豁免以杜绝反复重读
+            bpm.protect_page(dir_pid);
             root_dir = dir_pid;
         }
         let res = Self::get_or_allocate_page_from_dir(
@@ -989,6 +1020,8 @@ impl DiskGraph {
                 DirectoryPage::set_next_dir(&mut p_frame.data, new_dir_pid);
                 bpm.unpin_page(current_dir, true);
 
+                // 目录链上每一环都登记为置换豁免
+                bpm.protect_page(new_dir_pid);
                 if let Ok(mut set) = tx_modified.lock() {
                     set.insert(current_dir);
                     set.insert(new_dir_pid);
@@ -1749,15 +1782,226 @@ impl DiskGraph {
             }
         }
         src_node.first_outgoing_edge_id = edge_id;
-        self.write_node_record(src_id, &src_node)?;
-
-        // 2. 头插法插入目标节点入边链
-        dst_node.first_incoming_edge_id = edge_id;
-        self.write_node_record(dst_id, &dst_node)?;
+        if src_id == dst_id {
+            // 自环：src 与 dst 是同一节点，出边头与入边头必须合并为一次写入，
+            // 否则第二次写入会用陈旧副本覆盖掉第一次的链头更新。
+            src_node.first_incoming_edge_id = edge_id;
+            self.write_node_record(src_id, &src_node)?;
+        } else {
+            self.write_node_record(src_id, &src_node)?;
+            // 2. 头插法插入目标节点入边链
+            dst_node.first_incoming_edge_id = edge_id;
+            self.write_node_record(dst_id, &dst_node)?;
+        }
 
         // 3. 写入当前边记录
         self.write_edge_record(edge_id, &new_edge)?;
         Ok(())
+    }
+
+    /// 批量插入边：以「两阶段织网」消除受限内存下的缓存抖动。
+    ///
+    /// 逐条头插的代价是每条边要对源节点页、目标节点页、旧首边页各访问一次；
+    /// 大图离散写入时这些页远超缓冲池容量，同一页在一个批次内被反复换出/读入，
+    /// 每个 miss 还会触发一次 4KB 的 STEAL 溢出写入。
+    ///
+    /// 本方法把织网拆成三步，使每张页在整个批次内**只被触碰一次**：
+    /// 1. **规划**：完全按传入顺序在内存中推导双向链指针（与逐条头插逐位等价）：
+    ///    同一源节点的链序为「逆插入序」，故某边的 `src_next` 是它在同源序列中的前驱，
+    ///    `src_prev` 是同源序列中的后继，链头为同源序列的最后一条；
+    ///    入边链同理，仅使用 `dst_next`（与 `EdgeRecord` 字段定义一致）。
+    /// 2. **顺序写边记录**：按 `edge_id` 升序写入，使边记录页接近顺序 I/O。
+    /// 3. **分簇写节点头**：按节点页把源/目标头指针合并后每节点只写一次。
+    ///
+    /// 语义与逐条 `insert_edge_with_id_exact` 完全一致，且额外修正了自环场景下
+    /// 「先写源节点、再以陈旧副本覆盖写目标节点」导致出边链头被抹掉的隐患。
+    pub fn insert_edges_batch(&mut self, requests: &[EdgeInsert]) -> Result<(), GraphError> {
+        use crate::page::PROP_PTR_NONE;
+
+        if requests.is_empty() {
+            return Ok(());
+        }
+
+        // ---------- 阶段 0：校验与去重读取（每张节点页只读一次） ----------
+        for r in requests {
+            if r.weight < 0.0 || r.weight.is_nan() {
+                return Err(GraphError::InvalidWeight(r.weight));
+            }
+            if r.edge_id == 0 {
+                return Err(GraphError::General("EdgeId cannot be 0".into()));
+            }
+        }
+
+        // node_cache 保存的是**批次前**的节点记录，其链头即批次前的旧链头。
+        //
+        // 读取顺序按节点逻辑页排序：节点页数量在真实大图上远超缓冲池容量，
+        // 若按请求顺序随机读取，每个节点都要付一次页缺失；按页排序后同一张页
+        // 的 ≤128 个节点连续读取，使节点页的调页次数从「触达节点数」降到「触达页数」。
+        let mut distinct_nodes: Vec<u64> = Vec::with_capacity(requests.len() * 2);
+        for r in requests {
+            distinct_nodes.push(r.src_id);
+            distinct_nodes.push(r.dst_id);
+        }
+        distinct_nodes.sort_unstable();
+        distinct_nodes.dedup();
+        distinct_nodes.sort_unstable_by_key(|nid| Self::node_logical_page(*nid));
+
+        let mut node_cache: HashMap<u64, NodeRecord> = HashMap::with_capacity(distinct_nodes.len());
+        for nid in distinct_nodes {
+            let record = self
+                .read_node_record(nid)?
+                .ok_or(GraphError::NodeNotFound(nid))?;
+            node_cache.insert(nid, record);
+        }
+
+        // ---------- 阶段 1：按传入顺序规划链指针 ----------
+        // 链结构为「逆插入序」：list.last() 成为新链头，list[0] 的下游接批次前旧链头。
+        //
+        // 每个 (节点, 边) 的序号用 HashMap 预先建索引：链指针推导从「列表内线性查找」
+        // 降为 O(1) 哈希查找，避免同一目标被大量边共享时退化为 O(n²)。
+        let mut src_seq: HashMap<u64, Vec<u64>> = HashMap::new();
+        let mut dst_seq: HashMap<u64, Vec<u64>> = HashMap::new();
+        let mut meta: HashMap<u64, (u64, u64, u32, u32, f64)> =
+            HashMap::with_capacity(requests.len());
+
+        for r in requests {
+            if r.edge_id >= self.next_edge_id {
+                self.next_edge_id = r.edge_id + 1;
+            }
+            self.edge_count += 1;
+
+            let (edge_type_id, newly) = self.dict.get_or_intern(&r.edge_type);
+            if newly {
+                self.dict_dirty = true;
+            }
+            if !r.edge_type.is_empty() {
+                self.index_catalog.edge_types.insert(r.edge_type.clone());
+            }
+
+            let prop_ptr = if !r.properties.is_empty() {
+                self.write_edge_properties(&r.properties)?
+            } else {
+                PROP_PTR_NONE
+            };
+
+            src_seq.entry(r.src_id).or_default().push(r.edge_id);
+            dst_seq.entry(r.dst_id).or_default().push(r.edge_id);
+            meta.insert(
+                r.edge_id,
+                (r.src_id, r.dst_id, edge_type_id, prop_ptr, r.weight),
+            );
+        }
+
+        // (节点, 边) -> 在该节点序列中的位置，供 O(1) 相邻查找
+        let mut dst_pos: HashMap<(u64, u64), usize> = HashMap::with_capacity(requests.len());
+        for (&node, list) in &dst_seq {
+            for (i, &eid) in list.iter().enumerate() {
+                dst_pos.insert((node, eid), i);
+            }
+        }
+
+        // 边记录写入集合：新边与其 id 单调；旧链头回写单独分组，
+        // 避免两者混排后在同一批内来回跨越数千页（会冲刷 LRU 并制造假缺失）。
+        let mut new_records: Vec<(u64, EdgeRecord)> = Vec::with_capacity(requests.len());
+        let mut head_fixups: Vec<(u64, EdgeRecord)> = Vec::new();
+        let mut new_src_head: HashMap<u64, u64> = HashMap::with_capacity(src_seq.len());
+        let mut new_dst_head: HashMap<u64, u64> = HashMap::with_capacity(dst_seq.len());
+
+        for (&src_id, list) in &src_seq {
+            let old_head = node_cache[&src_id].first_outgoing_edge_id;
+            new_src_head.insert(src_id, *list.last().unwrap_or(&0));
+
+            for (idx, &eid) in list.iter().enumerate() {
+                let (_, dst_id, edge_type_id, prop_ptr, weight) = meta[&eid];
+                let src_next = if idx == 0 { old_head } else { list[idx - 1] };
+                let src_prev = if idx + 1 < list.len() {
+                    list[idx + 1]
+                } else {
+                    0
+                };
+                // 目标入边链的下游：同目标序列中的前一条；首条指向批次前旧链头
+                let dst_next = match dst_pos.get(&(dst_id, eid)) {
+                    Some(&0) => node_cache[&dst_id].first_incoming_edge_id,
+                    Some(&p) => dst_seq[&dst_id][p - 1],
+                    None => 0,
+                };
+
+                new_records.push((
+                    eid,
+                    EdgeRecord {
+                        in_use: 1,
+                        reserved: [0; 3],
+                        edge_type_id,
+                        prop_page_id: prop_ptr,
+                        reserved2: [0; 4],
+                        src_id,
+                        dst_id,
+                        weight,
+                        src_prev_edge_id: src_prev,
+                        src_next_edge_id: src_next,
+                        dst_next_edge_id: dst_next,
+                    },
+                ));
+            }
+
+            // 批次前的旧链头不再是链首，其 src_prev 必须指向本批次最早的一条，
+            // 否则删除旧链头会截断整条出边链。
+            if old_head != 0 {
+                let mut rec = self
+                    .read_edge_record(old_head)?
+                    .ok_or(GraphError::EdgeNotFound(old_head))?;
+                rec.src_prev_edge_id = list[0];
+                head_fixups.push((old_head, rec));
+            }
+        }
+
+        for (&dst_id, list) in &dst_seq {
+            new_dst_head.insert(dst_id, *list.last().unwrap_or(&0));
+        }
+
+        // ---------- 阶段 2：写边记录 ----------
+        // 关键：旧链头位于**低 id 区**，新边位于**高 id 区**，两者在批次规模累积后
+        // 相距可达上万页，远超缓冲池容量。因此必须「先低后高」地顺序写完一个区
+        // 再进入另一个区，任何交错都会让两个区互相驱逐（正是此前的假缺失来源）。
+        head_fixups.sort_unstable_by_key(|(eid, _)| *eid);
+        for (eid, record) in &head_fixups {
+            self.write_edge_record(*eid, record)?;
+        }
+        new_records.sort_unstable_by_key(|(eid, _)| *eid);
+        for (eid, record) in &new_records {
+            self.write_edge_record(*eid, record)?;
+        }
+
+        // ---------- 阶段 3：按节点页分簇写头指针（每节点只写一次） ----------
+        // 以节点所属逻辑页排序，让同一物理页的节点记录在单次页面持有内连续更新。
+        let mut touched: Vec<u64> = node_cache.keys().copied().collect();
+        touched.sort_unstable_by_key(|nid| Self::node_logical_page(*nid));
+        for nid in touched {
+            let mut record = node_cache[&nid];
+            let mut changed = false;
+            if let Some(&head) = new_src_head.get(&nid) {
+                if record.first_outgoing_edge_id != head {
+                    record.first_outgoing_edge_id = head;
+                    changed = true;
+                }
+            }
+            if let Some(&head) = new_dst_head.get(&nid) {
+                if record.first_incoming_edge_id != head {
+                    record.first_incoming_edge_id = head;
+                    changed = true;
+                }
+            }
+            if changed {
+                self.write_node_record(nid, &record)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 节点记录所属逻辑页号（纯算术，零磁盘访问）
+    fn node_logical_page(node_id: u64) -> usize {
+        (node_id.saturating_sub(1)) as usize / NODE_RECORDS_PER_PAGE
     }
 
     /// 获取指定边实体
@@ -2186,6 +2430,24 @@ impl DiskGraph {
         self.index_catalog_page_id = snapshot.index_catalog_page_id;
         self.index_catalog = snapshot.index_catalog.clone();
         *self.allocator.lock().unwrap() = snapshot.allocator.clone();
+
+        // 目录页在事务内可能被新建，回滚后旧目录才是权威，重新同步置换豁免集，
+        // 避免残留的失效目录页或漏保护的新目录页影响后续寻址。
+        self.sync_protected_pages();
+    }
+
+    /// 重新同步置换豁免页集合：Page 0 + 当前权威的节点/边页目录页
+    pub fn sync_protected_pages(&self) {
+        let mut bpm = self.bpm.lock().unwrap();
+        bpm.clear_protected_pages();
+        bpm.protect_page(HEADER_PAGE_ID);
+        let alloc = self.allocator.lock().unwrap();
+        if alloc.node_dir_page_id != INVALID_PAGE_ID && alloc.node_dir_page_id != 0 {
+            bpm.protect_page(alloc.node_dir_page_id);
+        }
+        if alloc.edge_dir_page_id != INVALID_PAGE_ID && alloc.edge_dir_page_id != 0 {
+            bpm.protect_page(alloc.edge_dir_page_id);
+        }
     }
 
     /// 取出并清空本事务修改过的物理页集合

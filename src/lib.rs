@@ -829,22 +829,64 @@ impl Transaction {
         }
 
         let mut failed_err = None;
+        let ops: Vec<TxAction> = self.ops.drain(..).collect();
 
-        for op in self.ops.drain(..) {
-            let res = match op {
+        let mut idx = 0usize;
+        while idx < ops.len() {
+            // 连续 AddEdge 段达到阈值时走两阶段批量织网，消除批内缓存抖动。
+            // 只合并**连续**段，绝不跨非边操作重排，保证 AddNode 先于 AddEdge 的依赖不变。
+            let is_edge = matches!(ops[idx], TxAction::AddEdge { .. });
+            if is_edge {
+                let mut end = idx;
+                while end < ops.len() && matches!(ops[end], TxAction::AddEdge { .. }) {
+                    end += 1;
+                }
+                if end - idx >= crate::disk_graph::EDGE_BATCH_WEAVE_MIN {
+                    let batch: Vec<crate::disk_graph::EdgeInsert> = ops[idx..end]
+                        .iter()
+                        .filter_map(|op| match op {
+                            TxAction::AddEdge {
+                                id,
+                                src_id,
+                                dst_id,
+                                edge_type,
+                                properties,
+                                weight,
+                            } => Some(crate::disk_graph::EdgeInsert {
+                                edge_id: *id,
+                                src_id: *src_id,
+                                dst_id: *dst_id,
+                                edge_type: edge_type.clone(),
+                                properties: properties.clone(),
+                                weight: *weight,
+                            }),
+                            _ => None,
+                        })
+                        .collect();
+
+                    if let Err(e) = inner.disk_graph.insert_edges_batch(&batch) {
+                        failed_err = Some(e);
+                        break;
+                    }
+                    idx = end;
+                    continue;
+                }
+            }
+
+            let res = match &ops[idx] {
                 TxAction::AddNode {
                     id,
                     labels,
                     properties,
                 } => inner
                     .disk_graph
-                    .insert_node_with_id_exact(id, labels.clone(), properties.clone())
+                    .insert_node_with_id_exact(*id, labels.clone(), properties.clone())
                     .map(|_| {
-                        for l in &labels {
-                            inner.index_mgr.insert_label(l, id);
+                        for l in labels {
+                            inner.index_mgr.insert_label(l, *id);
                             inner.disk_graph.index_catalog.labels.insert(l.clone());
-                            for (k, v) in &properties {
-                                inner.index_mgr.insert_property(l, k, v.clone(), id);
+                            for (k, v) in properties {
+                                inner.index_mgr.insert_property(l, k, v.clone(), *id);
                                 inner
                                     .disk_graph
                                     .index_catalog
@@ -860,25 +902,30 @@ impl Transaction {
                     edge_type,
                     properties,
                     weight,
-                } => inner
-                    .disk_graph
-                    .insert_edge_with_id_exact(id, src_id, dst_id, &edge_type, properties, weight),
+                } => inner.disk_graph.insert_edge_with_id_exact(
+                    *id,
+                    *src_id,
+                    *dst_id,
+                    edge_type,
+                    properties.clone(),
+                    *weight,
+                ),
                 TxAction::UpdateNodeProp { id, key, value } => {
-                    let old_val = if let Ok(Some(n)) = inner.disk_graph.get_node(id) {
-                        n.get_prop(&key).cloned()
+                    let old_val = if let Ok(Some(n)) = inner.disk_graph.get_node(*id) {
+                        n.get_prop(key).cloned()
                     } else {
                         None
                     };
                     let r = inner
                         .disk_graph
-                        .update_node_property(id, key.clone(), value.clone());
+                        .update_node_property(*id, key.clone(), value.clone());
                     if r.is_ok() {
-                        if let Ok(Some(n)) = inner.disk_graph.get_node(id) {
+                        if let Ok(Some(n)) = inner.disk_graph.get_node(*id) {
                             for l in &n.labels {
                                 if let Some(ref ov) = old_val {
-                                    inner.index_mgr.remove_property(l, &key, ov, id);
+                                    inner.index_mgr.remove_property(l, key, ov, *id);
                                 }
-                                inner.index_mgr.insert_property(l, &key, value.clone(), id);
+                                inner.index_mgr.insert_property(l, key, value.clone(), *id);
                                 inner.disk_graph.index_catalog.labels.insert(l.clone());
                                 inner
                                     .disk_graph
@@ -890,27 +937,28 @@ impl Transaction {
                     }
                     r
                 }
-                TxAction::UpdateEdgeProp { id, key, value } => {
-                    inner.disk_graph.update_edge_property(id, key, value)
-                }
-                TxAction::RemoveNode { id } => match inner.disk_graph.remove_node(id) {
+                TxAction::UpdateEdgeProp { id, key, value } => inner
+                    .disk_graph
+                    .update_edge_property(*id, key.clone(), value.clone()),
+                TxAction::RemoveNode { id } => match inner.disk_graph.remove_node(*id) {
                     Ok(node) => {
                         let labels_bt: std::collections::BTreeSet<String> =
                             node.labels.into_iter().collect();
                         inner
                             .index_mgr
-                            .remove_node_all_indices(id, &labels_bt, &node.properties);
+                            .remove_node_all_indices(*id, &labels_bt, &node.properties);
                         Ok(())
                     }
                     Err(e) => Err(e),
                 },
-                TxAction::RemoveEdge { id } => inner.disk_graph.remove_edge(id).map(|_| ()),
+                TxAction::RemoveEdge { id } => inner.disk_graph.remove_edge(*id).map(|_| ()),
             };
 
             if let Err(e) = res {
                 failed_err = Some(e);
                 break;
             }
+            idx += 1;
         }
 
         if let Some(err) = failed_err {

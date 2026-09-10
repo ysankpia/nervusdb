@@ -2,7 +2,7 @@ use crate::graph::GraphError;
 use crate::page::{PageId, INVALID_PAGE_ID, PAGE_SIZE};
 use crate::storage::{WalRecord, WalWriter};
 use crc32fast::Hasher;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -187,47 +187,148 @@ impl DiskManager {
     }
 }
 
-/// 标准 LRU 页面置换淘汰器
+/// 标准 LRU 页面置换淘汰器。
+///
+/// 采用**侵入式双向链表**（`prev`/`next` 数组按 frame_id 索引），使
+/// `pin` / `unpin` / `victim` 全部为严格 O(1)，且真实维护 LRU 顺序。
+///
+/// 此前用 `VecDeque` + 线性扫描实现是 O(池容量)：每次页操作都要遍历整个候选队列，
+/// 池越大单次操作越慢，在 16K 帧量级会成为吞吐主瓶颈。中途曾改用「与队尾交换」
+/// 的数组实现，但那会破坏 LRU 顺序（被交换到前端的元素会被提前驱逐），故此版本
+/// 用链表精确维护顺序。
 pub struct LRUReplacer {
-    elements: VecDeque<usize>, // 存储待淘汰的 frame_id
+    /// 前驱 frame_id（NULL 表示无）
+    prev: Vec<usize>,
+    /// 后继 frame_id（NULL 表示无）
+    next: Vec<usize>,
+    /// frame_id 是否在候选链表中
+    linked: Vec<bool>,
+    head: usize,
+    tail: usize,
+    len: usize,
 }
+
+/// 空指针哨兵
+const LRU_NULL: usize = usize::MAX;
 
 impl LRUReplacer {
     pub fn new() -> Self {
+        Self::with_capacity(0)
+    }
+
+    /// 按缓冲池容量预分配，避免运行期扩容
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            elements: VecDeque::new(),
+            prev: vec![LRU_NULL; capacity],
+            next: vec![LRU_NULL; capacity],
+            linked: vec![false; capacity],
+            head: LRU_NULL,
+            tail: LRU_NULL,
+            len: 0,
         }
     }
 
+    fn ensure_capacity(&mut self, frame_id: usize) {
+        if frame_id >= self.prev.len() {
+            let new_len = frame_id + 1;
+            self.prev.resize(new_len, LRU_NULL);
+            self.next.resize(new_len, LRU_NULL);
+            self.linked.resize(new_len, false);
+        }
+    }
+
+    /// 把 frame 从候选链表中摘除（Pin 住或已淘汰时调用）
     pub fn pin(&mut self, frame_id: usize) {
-        if let Some(pos) = self.elements.iter().position(|&id| id == frame_id) {
-            self.elements.remove(pos);
+        self.ensure_capacity(frame_id);
+        if !self.linked[frame_id] {
+            return;
         }
+        self.unlink(frame_id);
     }
 
+    /// 把 frame 追加到链表尾部（Unpin 且引用计数归零时调用）
     pub fn unpin(&mut self, frame_id: usize) {
-        if !self.elements.contains(&frame_id) {
-            self.elements.push_back(frame_id);
+        self.ensure_capacity(frame_id);
+        if self.linked[frame_id] {
+            return;
         }
+        self.link_back(frame_id);
     }
 
+    /// 淘汰队首（最久未用）
     pub fn victim(&mut self) -> Option<usize> {
-        self.elements.pop_front()
+        if self.head == LRU_NULL {
+            return None;
+        }
+        let frame_id = self.head;
+        self.unlink(frame_id);
+        Some(frame_id)
     }
 
+    /// 从队首开始寻找第一个满足谓词的候选并摘除；找不到返回 `None`。
+    ///
+    /// 扫描期间不修改链表结构，命中后按链表语义摘除，因此 LRU 顺序始终精确。
     pub fn victim_filter<F>(&mut self, mut predicate: F) -> Option<usize>
     where
         F: FnMut(usize) -> bool,
     {
-        if let Some(pos) = self.elements.iter().position(|&id| predicate(id)) {
-            self.elements.remove(pos)
-        } else {
-            None
+        let mut cursor = self.head;
+        let mut found = None;
+        while cursor != LRU_NULL {
+            if predicate(cursor) {
+                found = Some(cursor);
+                break;
+            }
+            cursor = self.next[cursor];
         }
+
+        let frame_id = found?;
+        self.unlink(frame_id);
+        Some(frame_id)
+    }
+
+    /// 从链表摘除（O(1)）
+    fn unlink(&mut self, frame_id: usize) {
+        let p = self.prev[frame_id];
+        let n = self.next[frame_id];
+
+        if p != LRU_NULL {
+            self.next[p] = n;
+        } else {
+            self.head = n;
+        }
+        if n != LRU_NULL {
+            self.prev[n] = p;
+        } else {
+            self.tail = p;
+        }
+
+        self.prev[frame_id] = LRU_NULL;
+        self.next[frame_id] = LRU_NULL;
+        self.linked[frame_id] = false;
+        self.len -= 1;
+    }
+
+    /// 追加到链表尾部（O(1)）
+    fn link_back(&mut self, frame_id: usize) {
+        self.prev[frame_id] = self.tail;
+        self.next[frame_id] = LRU_NULL;
+        if self.tail != LRU_NULL {
+            self.next[self.tail] = frame_id;
+        } else {
+            self.head = frame_id;
+        }
+        self.tail = frame_id;
+        self.linked[frame_id] = true;
+        self.len += 1;
     }
 
     pub fn size(&self) -> usize {
-        self.elements.len()
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 }
 
@@ -286,6 +387,8 @@ pub struct BufferStats {
     pub wal_fsync_count: u64,
     /// 累计写入的 WAL 帧数
     pub wal_frames_written: u64,
+    /// 累计页驱逐次数（用于区分「容量不足」与「结构性重复访问」）
+    pub evictions: u64,
 }
 
 /// 4KB 缓冲池管理器 (BufferPoolManager)
@@ -306,10 +409,14 @@ pub struct BufferPoolManager {
     wal_pages: HashMap<PageId, u64>,
     /// 本事务首次触碰各未提交页时的 WAL 位置基线（None 表示当时主文件即权威副本）
     tx_baseline: HashMap<PageId, Option<u64>>,
+    /// 置换豁免页：Page 0（Header）与多级页目录页必须常驻，严禁被数据页踢出。
+    /// 目录页穿透发生在每次节点/边寻址上，一旦被换出会引发整条寻址链反复重读。
+    protected_pages: HashSet<PageId>,
     wal: Option<Arc<WalWriter>>,
     spill_enabled: bool,
     current_tx_id: u64,
     spill_count: u64,
+    evictions: u64,
     cache_hits: AtomicU64,
     cache_misses: AtomicU64,
 }
@@ -331,14 +438,16 @@ impl BufferPoolManager {
             frames,
             page_table: HashMap::new(),
             free_list,
-            replacer: LRUReplacer::new(),
+            replacer: LRUReplacer::with_capacity(pool_size),
             uncommitted_pages: HashSet::new(),
             wal_pages: HashMap::new(),
             tx_baseline: HashMap::new(),
+            protected_pages: HashSet::new(),
             wal: None,
             spill_enabled,
             current_tx_id: 0,
             spill_count: 0,
+            evictions: 0,
             cache_hits: AtomicU64::new(0),
             cache_misses: AtomicU64::new(0),
         }
@@ -453,9 +562,10 @@ impl BufferPoolManager {
         }
 
         // 第一轮：优先淘汰非未提交页（已提交脏页正常写回主文件）
+        // 保护页（Header 与目录页）在两轮候选中一律豁免，保证寻址链常驻。
         if let Some(frame_id) = self.replacer.victim_filter(|fid| {
             let pid = self.frames[fid].page_id;
-            !self.uncommitted_pages.contains(&pid)
+            !self.uncommitted_pages.contains(&pid) && !self.protected_pages.contains(&pid)
         }) {
             self.evict_frame(frame_id)?;
             return Ok(frame_id);
@@ -465,7 +575,9 @@ impl BufferPoolManager {
         if self.spill_enabled {
             if let Some(frame_id) = self.replacer.victim_filter(|fid| {
                 let frame = &self.frames[fid];
-                frame.page_id != INVALID_PAGE_ID && frame.is_dirty
+                frame.page_id != INVALID_PAGE_ID
+                    && frame.is_dirty
+                    && !self.protected_pages.contains(&frame.page_id)
             }) {
                 self.spill_frame(frame_id)?;
                 self.evict_frame(frame_id)?;
@@ -477,6 +589,22 @@ impl BufferPoolManager {
             "Buffer pool capacity exceeded: all frames are uncommitted dirty pages (NO-STEAL enforced)"
                 .into(),
         ))
+    }
+
+    /// 将某页登记为置换豁免页（Page 0 Header 与多级页目录页）
+    pub fn protect_page(&mut self, page_id: PageId) {
+        if page_id != INVALID_PAGE_ID {
+            self.protected_pages.insert(page_id);
+        }
+    }
+
+    /// 清空置换豁免集（事务回滚恢复元数据后调用，再由上层重新同步当前目录页）
+    pub fn clear_protected_pages(&mut self) {
+        self.protected_pages.clear();
+    }
+
+    pub fn protected_page_count(&self) -> usize {
+        self.protected_pages.len()
     }
 
     /// 淘汰帧：已提交脏页写回主文件，仅存在于 WAL 的页保留其 WAL 位置索引
@@ -497,6 +625,7 @@ impl BufferPoolManager {
             self.wal_pages.remove(&page_id);
         }
         self.page_table.remove(&page_id);
+        self.evictions += 1;
         Ok(())
     }
 
@@ -675,6 +804,7 @@ impl BufferPoolManager {
             wal_size_bytes,
             wal_fsync_count,
             wal_frames_written,
+            evictions: self.evictions,
         }
     }
 }

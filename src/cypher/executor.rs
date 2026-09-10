@@ -694,7 +694,10 @@ impl<'a> CypherReadOnlyExecutor<'a> {
                 if h >= min_hops && h <= max_hops && self.node_matches_pattern(nid, next_node_pat) {
                     let mut next_ctx = ctx.clone();
                     if let Some(ref var) = next_node_pat.variable {
-                        next_ctx.insert(var.clone(), Binding::Node(nid));
+                        // 同名变量是连接约束而非覆盖（如自环 `(a)-[:R*1..1]->(a)`）
+                        if !bind_or_reject(&mut next_ctx, var, Binding::Node(nid)) {
+                            continue;
+                        }
                     }
                     if let Some(ref edge_var) = edge_pat.variable {
                         if last_edge != 0 {
@@ -735,7 +738,10 @@ impl<'a> CypherReadOnlyExecutor<'a> {
             if self.node_matches_pattern(next_nid, next_node_pat) {
                 let mut next_ctx = ctx.clone();
                 if let Some(ref var) = next_node_pat.variable {
-                    next_ctx.insert(var.clone(), Binding::Node(next_nid));
+                    // 同名变量是连接约束而非覆盖（如自环 `(a)-[:R]->(a)`）
+                    if !bind_or_reject(&mut next_ctx, var, Binding::Node(next_nid)) {
+                        continue;
+                    }
                 }
                 if let Some(ref edge_var) = edge_pat.variable {
                     next_ctx.insert(edge_var.clone(), Binding::Edge(edge.id));
@@ -884,6 +890,21 @@ impl<'a> CypherReadOnlyExecutor<'a> {
                     Some(Value::Bool(false))
                 }
             }
+        }
+    }
+}
+
+/// 把变量绑定进上下文；若同名变量已绑定到不同实体则判定连接失败。
+///
+/// 这保证 `MATCH (a)-[:R]->(a)` 这类**同名变量**被解释为连接约束
+/// （起止必须是同一节点），而不是把先前绑定静默覆盖掉。
+fn bind_or_reject(ctx: &mut RowCtx, var: &str, binding: Binding) -> bool {
+    match ctx.get(var) {
+        Some(existing) if *existing != binding => false,
+        Some(_) => true,
+        None => {
+            ctx.insert(var.to_string(), binding);
+            true
         }
     }
 }
