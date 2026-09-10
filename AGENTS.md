@@ -74,6 +74,26 @@ Any modification that violates these rules must be rejected immediately:
 - Avoid holding global write locks during long traversals. Read queries and graph algorithms (`dijkstra`, `bfs`, `has_cycle`, `query()`) must clone the lightweight `DiskGraph` handle, release the global read lock immediately, and execute concurrently under page-level latches.
 - All pointer traversal loops (`while curr != 0`) must enforce cycle-detection guards (`seen: HashSet<u64>`) to guarantee zero infinite loops under concurrent pointer updates.
 
+11. **Exclusive Single-Writer Open (No Silent Multi-Writer Corruption)**
+
+- A database file may have **exactly one open handle** at a time, across processes and within one process. `GraphLite::open` must take an exclusive lock on `{path}` itself (`std::fs::File::try_lock`, stable since Rust 1.89 — never add a third-party dependency or a sidecar `.lock` file, which would break the two-file invariant). A contended open returns `GraphError::DatabaseLocked`.
+- The lock MUST be acquired **before** `StorageEngine::open`, because WAL replay writes the main data file; locking afterwards already permits a racing replay.
+- `:memory:` mode takes no lock.
+- Rationale: without this, two writers each report success and the second write is silently lost.
+
+12. **Integrity Checking & No Silent Read Errors**
+
+- `GraphLite::integrity_check()` must remain read-only and must never auto-repair: repair strategies require separate design and explicit authorization.
+- Validation must include a **degree-conservation oracle**: chain degree measured by walking on-disk chain pointers must equal expected degree measured by independently scanning the edge id space. Do not re-derive both sides from the same traversal — that is self-confirmation, not a check. Keep the oracle's result wired into the report; a computed-but-discarded accumulator is a defect.
+- `get_node` / `get_edge` are **lossy** (they fold storage errors into `None`) and must stay documented as such. Production code uses `try_get_node` / `try_get_edge`, which return `Result` and reserve `Ok(None)` for genuine absence.
+- Any new public read accessor must decide explicitly between lossy and error-preserving semantics.
+
+13. **Lock Poisoning Must Not Abort the Process**
+
+- Never write `.lock().unwrap()` or `.read().expect("Lock poisoned")`. Use the poison-recovering accessors from `src/sync_ext.rs` (`lock_recover` / `read_recover` / `write_recover`).
+- Rationale: these locks guard rebuildable derived state (frame tables, allocator metadata, handle wrappers), not business invariants, so recovering beats converting a local failure into an unrecoverable process abort — especially for embedded callers.
+- `unwrap`/`expect` remain forbidden in library code per §4.1; fixed-offset slice conversions in `page.rs` must carry a comment stating why they cannot fail by construction.
+
 ---
 
 ## 2. Codebase Map & Module Responsibilities
@@ -92,6 +112,9 @@ Any modification that violates these rules must be rejected immediately:
 │   ├── disk_graph.rs           # O(1) direct addressing, disk adjacency, Freelist, page iterators
 │   ├── storage.rs              # Page-level WAL engine (WalWriter), CRC32 verification, checkpointing, recovery
 │   ├── index.rs                # Secondary indexing (Label inverted index & Property BTreeMap index)
+│   ├── integrity.rs            # Read-only structural integrity check (degree-conservation oracle)
+│   ├── lock.rs                 # Process-level exclusive open lock on the main data file
+│   ├── sync_ext.rs             # Poison-recovering lock accessors (never panic on a poisoned lock)
 │   ├── query.rs                # Chainable strongly-typed QueryBuilder & GraphQuery DSL
 │   ├── algo.rs                 # Pure-disk graph algorithms (BFS, Dijkstra, Cycle, PageRank, WCC, K-Hop)
 │   ├── cypher/
@@ -111,6 +134,8 @@ Any modification that violates these rules must be rejected immediately:
     ├── steal_spill_tests.rs    # STEAL spilling, rollback zero-pollution, checkpoint semantics
     ├── slotted_property_tests.rs # Slotted page packing, slot reuse, compaction, density target
     ├── batch_tx_tests.rs       # Batched transactions, single-fsync contract, bulk throughput
+    ├── edge_locality_tests.rs  # Batch-weave equivalence, self-loops, false-spill elimination
+    ├── production_safety_tests.rs # Exclusive lock, integrity check, no silent errors, poison recovery
     └── cli_tests.rs            # Interactive REPL end-to-end (multi-line, dot commands, dump round trip)
 ```
 
@@ -161,6 +186,10 @@ cargo test --workspace
 - **Run Edge Locality Suite Only**:
   ```bash
   cargo test --test edge_locality_tests
+  ```
+- **Run Production Safety Suite Only** (includes a real child-process lock probe):
+  ```bash
+  cargo test --test production_safety_tests
   ```
 - **Verify Interactive CLI**:
   ```bash
