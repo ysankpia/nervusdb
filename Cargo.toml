@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["GraphLite-RS Contributors"]
 description = "A production-grade, embedded, single-file persistent property graph database engine in Rust"
-license = "MIT OR Apache-2.0"
+license = "AGPL-3.0-only"
 readme = "README.md"
 repository = "https://github.com/graphlite-rs/graphlite-rs"
 homepage = "https://github.com/graphlite-rs/graphlite-rs"
@@ -24,6 +24,18 @@ thiserror = "1.0"
 
 [dev-dependencies]
 tempfile = "3.10"
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[[bench]]
+name = "pool_probe"
+harness = false
+
+[[bench]]
+name = "mem_probe"
+harness = false
 
 [[bin]]
 name = "graphlite"

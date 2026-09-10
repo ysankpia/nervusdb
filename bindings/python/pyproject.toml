@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "A production-grade, embedded, single-file persistent property graph database engine in Rust"
 readme = "README.md"
 authors = [{ name = "GraphLite-RS Contributors" }]
-license = { text = "MIT OR Apache-2.0" }
+license = { text = "AGPL-3.0-only" }
 requires-python = ">=3.8"
 keywords = ["graph", "database", "sqlite", "cypher", "embedded"]
 classifiers = [

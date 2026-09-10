@@ -99,7 +99,7 @@ Any modification that violates these rules must be rejected immediately:
 ## 2. Codebase Map & Module Responsibilities
 
 ```text
-/Users/luhui/Desktop/graphlite-rs/
+graphlite-rs/
 ├── Cargo.toml                  # Workspace root manifest (core, python, nodejs)
 ├── README.md                   # User documentation & architecture guide
 ├── AGENTS.md                   # This developer & agent standard specification
