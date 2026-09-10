@@ -29,6 +29,12 @@ pub enum GraphError {
     #[error("WAL corrupted: {0}")]
     WalCorrupted(String),
 
+    #[error("Database locked: {0}")]
+    DatabaseLocked(String),
+
+    #[error("Integrity check failed: {0}")]
+    IntegrityError(String),
+
     #[error("General database error: {0}")]
     General(String),
 }

@@ -5,6 +5,7 @@ use crate::page::{
     DIR_ENTRIES_PER_PAGE, EDGE_RECORDS_PER_PAGE, INVALID_PAGE_ID, NODE_RECORDS_PER_PAGE,
     SLOT_OVERFLOW,
 };
+use crate::sync_ext::MutexRecoverExt;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -184,7 +185,7 @@ impl DiskGraph {
 
     /// 初始化或加载 Page 0 元数据头
     fn init_or_load_header(&mut self) -> Result<(), GraphError> {
-        let mut bpm = self.bpm.lock().unwrap();
+        let mut bpm = self.bpm.lock_recover();
         let frame_id = bpm.fetch_page(HEADER_PAGE_ID)?;
         let frame = bpm.get_frame(frame_id);
 
@@ -312,7 +313,7 @@ impl DiskGraph {
             }
 
             {
-                let mut alloc = self.allocator.lock().unwrap();
+                let mut alloc = self.allocator.lock_recover();
                 alloc.allocated_pages = allocated_pages.max(1);
                 alloc.node_dir_page_id = node_dir;
                 alloc.edge_dir_page_id = edge_dir;
@@ -382,7 +383,7 @@ impl DiskGraph {
         allocator: &Arc<Mutex<AllocatorMeta>>,
         tx_modified: &Arc<Mutex<HashSet<PageId>>>,
     ) -> Result<PageId, GraphError> {
-        let mut alloc = allocator.lock().unwrap();
+        let mut alloc = allocator.lock_recover();
         if alloc.first_free_page_id != INVALID_PAGE_ID && alloc.first_free_page_id != 0 {
             let pid = alloc.first_free_page_id;
             let fid = bpm.fetch_page(pid)?;
@@ -424,7 +425,7 @@ impl DiskGraph {
         allocator: &Arc<Mutex<AllocatorMeta>>,
         tx_modified: &Arc<Mutex<HashSet<PageId>>>,
     ) -> Result<PageId, GraphError> {
-        let mut alloc = allocator.lock().unwrap();
+        let mut alloc = allocator.lock_recover();
         if alloc.first_free_overflow_page != INVALID_PAGE_ID && alloc.first_free_overflow_page != 0
         {
             let pid = alloc.first_free_overflow_page;
@@ -465,7 +466,7 @@ impl DiskGraph {
             let (next_pid, _) = PropertyPage::decode(&frame.data);
             bpm.unpin_page(curr, false);
 
-            let mut alloc = allocator.lock().unwrap();
+            let mut alloc = allocator.lock_recover();
             let old_free = alloc.first_free_overflow_page;
             alloc.first_free_overflow_page = curr;
             drop(alloc);
@@ -493,7 +494,7 @@ impl DiskGraph {
         tx_modified: &Arc<Mutex<HashSet<PageId>>>,
     ) -> Result<PageId, GraphError> {
         let recycled = {
-            let alloc = allocator.lock().unwrap();
+            let alloc = allocator.lock_recover();
             let pid = alloc.first_free_prop_page;
             if pid == INVALID_PAGE_ID || pid == 0 {
                 None
@@ -511,7 +512,7 @@ impl DiskGraph {
                     u32::from_le_bytes(frame.data[0..4].try_into().unwrap())
                 };
                 bpm.unpin_page(pid, false);
-                allocator.lock().unwrap().first_free_prop_page = next_free;
+                allocator.lock_recover().first_free_prop_page = next_free;
                 pid
             }
             None => Self::raw_allocate_page(bpm, allocator, tx_modified)?,
@@ -526,7 +527,7 @@ impl DiskGraph {
         bpm.unpin_page(pid, true);
 
         {
-            let mut alloc = allocator.lock().unwrap();
+            let mut alloc = allocator.lock_recover();
             alloc.last_prop_page_id = pid;
             if pid >= alloc.allocated_pages {
                 alloc.allocated_pages = pid + 1;
@@ -553,7 +554,7 @@ impl DiskGraph {
         }
 
         let old_free = {
-            let mut alloc = allocator.lock().unwrap();
+            let mut alloc = allocator.lock_recover();
             let old = alloc.first_free_prop_page;
             alloc.first_free_prop_page = pid;
             if alloc.last_prop_page_id == pid {
@@ -654,7 +655,7 @@ impl DiskGraph {
 
         // 2. 向后探测：从写入位点起最多扫描 PROP_PAGE_PROBE_LIMIT 张已分配页
         let mut probe = {
-            let alloc = allocator.lock().unwrap();
+            let alloc = allocator.lock_recover();
             let start = if alloc.last_prop_page_id == INVALID_PAGE_ID {
                 1
             } else {
@@ -663,7 +664,7 @@ impl DiskGraph {
             (start, alloc.allocated_pages)
         };
         if probe.1 <= probe.0 {
-            let alloc = allocator.lock().unwrap();
+            let alloc = allocator.lock_recover();
             probe = (1, alloc.allocated_pages);
         }
 
@@ -840,7 +841,7 @@ impl DiskGraph {
         is_write: bool,
     ) -> Result<Option<PageId>, GraphError> {
         if logical_page < HeaderPage::DIRECT_NODE_PAGES_COUNT {
-            let alloc = allocator.lock().unwrap();
+            let alloc = allocator.lock_recover();
             let pid = alloc.direct_node_pages[logical_page];
             if pid != 0 && pid != INVALID_PAGE_ID {
                 return Ok(Some(pid));
@@ -850,7 +851,7 @@ impl DiskGraph {
             }
             drop(alloc);
             let new_pid = Self::raw_allocate_page(bpm, allocator, tx_modified)?;
-            let mut alloc = allocator.lock().unwrap();
+            let mut alloc = allocator.lock_recover();
             alloc.direct_node_pages[logical_page] = new_pid;
             if let Ok(mut set) = tx_modified.lock() {
                 set.insert(HEADER_PAGE_ID);
@@ -860,14 +861,14 @@ impl DiskGraph {
         }
 
         {
-            let alloc = allocator.lock().unwrap();
+            let alloc = allocator.lock_recover();
             if let Some(&pid) = alloc.node_page_cache.get(&logical_page) {
                 return Ok(Some(pid));
             }
         }
 
         let indirect_logical = logical_page - HeaderPage::DIRECT_NODE_PAGES_COUNT;
-        let mut root_dir = allocator.lock().unwrap().node_dir_page_id;
+        let mut root_dir = allocator.lock_recover().node_dir_page_id;
         if root_dir == INVALID_PAGE_ID || root_dir == 0 {
             if !is_write {
                 return Ok(None);
@@ -880,7 +881,7 @@ impl DiskGraph {
             bpm.unpin_page(dir_pid, true);
             bpm.mark_page_uncommitted(dir_pid);
 
-            let mut alloc = allocator.lock().unwrap();
+            let mut alloc = allocator.lock_recover();
             alloc.node_dir_page_id = dir_pid;
             if let Ok(mut set) = tx_modified.lock() {
                 set.insert(HEADER_PAGE_ID);
@@ -917,7 +918,7 @@ impl DiskGraph {
         is_write: bool,
     ) -> Result<Option<PageId>, GraphError> {
         if logical_page < HeaderPage::DIRECT_EDGE_PAGES_COUNT {
-            let alloc = allocator.lock().unwrap();
+            let alloc = allocator.lock_recover();
             let pid = alloc.direct_edge_pages[logical_page];
             if pid != 0 && pid != INVALID_PAGE_ID {
                 return Ok(Some(pid));
@@ -927,7 +928,7 @@ impl DiskGraph {
             }
             drop(alloc);
             let new_pid = Self::raw_allocate_page(bpm, allocator, tx_modified)?;
-            let mut alloc = allocator.lock().unwrap();
+            let mut alloc = allocator.lock_recover();
             alloc.direct_edge_pages[logical_page] = new_pid;
             if let Ok(mut set) = tx_modified.lock() {
                 set.insert(HEADER_PAGE_ID);
@@ -937,14 +938,14 @@ impl DiskGraph {
         }
 
         {
-            let alloc = allocator.lock().unwrap();
+            let alloc = allocator.lock_recover();
             if let Some(&pid) = alloc.edge_page_cache.get(&logical_page) {
                 return Ok(Some(pid));
             }
         }
 
         let indirect_logical = logical_page - HeaderPage::DIRECT_EDGE_PAGES_COUNT;
-        let mut root_dir = allocator.lock().unwrap().edge_dir_page_id;
+        let mut root_dir = allocator.lock_recover().edge_dir_page_id;
         if root_dir == INVALID_PAGE_ID || root_dir == 0 {
             if !is_write {
                 return Ok(None);
@@ -957,7 +958,7 @@ impl DiskGraph {
             bpm.unpin_page(dir_pid, true);
             bpm.mark_page_uncommitted(dir_pid);
 
-            let mut alloc = allocator.lock().unwrap();
+            let mut alloc = allocator.lock_recover();
             alloc.edge_dir_page_id = dir_pid;
             if let Ok(mut set) = tx_modified.lock() {
                 set.insert(HEADER_PAGE_ID);
@@ -1088,7 +1089,7 @@ impl DiskGraph {
 
     /// 同步元数据到 Page 0 (包含直接页槽位与紧凑内联字典与索引目录)
     pub fn sync_header(&mut self) -> Result<(), GraphError> {
-        let mut bpm = self.bpm.lock().unwrap();
+        let mut bpm = self.bpm.lock_recover();
 
         let dict_bytes = bincode::serialize(&self.dict).unwrap_or_default();
         let cat_bytes = bincode::serialize(&self.index_catalog).unwrap_or_default();
@@ -1151,7 +1152,7 @@ impl DiskGraph {
 
         self.dict_dirty = false;
 
-        let alloc = self.allocator.lock().unwrap().clone();
+        let alloc = self.allocator.lock_recover().clone();
 
         let frame_id = bpm.fetch_page(HEADER_PAGE_ID)?;
         let frame = bpm.get_frame_mut(frame_id);
@@ -1248,7 +1249,7 @@ impl DiskGraph {
         let logical_page = (node_id - 1) as usize / NODE_RECORDS_PER_PAGE;
         let offset = ((node_id - 1) as usize % NODE_RECORDS_PER_PAGE) * NodeRecord::RECORD_SIZE;
 
-        let mut bpm = self.bpm.lock().unwrap();
+        let mut bpm = self.bpm.lock_recover();
         let physical_page = match Self::get_or_allocate_node_page(
             &mut bpm,
             &self.allocator,
@@ -1286,7 +1287,7 @@ impl DiskGraph {
         let logical_page = (node_id - 1) as usize / NODE_RECORDS_PER_PAGE;
         let offset = ((node_id - 1) as usize % NODE_RECORDS_PER_PAGE) * NodeRecord::RECORD_SIZE;
 
-        let mut bpm = self.bpm.lock().unwrap();
+        let mut bpm = self.bpm.lock_recover();
         let physical_page = Self::get_or_allocate_node_page(
             &mut bpm,
             &self.allocator,
@@ -1318,7 +1319,7 @@ impl DiskGraph {
         let logical_page = (edge_id - 1) as usize / EDGE_RECORDS_PER_PAGE;
         let offset = ((edge_id - 1) as usize % EDGE_RECORDS_PER_PAGE) * EdgeRecord::RECORD_SIZE;
 
-        let mut bpm = self.bpm.lock().unwrap();
+        let mut bpm = self.bpm.lock_recover();
         let physical_page = match Self::get_or_allocate_edge_page(
             &mut bpm,
             &self.allocator,
@@ -1356,7 +1357,7 @@ impl DiskGraph {
         let logical_page = (edge_id - 1) as usize / EDGE_RECORDS_PER_PAGE;
         let offset = ((edge_id - 1) as usize % EDGE_RECORDS_PER_PAGE) * EdgeRecord::RECORD_SIZE;
 
-        let mut bpm = self.bpm.lock().unwrap();
+        let mut bpm = self.bpm.lock_recover();
         let physical_page = Self::get_or_allocate_edge_page(
             &mut bpm,
             &self.allocator,
@@ -1386,7 +1387,7 @@ impl DiskGraph {
     pub fn write_node_data(&mut self, data: &NodeData) -> Result<u32, GraphError> {
         let payload = Self::encode_node_data(data)?;
 
-        let mut bpm = self.bpm.lock().unwrap();
+        let mut bpm = self.bpm.lock_recover();
         Self::write_prop_record(
             &mut bpm,
             &self.allocator,
@@ -1405,7 +1406,7 @@ impl DiskGraph {
             });
         }
 
-        let mut bpm = self.bpm.lock().unwrap();
+        let mut bpm = self.bpm.lock_recover();
         let payload = Self::read_prop_record(&mut bpm, ptr)?;
         if payload.is_empty() {
             return Ok(NodeData {
@@ -1418,7 +1419,7 @@ impl DiskGraph {
 
     /// 释放节点载荷占用的存储（槽位退还或溢出链整体回收）
     pub fn free_node_data(&mut self, ptr: u32) -> Result<(), GraphError> {
-        let mut bpm = self.bpm.lock().unwrap();
+        let mut bpm = self.bpm.lock_recover();
         Self::free_prop_record(
             &mut bpm,
             &self.allocator,
@@ -1438,7 +1439,7 @@ impl DiskGraph {
         }
         let payload = crate::page::encode_props(props);
 
-        let mut bpm = self.bpm.lock().unwrap();
+        let mut bpm = self.bpm.lock_recover();
         Self::write_prop_record(
             &mut bpm,
             &self.allocator,
@@ -1454,7 +1455,7 @@ impl DiskGraph {
             return Ok(HashMap::new());
         }
 
-        let mut bpm = self.bpm.lock().unwrap();
+        let mut bpm = self.bpm.lock_recover();
         let payload = Self::read_prop_record(&mut bpm, ptr)?;
         if payload.is_empty() {
             return Ok(HashMap::new());
@@ -1465,7 +1466,7 @@ impl DiskGraph {
 
     /// 释放边属性记录占用的存储
     pub fn free_edge_properties(&mut self, ptr: u32) -> Result<(), GraphError> {
-        let mut bpm = self.bpm.lock().unwrap();
+        let mut bpm = self.bpm.lock_recover();
         Self::free_prop_record(
             &mut bpm,
             &self.allocator,
@@ -2317,10 +2318,10 @@ impl DiskGraph {
             return Ok(node_ids);
         }
 
-        let mut bpm = self.bpm.lock().unwrap();
+        let mut bpm = self.bpm.lock_recover();
 
         // 1. 扫描 Page 0 直属节点页
-        let direct_pages = self.allocator.lock().unwrap().direct_node_pages;
+        let direct_pages = self.allocator.lock_recover().direct_node_pages;
         for (page_idx, &pid) in direct_pages.iter().enumerate() {
             if pid == 0 || pid == INVALID_PAGE_ID {
                 continue;
@@ -2343,7 +2344,7 @@ impl DiskGraph {
         }
 
         // 2. 扫描间接目录页
-        let mut current_dir = self.allocator.lock().unwrap().node_dir_page_id;
+        let mut current_dir = self.allocator.lock_recover().node_dir_page_id;
         let mut dir_order = 0;
 
         while current_dir != INVALID_PAGE_ID && current_dir != 0 {
@@ -2391,13 +2392,13 @@ impl DiskGraph {
 
     /// 刷盘：确保 Buffer Pool 所有已提交脏页写入物理文件
     pub fn flush(&self) -> Result<(), GraphError> {
-        let mut bpm = self.bpm.lock().unwrap();
+        let mut bpm = self.bpm.lock_recover();
         bpm.flush_all_pages()
     }
 
     /// 采集轻量元数据快照（O(1) 标量 + 字典/目录，不含图拓扑）
     pub fn snapshot_meta(&self) -> GraphMetaSnapshot {
-        let mut allocator = self.allocator.lock().unwrap().clone();
+        let mut allocator = self.allocator.lock_recover().clone();
         allocator.node_page_cache.clear();
         allocator.edge_page_cache.clear();
         GraphMetaSnapshot {
@@ -2429,7 +2430,7 @@ impl DiskGraph {
         self.dict_page_id = snapshot.dict_page_id;
         self.index_catalog_page_id = snapshot.index_catalog_page_id;
         self.index_catalog = snapshot.index_catalog.clone();
-        *self.allocator.lock().unwrap() = snapshot.allocator.clone();
+        *self.allocator.lock_recover() = snapshot.allocator.clone();
 
         // 目录页在事务内可能被新建，回滚后旧目录才是权威，重新同步置换豁免集，
         // 避免残留的失效目录页或漏保护的新目录页影响后续寻址。
@@ -2438,10 +2439,10 @@ impl DiskGraph {
 
     /// 重新同步置换豁免页集合：Page 0 + 当前权威的节点/边页目录页
     pub fn sync_protected_pages(&self) {
-        let mut bpm = self.bpm.lock().unwrap();
+        let mut bpm = self.bpm.lock_recover();
         bpm.clear_protected_pages();
         bpm.protect_page(HEADER_PAGE_ID);
-        let alloc = self.allocator.lock().unwrap();
+        let alloc = self.allocator.lock_recover();
         if alloc.node_dir_page_id != INVALID_PAGE_ID && alloc.node_dir_page_id != 0 {
             bpm.protect_page(alloc.node_dir_page_id);
         }

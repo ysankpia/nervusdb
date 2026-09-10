@@ -165,7 +165,8 @@ fn test_compaction_preserves_content() -> Result<(), GraphError> {
     }
     db.checkpoint()?;
 
-    // 冷重启后逐条校验
+    // 冷重启后逐条校验（排他锁：重开前释放旧句柄）
+    drop(db);
     let db = GraphLite::open(&db_path)?;
     assert_eq!(db.node_count(), 300);
 
@@ -219,7 +220,8 @@ fn test_inline_vs_overflow_boundary() -> Result<(), GraphError> {
 
     db.checkpoint()?;
 
-    // 冷重启后三种尺寸都必须无损
+    // 冷重启后三种尺寸都必须无损（排他锁：重开前释放旧句柄）
+    drop(db);
     let db = GraphLite::open(&db_path)?;
     assert_eq!(
         db.get_node(n1)
@@ -268,6 +270,8 @@ fn test_inline_vs_overflow_boundary() -> Result<(), GraphError> {
     )?;
     db.checkpoint()?;
 
+    // 排他锁：重开前释放旧句柄
+    drop(db);
     let db = GraphLite::open(&db_path)?;
     assert_eq!(
         db.get_edge(e1)
@@ -484,6 +488,8 @@ fn test_property_update_and_delete_hygiene() -> Result<(), GraphError> {
     );
 
     db.checkpoint()?;
+    // 排他锁：重开前释放旧句柄
+    drop(db);
     let db = GraphLite::open(&db_path)?;
     assert_eq!(db.node_count(), 2);
     assert_eq!(

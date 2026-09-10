@@ -5,9 +5,12 @@ pub mod cypher;
 pub mod disk_graph;
 pub mod graph;
 pub mod index;
+pub mod integrity;
+pub mod lock;
 pub mod page;
 pub mod query;
 pub mod storage;
+pub mod sync_ext;
 
 pub use algo::{
     bfs_shortest_path, dijkstra_shortest_path, find_cycles, has_cycle, k_hop_subgraph, pagerank,
@@ -21,9 +24,12 @@ pub use cypher::{
 pub use disk_graph::{DiskGraph, GraphMetaSnapshot};
 pub use graph::{Direction, Edge, GraphError, Node, Value};
 pub use index::IndexManager;
+pub use integrity::{check_integrity, IntegrityIssue, IntegrityIssueKind, IntegrityReport};
+pub use lock::DbLock;
 pub use page::{EdgeRecord, NodeRecord, PageId, PAGE_SIZE};
 pub use query::{GraphQuery, MultiHopPath, PathMatch, QueryBuilder, QueryResult};
 pub use storage::{StorageEngine, WalRecord};
+pub use sync_ext::{MutexRecoverExt, RwLockRecoverExt};
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -55,6 +61,9 @@ pub struct GraphInner {
 pub struct GraphLite {
     inner: Arc<RwLock<GraphInner>>,
     db_path: PathBuf,
+    /// 进程级排他锁守卫：保证同一数据库同时只有一个打开的句柄（跨进程与同进程）。
+    /// 锁随句柄 Drop 自动释放；`:memory:` 模式为 `None`。
+    lock: Arc<Option<DbLock>>,
 }
 
 impl GraphLite {
@@ -77,6 +86,16 @@ impl GraphLite {
         pool_size: usize,
     ) -> Result<Self, GraphError> {
         let db_path = path.as_ref().to_path_buf();
+        let is_memory = db_path.to_str() == Some(":memory:") || db_path.as_os_str().is_empty();
+
+        // 0. 先获取进程级排他锁，再执行任何读写。
+        //    顺序至关重要：`StorageEngine::open` 会回放 WAL 并**写主数据文件**，
+        //    若在其之后才加锁，并发回放本身就已经破坏了数据。
+        let lock = if is_memory {
+            None
+        } else {
+            Some(DbLock::acquire(&db_path)?)
+        };
 
         // 1. 初始化页级 WAL 持久化引擎（若存在未 Checkpoint 的 WAL，自动将已提交页重放至主文件）
         let storage = StorageEngine::open(&db_path)?;
@@ -102,6 +121,7 @@ impl GraphLite {
         Ok(Self {
             inner: Arc::new(RwLock::new(inner)),
             db_path,
+            lock: Arc::new(lock),
         })
     }
 
@@ -188,7 +208,7 @@ impl GraphLite {
 
         // 3. 主文件已成为全部页的权威副本，WAL 页位置索引失效并截断 WAL
         {
-            let mut bpm = inner.disk_graph.bpm.lock().unwrap();
+            let mut bpm = inner.disk_graph.bpm.lock_recover();
             bpm.clear_wal_page_index();
         }
         inner.storage.checkpoint()
@@ -196,19 +216,19 @@ impl GraphLite {
 
     /// 获取 Buffer Pool 运行统计指标
     pub fn buffer_stats(&self) -> BufferStats {
-        let inner = self.inner.read().expect("Lock poisoned");
-        let bpm = inner.disk_graph.bpm.lock().unwrap();
+        let inner = self.inner.read_recover();
+        let bpm = inner.disk_graph.bpm.lock_recover();
         bpm.stats()
     }
 
     /// 获取二级索引信息
     pub fn index_labels(&self) -> Vec<String> {
-        let inner = self.inner.read().expect("Lock poisoned");
+        let inner = self.inner.read_recover();
         inner.index_mgr.indexed_labels()
     }
 
     pub fn index_properties(&self) -> Vec<(String, String)> {
-        let inner = self.inner.read().expect("Lock poisoned");
+        let inner = self.inner.read_recover();
         inner.index_mgr.indexed_properties()
     }
 
@@ -217,28 +237,86 @@ impl GraphLite {
         &self.db_path
     }
 
+    /// 扫描数据库的结构完整性（只读，不修改任何页）。
+    ///
+    /// 依据守恒律而非抽样：同一量用「沿链指针走出」与「遍历边记录」两条独立口径
+    /// 计算并比对，因此无需第二份实现即可发现不一致。
+    ///
+    /// 只报告问题，不自动修复——修复策略需单独设计并经显式授权。
+    pub fn integrity_check(&self) -> Result<IntegrityReport, GraphError> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|e| GraphError::General(e.to_string()))?;
+        check_integrity(&inner.disk_graph)
+    }
+
+    /// 结构校验失败即返回 `Err`；成功返回报告。
+    ///
+    /// 适合作为运维探针：`db.verify()?` 通过即认为库结构自洽。
+    pub fn verify(&self) -> Result<IntegrityReport, GraphError> {
+        let report = self.integrity_check()?;
+        if report.is_ok() {
+            Ok(report)
+        } else {
+            Err(report.into_error())
+        }
+    }
+
+    /// 该句柄是否持有了进程级排他锁（`:memory:` 模式下为 `false`）。
+    ///
+    /// 锁由 `GraphLite` 持有并在其 Drop 时释放；此访问器同时让编译器确认
+    /// 锁字段被真实读取，而非仅在构造时赋值。
+    pub fn is_locked(&self) -> bool {
+        self.lock.is_some()
+    }
+
     /// 获取当前节点总数（纯磁盘定长元数据头统计）
     pub fn node_count(&self) -> usize {
-        let inner = self.inner.read().expect("Lock poisoned");
+        let inner = self.inner.read_recover();
         inner.disk_graph.node_count
     }
 
     /// 获取当前边总数
     pub fn edge_count(&self) -> usize {
-        let inner = self.inner.read().expect("Lock poisoned");
+        let inner = self.inner.read_recover();
         inner.disk_graph.edge_count
     }
 
-    /// 获取指定节点（按需通过 Buffer Pool 调入）
+    /// 获取指定节点（按需通过 Buffer Pool 调入）。
+    ///
+    /// **有损 API**：存储层的 I/O 或损坏错误会被折叠为 `None`，因此无法区分
+    /// 「节点不存在」与「页读不出来」。生产代码应改用 [`GraphLite::try_get_node`]。
     pub fn get_node(&self, id: u64) -> Option<Node> {
-        let inner = self.inner.read().expect("Lock poisoned");
+        let inner = self.inner.read_recover();
         inner.disk_graph.get_node(id).ok().flatten()
     }
 
-    /// 获取指定边（按需通过 Buffer Pool 调入）
+    /// 获取指定边（按需通过 Buffer Pool 调入）。
+    ///
+    /// **有损 API**：同 [`GraphLite::get_node`]，错误被折叠为 `None`。
+    /// 生产代码应改用 [`GraphLite::try_get_edge`]。
     pub fn get_edge(&self, id: u64) -> Option<Edge> {
-        let inner = self.inner.read().expect("Lock poisoned");
+        let inner = self.inner.read_recover();
         inner.disk_graph.get_edge(id).ok().flatten()
+    }
+
+    /// 获取指定节点，**完整保留**存储错误：`Ok(None)` 仅表示节点不存在。
+    pub fn try_get_node(&self, id: u64) -> Result<Option<Node>, GraphError> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|e| GraphError::General(e.to_string()))?;
+        inner.disk_graph.get_node(id)
+    }
+
+    /// 获取指定边，**完整保留**存储错误：`Ok(None)` 仅表示边不存在。
+    pub fn try_get_edge(&self, id: u64) -> Result<Option<Edge>, GraphError> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|e| GraphError::General(e.to_string()))?;
+        inner.disk_graph.get_edge(id)
     }
 
     /// 添加单个节点（纯磁盘定长写入，优先复用 Freelist，记录页级 WAL）
@@ -422,7 +500,7 @@ impl GraphLite {
     /// 非常驻页，其最新镜像已在 WAL 中。整个流程以 O(1) 内存完成，绝不随事务规模线性膨胀。
     fn commit_dirty_pages_to_wal(inner: &mut GraphInner, tx_id: u64) -> Result<(), GraphError> {
         let modified_pages = inner.disk_graph.drain_modified_pages();
-        let mut bpm = inner.disk_graph.bpm.lock().unwrap();
+        let mut bpm = inner.disk_graph.bpm.lock_recover();
         bpm.begin_tx(tx_id);
         bpm.commit_tx(tx_id, &modified_pages)
     }
@@ -449,7 +527,7 @@ impl GraphLite {
 
     /// 构造链式查询执行器（基于纯磁盘游标执行，无锁并发只读遍历）
     pub fn query(&self) -> GraphQuery {
-        let inner = self.inner.read().expect("Lock poisoned");
+        let inner = self.inner.read_recover();
         GraphQuery::new(inner.disk_graph.clone())
     }
 
@@ -483,7 +561,7 @@ impl GraphLite {
         edge_type: Option<&str>,
     ) -> Option<(f64, Vec<u64>)> {
         let graph = {
-            let inner = self.inner.read().expect("Lock poisoned");
+            let inner = self.inner.read_recover();
             inner.disk_graph.clone()
         };
         algo::dijkstra_shortest_path(&graph, start_id, end_id, edge_type)
@@ -492,7 +570,7 @@ impl GraphLite {
     /// 执行无权 BFS 最短路径算法（纯磁盘流式遍历，脱离全局锁并发执行）
     pub fn bfs(&self, start_id: u64, end_id: u64, edge_type: Option<&str>) -> Option<Vec<u64>> {
         let graph = {
-            let inner = self.inner.read().expect("Lock poisoned");
+            let inner = self.inner.read_recover();
             inner.disk_graph.clone()
         };
         algo::bfs_shortest_path(&graph, start_id, end_id, edge_type)
@@ -501,7 +579,7 @@ impl GraphLite {
     /// 检测全图是否存在有向环路（纯磁盘按页扫描，脱离全局锁并发执行）
     pub fn has_cycle(&self) -> bool {
         let graph = {
-            let inner = self.inner.read().expect("Lock poisoned");
+            let inner = self.inner.read_recover();
             inner.disk_graph.clone()
         };
         algo::has_cycle(&graph)
@@ -510,7 +588,7 @@ impl GraphLite {
     /// 查找全图所有有向环路（脱离全局锁并发执行）
     pub fn find_cycles(&self) -> Vec<Vec<u64>> {
         let graph = {
-            let inner = self.inner.read().expect("Lock poisoned");
+            let inner = self.inner.read_recover();
             inner.disk_graph.clone()
         };
         algo::find_cycles(&graph)
@@ -529,7 +607,7 @@ impl GraphLite {
         tolerance: f64,
     ) -> Vec<algo::PageRankScore> {
         let graph = {
-            let inner = self.inner.read().expect("Lock poisoned");
+            let inner = self.inner.read_recover();
             inner.disk_graph.clone()
         };
         algo::pagerank(&graph, damping_factor, max_iterations, tolerance)
@@ -538,7 +616,7 @@ impl GraphLite {
     /// 弱连通分量分析（并查集划分社群 / 孤岛检测），按分量规模降序返回
     pub fn weakly_connected_components(&self) -> Vec<Vec<u64>> {
         let graph = {
-            let inner = self.inner.read().expect("Lock poisoned");
+            let inner = self.inner.read_recover();
             inner.disk_graph.clone()
         };
         algo::weakly_connected_components(&graph)
@@ -562,7 +640,7 @@ impl GraphLite {
         edge_type: Option<&str>,
     ) -> Result<algo::KHopSubgraph, GraphError> {
         let graph = {
-            let inner = self.inner.read().expect("Lock poisoned");
+            let inner = self.inner.read_recover();
             inner.disk_graph.clone()
         };
         algo::k_hop_subgraph(&graph, start_id, k, direction, edge_type)
@@ -570,13 +648,13 @@ impl GraphLite {
 
     /// 获取图模式中的全部节点标签
     pub fn labels(&self) -> Vec<String> {
-        let inner = self.inner.read().expect("Lock poisoned");
+        let inner = self.inner.read_recover();
         inner.index_mgr.indexed_labels()
     }
 
     /// 获取图模式中的全部关系类型（以 DiskGraph 的持久化目录为权威来源）
     pub fn edge_types(&self) -> Vec<String> {
-        let inner = self.inner.read().expect("Lock poisoned");
+        let inner = self.inner.read_recover();
         inner
             .disk_graph
             .index_catalog
@@ -861,7 +939,7 @@ impl Transaction {
         // 事务生效前采集轻量元数据快照（O(1) 规模，不含图拓扑），用于失败时精确回拨
         let snapshot = inner.disk_graph.snapshot_meta();
         {
-            let mut bpm = inner.disk_graph.bpm.lock().unwrap();
+            let mut bpm = inner.disk_graph.bpm.lock_recover();
             bpm.begin_tx(self.tx_id);
         }
 
@@ -1004,7 +1082,7 @@ impl Transaction {
             // 回拨内存元数据、并使二级索引整体失效，确保零残留、主库零污染。
             let failed_pages = inner.disk_graph.drain_modified_pages();
             {
-                let mut bpm = inner.disk_graph.bpm.lock().unwrap();
+                let mut bpm = inner.disk_graph.bpm.lock_recover();
                 let _ = bpm.rollback_uncommitted_pages(&failed_pages);
             }
             inner.disk_graph.restore_meta(&snapshot);

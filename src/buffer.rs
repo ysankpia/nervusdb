@@ -1,6 +1,7 @@
 use crate::graph::GraphError;
 use crate::page::{PageId, INVALID_PAGE_ID, PAGE_SIZE};
 use crate::storage::{WalRecord, WalWriter};
+use crate::sync_ext::MutexRecoverExt;
 use crc32fast::Hasher;
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
@@ -88,7 +89,7 @@ impl DiskManager {
         buffer: &mut [u8; PAGE_SIZE],
     ) -> Result<(), GraphError> {
         if self.is_memory {
-            let pages = self.memory_pages.lock().unwrap();
+            let pages = self.memory_pages.lock_recover();
             let idx = page_id as usize;
             if idx < pages.len() {
                 buffer.copy_from_slice(&pages[idx]);
@@ -99,7 +100,7 @@ impl DiskManager {
             return Ok(());
         }
 
-        let file_guard = self.file.lock().unwrap();
+        let file_guard = self.file.lock_recover();
         let mut file = file_guard.as_ref().unwrap();
         let offset = (page_id as u64) * (PAGE_SIZE as u64);
         let file_len = file.metadata()?.len();
@@ -117,7 +118,7 @@ impl DiskManager {
 
     pub fn write_page(&self, page_id: PageId, buffer: &[u8; PAGE_SIZE]) -> Result<(), GraphError> {
         if self.is_memory {
-            let mut pages = self.memory_pages.lock().unwrap();
+            let mut pages = self.memory_pages.lock_recover();
             let idx = page_id as usize;
             if idx >= pages.len() {
                 pages.resize(idx + 1, [0u8; PAGE_SIZE]);
@@ -127,7 +128,7 @@ impl DiskManager {
             return Ok(());
         }
 
-        let file_guard = self.file.lock().unwrap();
+        let file_guard = self.file.lock_recover();
         let mut file = file_guard.as_ref().unwrap();
         let offset = (page_id as u64) * (PAGE_SIZE as u64);
         file.seek(SeekFrom::Start(offset))?;
@@ -138,7 +139,7 @@ impl DiskManager {
 
     pub fn allocate_page(&self) -> Result<PageId, GraphError> {
         if self.is_memory {
-            let mut pages = self.memory_pages.lock().unwrap();
+            let mut pages = self.memory_pages.lock_recover();
             if pages.is_empty() {
                 pages.push([0u8; PAGE_SIZE]); // Page 0
                 pages.push([0u8; PAGE_SIZE]); // Page 1
@@ -163,7 +164,7 @@ impl DiskManager {
         if self.is_memory {
             return Ok(());
         }
-        let file_guard = self.file.lock().unwrap();
+        let file_guard = self.file.lock_recover();
         if let Some(ref file) = *file_guard {
             file.sync_all()?;
         }
@@ -172,9 +173,9 @@ impl DiskManager {
 
     pub fn file_size(&self) -> u64 {
         if self.is_memory {
-            return (self.memory_pages.lock().unwrap().len() * PAGE_SIZE) as u64;
+            return (self.memory_pages.lock_recover().len() * PAGE_SIZE) as u64;
         }
-        let file_guard = self.file.lock().unwrap();
+        let file_guard = self.file.lock_recover();
         if let Some(ref file) = *file_guard {
             file.metadata().map(|m| m.len()).unwrap_or(0)
         } else {

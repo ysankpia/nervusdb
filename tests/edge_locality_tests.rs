@@ -190,6 +190,8 @@ fn test_batch_append_across_transactions() -> Result<(), GraphError> {
     );
 
     db.checkpoint()?;
+    // 排他锁要求同一数据库同时只有一个句柄：重开前必须释放旧句柄
+    drop(db);
     let reopened = GraphLite::open(&db_path)?;
     assert_eq!(
         reopened.get_node(src).unwrap().outgoing.len(),
@@ -425,6 +427,8 @@ fn test_directory_pages_stay_resident() -> Result<(), GraphError> {
     );
 
     db.checkpoint()?;
+    // 排他锁：重开前必须释放旧句柄
+    drop(db);
     let reopened = GraphLite::open_with_pool_size(&db_path, 256)?;
     assert_eq!(reopened.node_count(), nodes as usize);
     assert_eq!(
