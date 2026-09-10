@@ -1,18 +1,20 @@
 use crate::cypher::ast::{
-    BinaryOperator, CypherStatement, DeleteClause, ExecuteResult, Expr, NodePattern, PathPattern,
-    ReturnItem,
+    AggregateArg, AggregateFunc, BinaryOperator, CypherStatement, DeleteClause, ExecuteResult,
+    Expr, NodePattern, OrderItem, PathPattern, ReturnItem, SetItem,
 };
 use crate::disk_graph::DiskGraph;
-use crate::graph::{GraphError, Value};
+use crate::graph::{Direction, GraphError, Value};
 use crate::index::IndexManager;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+/// 结果集行
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Row {
     pub values: Vec<Value>,
 }
 
+/// Cypher 查询结果集
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CypherResultSet {
     pub columns: Vec<String>,
@@ -30,6 +32,22 @@ impl CypherResultSet {
     }
 }
 
+/// 变量绑定：明确区分节点与边，彻底杜绝「边 ID 与节点 ID 同号混淆」
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Binding {
+    Node(u64),
+    Edge(u64),
+}
+
+/// 单行匹配上下文：变量名 -> 实体绑定
+pub type RowCtx = HashMap<String, Binding>;
+
+/// 投影后的中间行（保留上下文以支持 ORDER BY 表达式求值）
+struct ProjectedRow {
+    ctx: RowCtx,
+    values: Vec<Value>,
+}
+
 /// 只读 Cypher 执行器（脱离排他写锁，支持全并发只读）
 pub struct CypherReadOnlyExecutor<'a> {
     graph: &'a DiskGraph,
@@ -41,24 +59,72 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         Self { graph, index_mgr }
     }
 
-    /// 执行只读 MATCH 查询
+    /// 执行只读 MATCH 查询（完整管线：匹配 → WHERE → 投影/聚合 → ORDER BY → SKIP → LIMIT）
     pub fn execute_match(
         &self,
-        pattern: PathPattern,
+        patterns: Vec<PathPattern>,
         where_clause: Option<Expr>,
         return_clause: Option<Vec<ReturnItem>>,
+        order_by: &[OrderItem],
+        skip: Option<usize>,
         limit: Option<usize>,
     ) -> Result<CypherResultSet, GraphError> {
-        let matched_contexts = self.find_matches(&pattern, &where_clause)?;
-        self.project_results(&pattern, matched_contexts, return_clause, limit)
+        let matched = self.find_matches(&patterns, &where_clause)?;
+        self.project_results(&patterns, matched, return_clause, order_by, skip, limit)
     }
 
-    /// 查找所有匹配上下文
+    /// 多模式匹配：逐模式求解后按共享变量做连接（笛卡尔积 + 一致性约束）
     pub fn find_matches(
+        &self,
+        patterns: &[PathPattern],
+        where_clause: &Option<Expr>,
+    ) -> Result<Vec<RowCtx>, GraphError> {
+        if patterns.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut combined: Vec<RowCtx> = vec![RowCtx::new()];
+
+        for (idx, pattern) in patterns.iter().enumerate() {
+            // 仅对首个模式启用索引加速（WHERE 中的候选集推导基于整体表达式）
+            let pattern_rows = if idx == 0 {
+                self.find_single_pattern_matches(pattern, where_clause)?
+            } else {
+                self.find_single_pattern_matches(pattern, &None)?
+            };
+
+            if pattern_rows.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            let mut joined: Vec<RowCtx> = Vec::new();
+            for base in &combined {
+                for candidate in &pattern_rows {
+                    if let Some(merged) = merge_contexts(base, candidate) {
+                        joined.push(merged);
+                    }
+                }
+            }
+            combined = joined;
+
+            if combined.is_empty() {
+                return Ok(Vec::new());
+            }
+        }
+
+        if let Some(ref w) = where_clause {
+            combined.retain(|ctx| self.eval_expr_truthy(w, ctx));
+        }
+
+        Ok(combined)
+    }
+
+    /// 求解单个路径模式的全部匹配上下文
+    fn find_single_pattern_matches(
         &self,
         pattern: &PathPattern,
         where_clause: &Option<Expr>,
-    ) -> Result<Vec<HashMap<String, u64>>, GraphError> {
+    ) -> Result<Vec<RowCtx>, GraphError> {
         if pattern.nodes.is_empty() {
             return Ok(Vec::new());
         }
@@ -66,167 +132,167 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         let start_pat = &pattern.nodes[0];
         let candidate_start_nodes = self.find_initial_candidates(start_pat, where_clause);
 
-        let mut matched_contexts = Vec::new();
+        let mut matched = Vec::new();
         for start_id in candidate_start_nodes {
+            // 通过定长 NodeRecord 做快速过滤，避免无谓的溢出页调入
+            if self.graph.read_node_record(start_id)?.is_none() {
+                continue;
+            }
             if !self.node_matches_pattern(start_id, start_pat) {
                 continue;
             }
-            let mut ctx = HashMap::new();
+
+            let mut ctx = RowCtx::new();
             if let Some(ref var) = start_pat.variable {
-                ctx.insert(var.clone(), start_id);
+                ctx.insert(var.clone(), Binding::Node(start_id));
             }
-            self.match_path_step(
-                pattern,
-                0,
-                start_id,
-                &ctx,
-                where_clause,
-                &mut matched_contexts,
-            )?;
+
+            self.match_path_step(pattern, 0, start_id, &ctx, &mut matched)?;
         }
 
-        Ok(matched_contexts)
+        Ok(matched)
     }
 
-    /// 结果投影
+    /// 结果投影：聚合分组 → ORDER BY → SKIP → LIMIT
     pub fn project_results(
         &self,
-        pattern: &PathPattern,
-        matched_contexts: Vec<HashMap<String, u64>>,
+        patterns: &[PathPattern],
+        matched: Vec<RowCtx>,
         return_clause: Option<Vec<ReturnItem>>,
+        order_by: &[OrderItem],
+        skip: Option<usize>,
         limit: Option<usize>,
     ) -> Result<CypherResultSet, GraphError> {
-        let return_items = return_clause.unwrap_or_else(|| {
-            let mut items = Vec::new();
-            for n in &pattern.nodes {
-                if let Some(ref v) = n.variable {
-                    items.push(ReturnItem::Variable {
-                        var: v.clone(),
-                        alias: None,
-                    });
-                }
-            }
-            items
-        });
-
-        let mut columns = Vec::new();
-        let mut all_mode = false;
-        for item in &return_items {
-            match item {
-                ReturnItem::All => {
-                    all_mode = true;
-                    if let Some(first_ctx) = matched_contexts.first() {
-                        let mut keys: Vec<_> = first_ctx.keys().cloned().collect();
-                        keys.sort();
-                        columns.extend(keys);
-                    } else {
-                        columns.push("*".to_string());
+        let default_all = return_clause.is_none();
+        let return_items = match return_clause {
+            Some(items) if !items.is_empty() => items,
+            _ => {
+                let mut items = Vec::new();
+                for p in patterns {
+                    for n in &p.nodes {
+                        if let Some(ref v) = n.variable {
+                            if !items
+                                .iter()
+                                .any(|i| matches!(i, ReturnItem::Variable { var, .. } if var == v))
+                            {
+                                items.push(ReturnItem::Variable {
+                                    var: v.clone(),
+                                    alias: None,
+                                });
+                            }
+                        }
                     }
                 }
-                ReturnItem::Variable { var, alias } => {
-                    columns.push(alias.clone().unwrap_or_else(|| var.clone()));
-                }
-                ReturnItem::Property { var, prop, alias } => {
-                    columns.push(alias.clone().unwrap_or_else(|| format!("{}.{}", var, prop)));
+                items
+            }
+        };
+
+        // `RETURN *` 展开为上下文中出现过的具体变量（按列名有序），与 sqlite 的 `SELECT *` 语义对齐
+        let mut return_items = return_items;
+        if return_items.iter().any(|i| matches!(i, ReturnItem::All)) {
+            let mut all_vars: BTreeSet<String> = BTreeSet::new();
+            for ctx in &matched {
+                for var in ctx.keys() {
+                    if !return_items
+                        .iter()
+                        .any(|i| matches!(i, ReturnItem::Variable { var: v, .. } if v == var))
+                    {
+                        all_vars.insert(var.clone());
+                    }
                 }
             }
+
+            // 保持 `*` 所在位置，其余变量按名称有序追加
+            let mut expanded: Vec<ReturnItem> = Vec::new();
+            let mut taken: HashSet<String> = HashSet::new();
+            for item in return_items {
+                match item {
+                    ReturnItem::All => {
+                        for var in &all_vars {
+                            if taken.insert(var.clone()) {
+                                expanded.push(ReturnItem::Variable {
+                                    var: var.clone(),
+                                    alias: None,
+                                });
+                            }
+                        }
+                    }
+                    other => {
+                        if let ReturnItem::Variable { var, .. } = &other {
+                            taken.insert(var.clone());
+                        }
+                        expanded.push(other);
+                    }
+                }
+            }
+
+            // 空结果集无法从上下文推导变量，退回字面 `*` 列
+            if expanded.is_empty() {
+                expanded.push(ReturnItem::All);
+            }
+            return_items = expanded;
         }
 
-        let edge_vars: HashSet<String> = pattern
-            .edges
+        let has_aggregate = return_items
             .iter()
-            .filter_map(|e| e.variable.clone())
+            .any(|i| matches!(i, ReturnItem::Aggregate { .. }));
+
+        let mut projected = if has_aggregate {
+            self.project_aggregated(&return_items, &matched)?
+        } else {
+            self.project_plain(&return_items, default_all, &matched)?
+        };
+
+        // 列名解析
+        let mut columns = Vec::new();
+        for item in &return_items {
+            columns.push(Self::column_name(item, &projected));
+        }
+
+        // ORDER BY（先尝试别名列，再回退上下文表达式求值）
+        if !order_by.is_empty() {
+            let mut sortable: Vec<(usize, Vec<Value>)> = Vec::with_capacity(projected.len());
+            for (i, row) in projected.iter().enumerate() {
+                let mut keys = Vec::with_capacity(order_by.len());
+                for item in order_by {
+                    keys.push(self.eval_order_key(item, &row.ctx, &columns, &row.values));
+                }
+                sortable.push((i, keys));
+            }
+            sortable.sort_by(|a, b| {
+                for (idx, item) in order_by.iter().enumerate() {
+                    let ord = a.1[idx].cmp(&b.1[idx]);
+                    let ord = if item.desc { ord.reverse() } else { ord };
+                    if ord != std::cmp::Ordering::Equal {
+                        return ord;
+                    }
+                }
+                a.0.cmp(&b.0)
+            });
+            let mut reordered = Vec::with_capacity(projected.len());
+            let mut taken: Vec<Option<ProjectedRow>> = projected.into_iter().map(Some).collect();
+            for (i, _) in sortable {
+                if let Some(row) = taken[i].take() {
+                    reordered.push(row);
+                }
+            }
+            projected = reordered;
+        }
+
+        // SKIP / LIMIT 分页
+        let start = skip.unwrap_or(0).min(projected.len());
+        let mut end = projected.len();
+        if let Some(max) = limit {
+            end = start.saturating_add(max).min(projected.len());
+        }
+        let paged: Vec<ProjectedRow> = projected.drain(..).skip(start).take(end - start).collect();
+
+        let count = paged.len();
+        let rows: Vec<Row> = paged
+            .into_iter()
+            .map(|r| Row { values: r.values })
             .collect();
 
-        let mut rows = Vec::new();
-        for ctx in &matched_contexts {
-            let mut row_values = Vec::new();
-            if all_mode {
-                let mut keys: Vec<_> = ctx.keys().cloned().collect();
-                keys.sort();
-                for var in keys {
-                    let nid = ctx[&var];
-                    if edge_vars.contains(&var) {
-                        if let Ok(Some(edge)) = self.graph.get_edge(nid) {
-                            let json = serde_json::to_string(&edge.properties)
-                                .unwrap_or_else(|_| "{}".to_string());
-                            row_values.push(Value::from(json));
-                        } else {
-                            row_values.push(Value::from("null"));
-                        }
-                    } else if let Ok(Some(node)) = self.graph.get_node(nid) {
-                        let json = serde_json::to_string(&node.properties)
-                            .unwrap_or_else(|_| "{}".to_string());
-                        row_values.push(Value::from(json));
-                    } else {
-                        row_values.push(Value::from("null"));
-                    }
-                }
-            } else {
-                for item in &return_items {
-                    match item {
-                        ReturnItem::All => {}
-                        ReturnItem::Variable { var, .. } => {
-                            if let Some(&nid) = ctx.get(var) {
-                                if edge_vars.contains(var) {
-                                    if let Ok(Some(edge)) = self.graph.get_edge(nid) {
-                                        let json = serde_json::to_string(&edge.properties)
-                                            .unwrap_or_else(|_| "{}".to_string());
-                                        row_values.push(Value::from(json));
-                                    } else {
-                                        row_values.push(Value::from("null"));
-                                    }
-                                } else if let Ok(Some(node)) = self.graph.get_node(nid) {
-                                    let json = serde_json::to_string(&node.properties)
-                                        .unwrap_or_else(|_| "{}".to_string());
-                                    row_values.push(Value::from(json));
-                                } else {
-                                    row_values.push(Value::from("null"));
-                                }
-                            } else {
-                                row_values.push(Value::from("null"));
-                            }
-                        }
-                        ReturnItem::Property { var, prop, .. } => {
-                            if let Some(&nid) = ctx.get(var) {
-                                if edge_vars.contains(var) {
-                                    if let Ok(Some(edge)) = self.graph.get_edge(nid) {
-                                        if let Some(val) = edge.get_prop(prop) {
-                                            row_values.push(val.clone());
-                                        } else if prop == "weight" {
-                                            row_values.push(Value::from(edge.weight));
-                                        } else {
-                                            row_values.push(Value::from("null"));
-                                        }
-                                    } else {
-                                        row_values.push(Value::from("null"));
-                                    }
-                                } else if let Ok(Some(node)) = self.graph.get_node(nid) {
-                                    if let Some(val) = node.get_prop(prop) {
-                                        row_values.push(val.clone());
-                                    } else {
-                                        row_values.push(Value::from("null"));
-                                    }
-                                } else {
-                                    row_values.push(Value::from("null"));
-                                }
-                            } else {
-                                row_values.push(Value::from("null"));
-                            }
-                        }
-                    }
-                }
-            }
-            rows.push(Row { values: row_values });
-
-            if let Some(max_l) = limit {
-                if rows.len() >= max_l {
-                    break;
-                }
-            }
-        }
-
-        let count = rows.len();
         Ok(CypherResultSet {
             columns,
             rows,
@@ -241,15 +307,275 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         })
     }
 
+    fn column_name(item: &ReturnItem, projected: &[ProjectedRow]) -> String {
+        let _ = projected;
+        match item {
+            ReturnItem::All => "*".to_string(),
+            ReturnItem::Variable { var, alias } => alias.clone().unwrap_or_else(|| var.clone()),
+            ReturnItem::Property { var, prop, alias } => {
+                alias.clone().unwrap_or_else(|| format!("{}.{}", var, prop))
+            }
+            ReturnItem::Aggregate { func, arg, alias } => alias.clone().unwrap_or_else(|| {
+                let arg_repr = match arg {
+                    AggregateArg::Star => "*".to_string(),
+                    AggregateArg::Variable(v) => v.clone(),
+                    AggregateArg::Property { var, prop } => format!("{}.{}", var, prop),
+                };
+                format!("{}({})", func.as_str(), arg_repr)
+            }),
+        }
+    }
+
+    /// 非聚合投影（逐匹配行展开）
+    fn project_plain(
+        &self,
+        return_items: &[ReturnItem],
+        default_all: bool,
+        matched: &[RowCtx],
+    ) -> Result<Vec<ProjectedRow>, GraphError> {
+        let mut rows = Vec::with_capacity(matched.len());
+
+        for ctx in matched {
+            let mut values = Vec::new();
+            for item in return_items {
+                match item {
+                    ReturnItem::All => {
+                        let mut keys: Vec<&String> = ctx.keys().collect();
+                        keys.sort();
+                        for var in keys {
+                            values.push(self.render_binding(var, ctx[var])?);
+                        }
+                    }
+                    ReturnItem::Variable { var, .. } => match ctx.get(var) {
+                        Some(binding) => values.push(self.render_binding(var, *binding)?),
+                        None => values.push(null_value()),
+                    },
+                    ReturnItem::Property { var, prop, .. } => {
+                        values.push(self.render_property(var, prop, ctx)?)
+                    }
+                    ReturnItem::Aggregate { .. } => {}
+                }
+            }
+            let _ = default_all;
+            rows.push(ProjectedRow {
+                ctx: ctx.clone(),
+                values,
+            });
+        }
+
+        Ok(rows)
+    }
+
+    /// 聚合投影（按非聚合投影项分组，组内计算聚合函数）
+    fn project_aggregated(
+        &self,
+        return_items: &[ReturnItem],
+        matched: &[RowCtx],
+    ) -> Result<Vec<ProjectedRow>, GraphError> {
+        let group_items: Vec<&ReturnItem> = return_items
+            .iter()
+            .filter(|i| !matches!(i, ReturnItem::Aggregate { .. }))
+            .collect();
+
+        let mut groups: BTreeMap<Vec<Value>, Vec<RowCtx>> = BTreeMap::new();
+
+        if group_items.is_empty() {
+            // 全局聚合：空结果集也必须产出一行（count=0 / sum=0 / 其余 null）
+            let key = Vec::new();
+            let entry = groups.entry(key).or_default();
+            for ctx in matched {
+                entry.push(ctx.clone());
+            }
+        } else {
+            for ctx in matched {
+                let mut key = Vec::with_capacity(group_items.len());
+                for item in &group_items {
+                    key.push(self.eval_item_value(item, ctx)?);
+                }
+                groups.entry(key).or_default().push(ctx.clone());
+            }
+        }
+
+        let mut rows = Vec::new();
+        for (_key, ctxs) in groups {
+            let representative = ctxs.first().cloned().unwrap_or_default();
+            let mut values = Vec::new();
+            for item in return_items {
+                match item {
+                    ReturnItem::Aggregate { func, arg, .. } => {
+                        values.push(self.eval_aggregate(*func, arg, &ctxs)?);
+                    }
+                    other => {
+                        values.push(self.eval_item_value(other, &representative)?);
+                    }
+                }
+            }
+            rows.push(ProjectedRow {
+                ctx: representative,
+                values,
+            });
+        }
+
+        Ok(rows)
+    }
+
+    fn eval_aggregate(
+        &self,
+        func: AggregateFunc,
+        arg: &AggregateArg,
+        ctxs: &[RowCtx],
+    ) -> Result<Value, GraphError> {
+        let mut collected: Vec<Value> = Vec::new();
+        let mut non_null_count: i64 = 0;
+
+        for ctx in ctxs {
+            match arg {
+                AggregateArg::Star => {
+                    non_null_count += 1;
+                }
+                AggregateArg::Variable(var) => {
+                    if ctx.contains_key(var) {
+                        non_null_count += 1;
+                        collected.push(Value::Int(1));
+                    }
+                }
+                AggregateArg::Property { var, prop } => {
+                    let val = self.render_property(var, prop, ctx)?;
+                    if !is_null(&val) {
+                        non_null_count += 1;
+                        collected.push(val);
+                    }
+                }
+            }
+        }
+
+        let result = match func {
+            AggregateFunc::Count => Value::Int(non_null_count),
+            AggregateFunc::Sum => {
+                if collected.is_empty() {
+                    Value::Int(0)
+                } else {
+                    let all_int = collected.iter().all(|v| matches!(v, Value::Int(_)));
+                    let sum_f: f64 = collected.iter().filter_map(|v| v.as_f64()).sum();
+                    if all_int {
+                        Value::Int(sum_f as i64)
+                    } else {
+                        Value::Float(sum_f)
+                    }
+                }
+            }
+            AggregateFunc::Avg => {
+                if collected.is_empty() {
+                    null_value()
+                } else {
+                    let sum_f: f64 = collected.iter().filter_map(|v| v.as_f64()).sum();
+                    Value::Float(sum_f / collected.len() as f64)
+                }
+            }
+            AggregateFunc::Min => collected.into_iter().min().unwrap_or_else(null_value),
+            AggregateFunc::Max => collected.into_iter().max().unwrap_or_else(null_value),
+        };
+
+        Ok(result)
+    }
+
+    fn eval_item_value(&self, item: &ReturnItem, ctx: &RowCtx) -> Result<Value, GraphError> {
+        match item {
+            ReturnItem::Variable { var, .. } => match ctx.get(var) {
+                Some(binding) => self.render_binding(var, *binding),
+                None => Ok(null_value()),
+            },
+            ReturnItem::Property { var, prop, .. } => self.render_property(var, prop, ctx),
+            ReturnItem::All => Ok(null_value()),
+            ReturnItem::Aggregate { .. } => Ok(null_value()),
+        }
+    }
+
+    fn render_binding(&self, var: &str, binding: Binding) -> Result<Value, GraphError> {
+        let _ = var;
+        match binding {
+            Binding::Node(id) => {
+                if let Some(node) = self.graph.get_node(id)? {
+                    let json = serde_json::to_string(&node.properties).unwrap_or_default();
+                    Ok(Value::from(json))
+                } else {
+                    Ok(Value::from("{}"))
+                }
+            }
+            Binding::Edge(id) => {
+                if let Some(edge) = self.graph.get_edge(id)? {
+                    let json = serde_json::to_string(&edge.properties).unwrap_or_default();
+                    Ok(Value::from(json))
+                } else {
+                    Ok(Value::from("{}"))
+                }
+            }
+        }
+    }
+
+    fn render_property(&self, var: &str, prop: &str, ctx: &RowCtx) -> Result<Value, GraphError> {
+        match ctx.get(var) {
+            Some(Binding::Edge(id)) => {
+                if let Some(edge) = self.graph.get_edge(*id)? {
+                    if let Some(val) = edge.get_prop(prop) {
+                        Ok(val.clone())
+                    } else if prop == "weight" {
+                        Ok(Value::from(edge.weight))
+                    } else {
+                        Ok(null_value())
+                    }
+                } else {
+                    Ok(null_value())
+                }
+            }
+            Some(Binding::Node(id)) => {
+                if let Some(node) = self.graph.get_node(*id)? {
+                    if let Some(val) = node.get_prop(prop) {
+                        Ok(val.clone())
+                    } else if prop == "id" {
+                        Ok(Value::Int(*id as i64))
+                    } else {
+                        Ok(null_value())
+                    }
+                } else {
+                    Ok(null_value())
+                }
+            }
+            None => Ok(null_value()),
+        }
+    }
+
+    fn eval_order_key(
+        &self,
+        item: &OrderItem,
+        ctx: &RowCtx,
+        columns: &[String],
+        values: &[Value],
+    ) -> Value {
+        // 优先按投影别名解析（如 ORDER BY total DESC）
+        match &item.expr {
+            Expr::Variable(name) => {
+                if let Some(idx) = columns.iter().position(|c| c == name) {
+                    if let Some(v) = values.get(idx) {
+                        return v.clone();
+                    }
+                }
+                self.eval_expr_value(&item.expr, ctx)
+                    .unwrap_or_else(null_value)
+            }
+            _ => self
+                .eval_expr_value(&item.expr, ctx)
+                .unwrap_or_else(null_value),
+        }
+    }
+
     /// 起始候选集检索：智能命中属性索引或标签索引，回退走流式磁盘页扫描
     fn find_initial_candidates(
         &self,
         node_pat: &NodePattern,
         where_clause: &Option<Expr>,
     ) -> Vec<u64> {
-        let label_opt = node_pat.label.as_deref();
-
-        if let Some(lbl) = label_opt {
+        if let Some(lbl) = node_pat.labels.first() {
             if self.index_mgr.is_label_complete(lbl) {
                 for (key, val) in &node_pat.properties {
                     if let Some(set) = self.index_mgr.find_by_property_exact(lbl, key, val) {
@@ -340,21 +666,16 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         }
     }
 
+    /// 沿路径模式逐跳推进匹配（含变长多跳 BFS 与环检测守卫）
     fn match_path_step(
         &self,
         pattern: &PathPattern,
         step: usize,
         current_node_id: u64,
-        ctx: &HashMap<String, u64>,
-        where_clause: &Option<Expr>,
-        results: &mut Vec<HashMap<String, u64>>,
+        ctx: &RowCtx,
+        results: &mut Vec<RowCtx>,
     ) -> Result<(), GraphError> {
         if step >= pattern.edges.len() {
-            if let Some(ref w) = where_clause {
-                if !self.eval_expr(w, ctx) {
-                    return Ok(());
-                }
-            }
             results.push(ctx.clone());
             return Ok(());
         }
@@ -362,116 +683,108 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         let edge_pat = &pattern.edges[step];
         let next_node_pat = &pattern.nodes[step + 1];
 
+        // 变长多跳：BFS 展开并以 visited_edges 作为环检测守卫
         if let Some((min_hops, max_hops)) = edge_pat.hops {
-            let mut queue = std::collections::VecDeque::new();
-            queue.push_back((current_node_id, 0, HashSet::new()));
+            // (当前节点, 已走跳数, 本路径已用边集合, 最后一跳的边 ID)
+            let mut queue: std::collections::VecDeque<(u64, usize, HashSet<u64>, u64)> =
+                std::collections::VecDeque::new();
+            queue.push_back((current_node_id, 0, HashSet::new(), 0));
 
-            while let Some((nid, h, visited_edges)) = queue.pop_front() {
+            while let Some((nid, h, visited_edges, last_edge)) = queue.pop_front() {
                 if h >= min_hops && h <= max_hops && self.node_matches_pattern(nid, next_node_pat) {
                     let mut next_ctx = ctx.clone();
                     if let Some(ref var) = next_node_pat.variable {
-                        next_ctx.insert(var.clone(), nid);
+                        next_ctx.insert(var.clone(), Binding::Node(nid));
                     }
-                    self.match_path_step(pattern, step + 1, nid, &next_ctx, where_clause, results)?;
+                    if let Some(ref edge_var) = edge_pat.variable {
+                        if last_edge != 0 {
+                            next_ctx.insert(edge_var.clone(), Binding::Edge(last_edge));
+                        }
+                    }
+                    self.match_path_step(pattern, step + 1, nid, &next_ctx, results)?;
                 }
 
-                if h < max_hops {
-                    let edges = match edge_pat.direction {
-                        crate::graph::Direction::Outgoing => self.graph.outgoing_edges(nid)?,
-                        crate::graph::Direction::Incoming => self.graph.incoming_edges(nid)?,
-                        crate::graph::Direction::Both => {
-                            let mut e = self.graph.outgoing_edges(nid)?;
-                            e.extend(self.graph.incoming_edges(nid)?);
-                            e
-                        }
-                    };
+                if h >= max_hops {
+                    continue;
+                }
 
-                    for edge in edges {
-                        if visited_edges.contains(&edge.id) {
-                            continue;
-                        }
-
-                        if let Some(ref expected_type) = edge_pat.rel_type {
-                            if &edge.edge_type != expected_type {
-                                continue;
-                            }
-                        }
-
-                        let mut props_match = true;
-                        for (k, expected_v) in &edge_pat.properties {
-                            if edge.get_prop(k) != Some(expected_v) {
-                                props_match = false;
-                                break;
-                            }
-                        }
-                        if !props_match {
-                            continue;
-                        }
-
-                        let next_nid = if edge.src_id == nid {
-                            edge.dst_id
-                        } else {
-                            edge.src_id
-                        };
-
-                        let mut next_visited = visited_edges.clone();
-                        next_visited.insert(edge.id);
-                        queue.push_back((next_nid, h + 1, next_visited));
+                for edge in self.candidate_edges(nid, edge_pat.direction)? {
+                    if visited_edges.contains(&edge.id) {
+                        continue;
                     }
+                    if !self.edge_matches_pattern(&edge, edge_pat) {
+                        continue;
+                    }
+
+                    let next_nid = neighbor_of(&edge, nid);
+                    let mut next_visited = visited_edges.clone();
+                    next_visited.insert(edge.id);
+                    queue.push_back((next_nid, h + 1, next_visited, edge.id));
                 }
             }
             return Ok(());
         }
 
-        let edges = match edge_pat.direction {
-            crate::graph::Direction::Outgoing => self.graph.outgoing_edges(current_node_id)?,
-            crate::graph::Direction::Incoming => self.graph.incoming_edges(current_node_id)?,
-            crate::graph::Direction::Both => {
-                let mut e = self.graph.outgoing_edges(current_node_id)?;
-                e.extend(self.graph.incoming_edges(current_node_id)?);
-                e
-            }
-        };
-
-        for edge in edges {
-            if let Some(ref expected_type) = edge_pat.rel_type {
-                if &edge.edge_type != expected_type {
-                    continue;
-                }
+        for edge in self.candidate_edges(current_node_id, edge_pat.direction)? {
+            if !self.edge_matches_pattern(&edge, edge_pat) {
+                continue;
             }
 
-            for (k, expected_v) in &edge_pat.properties {
-                if edge.get_prop(k) != Some(expected_v) {
-                    continue;
-                }
-            }
-
-            let next_nid = if edge.src_id == current_node_id {
-                edge.dst_id
-            } else {
-                edge.src_id
-            };
+            let next_nid = neighbor_of(&edge, current_node_id);
 
             if self.node_matches_pattern(next_nid, next_node_pat) {
                 let mut next_ctx = ctx.clone();
                 if let Some(ref var) = next_node_pat.variable {
-                    next_ctx.insert(var.clone(), next_nid);
+                    next_ctx.insert(var.clone(), Binding::Node(next_nid));
                 }
                 if let Some(ref edge_var) = edge_pat.variable {
-                    next_ctx.insert(edge_var.clone(), edge.id);
+                    next_ctx.insert(edge_var.clone(), Binding::Edge(edge.id));
                 }
-                self.match_path_step(
-                    pattern,
-                    step + 1,
-                    next_nid,
-                    &next_ctx,
-                    where_clause,
-                    results,
-                )?;
+                self.match_path_step(pattern, step + 1, next_nid, &next_ctx, results)?;
             }
         }
 
         Ok(())
+    }
+
+    fn candidate_edges(
+        &self,
+        node_id: u64,
+        direction: Direction,
+    ) -> Result<Vec<crate::graph::Edge>, GraphError> {
+        match direction {
+            Direction::Outgoing => self.graph.outgoing_edges(node_id),
+            Direction::Incoming => self.graph.incoming_edges(node_id),
+            Direction::Both => {
+                let mut both = self.graph.outgoing_edges(node_id)?;
+                both.extend(self.graph.incoming_edges(node_id)?);
+                Ok(both)
+            }
+        }
+    }
+
+    fn edge_matches_pattern(
+        &self,
+        edge: &crate::graph::Edge,
+        pattern: &crate::cypher::ast::RelPattern,
+    ) -> bool {
+        if let Some(ref expected_type) = pattern.rel_type {
+            if &edge.edge_type != expected_type {
+                return false;
+            }
+        }
+        for (k, expected_v) in &pattern.properties {
+            if k == "weight" {
+                if (edge.weight - expected_v.as_f64().unwrap_or(edge.weight)).abs() > f64::EPSILON {
+                    return false;
+                }
+                continue;
+            }
+            if edge.get_prop(k) != Some(expected_v) {
+                return false;
+            }
+        }
+        true
     }
 
     fn node_matches_pattern(&self, node_id: u64, pattern: &NodePattern) -> bool {
@@ -480,8 +793,8 @@ impl<'a> CypherReadOnlyExecutor<'a> {
             _ => return false,
         };
 
-        if let Some(ref expected_label) = pattern.label {
-            if !node.has_label(expected_label) {
+        for label in &pattern.labels {
+            if !node.has_label(label) {
                 return false;
             }
         }
@@ -495,25 +808,46 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         true
     }
 
-    fn eval_expr(&self, expr: &Expr, ctx: &HashMap<String, u64>) -> bool {
+    /// 求值布尔表达式（WHERE / 谓词）
+    pub fn eval_expr_truthy(&self, expr: &Expr, ctx: &RowCtx) -> bool {
         match expr {
             Expr::Literal(Value::Bool(b)) => *b,
+            Expr::LabelCheck { var, label } => match ctx.get(var) {
+                Some(Binding::Node(id)) => self
+                    .graph
+                    .get_node(*id)
+                    .ok()
+                    .flatten()
+                    .map(|n| n.has_label(label))
+                    .unwrap_or(false),
+                _ => false,
+            },
             Expr::BinaryOp { left, op, right } => match op {
-                BinaryOperator::And => self.eval_expr(left, ctx) && self.eval_expr(right, ctx),
-                BinaryOperator::Or => self.eval_expr(left, ctx) || self.eval_expr(right, ctx),
+                BinaryOperator::And => {
+                    self.eval_expr_truthy(left, ctx) && self.eval_expr_truthy(right, ctx)
+                }
+                BinaryOperator::Or => {
+                    self.eval_expr_truthy(left, ctx) || self.eval_expr_truthy(right, ctx)
+                }
                 _ => {
-                    let l_val = self.eval_val(left, ctx);
-                    let r_val = self.eval_val(right, ctx);
+                    let l_val = self.eval_expr_value(left, ctx);
+                    let r_val = self.eval_expr_value(right, ctx);
                     match (l_val, r_val) {
-                        (Some(l), Some(r)) => match op {
-                            BinaryOperator::Eq => l == r,
-                            BinaryOperator::Neq => l != r,
-                            BinaryOperator::Lt => l < r,
-                            BinaryOperator::Lte => l <= r,
-                            BinaryOperator::Gt => l > r,
-                            BinaryOperator::Gte => l >= r,
-                            _ => false,
-                        },
+                        (Some(l), Some(r)) => {
+                            // null 参与比较一律为 false（三值逻辑的安全近似）
+                            if is_null(&l) || is_null(&r) {
+                                return false;
+                            }
+                            match op {
+                                BinaryOperator::Eq => l == r,
+                                BinaryOperator::Neq => l != r,
+                                BinaryOperator::Lt => l < r,
+                                BinaryOperator::Lte => l <= r,
+                                BinaryOperator::Gt => l > r,
+                                BinaryOperator::Gte => l >= r,
+                                _ => false,
+                            }
+                        }
                         _ => false,
                     }
                 }
@@ -522,37 +856,75 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         }
     }
 
-    fn eval_val(&self, expr: &Expr, ctx: &HashMap<String, u64>) -> Option<Value> {
+    /// 求值任意表达式的值
+    pub fn eval_expr_value(&self, expr: &Expr, ctx: &RowCtx) -> Option<Value> {
         match expr {
             Expr::Literal(v) => Some(v.clone()),
-            Expr::PropertyAccess { var, prop } => {
-                if let Some(&id) = ctx.get(var) {
-                    if let Ok(Some(node)) = self.graph.get_node(id) {
-                        return node.get_prop(prop).cloned();
-                    } else if let Ok(Some(edge)) = self.graph.get_edge(id) {
-                        return edge.get_prop(prop).cloned().or_else(|| {
-                            if prop == "weight" {
-                                Some(Value::from(edge.weight))
-                            } else {
-                                None
-                            }
-                        });
-                    }
+            Expr::PropertyAccess { var, prop } => self.render_property(var, prop, ctx).ok(),
+            Expr::Variable(var) => match ctx.get(var) {
+                Some(Binding::Node(id)) => Some(Value::Int(*id as i64)),
+                Some(Binding::Edge(id)) => Some(Value::Int(*id as i64)),
+                None => None,
+            },
+            Expr::LabelCheck { var, label } => match ctx.get(var) {
+                Some(Binding::Node(id)) => Some(Value::Bool(
+                    self.graph
+                        .get_node(*id)
+                        .ok()
+                        .flatten()
+                        .map(|n| n.has_label(label))
+                        .unwrap_or(false),
+                )),
+                _ => Some(Value::Bool(false)),
+            },
+            Expr::BinaryOp { .. } => {
+                if self.eval_expr_truthy(expr, ctx) {
+                    Some(Value::Bool(true))
+                } else {
+                    Some(Value::Bool(false))
                 }
-                None
             }
-            Expr::Variable(var) => {
-                if let Some(&node_id) = ctx.get(var) {
-                    return Some(Value::from(node_id as i64));
-                }
-                None
-            }
-            _ => None,
         }
     }
 }
 
-/// 完整 Cypher 执行器（支持 CREATE 与 DELETE 等写操作）
+/// 合并两个上下文（共享变量必须绑定一致，否则连接失败）
+fn merge_contexts(base: &RowCtx, candidate: &RowCtx) -> Option<RowCtx> {
+    let mut merged = base.clone();
+    for (k, v) in candidate {
+        match merged.get(k) {
+            Some(existing) if existing != v => return None,
+            Some(_) => {}
+            None => {
+                merged.insert(k.clone(), *v);
+            }
+        }
+    }
+    Some(merged)
+}
+
+/// 依据遍历方向求取边上「对端」节点
+fn neighbor_of(edge: &crate::graph::Edge, from: u64) -> u64 {
+    if edge.src_id == from && edge.dst_id == from {
+        from
+    } else if edge.src_id == from {
+        edge.dst_id
+    } else if edge.dst_id == from {
+        edge.src_id
+    } else {
+        edge.dst_id
+    }
+}
+
+fn null_value() -> Value {
+    Value::from("null")
+}
+
+fn is_null(v: &Value) -> bool {
+    matches!(v, Value::String(s) if s == "null")
+}
+
+/// 完整 Cypher 执行器（支持 CREATE / SET / DELETE 等写操作）
 pub struct CypherExecutor<'a> {
     graph: &'a mut DiskGraph,
     index_mgr: &'a mut IndexManager,
@@ -568,84 +940,169 @@ impl<'a> CypherExecutor<'a> {
         stmt: CypherStatement,
     ) -> Result<CypherResultSet, GraphError> {
         match stmt {
-            CypherStatement::Create { pattern } => self.execute_create(pattern),
+            CypherStatement::Create { pattern } => self.execute_create(&[pattern]),
             CypherStatement::Match {
-                pattern,
+                patterns,
                 where_clause,
-                return_clause,
+                set_clause,
                 delete_clause,
+                create_clause,
+                return_clause,
+                order_by,
+                skip,
                 limit,
             } => {
-                if let Some(start_pat) = pattern.nodes.first() {
-                    if let Some(ref lbl) = start_pat.label {
-                        self.index_mgr.ensure_label_index(self.graph, lbl);
+                for p in &patterns {
+                    if let Some(start_pat) = p.nodes.first() {
+                        for lbl in &start_pat.labels {
+                            self.index_mgr.ensure_label_index(self.graph, lbl);
+                        }
                     }
                 }
-                if let Some(del) = delete_clause {
-                    self.execute_match_with_delete(pattern, where_clause, del)
-                } else {
+
+                let mut properties_set = 0;
+                let mut nodes_created = 0;
+                let mut edges_created = 0;
+                let mut nodes_deleted = 0;
+                let mut edges_deleted = 0;
+
+                let writes =
+                    !set_clause.is_empty() || delete_clause.is_some() || create_clause.is_some();
+
+                if !writes {
                     let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
-                    ro.execute_match(pattern, where_clause, return_clause, limit)
+                    return ro.execute_match(
+                        patterns,
+                        where_clause,
+                        return_clause,
+                        &order_by,
+                        skip,
+                        limit,
+                    );
                 }
+
+                let matched = {
+                    let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+                    ro.find_matches(&patterns, &where_clause)?
+                };
+
+                if !set_clause.is_empty() {
+                    properties_set += self.apply_set(&set_clause, &matched)?;
+                }
+
+                if let Some(ref cc) = create_clause {
+                    let (nc, ec) = self.apply_create_clause(cc, &matched)?;
+                    nodes_created += nc;
+                    edges_created += ec;
+                }
+
+                if let Some(ref del) = delete_clause {
+                    let (nd, ed) = self.apply_delete(del, &matched)?;
+                    nodes_deleted += nd;
+                    edges_deleted += ed;
+                }
+
+                // 写语句若有 RETURN 子句，按变更后的图状态重新投影
+                if let Some(items) = return_clause {
+                    let refreshed = {
+                        let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+                        ro.find_matches(&patterns, &where_clause)?
+                    };
+                    let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+                    let mut result = ro.project_results(
+                        &patterns,
+                        refreshed,
+                        Some(items),
+                        &order_by,
+                        skip,
+                        limit,
+                    )?;
+                    result.stats = ExecuteResult {
+                        nodes_created,
+                        edges_created,
+                        nodes_deleted,
+                        edges_deleted,
+                        properties_set,
+                        message: format!(
+                            "Set {} properties, created {} nodes / {} edges, deleted {} nodes / {} edges.",
+                            properties_set, nodes_created, edges_created, nodes_deleted, edges_deleted
+                        ),
+                    };
+                    return Ok(result);
+                }
+
+                let stats = ExecuteResult {
+                    nodes_created,
+                    edges_created,
+                    nodes_deleted,
+                    edges_deleted,
+                    properties_set,
+                    message: format!(
+                        "Set {} properties, created {} nodes / {} edges, deleted {} nodes / {} edges.",
+                        properties_set, nodes_created, edges_created, nodes_deleted, edges_deleted
+                    ),
+                };
+
+                Ok(CypherResultSet {
+                    columns: vec!["Status".to_string()],
+                    rows: vec![Row {
+                        values: vec![Value::from(stats.message.clone())],
+                    }],
+                    stats,
+                })
             }
         }
     }
 
-    /// 执行 CREATE 语句（纯磁盘写入，维护索引）
-    fn execute_create(&mut self, pattern: PathPattern) -> Result<CypherResultSet, GraphError> {
-        let mut var_bindings: HashMap<String, u64> = HashMap::new();
+    /// 执行 CREATE 语句（纯磁盘写入，维护二级索引）
+    fn execute_create(&mut self, patterns: &[PathPattern]) -> Result<CypherResultSet, GraphError> {
         let mut nodes_created = 0;
         let mut edges_created = 0;
 
-        let mut node_ids = Vec::new();
+        for pattern in patterns {
+            let mut node_ids = Vec::new();
 
-        for node_pat in &pattern.nodes {
-            let mut labels = HashSet::new();
-            if let Some(ref l) = node_pat.label {
-                labels.insert(l.clone());
-            }
+            for node_pat in &pattern.nodes {
+                let labels: HashSet<String> = node_pat.labels.iter().cloned().collect();
 
-            let node_id = self
-                .graph
-                .add_node(labels.clone(), node_pat.properties.clone())?;
-            nodes_created += 1;
-            node_ids.push(node_id);
+                let node_id = self
+                    .graph
+                    .add_node(labels.clone(), node_pat.properties.clone())?;
+                nodes_created += 1;
+                node_ids.push(node_id);
 
-            for l in &labels {
-                self.index_mgr.insert_label(l, node_id);
-                self.graph.index_catalog.labels.insert(l.clone());
-                for (k, v) in &node_pat.properties {
-                    self.index_mgr.insert_property(l, k, v.clone(), node_id);
-                    self.graph
-                        .index_catalog
-                        .properties
-                        .insert((l.clone(), k.clone()));
+                for l in &labels {
+                    self.index_mgr.insert_label(l, node_id);
+                    self.graph.index_catalog.labels.insert(l.clone());
+                    for (k, v) in &node_pat.properties {
+                        self.index_mgr.insert_property(l, k, v.clone(), node_id);
+                        self.graph
+                            .index_catalog
+                            .properties
+                            .insert((l.clone(), k.clone()));
+                    }
                 }
             }
 
-            if let Some(ref var) = node_pat.variable {
-                var_bindings.insert(var.clone(), node_id);
+            for (i, edge_pat) in pattern.edges.iter().enumerate() {
+                let src_id = node_ids[i];
+                let dst_id = node_ids[i + 1];
+
+                let rel_type = edge_pat
+                    .rel_type
+                    .clone()
+                    .unwrap_or_else(|| "RELATED".to_string());
+                let weight = edge_pat.weight.unwrap_or(1.0);
+
+                self.graph.add_edge(
+                    src_id,
+                    dst_id,
+                    &rel_type,
+                    edge_pat.properties.clone(),
+                    weight,
+                )?;
+                edges_created += 1;
             }
-        }
-
-        for (i, edge_pat) in pattern.edges.iter().enumerate() {
-            let src_id = node_ids[i];
-            let dst_id = node_ids[i + 1];
-
-            let rel_type = edge_pat
-                .rel_type
-                .clone()
-                .unwrap_or_else(|| "RELATED".to_string());
-            let weight = edge_pat.weight.unwrap_or(1.0);
-
-            self.graph.add_edge(
-                src_id,
-                dst_id,
-                &rel_type,
-                edge_pat.properties.clone(),
-                weight,
-            )?;
-            edges_created += 1;
         }
 
         let stats = ExecuteResult {
@@ -669,53 +1126,224 @@ impl<'a> CypherExecutor<'a> {
         })
     }
 
-    /// 执行带 DELETE / DETACH DELETE 的 MATCH 语句
-    fn execute_match_with_delete(
-        &mut self,
-        pattern: PathPattern,
-        where_clause: Option<Expr>,
-        del: DeleteClause,
-    ) -> Result<CypherResultSet, GraphError> {
-        let matched_contexts = {
-            let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
-            ro.find_matches(&pattern, &where_clause)?
-        };
+    /// 应用 SET 子句：更新属性或追加标签（同步维护二级索引）
+    fn apply_set(&mut self, items: &[SetItem], matched: &[RowCtx]) -> Result<usize, GraphError> {
+        let mut applied = 0;
 
-        let node_vars: HashSet<String> = pattern
-            .nodes
-            .iter()
-            .filter_map(|n| n.variable.clone())
-            .collect();
-        let edge_vars: HashSet<String> = pattern
-            .edges
-            .iter()
-            .filter_map(|e| e.variable.clone())
-            .collect();
+        for ctx in matched {
+            for item in items {
+                match item {
+                    SetItem::Property { var, key, value } => {
+                        let node_id = match ctx.get(var) {
+                            Some(Binding::Node(id)) => *id,
+                            Some(Binding::Edge(id)) => {
+                                let val = {
+                                    let ro =
+                                        CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+                                    ro.eval_expr_value(value, ctx).unwrap_or_else(null_value)
+                                };
+                                // 边属性不参与二级索引，直接写入磁盘溢出页
+                                self.graph.update_edge_property(*id, key.clone(), val)?;
+                                applied += 1;
+                                continue;
+                            }
+                            None => continue,
+                        };
 
-        let mut nodes_deleted = 0;
-        let mut edges_deleted = 0;
-        let mut deleted_node_ids = HashSet::new();
-        let mut deleted_edge_ids = HashSet::new();
+                        let val = {
+                            let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+                            ro.eval_expr_value(value, ctx).unwrap_or_else(null_value)
+                        };
 
-        for ctx in &matched_contexts {
-            for target_var in &del.targets {
-                if let Some(&entity_id) = ctx.get(target_var) {
-                    if node_vars.contains(target_var) {
-                        if deleted_node_ids.insert(entity_id) {
-                            if let Ok(n) = self.graph.remove_node(entity_id) {
-                                nodes_deleted += 1;
-                                edges_deleted += n.outgoing.len() + n.incoming.len();
-                                let labels_bt: BTreeSet<String> = n.labels.into_iter().collect();
-                                self.index_mgr.remove_node_all_indices(
-                                    entity_id,
-                                    &labels_bt,
-                                    &n.properties,
-                                );
+                        let old_val = self
+                            .graph
+                            .get_node(node_id)?
+                            .and_then(|n| n.get_prop(key).cloned());
+
+                        self.graph
+                            .update_node_property(node_id, key.clone(), val.clone())?;
+
+                        if let Some(node) = self.graph.get_node(node_id)? {
+                            for l in &node.labels {
+                                if let Some(ref ov) = old_val {
+                                    if ov != &val {
+                                        self.index_mgr.remove_property(l, key, ov, node_id);
+                                    }
+                                }
+                                self.index_mgr.insert_property(l, key, val.clone(), node_id);
+                                self.graph.index_catalog.labels.insert(l.clone());
+                                self.graph
+                                    .index_catalog
+                                    .properties
+                                    .insert((l.clone(), key.clone()));
                             }
                         }
-                    } else if edge_vars.contains(target_var) {
-                        if deleted_edge_ids.insert(entity_id) {
-                            if self.graph.remove_edge(entity_id).is_ok() {
+                        applied += 1;
+                    }
+                    SetItem::Label { var, label } => {
+                        let node_id = match ctx.get(var) {
+                            Some(Binding::Node(id)) => *id,
+                            _ => continue,
+                        };
+
+                        let mut node = match self.graph.get_node(node_id)? {
+                            Some(n) => n,
+                            None => continue,
+                        };
+                        if node.has_label(label) {
+                            continue;
+                        }
+                        node.labels.insert(label.clone());
+                        // 原地改写节点载荷：绝不触发新节点分配或计数膨胀
+                        self.graph.update_node_payload(
+                            node_id,
+                            node.labels.clone(),
+                            node.properties.clone(),
+                        )?;
+
+                        self.index_mgr.insert_label(label, node_id);
+                        self.graph.index_catalog.labels.insert(label.clone());
+                        for (k, v) in &node.properties {
+                            self.index_mgr.insert_property(label, k, v.clone(), node_id);
+                            self.graph
+                                .index_catalog
+                                .properties
+                                .insert((label.clone(), k.clone()));
+                        }
+                        applied += 1;
+                    }
+                }
+            }
+        }
+
+        Ok(applied)
+    }
+
+    /// 应用 MATCH ... CREATE 子句：复用已绑定变量，仅创建新模式中的新实体
+    fn apply_create_clause(
+        &mut self,
+        pattern: &PathPattern,
+        matched: &[RowCtx],
+    ) -> Result<(usize, usize), GraphError> {
+        let mut nodes_created = 0;
+        let mut edges_created = 0;
+
+        for ctx in matched {
+            let mut node_ids: Vec<u64> = Vec::with_capacity(pattern.nodes.len());
+
+            for node_pat in &pattern.nodes {
+                if let Some(ref var) = node_pat.variable {
+                    if let Some(Binding::Node(existing)) = ctx.get(var) {
+                        node_ids.push(*existing);
+                        continue;
+                    }
+                }
+
+                let labels: HashSet<String> = node_pat.labels.iter().cloned().collect();
+                let node_id = self
+                    .graph
+                    .add_node(labels.clone(), node_pat.properties.clone())?;
+                nodes_created += 1;
+                node_ids.push(node_id);
+
+                for l in &labels {
+                    self.index_mgr.insert_label(l, node_id);
+                    self.graph.index_catalog.labels.insert(l.clone());
+                    for (k, v) in &node_pat.properties {
+                        self.index_mgr.insert_property(l, k, v.clone(), node_id);
+                        self.graph
+                            .index_catalog
+                            .properties
+                            .insert((l.clone(), k.clone()));
+                    }
+                }
+            }
+
+            for (i, edge_pat) in pattern.edges.iter().enumerate() {
+                let src_id = node_ids[i];
+                let dst_id = node_ids[i + 1];
+                let rel_type = edge_pat
+                    .rel_type
+                    .clone()
+                    .unwrap_or_else(|| "RELATED".to_string());
+                let weight = edge_pat.weight.unwrap_or(1.0);
+
+                self.graph.add_edge(
+                    src_id,
+                    dst_id,
+                    &rel_type,
+                    edge_pat.properties.clone(),
+                    weight,
+                )?;
+                edges_created += 1;
+            }
+        }
+
+        Ok((nodes_created, edges_created))
+    }
+
+    /// 应用 DELETE / DETACH DELETE：级联删除关联边并回收 Freelist 槽位
+    fn apply_delete(
+        &mut self,
+        del: &DeleteClause,
+        matched: &[RowCtx],
+    ) -> Result<(usize, usize), GraphError> {
+        let mut nodes_deleted = 0;
+        let mut edges_deleted = 0;
+        let mut deleted_nodes: HashSet<u64> = HashSet::new();
+        let mut deleted_edges: HashSet<u64> = HashSet::new();
+
+        for ctx in matched {
+            for target_var in &del.targets {
+                let binding = match ctx.get(target_var) {
+                    Some(b) => *b,
+                    None => continue,
+                };
+
+                match binding {
+                    Binding::Node(id) => {
+                        if !deleted_nodes.insert(id) {
+                            continue;
+                        }
+
+                        // 先读取节点当前的邻接边（级联删除会清空这些链表）
+                        let node = match self.graph.get_node(id)? {
+                            Some(n) => n,
+                            None => continue,
+                        };
+                        let live_edges: Vec<u64> = node
+                            .outgoing
+                            .iter()
+                            .chain(node.incoming.iter())
+                            .copied()
+                            .filter(|eid| {
+                                self.graph.read_edge_record(*eid).ok().flatten().is_some()
+                            })
+                            .collect();
+
+                        // 标准 Cypher 语义：非 DETACH 删除带关联边的节点必须显式报错
+                        if !del.detach && !live_edges.is_empty() {
+                            return Err(GraphError::General(format!(
+                                "Cannot delete node {} because it still has relationships. \
+                                 Use DETACH DELETE to delete the node and its relationships.",
+                                id
+                            )));
+                        }
+
+                        let removed = self.graph.remove_node(id)?;
+                        nodes_deleted += 1;
+                        for eid in live_edges {
+                            if deleted_edges.insert(eid) {
+                                edges_deleted += 1;
+                            }
+                        }
+                        let labels_bt: BTreeSet<String> = removed.labels.into_iter().collect();
+                        self.index_mgr
+                            .remove_node_all_indices(id, &labels_bt, &removed.properties);
+                    }
+                    Binding::Edge(id) => {
+                        if deleted_edges.insert(id) {
+                            if self.graph.remove_edge(id).is_ok() {
                                 edges_deleted += 1;
                             }
                         }
@@ -724,22 +1352,7 @@ impl<'a> CypherExecutor<'a> {
             }
         }
 
-        let stats = ExecuteResult {
-            nodes_created: 0,
-            edges_created: 0,
-            nodes_deleted,
-            edges_deleted,
-            properties_set: 0,
-            message: format!("Deleted {} nodes, {} edges.", nodes_deleted, edges_deleted),
-        };
-
-        Ok(CypherResultSet {
-            columns: vec!["Status".to_string()],
-            rows: vec![Row {
-                values: vec![Value::from(stats.message.clone())],
-            }],
-            stats,
-        })
+        Ok((nodes_deleted, edges_deleted))
     }
 }
 
@@ -753,16 +1366,30 @@ pub fn execute_cypher_read(
     let tokens = lexer.tokenize()?;
     let mut parser = crate::cypher::parser::Parser::new(tokens);
     let statement = parser.parse()?;
+    if statement.is_mutating() {
+        return Err(GraphError::General(
+            "Read-only executor cannot execute mutating Cypher statement".into(),
+        ));
+    }
     match statement {
         CypherStatement::Match {
-            pattern,
+            patterns,
             where_clause,
             return_clause,
-            delete_clause: None,
+            order_by,
+            skip,
             limit,
+            ..
         } => {
             let executor = CypherReadOnlyExecutor::new(graph, index_mgr);
-            executor.execute_match(pattern, where_clause, return_clause, limit)
+            executor.execute_match(
+                patterns,
+                where_clause,
+                return_clause,
+                &order_by,
+                skip,
+                limit,
+            )
         }
         _ => Err(GraphError::General(
             "Read-only executor cannot execute mutating Cypher statement".into(),

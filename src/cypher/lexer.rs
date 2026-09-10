@@ -8,11 +8,24 @@ pub enum Token {
     Where,
     Return,
     Limit,
+    Skip,
     Delete,
     Detach,
+    Set,
+    Order,
+    By,
+    Asc,
+    Desc,
     And,
     Or,
     As,
+
+    // 聚合函数
+    Count,
+    Sum,
+    Avg,
+    Min,
+    Max,
 
     // 标识符与字面量
     Ident(String),
@@ -55,9 +68,23 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// 前瞻第 2 个字符（不消费）
+    fn peek_second(&self) -> Option<char> {
+        let mut it = self.chars.clone();
+        it.next();
+        it.next()
+    }
+
+    /// 前瞻第 3 个字符（不消费）
+    fn peek_third(&self) -> Option<char> {
+        let mut it = self.chars.clone();
+        it.next();
+        it.next();
+        it.next()
+    }
+
     pub fn tokenize(mut self) -> Result<Vec<Token>, GraphError> {
         let mut tokens = Vec::new();
-
         while let Some(&c) = self.chars.peek() {
             if c.is_whitespace() {
                 self.chars.next();
@@ -65,6 +92,25 @@ impl<'a> Lexer<'a> {
             }
 
             match c {
+                // 行注释：`//` 与 `--`（后者要求后续字符不是 '>'，避免与 `-->` 箭头歧义）
+                '/' if self.peek_second() == Some('/') => {
+                    self.chars.next();
+                    self.chars.next();
+                    for ch in self.chars.by_ref() {
+                        if ch == '\n' {
+                            break;
+                        }
+                    }
+                }
+                '-' if self.peek_second() == Some('-') && self.peek_third() != Some('>') => {
+                    self.chars.next();
+                    self.chars.next();
+                    for ch in self.chars.by_ref() {
+                        if ch == '\n' {
+                            break;
+                        }
+                    }
+                }
                 '(' => {
                     self.chars.next();
                     tokens.push(Token::LParen);
@@ -228,11 +274,22 @@ impl<'a> Lexer<'a> {
                         "WHERE" => tokens.push(Token::Where),
                         "RETURN" => tokens.push(Token::Return),
                         "LIMIT" => tokens.push(Token::Limit),
+                        "SKIP" => tokens.push(Token::Skip),
                         "DELETE" => tokens.push(Token::Delete),
                         "DETACH" => tokens.push(Token::Detach),
+                        "SET" => tokens.push(Token::Set),
+                        "ORDER" => tokens.push(Token::Order),
+                        "BY" => tokens.push(Token::By),
+                        "ASC" => tokens.push(Token::Asc),
+                        "DESC" => tokens.push(Token::Desc),
                         "AND" => tokens.push(Token::And),
                         "OR" => tokens.push(Token::Or),
                         "AS" => tokens.push(Token::As),
+                        "COUNT" => tokens.push(Token::Count),
+                        "SUM" => tokens.push(Token::Sum),
+                        "AVG" => tokens.push(Token::Avg),
+                        "MIN" => tokens.push(Token::Min),
+                        "MAX" => tokens.push(Token::Max),
                         "TRUE" => tokens.push(Token::Literal(Value::from(true))),
                         "FALSE" => tokens.push(Token::Literal(Value::from(false))),
                         _ => tokens.push(Token::Ident(ident)),

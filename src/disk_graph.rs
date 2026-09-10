@@ -1,11 +1,12 @@
 use crate::buffer::BufferPoolManager;
 use crate::graph::{Direction, Edge, GraphError, Node, Value};
 use crate::page::{
-    DirectoryPage, EdgeRecord, HeaderPage, NodeRecord, PageId, PropertyPage, DIR_ENTRIES_PER_PAGE,
-    EDGE_RECORDS_PER_PAGE, INVALID_PAGE_ID, NODE_RECORDS_PER_PAGE,
+    DirectoryPage, EdgeRecord, HeaderPage, NodeRecord, PageId, PropertyPage, SlottedPropPage,
+    DIR_ENTRIES_PER_PAGE, EDGE_RECORDS_PER_PAGE, INVALID_PAGE_ID, NODE_RECORDS_PER_PAGE,
+    SLOT_OVERFLOW,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 /// Header 物理页编号
@@ -66,16 +67,45 @@ impl StringDict {
 
 /// 内部物理页分配元数据
 #[derive(Debug, Clone)]
-struct AllocatorMeta {
-    allocated_pages: PageId,
-    first_free_page_id: PageId,
-    first_free_overflow_page: PageId,
-    node_dir_page_id: PageId,
-    edge_dir_page_id: PageId,
-    direct_node_pages: [PageId; HeaderPage::DIRECT_NODE_PAGES_COUNT],
-    direct_edge_pages: [PageId; HeaderPage::DIRECT_EDGE_PAGES_COUNT],
-    node_page_cache: HashMap<usize, PageId>,
-    edge_page_cache: HashMap<usize, PageId>,
+pub struct AllocatorMeta {
+    pub allocated_pages: PageId,
+    pub first_free_page_id: PageId,
+    pub first_free_overflow_page: PageId,
+    /// 已腾空可整页复用的槽位属性页回收链
+    pub first_free_prop_page: PageId,
+    /// 最近分配过的槽位属性页（写入位点提示，避免每次写入都从头探测）
+    pub last_prop_page_id: PageId,
+    pub node_dir_page_id: PageId,
+    pub edge_dir_page_id: PageId,
+    pub direct_node_pages: [PageId; HeaderPage::DIRECT_NODE_PAGES_COUNT],
+    pub direct_edge_pages: [PageId; HeaderPage::DIRECT_EDGE_PAGES_COUNT],
+    pub node_page_cache: HashMap<usize, PageId>,
+    pub edge_page_cache: HashMap<usize, PageId>,
+}
+
+/// 槽位属性页提示环容量：有界 O(1) 元数据，不承载任何图拓扑
+pub const PROP_PAGE_HINT_CAPACITY: usize = 32;
+/// 提示环未命中时向后探测的已分配页数上限
+const PROP_PAGE_PROBE_LIMIT: u32 = 64;
+
+/// 图轻量元数据快照：用于事务失败时把内存态元数据精确回拨，保证失败事务零残留。
+///
+/// 该快照只记录 O(1) 规模的标量元数据与字典/目录，不承载任何图拓扑数据，
+/// 严格符合「DiskGraph 为唯一数据源」的纯外存架构约束。
+#[derive(Debug, Clone)]
+pub struct GraphMetaSnapshot {
+    next_node_id: u64,
+    next_edge_id: u64,
+    node_count: usize,
+    edge_count: usize,
+    first_free_node_id: u64,
+    first_free_edge_id: u64,
+    dict: StringDict,
+    dict_dirty: bool,
+    dict_page_id: PageId,
+    index_catalog_page_id: PageId,
+    index_catalog: crate::index::IndexCatalog,
+    allocator: AllocatorMeta,
 }
 
 /// 磁盘定长记录图存储驱动引擎
@@ -95,6 +125,8 @@ pub struct DiskGraph {
     pub index_catalog_page_id: PageId,
     pub index_catalog: crate::index::IndexCatalog,
     pub tx_modified_pages: Arc<Mutex<HashSet<PageId>>>,
+    /// 槽位属性页写入提示环（有界，仅页号，不含属性内容）
+    prop_page_hint: VecDeque<PageId>,
     allocator: Arc<Mutex<AllocatorMeta>>,
 }
 
@@ -114,10 +146,13 @@ impl DiskGraph {
             index_catalog_page_id: INVALID_PAGE_ID,
             index_catalog: crate::index::IndexCatalog::default(),
             tx_modified_pages: Arc::new(Mutex::new(HashSet::new())),
+            prop_page_hint: VecDeque::new(),
             allocator: Arc::new(Mutex::new(AllocatorMeta {
                 allocated_pages: 1,
                 first_free_page_id: INVALID_PAGE_ID,
                 first_free_overflow_page: INVALID_PAGE_ID,
+                first_free_prop_page: INVALID_PAGE_ID,
+                last_prop_page_id: INVALID_PAGE_ID,
                 node_dir_page_id: INVALID_PAGE_ID,
                 edge_dir_page_id: INVALID_PAGE_ID,
                 direct_node_pages: [0; HeaderPage::DIRECT_NODE_PAGES_COUNT],
@@ -138,6 +173,24 @@ impl DiskGraph {
 
         let magic = &frame.data[0..4];
         if magic == crate::page::DB_PAGE_MAGIC || magic == crate::page::DB_PAGE_MAGIC_LEGACY {
+            // 物理格式版本守卫：1.0 的「每实体独占整页」属性布局与 1.1 槽位页不兼容
+            let file_version = u32::from_le_bytes(
+                frame.data[HeaderPage::VERSION_OFFSET..HeaderPage::VERSION_OFFSET + 4]
+                    .try_into()
+                    .unwrap(),
+            );
+            if file_version < crate::page::DB_PAGE_VERSION {
+                bpm.unpin_page(HEADER_PAGE_ID, false);
+                return Err(GraphError::StorageError(format!(
+                    "Database file format version {} is not supported by GraphLite 1.1 \
+                     (current format version {}). Export the graph with GraphLite 1.0 via \
+                     `graphlite-cli <old.db>` then `.dump <file>`, and re-import the script \
+                     into a fresh database.",
+                    file_version,
+                    crate::page::DB_PAGE_VERSION
+                )));
+            }
+
             self.next_node_id = u64::from_le_bytes(
                 frame.data[HeaderPage::NEXT_NODE_ID_OFFSET..HeaderPage::NEXT_NODE_ID_OFFSET + 8]
                     .try_into()
@@ -175,6 +228,17 @@ impl DiskGraph {
             );
             let free_page = u32::from_le_bytes(
                 frame.data[HeaderPage::PAGE_FREELIST_OFFSET..HeaderPage::PAGE_FREELIST_OFFSET + 4]
+                    .try_into()
+                    .unwrap(),
+            );
+            let free_prop_page = u32::from_le_bytes(
+                frame.data[HeaderPage::PROP_FREELIST_OFFSET..HeaderPage::PROP_FREELIST_OFFSET + 4]
+                    .try_into()
+                    .unwrap(),
+            );
+            let last_prop_page = u32::from_le_bytes(
+                frame.data
+                    [HeaderPage::LAST_PROP_PAGE_OFFSET..HeaderPage::LAST_PROP_PAGE_OFFSET + 4]
                     .try_into()
                     .unwrap(),
             );
@@ -237,6 +301,8 @@ impl DiskGraph {
                 alloc.edge_dir_page_id = edge_dir;
                 alloc.first_free_overflow_page = free_overflow;
                 alloc.first_free_page_id = free_page;
+                alloc.first_free_prop_page = free_prop_page;
+                alloc.last_prop_page_id = last_prop_page;
                 alloc.direct_node_pages = direct_node_pages;
                 alloc.direct_edge_pages = direct_edge_pages;
             }
@@ -245,7 +311,7 @@ impl DiskGraph {
             bpm.unpin_page(HEADER_PAGE_ID, false);
 
             if self.dict_page_id != INVALID_PAGE_ID && self.dict_page_id != 0 {
-                let payload = self.read_overflow_payload_internal(&mut bpm, self.dict_page_id)?;
+                let payload = Self::read_overflow_payload_internal(&mut bpm, self.dict_page_id)?;
                 if let Ok(d) = bincode::deserialize::<StringDict>(&payload) {
                     self.dict = d;
                 }
@@ -260,7 +326,7 @@ impl DiskGraph {
 
             if self.index_catalog_page_id != INVALID_PAGE_ID && self.index_catalog_page_id != 0 {
                 if let Ok(payload) =
-                    self.read_overflow_payload_internal(&mut bpm, self.index_catalog_page_id)
+                    Self::read_overflow_payload_internal(&mut bpm, self.index_catalog_page_id)
                 {
                     if let Ok(cat) = bincode::deserialize::<crate::index::IndexCatalog>(&payload) {
                         self.index_catalog = cat;
@@ -389,6 +455,351 @@ impl DiskGraph {
             bpm.mark_page_uncommitted(curr);
 
             curr = next_pid;
+        }
+        Ok(())
+    }
+
+    /// 分配一张全新的槽位属性页（优先复用已腾空的整页回收链，否则新分配并记入写入位点）
+    fn raw_allocate_prop_page(
+        bpm: &mut BufferPoolManager,
+        allocator: &Arc<Mutex<AllocatorMeta>>,
+        tx_modified: &Arc<Mutex<HashSet<PageId>>>,
+    ) -> Result<PageId, GraphError> {
+        let recycled = {
+            let alloc = allocator.lock().unwrap();
+            let pid = alloc.first_free_prop_page;
+            if pid == INVALID_PAGE_ID || pid == 0 {
+                None
+            } else {
+                Some(pid)
+            }
+        };
+
+        let pid = match recycled {
+            Some(pid) => {
+                // 从回收链头部弹出，并读出后继
+                let fid = bpm.fetch_page(pid)?;
+                let next_free = {
+                    let frame = bpm.get_frame(fid);
+                    u32::from_le_bytes(frame.data[0..4].try_into().unwrap())
+                };
+                bpm.unpin_page(pid, false);
+                allocator.lock().unwrap().first_free_prop_page = next_free;
+                pid
+            }
+            None => Self::raw_allocate_page(bpm, allocator, tx_modified)?,
+        };
+
+        // 初始化为空槽位页
+        let fid = bpm.fetch_page(pid)?;
+        {
+            let frame = bpm.get_frame_mut(fid);
+            SlottedPropPage::init(&mut frame.data);
+        }
+        bpm.unpin_page(pid, true);
+
+        {
+            let mut alloc = allocator.lock().unwrap();
+            alloc.last_prop_page_id = pid;
+            if pid >= alloc.allocated_pages {
+                alloc.allocated_pages = pid + 1;
+            }
+        }
+
+        if let Ok(mut set) = tx_modified.lock() {
+            set.insert(pid);
+        }
+        bpm.mark_page_uncommitted(pid);
+        Ok(pid)
+    }
+
+    /// 整页回收一张已腾空的槽位属性页，挂入回收链
+    fn raw_free_prop_page(
+        bpm: &mut BufferPoolManager,
+        allocator: &Arc<Mutex<AllocatorMeta>>,
+        tx_modified: &Arc<Mutex<HashSet<PageId>>>,
+        pid: PageId,
+        prop_page_hint: &mut VecDeque<PageId>,
+    ) -> Result<(), GraphError> {
+        if pid == INVALID_PAGE_ID || pid == 0 {
+            return Ok(());
+        }
+
+        let old_free = {
+            let mut alloc = allocator.lock().unwrap();
+            let old = alloc.first_free_prop_page;
+            alloc.first_free_prop_page = pid;
+            if alloc.last_prop_page_id == pid {
+                alloc.last_prop_page_id = INVALID_PAGE_ID;
+            }
+            old
+        };
+
+        let fid = bpm.fetch_page(pid)?;
+        {
+            let frame = bpm.get_frame_mut(fid);
+            frame.data.fill(0);
+            frame.data[0..4].copy_from_slice(&old_free.to_le_bytes());
+        }
+        bpm.unpin_page(pid, true);
+
+        if let Ok(mut set) = tx_modified.lock() {
+            set.insert(pid);
+        }
+        bpm.mark_page_uncommitted(pid);
+
+        prop_page_hint.retain(|&candidate| candidate != pid);
+        Ok(())
+    }
+
+    /// 把页号压入有界提示环（去重，超出容量淘汰最旧项）
+    fn push_prop_hint(hint: &mut VecDeque<PageId>, pid: PageId) {
+        if pid == INVALID_PAGE_ID || pid == 0 {
+            return;
+        }
+        hint.retain(|&candidate| candidate != pid);
+        if hint.len() >= PROP_PAGE_HINT_CAPACITY {
+            hint.pop_front();
+        }
+        hint.push_back(pid);
+    }
+
+    /// 尝试把记录插入指定槽位属性页；返回槽位号（不可容纳时返回 `None`）
+    fn try_insert_into_prop_page(
+        bpm: &mut BufferPoolManager,
+        tx_modified: &Arc<Mutex<HashSet<PageId>>>,
+        pid: PageId,
+        payload: &[u8],
+    ) -> Result<Option<u8>, GraphError> {
+        if pid == INVALID_PAGE_ID || pid == 0 {
+            return Ok(None);
+        }
+        let fid = bpm.fetch_page(pid)?;
+        if !SlottedPropPage::is_slotted(&bpm.get_frame(fid).data) {
+            // 该页仍承载溢出链内容（字典/目录等），不可混用
+            bpm.unpin_page(pid, false);
+            return Ok(None);
+        }
+        let slot = {
+            let frame = bpm.get_frame_mut(fid);
+            SlottedPropPage::insert(&mut frame.data, payload)
+        };
+        match slot {
+            Some(slot) => {
+                bpm.unpin_page(pid, true);
+                bpm.mark_page_uncommitted(pid);
+                if let Ok(mut set) = tx_modified.lock() {
+                    set.insert(pid);
+                }
+                Ok(Some(slot))
+            }
+            None => {
+                bpm.unpin_page(pid, false);
+                Ok(None)
+            }
+        }
+    }
+
+    /// 查找或新建一张可容纳该记录的槽位属性页
+    fn locate_prop_page_for(
+        bpm: &mut BufferPoolManager,
+        allocator: &Arc<Mutex<AllocatorMeta>>,
+        tx_modified: &Arc<Mutex<HashSet<PageId>>>,
+        hint: &mut VecDeque<PageId>,
+        payload: &[u8],
+    ) -> Result<PageId, GraphError> {
+        let record_len = payload.len();
+
+        // 1. 提示环：最近写入过的页最可能仍有空间（O(1) 命中热页）
+        let hints: Vec<PageId> = hint.iter().copied().collect();
+        for pid in hints.into_iter().rev() {
+            let fid = bpm.fetch_page(pid)?;
+            let fits = {
+                let frame = bpm.get_frame(fid);
+                SlottedPropPage::is_slotted(&frame.data)
+                    && SlottedPropPage::can_fit(&frame.data, record_len)
+            };
+            bpm.unpin_page(pid, false);
+            if fits {
+                return Ok(pid);
+            }
+        }
+
+        // 2. 向后探测：从写入位点起最多扫描 PROP_PAGE_PROBE_LIMIT 张已分配页
+        let mut probe = {
+            let alloc = allocator.lock().unwrap();
+            let start = if alloc.last_prop_page_id == INVALID_PAGE_ID {
+                1
+            } else {
+                alloc.last_prop_page_id + 1
+            };
+            (start, alloc.allocated_pages)
+        };
+        if probe.1 <= probe.0 {
+            let alloc = allocator.lock().unwrap();
+            probe = (1, alloc.allocated_pages);
+        }
+
+        let upper = probe.0.saturating_add(PROP_PAGE_PROBE_LIMIT);
+        let mut candidate = probe.0;
+        while candidate < probe.1 && candidate < upper {
+            if candidate != 0 && candidate != HEADER_PAGE_ID {
+                let fid = bpm.fetch_page(candidate)?;
+                let fits = {
+                    let frame = bpm.get_frame(fid);
+                    SlottedPropPage::is_slotted(&frame.data)
+                        && SlottedPropPage::can_fit(&frame.data, record_len)
+                };
+                bpm.unpin_page(candidate, false);
+                if fits {
+                    Self::push_prop_hint(hint, candidate);
+                    return Ok(candidate);
+                }
+            }
+            candidate += 1;
+        }
+
+        // 3. 全部未命中：分配新页
+        let pid = Self::raw_allocate_prop_page(bpm, allocator, tx_modified)?;
+        Self::push_prop_hint(hint, pid);
+        Ok(pid)
+    }
+
+    /// 写入一条属性记录，返回打包后的属性指针
+    fn write_prop_record(
+        bpm: &mut BufferPoolManager,
+        allocator: &Arc<Mutex<AllocatorMeta>>,
+        tx_modified: &Arc<Mutex<HashSet<PageId>>>,
+        hint: &mut VecDeque<PageId>,
+        payload: &[u8],
+    ) -> Result<u32, GraphError> {
+        if payload.is_empty() {
+            return Ok(crate::page::PROP_PTR_NONE);
+        }
+
+        // 超过 1KB 的行记录走溢出页链
+        if payload.len() > crate::page::INLINE_RECORD_MAX {
+            let root = {
+                let chunk_size = PropertyPage::MAX_PAYLOAD;
+                let num_chunks = payload.len().div_ceil(chunk_size);
+                let mut pids = Vec::with_capacity(num_chunks);
+                for _ in 0..num_chunks {
+                    pids.push(Self::raw_allocate_overflow_page(
+                        bpm,
+                        allocator,
+                        tx_modified,
+                    )?);
+                }
+                for i in 0..num_chunks {
+                    let pid = pids[i];
+                    let next_pid = if i + 1 < num_chunks {
+                        pids[i + 1]
+                    } else {
+                        INVALID_PAGE_ID
+                    };
+                    let start = i * chunk_size;
+                    let end = (start + chunk_size).min(payload.len());
+                    let encoded = PropertyPage::encode(next_pid, &payload[start..end]);
+
+                    let fid = bpm.fetch_page(pid)?;
+                    {
+                        let frame = bpm.get_frame_mut(fid);
+                        frame.data.copy_from_slice(&encoded);
+                    }
+                    bpm.unpin_page(pid, true);
+                    if let Ok(mut set) = tx_modified.lock() {
+                        set.insert(pid);
+                    }
+                    bpm.mark_page_uncommitted(pid);
+                }
+                pids[0]
+            };
+            return Ok(crate::page::pack_prop_ptr(root, SLOT_OVERFLOW));
+        }
+
+        let pid = Self::locate_prop_page_for(bpm, allocator, tx_modified, hint, payload)?;
+        match Self::try_insert_into_prop_page(bpm, tx_modified, pid, payload)? {
+            Some(slot) => Ok(crate::page::pack_prop_ptr(pid, slot)),
+            None => {
+                // 定位阶段的判断与实际插入之间存在竞争（同页并发写），退化为新页
+                let pid = Self::raw_allocate_prop_page(bpm, allocator, tx_modified)?;
+                Self::push_prop_hint(hint, pid);
+                match Self::try_insert_into_prop_page(bpm, tx_modified, pid, payload)? {
+                    Some(slot) => Ok(crate::page::pack_prop_ptr(pid, slot)),
+                    None => Err(GraphError::StorageError(
+                        "Failed to insert property record into a freshly allocated slotted page"
+                            .into(),
+                    )),
+                }
+            }
+        }
+    }
+
+    /// 读取属性指针指向的属性记录（自动区分槽位页与溢出链）
+    fn read_prop_record(bpm: &mut BufferPoolManager, ptr: u32) -> Result<Vec<u8>, GraphError> {
+        if crate::page::is_none_ptr(ptr) {
+            return Ok(Vec::new());
+        }
+        let (page_id, slot) = crate::page::unpack_prop_ptr(ptr);
+
+        if crate::page::is_overflow_ptr(ptr) {
+            return Self::read_overflow_payload_internal(bpm, page_id);
+        }
+
+        let fid = bpm.fetch_page(page_id)?;
+        let data = {
+            let frame = bpm.get_frame(fid);
+            if !SlottedPropPage::is_slotted(&frame.data) {
+                None
+            } else {
+                SlottedPropPage::read(&frame.data, slot)
+            }
+        };
+        bpm.unpin_page(page_id, false);
+        match data {
+            Some(bytes) => Ok(bytes),
+            None => Err(GraphError::StorageError(format!(
+                "Slotted property record missing: page {} slot {}",
+                page_id, slot
+            ))),
+        }
+    }
+
+    /// 释放属性指针占用的空间（槽位页标死槽并按需整页回收；溢出链整体回收）
+    fn free_prop_record(
+        bpm: &mut BufferPoolManager,
+        allocator: &Arc<Mutex<AllocatorMeta>>,
+        tx_modified: &Arc<Mutex<HashSet<PageId>>>,
+        hint: &mut VecDeque<PageId>,
+        ptr: u32,
+    ) -> Result<(), GraphError> {
+        if crate::page::is_none_ptr(ptr) {
+            return Ok(());
+        }
+        let (page_id, slot) = crate::page::unpack_prop_ptr(ptr);
+
+        if crate::page::is_overflow_ptr(ptr) {
+            return Self::raw_free_overflow_chain(bpm, allocator, tx_modified, page_id);
+        }
+
+        let fid = bpm.fetch_page(page_id)?;
+        let became_empty = {
+            let frame = bpm.get_frame_mut(fid);
+            if SlottedPropPage::is_slotted(&frame.data) {
+                let _ = SlottedPropPage::remove(&mut frame.data, slot);
+                SlottedPropPage::is_empty(&frame.data)
+            } else {
+                false
+            }
+        };
+        bpm.unpin_page(page_id, true);
+        bpm.mark_page_uncommitted(page_id);
+        if let Ok(mut set) = tx_modified.lock() {
+            set.insert(page_id);
+        }
+
+        if became_empty {
+            Self::raw_free_prop_page(bpm, allocator, tx_modified, page_id, hint)?;
         }
         Ok(())
     }
@@ -619,55 +1030,8 @@ impl DiskGraph {
         }
     }
 
-    /// 多页写入变长属性载荷
-    fn write_overflow_payload_internal(
-        &self,
-        bpm: &mut BufferPoolManager,
-        payload: &[u8],
-    ) -> Result<PageId, GraphError> {
-        if payload.is_empty() {
-            return Ok(INVALID_PAGE_ID);
-        }
-        let chunk_size = PropertyPage::MAX_PAYLOAD;
-        let num_chunks = payload.len().div_ceil(chunk_size);
-        let mut pids = Vec::with_capacity(num_chunks);
-        for _ in 0..num_chunks {
-            pids.push(Self::raw_allocate_overflow_page(
-                bpm,
-                &self.allocator,
-                &self.tx_modified_pages,
-            )?);
-        }
-
-        for i in 0..num_chunks {
-            let pid = pids[i];
-            let next_pid = if i + 1 < num_chunks {
-                pids[i + 1]
-            } else {
-                INVALID_PAGE_ID
-            };
-            let start = i * chunk_size;
-            let end = (start + chunk_size).min(payload.len());
-            let chunk = &payload[start..end];
-            let encoded = PropertyPage::encode(next_pid, chunk);
-
-            let fid = bpm.fetch_page(pid)?;
-            let frame = bpm.get_frame_mut(fid);
-            frame.data.copy_from_slice(&encoded);
-            bpm.unpin_page(pid, true);
-
-            if let Ok(mut set) = self.tx_modified_pages.lock() {
-                set.insert(pid);
-            }
-            bpm.mark_page_uncommitted(pid);
-        }
-
-        Ok(pids[0])
-    }
-
     /// 多页读取变长属性载荷
     fn read_overflow_payload_internal(
-        &self,
         bpm: &mut BufferPoolManager,
         start_pid: PageId,
     ) -> Result<Vec<u8>, GraphError> {
@@ -707,9 +1071,11 @@ impl DiskGraph {
                 inline_dict_len = dict_bytes.len() as u32;
             } else {
                 if self.dict_page_id == INVALID_PAGE_ID || self.dict_page_id == 0 {
-                    if let Ok(pid) =
-                        Self::raw_allocate_page(&mut bpm, &self.allocator, &self.tx_modified_pages)
-                    {
+                    if let Ok(pid) = Self::raw_allocate_overflow_page(
+                        &mut bpm,
+                        &self.allocator,
+                        &self.tx_modified_pages,
+                    ) {
                         self.dict_page_id = pid;
                     }
                 }
@@ -729,9 +1095,11 @@ impl DiskGraph {
             } else {
                 if self.index_catalog_page_id == INVALID_PAGE_ID || self.index_catalog_page_id == 0
                 {
-                    if let Ok(pid) =
-                        Self::raw_allocate_page(&mut bpm, &self.allocator, &self.tx_modified_pages)
-                    {
+                    if let Ok(pid) = Self::raw_allocate_overflow_page(
+                        &mut bpm,
+                        &self.allocator,
+                        &self.tx_modified_pages,
+                    ) {
                         self.index_catalog_page_id = pid;
                     }
                 }
@@ -792,6 +1160,10 @@ impl DiskGraph {
             .copy_from_slice(&alloc.edge_dir_page_id.to_le_bytes());
         frame.data[HeaderPage::OVERFLOW_FREELIST_OFFSET..HeaderPage::OVERFLOW_FREELIST_OFFSET + 4]
             .copy_from_slice(&alloc.first_free_overflow_page.to_le_bytes());
+        frame.data[HeaderPage::PROP_FREELIST_OFFSET..HeaderPage::PROP_FREELIST_OFFSET + 4]
+            .copy_from_slice(&alloc.first_free_prop_page.to_le_bytes());
+        frame.data[HeaderPage::LAST_PROP_PAGE_OFFSET..HeaderPage::LAST_PROP_PAGE_OFFSET + 4]
+            .copy_from_slice(&alloc.last_prop_page_id.to_le_bytes());
 
         frame.data[HeaderPage::INLINE_DICT_LEN_OFFSET..HeaderPage::INLINE_DICT_LEN_OFFSET + 4]
             .copy_from_slice(&inline_dict_len.to_le_bytes());
@@ -975,18 +1347,25 @@ impl DiskGraph {
         Ok(())
     }
 
-    /// 写入节点完整属性数据至溢出链表
-    pub fn write_node_data(&mut self, data: &NodeData) -> Result<PageId, GraphError> {
-        let serialized =
-            bincode::serialize(data).map_err(|e| GraphError::SerializationError(e.to_string()))?;
+    /// 写入节点载荷（标签集合 + 属性字典）为**单条紧凑记录**，返回属性指针。
+    ///
+    /// 记录 ≤1KB 时紧凑打包进共享槽位页（多条记录共处一页）；>1KB 时走溢出页链。
+    pub fn write_node_data(&mut self, data: &NodeData) -> Result<u32, GraphError> {
+        let payload = Self::encode_node_data(data)?;
 
         let mut bpm = self.bpm.lock().unwrap();
-        self.write_overflow_payload_internal(&mut bpm, &serialized)
+        Self::write_prop_record(
+            &mut bpm,
+            &self.allocator,
+            &self.tx_modified_pages,
+            &mut self.prop_page_hint,
+            &payload,
+        )
     }
 
-    /// 读取节点完整属性数据
-    pub fn read_node_data(&self, page_id: PageId) -> Result<NodeData, GraphError> {
-        if page_id == INVALID_PAGE_ID || page_id == 0 {
+    /// 读取节点载荷
+    pub fn read_node_data(&self, ptr: u32) -> Result<NodeData, GraphError> {
+        if crate::page::is_none_ptr(ptr) {
             return Ok(NodeData {
                 labels: HashSet::new(),
                 properties: HashMap::new(),
@@ -994,46 +1373,122 @@ impl DiskGraph {
         }
 
         let mut bpm = self.bpm.lock().unwrap();
-        let payload = self.read_overflow_payload_internal(&mut bpm, page_id)?;
+        let payload = Self::read_prop_record(&mut bpm, ptr)?;
         if payload.is_empty() {
             return Ok(NodeData {
                 labels: HashSet::new(),
                 properties: HashMap::new(),
             });
         }
-        bincode::deserialize(&payload).map_err(|e| GraphError::SerializationError(e.to_string()))
+        Self::decode_node_data(&payload)
     }
 
-    /// 写入边属性映射
+    /// 释放节点载荷占用的存储（槽位退还或溢出链整体回收）
+    pub fn free_node_data(&mut self, ptr: u32) -> Result<(), GraphError> {
+        let mut bpm = self.bpm.lock().unwrap();
+        Self::free_prop_record(
+            &mut bpm,
+            &self.allocator,
+            &self.tx_modified_pages,
+            &mut self.prop_page_hint,
+            ptr,
+        )
+    }
+
+    /// 写入边属性映射为单条紧凑记录，返回属性指针
     pub fn write_edge_properties(
         &mut self,
         props: &HashMap<String, Value>,
-    ) -> Result<PageId, GraphError> {
+    ) -> Result<u32, GraphError> {
         if props.is_empty() {
-            return Ok(INVALID_PAGE_ID);
+            return Ok(crate::page::PROP_PTR_NONE);
         }
-        let serialized =
-            bincode::serialize(props).map_err(|e| GraphError::SerializationError(e.to_string()))?;
+        let payload = crate::page::encode_props(props);
 
         let mut bpm = self.bpm.lock().unwrap();
-        self.write_overflow_payload_internal(&mut bpm, &serialized)
+        Self::write_prop_record(
+            &mut bpm,
+            &self.allocator,
+            &self.tx_modified_pages,
+            &mut self.prop_page_hint,
+            &payload,
+        )
     }
 
     /// 读取边属性映射
-    pub fn read_edge_properties(
-        &self,
-        page_id: PageId,
-    ) -> Result<HashMap<String, Value>, GraphError> {
-        if page_id == INVALID_PAGE_ID || page_id == 0 {
+    pub fn read_edge_properties(&self, ptr: u32) -> Result<HashMap<String, Value>, GraphError> {
+        if crate::page::is_none_ptr(ptr) {
             return Ok(HashMap::new());
         }
 
         let mut bpm = self.bpm.lock().unwrap();
-        let payload = self.read_overflow_payload_internal(&mut bpm, page_id)?;
+        let payload = Self::read_prop_record(&mut bpm, ptr)?;
         if payload.is_empty() {
             return Ok(HashMap::new());
         }
-        bincode::deserialize(&payload).map_err(|e| GraphError::SerializationError(e.to_string()))
+        crate::page::decode_props(&payload)
+            .ok_or_else(|| GraphError::SerializationError("corrupted edge property record".into()))
+    }
+
+    /// 释放边属性记录占用的存储
+    pub fn free_edge_properties(&mut self, ptr: u32) -> Result<(), GraphError> {
+        let mut bpm = self.bpm.lock().unwrap();
+        Self::free_prop_record(
+            &mut bpm,
+            &self.allocator,
+            &self.tx_modified_pages,
+            &mut self.prop_page_hint,
+            ptr,
+        )
+    }
+
+    /// 编码节点载荷：`varint(label_count) | label... | encode_props(properties)`
+    fn encode_node_data(data: &NodeData) -> Result<Vec<u8>, GraphError> {
+        let mut codec = crate::page::PropCodec::new();
+        codec.push_varint(data.labels.len() as u64);
+        for label in &data.labels {
+            codec.push_key(label);
+        }
+        codec.push_varint(data.properties.len() as u64);
+        for (key, value) in &data.properties {
+            codec.push_key(key);
+            codec.push_value(value);
+        }
+        Ok(codec.into_bytes())
+    }
+
+    /// 解码节点载荷
+    fn decode_node_data(payload: &[u8]) -> Result<NodeData, GraphError> {
+        let mut reader = crate::page::PropReader::new(payload);
+
+        let label_count = reader
+            .read_varint()
+            .ok_or_else(|| GraphError::SerializationError("corrupted node label count".into()))?
+            as usize;
+        let mut labels = HashSet::with_capacity(label_count);
+        for _ in 0..label_count {
+            let label = reader
+                .read_key()
+                .ok_or_else(|| GraphError::SerializationError("corrupted node label".into()))?;
+            labels.insert(label);
+        }
+
+        let prop_count = reader
+            .read_varint()
+            .ok_or_else(|| GraphError::SerializationError("corrupted node property count".into()))?
+            as usize;
+        let mut properties = HashMap::with_capacity(prop_count);
+        for _ in 0..prop_count {
+            let key = reader.read_key().ok_or_else(|| {
+                GraphError::SerializationError("corrupted node property key".into())
+            })?;
+            let value = reader.read_value().ok_or_else(|| {
+                GraphError::SerializationError("corrupted node property value".into())
+            })?;
+            properties.insert(key, value);
+        }
+
+        Ok(NodeData { labels, properties })
     }
 
     /// 分配下一个有效的节点 ID（优先弹出 Freelist，否则自增）
@@ -1136,6 +1591,33 @@ impl DiskGraph {
         Ok(())
     }
 
+    /// 更新节点载荷（标签集合 + 属性字典），不改变节点计数与自增序列。
+    ///
+    /// 供 `SET n:Label` 等「原地改写既有节点」的算子使用，避免误触发新节点分配。
+    pub fn update_node_payload(
+        &mut self,
+        node_id: u64,
+        labels: HashSet<String>,
+        properties: HashMap<String, Value>,
+    ) -> Result<(), GraphError> {
+        let mut record = self
+            .read_node_record(node_id)?
+            .ok_or(GraphError::NodeNotFound(node_id))?;
+
+        let old_ptr = record.prop_page_id;
+        let node_data = NodeData { labels, properties };
+        let new_ptr = self.write_node_data(&node_data)?;
+        record.prop_page_id = new_ptr;
+
+        // 先写新载荷再释放旧载荷，避免中间态丢数据
+        if !crate::page::is_none_ptr(old_ptr) && old_ptr != new_ptr {
+            self.free_node_data(old_ptr)?;
+        }
+
+        self.write_node_record(node_id, &record)?;
+        Ok(())
+    }
+
     /// 获取完整 Node 结构体（按需通过 Buffer Pool 调入）
     pub fn get_node(&self, node_id: u64) -> Result<Option<Node>, GraphError> {
         let record = match self.read_node_record(node_id)? {
@@ -1233,6 +1715,9 @@ impl DiskGraph {
         let (edge_type_id, newly) = self.dict.get_or_intern(edge_type);
         if newly {
             self.dict_dirty = true;
+        }
+        if !edge_type.is_empty() {
+            self.index_catalog.edge_types.insert(edge_type.to_string());
         }
 
         // 1. 头插法插入源节点出边链
@@ -1359,20 +1844,14 @@ impl DiskGraph {
             .to_string();
         let properties = self.read_edge_properties(edge.prop_page_id)?;
 
-        // 回收边属性溢出页
-        if edge.prop_page_id != INVALID_PAGE_ID && edge.prop_page_id != 0 {
-            let mut bpm = self.bpm.lock().unwrap();
-            let _ = Self::raw_free_overflow_chain(
-                &mut bpm,
-                &self.allocator,
-                &self.tx_modified_pages,
-                edge.prop_page_id,
-            );
+        // 回收边属性记录（槽位退还或溢出链整体回收）
+        if !crate::page::is_none_ptr(edge.prop_page_id) {
+            self.free_edge_properties(edge.prop_page_id)?;
         }
 
         // 3. 边记录标记为未用并串入 Edge Freelist
         edge.in_use = 0;
-        edge.prop_page_id = INVALID_PAGE_ID;
+        edge.prop_page_id = crate::page::PROP_PTR_NONE;
         edge.src_next_edge_id = self.first_free_edge_id;
         self.first_free_edge_id = edge_id;
 
@@ -1430,20 +1909,14 @@ impl DiskGraph {
             let _ = self.remove_edge(eid);
         }
 
-        // 回收节点属性溢出页
-        if node_record.prop_page_id != INVALID_PAGE_ID && node_record.prop_page_id != 0 {
-            let mut bpm = self.bpm.lock().unwrap();
-            let _ = Self::raw_free_overflow_chain(
-                &mut bpm,
-                &self.allocator,
-                &self.tx_modified_pages,
-                node_record.prop_page_id,
-            );
+        // 回收节点属性记录（槽位退还或溢出链整体回收）
+        if !crate::page::is_none_ptr(node_record.prop_page_id) {
+            self.free_node_data(node_record.prop_page_id)?;
         }
 
         // 3. 标记未用并串入 Node Freelist
         node_record.in_use = 0;
-        node_record.prop_page_id = INVALID_PAGE_ID;
+        node_record.prop_page_id = crate::page::PROP_PTR_NONE;
         node_record.first_outgoing_edge_id = self.first_free_node_id;
         self.first_free_node_id = node_id;
 
@@ -1465,22 +1938,16 @@ impl DiskGraph {
             .read_node_record(node_id)?
             .ok_or(GraphError::NodeNotFound(node_id))?;
 
-        let old_pid = record.prop_page_id;
-        let mut node_data = self.read_node_data(old_pid)?;
+        let old_ptr = record.prop_page_id;
+        let mut node_data = self.read_node_data(old_ptr)?;
         node_data.properties.insert(key, value);
 
-        let new_pid = self.write_node_data(&node_data)?;
-        record.prop_page_id = new_pid;
+        let new_ptr = self.write_node_data(&node_data)?;
+        record.prop_page_id = new_ptr;
 
-        // 回收旧溢出页链表
-        if old_pid != INVALID_PAGE_ID && old_pid != 0 && old_pid != new_pid {
-            let mut bpm = self.bpm.lock().unwrap();
-            let _ = Self::raw_free_overflow_chain(
-                &mut bpm,
-                &self.allocator,
-                &self.tx_modified_pages,
-                old_pid,
-            );
+        // 先写新记录再释放旧记录，避免中间态丢数据
+        if !crate::page::is_none_ptr(old_ptr) && old_ptr != new_ptr {
+            self.free_node_data(old_ptr)?;
         }
 
         self.write_node_record(node_id, &record)?;
@@ -1498,22 +1965,16 @@ impl DiskGraph {
             .read_edge_record(edge_id)?
             .ok_or(GraphError::EdgeNotFound(edge_id))?;
 
-        let old_pid = record.prop_page_id;
-        let mut props = self.read_edge_properties(old_pid)?;
+        let old_ptr = record.prop_page_id;
+        let mut props = self.read_edge_properties(old_ptr)?;
         props.insert(key, value);
 
-        let new_pid = self.write_edge_properties(&props)?;
-        record.prop_page_id = new_pid;
+        let new_ptr = self.write_edge_properties(&props)?;
+        record.prop_page_id = new_ptr;
 
-        // 回收旧溢出页链表
-        if old_pid != INVALID_PAGE_ID && old_pid != 0 && old_pid != new_pid {
-            let mut bpm = self.bpm.lock().unwrap();
-            let _ = Self::raw_free_overflow_chain(
-                &mut bpm,
-                &self.allocator,
-                &self.tx_modified_pages,
-                old_pid,
-            );
+        // 先写新记录再释放旧记录，避免中间态丢数据
+        if !crate::page::is_none_ptr(old_ptr) && old_ptr != new_ptr {
+            self.free_edge_properties(old_ptr)?;
         }
 
         self.write_edge_record(edge_id, &record)?;
@@ -1684,9 +2145,55 @@ impl DiskGraph {
         Ok(node_ids)
     }
 
-    /// 刷盘：确保 Buffer Pool 所有脏页写入物理文件
+    /// 刷盘：确保 Buffer Pool 所有已提交脏页写入物理文件
     pub fn flush(&self) -> Result<(), GraphError> {
         let mut bpm = self.bpm.lock().unwrap();
         bpm.flush_all_pages()
+    }
+
+    /// 采集轻量元数据快照（O(1) 标量 + 字典/目录，不含图拓扑）
+    pub fn snapshot_meta(&self) -> GraphMetaSnapshot {
+        let mut allocator = self.allocator.lock().unwrap().clone();
+        allocator.node_page_cache.clear();
+        allocator.edge_page_cache.clear();
+        GraphMetaSnapshot {
+            next_node_id: self.next_node_id,
+            next_edge_id: self.next_edge_id,
+            node_count: self.node_count,
+            edge_count: self.edge_count,
+            first_free_node_id: self.first_free_node_id,
+            first_free_edge_id: self.first_free_edge_id,
+            dict: self.dict.clone(),
+            dict_dirty: self.dict_dirty,
+            dict_page_id: self.dict_page_id,
+            index_catalog_page_id: self.index_catalog_page_id,
+            index_catalog: self.index_catalog.clone(),
+            allocator,
+        }
+    }
+
+    /// 恢复元数据快照（事务失败回滚路径），同时清空物理页间接缓存
+    pub fn restore_meta(&mut self, snapshot: &GraphMetaSnapshot) {
+        self.next_node_id = snapshot.next_node_id;
+        self.next_edge_id = snapshot.next_edge_id;
+        self.node_count = snapshot.node_count;
+        self.edge_count = snapshot.edge_count;
+        self.first_free_node_id = snapshot.first_free_node_id;
+        self.first_free_edge_id = snapshot.first_free_edge_id;
+        self.dict = snapshot.dict.clone();
+        self.dict_dirty = snapshot.dict_dirty;
+        self.dict_page_id = snapshot.dict_page_id;
+        self.index_catalog_page_id = snapshot.index_catalog_page_id;
+        self.index_catalog = snapshot.index_catalog.clone();
+        *self.allocator.lock().unwrap() = snapshot.allocator.clone();
+    }
+
+    /// 取出并清空本事务修改过的物理页集合
+    pub fn drain_modified_pages(&self) -> Vec<PageId> {
+        if let Ok(mut set) = self.tx_modified_pages.lock() {
+            set.drain().collect()
+        } else {
+            Vec::new()
+        }
     }
 }

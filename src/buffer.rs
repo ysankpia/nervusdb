@@ -1,11 +1,26 @@
 use crate::graph::GraphError;
 use crate::page::{PageId, INVALID_PAGE_ID, PAGE_SIZE};
+use crate::storage::{WalRecord, WalWriter};
+use crc32fast::Hasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+
+/// 启用 STEAL 外存溢出的最小缓冲池帧数（外存最小工作集水位）。
+///
+/// 缓冲池小于该水位时，未提交脏页严禁置换（严格 NO-STEAL 防线）；达到或超过该水位时，
+/// 未提交脏页可被安全溢出到 WAL 并以 baseline 索引支持回滚，从而允许单个事务修改的物理页
+/// 数量远超缓冲池容量（如 1MB / 2MB 极小内存下的数万节点大事务）。
+pub const MIN_SPILL_FRAMES: usize = 16;
+
+fn page_crc(data: &[u8; PAGE_SIZE]) -> u32 {
+    let mut hasher = Hasher::new();
+    hasher.update(data);
+    hasher.finalize()
+}
 
 /// 底层物理磁盘页管理器（直接面向单文件 {path} 进行 4KB 物理分页管理，支持 :memory: 纯内存模式）
 pub struct DiskManager {
@@ -117,7 +132,6 @@ impl DiskManager {
         let offset = (page_id as u64) * (PAGE_SIZE as u64);
         file.seek(SeekFrom::Start(offset))?;
         file.write_all(buffer)?;
-        file.flush()?;
         self.num_writes.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -262,10 +276,24 @@ pub struct BufferStats {
     pub disk_reads: u64,
     pub disk_writes: u64,
     pub file_size_bytes: u64,
+    /// 当前仅存在于 WAL 中的页数（未经 Checkpoint 落回主文件的已提交页 + 未提交溢出页）
+    pub wal_page_count: usize,
+    /// 累计溢出（STEAL）次数
+    pub spill_count: u64,
+    /// WAL 物理体积
+    pub wal_size_bytes: u64,
+    /// 累计 WAL fsync 次数（批量提交时一次 commit 应恰好 +1）
+    pub wal_fsync_count: u64,
+    /// 累计写入的 WAL 帧数
+    pub wal_frames_written: u64,
 }
 
 /// 4KB 缓冲池管理器 (BufferPoolManager)
-/// 严格管理 Page Pin/Unpin 计数、Dirty 脏页标记、页级门闩与 LRU 换页淘汰
+///
+/// 严格管理 Page Pin/Unpin 计数、Dirty 脏页标记、页级门闩与 LRU 换页淘汰。
+/// 淘汰策略为 SQLite 风格的 STEAL：未提交脏页在缓冲池达到最小工作集水位时可被
+/// 溢出至 WAL（记入 `wal_pages` 位置索引），并持有事务基线（`tx_baseline`）
+/// 以支持任意时刻的精确回滚。
 pub struct BufferPoolManager {
     disk_manager: Arc<DiskManager>,
     pool_size: usize,
@@ -273,7 +301,15 @@ pub struct BufferPoolManager {
     page_table: HashMap<PageId, usize>, // PageId -> FrameId
     free_list: Vec<usize>,              // 空闲 FrameId 列表
     replacer: LRUReplacer,
-    uncommitted_pages: HashSet<PageId>, // 事务中修改的未提交脏页 (严格 NO-STEAL)
+    uncommitted_pages: HashSet<PageId>, // 事务中修改的未提交脏页
+    /// 该页最新镜像仅在 WAL 中的位置索引（SQLite wal-index 同性质）
+    wal_pages: HashMap<PageId, u64>,
+    /// 本事务首次触碰各未提交页时的 WAL 位置基线（None 表示当时主文件即权威副本）
+    tx_baseline: HashMap<PageId, Option<u64>>,
+    wal: Option<Arc<WalWriter>>,
+    spill_enabled: bool,
+    current_tx_id: u64,
+    spill_count: u64,
     cache_hits: AtomicU64,
     cache_misses: AtomicU64,
 }
@@ -287,6 +323,8 @@ impl BufferPoolManager {
             free_list.push(i);
         }
 
+        let spill_enabled = pool_size >= MIN_SPILL_FRAMES;
+
         Self {
             disk_manager,
             pool_size,
@@ -295,12 +333,27 @@ impl BufferPoolManager {
             free_list,
             replacer: LRUReplacer::new(),
             uncommitted_pages: HashSet::new(),
+            wal_pages: HashMap::new(),
+            tx_baseline: HashMap::new(),
+            wal: None,
+            spill_enabled,
+            current_tx_id: 0,
+            spill_count: 0,
             cache_hits: AtomicU64::new(0),
             cache_misses: AtomicU64::new(0),
         }
     }
 
-    /// 获取或从磁盘调入指定物理页并 Pin 住（返回 frame_id）
+    /// 挂载 WAL 写入器：挂载后未提交脏页即可在达到最小工作集水位时安全溢出入 WAL
+    pub fn attach_wal(&mut self, wal: Arc<WalWriter>) {
+        self.wal = Some(wal);
+    }
+
+    pub fn spill_enabled(&self) -> bool {
+        self.spill_enabled
+    }
+
+    /// 获取或从磁盘（或 WAL 溢出副本）调入指定物理页并 Pin 住（返回 frame_id）
     pub fn fetch_page(&mut self, page_id: PageId) -> Result<usize, GraphError> {
         if let Some(&frame_id) = self.page_table.get(&page_id) {
             self.frames[frame_id].pin_count += 1;
@@ -310,24 +363,27 @@ impl BufferPoolManager {
         }
 
         self.cache_misses.fetch_add(1, Ordering::Relaxed);
-        let frame_id = self.find_available_frame()?;
+        let frame_id = self.acquire_frame()?;
 
-        // 如果被置换的旧页是脏页，写回物理磁盘
-        let old_frame = &mut self.frames[frame_id];
-        if old_frame.page_id != INVALID_PAGE_ID {
-            if old_frame.is_dirty {
-                self.disk_manager
-                    .write_page(old_frame.page_id, &old_frame.data)?;
-                old_frame.is_dirty = false;
+        let wal_offset = self.wal_pages.get(&page_id).copied();
+        let mut restored_from_wal = false;
+        if let Some(offset) = wal_offset {
+            if let Some(ref wal) = self.wal {
+                if let Some(image) = wal.read_page_image(offset)? {
+                    self.frames[frame_id].data.copy_from_slice(&image);
+                    restored_from_wal = true;
+                }
             }
-            self.page_table.remove(&old_frame.page_id);
+        }
+        if !restored_from_wal {
+            self.disk_manager
+                .read_page(page_id, &mut self.frames[frame_id].data)?;
         }
 
-        // 从磁盘调入新页数据
-        self.disk_manager.read_page(page_id, &mut old_frame.data)?;
-        old_frame.page_id = page_id;
-        old_frame.pin_count = 1;
-        old_frame.is_dirty = false;
+        let frame = &mut self.frames[frame_id];
+        frame.page_id = page_id;
+        frame.pin_count = 1;
+        frame.is_dirty = false;
 
         self.page_table.insert(page_id, frame_id);
         self.replacer.pin(frame_id);
@@ -353,18 +409,13 @@ impl BufferPoolManager {
 
     /// 分配全新的物理页并在缓冲池中分配 Frame 并 Pin 住
     pub fn new_page(&mut self) -> Result<(PageId, usize), GraphError> {
-        let frame_id = self.find_available_frame()?;
+        let frame_id = self.acquire_frame()?;
         let page_id = self.disk_manager.allocate_page()?;
 
-        let frame = &mut self.frames[frame_id];
-        if frame.page_id != INVALID_PAGE_ID {
-            if frame.is_dirty {
-                self.disk_manager.write_page(frame.page_id, &frame.data)?;
-                frame.is_dirty = false;
-            }
-            self.page_table.remove(&frame.page_id);
-        }
+        // 物理页被重新分配时，历史 WAL 镜像失效
+        self.wal_pages.remove(&page_id);
 
+        let frame = &mut self.frames[frame_id];
         frame.data.fill(0);
         frame.page_id = page_id;
         frame.pin_count = 1;
@@ -376,91 +427,209 @@ impl BufferPoolManager {
         Ok((page_id, frame_id))
     }
 
-    /// 强制刷盘单个页
-    pub fn flush_page(&mut self, page_id: PageId) -> Result<(), GraphError> {
-        if let Some(&frame_id) = self.page_table.get(&page_id) {
-            let frame = &mut self.frames[frame_id];
-            if frame.is_dirty {
-                self.disk_manager.write_page(page_id, &frame.data)?;
-                frame.is_dirty = false;
-            }
-        }
-        Ok(())
-    }
-
-    /// 强制刷盘所有脏页
+    /// 强制刷盘所有已提交脏页（未提交页与仅存在于 WAL 的页绝不会污染主文件）
     pub fn flush_all_pages(&mut self) -> Result<(), GraphError> {
-        for frame in &mut self.frames {
-            if frame.page_id != INVALID_PAGE_ID && frame.is_dirty {
-                self.disk_manager.write_page(frame.page_id, &frame.data)?;
-                frame.is_dirty = false;
+        for i in 0..self.frames.len() {
+            let pid = self.frames[i].page_id;
+            if pid == INVALID_PAGE_ID || !self.frames[i].is_dirty {
+                continue;
             }
+            if self.uncommitted_pages.contains(&pid) {
+                continue;
+            }
+            let data = self.frames[i].data;
+            self.disk_manager.write_page(pid, &data)?;
+            self.frames[i].is_dirty = false;
+            self.wal_pages.remove(&pid);
         }
         self.disk_manager.sync_all()?;
         Ok(())
     }
 
-    /// 提取当前所有脏页快照（供页级 WAL 刷盘使用）
-    pub fn get_dirty_page_snapshots(&self) -> Vec<(PageId, [u8; PAGE_SIZE])> {
-        let mut dirty = Vec::new();
-        for frame in &self.frames {
-            if frame.page_id != INVALID_PAGE_ID && frame.is_dirty {
-                dirty.push((frame.page_id, frame.data));
-            }
-        }
-        dirty
-    }
-
-    /// 寻找可用的帧：优先空闲链表，其次 LRU 淘汰（严格落实 NO-STEAL）
-    fn find_available_frame(&mut self) -> Result<usize, GraphError> {
+    /// 寻找可用的帧：空闲链表 → 非未提交页 LRU 淘汰 → STEAL 溢出未提交页
+    fn acquire_frame(&mut self) -> Result<usize, GraphError> {
         if let Some(frame_id) = self.free_list.pop() {
             return Ok(frame_id);
         }
 
-        // 严苛约束：凡是位于 uncommitted_pages 中的物理页帧，绝不允许被淘汰！
+        // 第一轮：优先淘汰非未提交页（已提交脏页正常写回主文件）
         if let Some(frame_id) = self.replacer.victim_filter(|fid| {
             let pid = self.frames[fid].page_id;
             !self.uncommitted_pages.contains(&pid)
         }) {
+            self.evict_frame(frame_id)?;
             return Ok(frame_id);
         }
 
+        // 第二轮：STEAL —— 把未提交脏页镜像溢出到 WAL 后安全置换
+        if self.spill_enabled {
+            if let Some(frame_id) = self.replacer.victim_filter(|fid| {
+                let frame = &self.frames[fid];
+                frame.page_id != INVALID_PAGE_ID && frame.is_dirty
+            }) {
+                self.spill_frame(frame_id)?;
+                self.evict_frame(frame_id)?;
+                return Ok(frame_id);
+            }
+        }
+
         Err(GraphError::StorageError(
-            "Buffer pool capacity exceeded: all frames are uncommitted dirty pages (NO-STEAL enforced)".into(),
+            "Buffer pool capacity exceeded: all frames are uncommitted dirty pages (NO-STEAL enforced)"
+                .into(),
         ))
     }
 
-    /// 标记物理页为未提交事务修改页
+    /// 淘汰帧：已提交脏页写回主文件，仅存在于 WAL 的页保留其 WAL 位置索引
+    fn evict_frame(&mut self, frame_id: usize) -> Result<(), GraphError> {
+        let page_id = self.frames[frame_id].page_id;
+        if page_id == INVALID_PAGE_ID {
+            return Ok(());
+        }
+        if self.frames[frame_id].is_dirty {
+            if self.uncommitted_pages.contains(&page_id) {
+                return Err(GraphError::StorageError(
+                    "Refusing to evict uncommitted dirty page without spill".into(),
+                ));
+            }
+            let data = self.frames[frame_id].data;
+            self.disk_manager.write_page(page_id, &data)?;
+            self.frames[frame_id].is_dirty = false;
+            self.wal_pages.remove(&page_id);
+        }
+        self.page_table.remove(&page_id);
+        Ok(())
+    }
+
+    /// 将未提交脏页镜像追加到 WAL（STEAL 溢出），并记录其位置索引
+    fn spill_frame(&mut self, frame_id: usize) -> Result<(), GraphError> {
+        let page_id = self.frames[frame_id].page_id;
+        let data = self.frames[frame_id].data;
+        let wal = match self.wal {
+            Some(ref w) => Arc::clone(w),
+            None => {
+                return Err(GraphError::StorageError(
+                    "Buffer pool capacity exceeded: all frames are uncommitted dirty pages (NO-STEAL enforced)"
+                        .into(),
+                ))
+            }
+        };
+
+        let offset = wal.append(&WalRecord::PageWrite {
+            tx_id: self.current_tx_id,
+            page_id,
+            crc32: page_crc(&data),
+            data: data.to_vec(),
+        })?;
+
+        self.wal_pages.insert(page_id, offset);
+        self.frames[frame_id].is_dirty = false;
+        self.spill_count += 1;
+        Ok(())
+    }
+
+    /// 标记物理页为未提交事务修改页，并记录其回滚基线
     pub fn mark_page_uncommitted(&mut self, page_id: PageId) {
-        self.uncommitted_pages.insert(page_id);
+        if self.uncommitted_pages.insert(page_id) {
+            let baseline = self.wal_pages.get(&page_id).copied();
+            self.tx_baseline.insert(page_id, baseline);
+        }
+    }
+
+    /// 开启/切换事务上下文
+    pub fn begin_tx(&mut self, tx_id: u64) {
+        self.current_tx_id = tx_id;
+        self.tx_baseline.clear();
+    }
+
+    /// 事务提交：常驻脏页写入 WAL redo 帧后追加 TxCommit 并 fsync，随后放行未提交标记
+    pub fn commit_tx(&mut self, tx_id: u64, modified_pages: &[PageId]) -> Result<(), GraphError> {
+        if let Some(wal) = self.wal.clone() {
+            wal.append(&WalRecord::TxBegin { tx_id })?;
+
+            for &pid in modified_pages {
+                let frame_id = match self.page_table.get(&pid) {
+                    Some(&fid) => fid,
+                    None => continue, // 非常驻页的最新镜像已在溢出时写入 WAL
+                };
+                if !self.frames[frame_id].is_dirty {
+                    continue;
+                }
+                let data = self.frames[frame_id].data;
+                let offset = wal.append(&WalRecord::PageWrite {
+                    tx_id,
+                    page_id: pid,
+                    crc32: page_crc(&data),
+                    data: data.to_vec(),
+                })?;
+                self.wal_pages.insert(pid, offset);
+                self.frames[frame_id].is_dirty = false;
+            }
+
+            wal.append(&WalRecord::TxCommit { tx_id })?;
+            wal.sync()?;
+        }
+
+        self.mark_pages_committed(modified_pages);
+        self.tx_baseline.clear();
+        Ok(())
     }
 
     /// 事务提交后放行修改页，允许后续安全置换刷盘
     pub fn mark_pages_committed(&mut self, pages: &[PageId]) {
         for pid in pages {
             self.uncommitted_pages.remove(pid);
+            self.tx_baseline.remove(pid);
         }
     }
 
-    /// 事务回滚时强制丢弃未提交脏页，重置内存帧，防止磁盘污染
-    pub fn discard_uncommitted_pages(&mut self, pages: &[PageId]) {
+    /// 事务回滚：按基线还原 WAL 位置索引与页内容，未提交数据绝不会残留到主文件
+    pub fn rollback_uncommitted_pages(&mut self, pages: &[PageId]) -> Result<(), GraphError> {
         for &pid in pages {
             self.uncommitted_pages.remove(&pid);
-            if let Some(&frame_id) = self.page_table.get(&pid) {
-                let frame = &mut self.frames[frame_id];
-                if self.disk_manager.read_page(pid, &mut frame.data).is_ok() {
-                    frame.is_dirty = false;
-                } else {
-                    self.page_table.remove(&pid);
-                    self.replacer.pin(frame_id);
-                    frame.page_id = INVALID_PAGE_ID;
-                    frame.pin_count = 0;
-                    frame.is_dirty = false;
-                    frame.data.fill(0);
-                    self.free_list.push(frame_id);
+            match self.tx_baseline.remove(&pid) {
+                Some(Some(offset)) => {
+                    self.wal_pages.insert(pid, offset);
+                }
+                Some(None) => {
+                    self.wal_pages.remove(&pid);
+                }
+                None => {}
+            }
+
+            let target = self.wal_pages.get(&pid).copied();
+            let frame_id = match self.page_table.get(&pid) {
+                Some(&fid) => fid,
+                None => continue,
+            };
+            self.frames[frame_id].is_dirty = false;
+            if self.frames[frame_id].pin_count > 0 {
+                continue;
+            }
+
+            let mut restored = false;
+            if let Some(offset) = target {
+                if let Some(ref wal) = self.wal {
+                    if let Some(image) = wal.read_page_image(offset)? {
+                        self.frames[frame_id].data.copy_from_slice(&image);
+                        restored = true;
+                    }
                 }
             }
+            if !restored {
+                self.disk_manager
+                    .read_page(pid, &mut self.frames[frame_id].data)?;
+            }
         }
+        Ok(())
+    }
+
+    /// 清空「仅存在于 WAL」的页位置索引（Checkpoint 落盘并截断 WAL 后调用）
+    pub fn clear_wal_page_index(&mut self) {
+        self.wal_pages.clear();
+    }
+
+    pub fn wal_page_count(&self) -> usize {
+        self.wal_pages.len()
     }
 
     pub fn get_frame(&self, frame_id: usize) -> &Frame {
@@ -487,6 +656,9 @@ impl BufferPoolManager {
 
         let dirty_count = self.frames.iter().filter(|f| f.is_dirty).count();
         let used_count = self.page_table.len();
+        let wal_size_bytes = self.wal.as_ref().map(|w| w.len()).unwrap_or(0);
+        let wal_fsync_count = self.wal.as_ref().map(|w| w.fsync_count()).unwrap_or(0);
+        let wal_frames_written = self.wal.as_ref().map(|w| w.frames_written()).unwrap_or(0);
 
         BufferStats {
             capacity_frames: self.pool_size,
@@ -498,6 +670,11 @@ impl BufferPoolManager {
             disk_reads: self.disk_manager.num_reads.load(Ordering::Relaxed),
             disk_writes: self.disk_manager.num_writes.load(Ordering::Relaxed),
             file_size_bytes: self.disk_manager.file_size(),
+            wal_page_count: self.wal_pages.len(),
+            spill_count: self.spill_count,
+            wal_size_bytes,
+            wal_fsync_count,
+            wal_frames_written,
         }
     }
 }

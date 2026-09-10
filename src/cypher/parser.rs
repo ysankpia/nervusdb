@@ -1,6 +1,6 @@
 use crate::cypher::ast::{
-    BinaryOperator, CypherStatement, DeleteClause, Expr, NodePattern, PathPattern, RelPattern,
-    ReturnItem,
+    AggregateArg, AggregateFunc, BinaryOperator, CypherStatement, DeleteClause, Expr, NodePattern,
+    OrderItem, PathPattern, RelPattern, ReturnItem, SetItem,
 };
 use crate::cypher::lexer::Token;
 use crate::graph::{Direction, GraphError, Value};
@@ -17,19 +17,20 @@ impl Parser {
     }
 
     pub fn parse(&mut self) -> Result<CypherStatement, GraphError> {
-        match self.peek() {
+        let statement = match self.peek() {
             Some(Token::Create) => {
                 self.consume();
                 let pattern = self.parse_path_pattern()?;
-                // 可选的分号
-                if self.peek() == Some(&Token::Semicolon) {
-                    self.consume();
-                }
-                Ok(CypherStatement::Create { pattern })
+                CypherStatement::Create { pattern }
             }
             Some(Token::Match) => {
                 self.consume();
-                let pattern = self.parse_path_pattern()?;
+
+                let mut patterns = vec![self.parse_path_pattern()?];
+                while self.peek() == Some(&Token::Comma) {
+                    self.consume();
+                    patterns.push(self.parse_path_pattern()?);
+                }
 
                 let mut where_clause = None;
                 if self.peek() == Some(&Token::Where) {
@@ -37,62 +38,87 @@ impl Parser {
                     where_clause = Some(self.parse_expr()?);
                 }
 
-                let mut return_clause = None;
-                let mut delete_clause = None;
+                let mut set_clause = Vec::new();
+                if self.peek() == Some(&Token::Set) {
+                    self.consume();
+                    set_clause = self.parse_set_items()?;
+                }
 
+                let mut delete_clause = None;
                 if self.peek() == Some(&Token::Detach) {
                     self.consume();
                     if self.peek() == Some(&Token::Delete) {
                         self.consume();
-                        let targets = self.parse_ident_list()?;
                         delete_clause = Some(DeleteClause {
                             detach: true,
-                            targets,
+                            targets: self.parse_ident_list()?,
                         });
                     } else {
                         return Err(GraphError::General("Expected DELETE after DETACH".into()));
                     }
                 } else if self.peek() == Some(&Token::Delete) {
                     self.consume();
-                    let targets = self.parse_ident_list()?;
                     delete_clause = Some(DeleteClause {
                         detach: false,
-                        targets,
+                        targets: self.parse_ident_list()?,
                     });
                 }
 
+                let mut create_clause = None;
+                if self.peek() == Some(&Token::Create) {
+                    self.consume();
+                    create_clause = Some(self.parse_path_pattern()?);
+                }
+
+                let mut return_clause = None;
                 if self.peek() == Some(&Token::Return) {
                     self.consume();
                     return_clause = Some(self.parse_return_items()?);
                 }
 
+                let mut order_by = Vec::new();
+                if self.peek() == Some(&Token::Order) {
+                    self.consume();
+                    self.expect(&Token::By)?;
+                    order_by = self.parse_order_items()?;
+                }
+
+                let mut skip = None;
+                if self.peek() == Some(&Token::Skip) {
+                    self.consume();
+                    skip = Some(self.parse_usize_literal("SKIP")?);
+                }
+
                 let mut limit = None;
                 if self.peek() == Some(&Token::Limit) {
                     self.consume();
-                    if let Some(Token::Literal(Value::Int(val))) = self.peek() {
-                        limit = Some(*val as usize);
-                        self.consume();
-                    } else {
-                        return Err(GraphError::General("Expected integer after LIMIT".into()));
-                    }
+                    limit = Some(self.parse_usize_literal("LIMIT")?);
                 }
 
-                if self.peek() == Some(&Token::Semicolon) {
-                    self.consume();
-                }
-
-                Ok(CypherStatement::Match {
-                    pattern,
+                CypherStatement::Match {
+                    patterns,
                     where_clause,
-                    return_clause,
+                    set_clause,
                     delete_clause,
+                    create_clause,
+                    return_clause,
+                    order_by,
+                    skip,
                     limit,
-                })
+                }
             }
-            _ => Err(GraphError::General(
-                "Unsupported Cypher query: must start with CREATE or MATCH".into(),
-            )),
+            _ => {
+                return Err(GraphError::General(
+                    "Unsupported Cypher query: must start with CREATE or MATCH".into(),
+                ))
+            }
+        };
+
+        if self.peek() == Some(&Token::Semicolon) {
+            self.consume();
         }
+
+        Ok(statement)
     }
 
     /// 解析路径模式：(node)-[rel]->(node)...
@@ -115,12 +141,12 @@ impl Parser {
         Ok(PathPattern { nodes, edges })
     }
 
-    /// 解析单节点模式：(var:Label {k: v})
+    /// 解析单节点模式：(var:Label1:Label2 {k: v})
     fn parse_node_pattern(&mut self) -> Result<NodePattern, GraphError> {
         self.expect(&Token::LParen)?;
 
         let mut variable = None;
-        let mut label = None;
+        let mut labels = Vec::new();
         let mut properties = HashMap::new();
 
         if let Some(Token::Ident(name)) = self.peek() {
@@ -128,13 +154,14 @@ impl Parser {
             self.consume();
         }
 
-        if self.peek() == Some(&Token::Colon) {
+        while self.peek() == Some(&Token::Colon) {
             self.consume();
-            if let Some(Token::Ident(lbl)) = self.peek() {
-                label = Some(lbl.clone());
-                self.consume();
-            } else {
-                return Err(GraphError::General("Expected label after ':'".into()));
+            match self.peek() {
+                Some(Token::Ident(lbl)) => {
+                    labels.push(lbl.clone());
+                    self.consume();
+                }
+                _ => return Err(GraphError::General("Expected label after ':'".into())),
             }
         }
 
@@ -146,12 +173,12 @@ impl Parser {
 
         Ok(NodePattern {
             variable,
-            label,
+            labels,
             properties,
         })
     }
 
-    /// 解析边模式及后续的目标节点：-[rel]->(node) 或 <-[rel]-(node)
+    /// 解析边模式及后续的目标节点：-[rel]->(node) 或 <-[rel]-(node) 或 -[rel]-(node)
     fn parse_edge_and_target_node(&mut self) -> Result<(RelPattern, NodePattern), GraphError> {
         let is_left_arrow = self.peek() == Some(&Token::ArrowLeft);
         if is_left_arrow {
@@ -180,27 +207,30 @@ impl Parser {
             }
         }
 
-        // 解析多跳语法，如 *1..3 或 *2
+        // 解析多跳语法，如 *1..3 或 *2 或 *
         if self.peek() == Some(&Token::Star) {
             self.consume();
-            let mut min_hops = 1;
-            let mut max_hops = usize::MAX;
 
-            if let Some(Token::Literal(Value::Int(h))) = self.peek() {
-                min_hops = *h as usize;
-                max_hops = min_hops;
-                self.consume();
-            }
+            // `*` 单独出现时上界取 DEFAULT_MAX_HOPS，否则为精确跳数或 `*n..m` 区间
+            let (min_hops, mut max_hops): (usize, usize) = match self.peek() {
+                Some(Token::Literal(Value::Int(h))) => {
+                    let hops = (*h).max(0) as usize;
+                    self.consume();
+                    (hops, hops)
+                }
+                _ => (1, DEFAULT_MAX_HOPS),
+            };
 
             if self.peek() == Some(&Token::DotDot) {
                 self.consume();
                 if let Some(Token::Literal(Value::Int(h))) = self.peek() {
-                    max_hops = *h as usize;
+                    max_hops = (*h).max(0) as usize;
                     self.consume();
                 } else {
-                    max_hops = 100; // 默认上限
+                    max_hops = DEFAULT_MAX_HOPS;
                 }
             }
+            let max_hops = max_hops.max(min_hops);
             hops = Some((min_hops, max_hops));
         }
 
@@ -289,7 +319,64 @@ impl Parser {
         Ok(list)
     }
 
-    /// 解析 RETURN 项：RETURN a.name, b.age AS age
+    /// 解析 SET 子句：`SET n.a = 1, m:Label`
+    fn parse_set_items(&mut self) -> Result<Vec<SetItem>, GraphError> {
+        let mut items = Vec::new();
+
+        loop {
+            let var = match self.peek() {
+                Some(Token::Ident(v)) => v.clone(),
+                _ => {
+                    return Err(GraphError::General(
+                        "Expected variable in SET clause".into(),
+                    ))
+                }
+            };
+            self.consume();
+
+            if self.peek() == Some(&Token::Colon) {
+                self.consume();
+                let label = match self.peek() {
+                    Some(Token::Ident(l)) => l.clone(),
+                    _ => {
+                        return Err(GraphError::General(
+                            "Expected label after ':' in SET".into(),
+                        ))
+                    }
+                };
+                self.consume();
+                items.push(SetItem::Label { var, label });
+            } else if self.peek() == Some(&Token::Dot) {
+                self.consume();
+                let key = match self.peek() {
+                    Some(Token::Ident(k)) => k.clone(),
+                    _ => {
+                        return Err(GraphError::General(
+                            "Expected property key after '.'".into(),
+                        ))
+                    }
+                };
+                self.consume();
+                self.expect(&Token::Eq)?;
+                let value = self.parse_primary_expr()?;
+                items.push(SetItem::Property { var, key, value });
+            } else {
+                return Err(GraphError::General(
+                    "SET requires either 'var.key = expr' or 'var:Label'".into(),
+                ));
+            }
+
+            if self.peek() == Some(&Token::Comma) {
+                self.consume();
+            } else {
+                break;
+            }
+        }
+
+        Ok(items)
+    }
+
+    /// 解析 RETURN 项：RETURN a.name, count(b) AS total, *
     fn parse_return_items(&mut self) -> Result<Vec<ReturnItem>, GraphError> {
         let mut items = Vec::new();
 
@@ -297,6 +384,9 @@ impl Parser {
             if self.peek() == Some(&Token::Star) {
                 self.consume();
                 items.push(ReturnItem::All);
+            } else if let Some(func) = self.peek_aggregate_func() {
+                self.consume();
+                items.push(self.parse_aggregate_item(func)?);
             } else if let Some(Token::Ident(var)) = self.peek() {
                 let var_name = var.clone();
                 self.consume();
@@ -306,16 +396,7 @@ impl Parser {
                     if let Some(Token::Ident(prop)) = self.peek() {
                         let prop_name = prop.clone();
                         self.consume();
-
-                        let mut alias = None;
-                        if self.peek() == Some(&Token::As) {
-                            self.consume();
-                            if let Some(Token::Ident(a)) = self.peek() {
-                                alias = Some(a.clone());
-                                self.consume();
-                            }
-                        }
-
+                        let alias = self.parse_optional_alias()?;
                         items.push(ReturnItem::Property {
                             var: var_name,
                             prop: prop_name,
@@ -327,14 +408,7 @@ impl Parser {
                         ));
                     }
                 } else {
-                    let mut alias = None;
-                    if self.peek() == Some(&Token::As) {
-                        self.consume();
-                        if let Some(Token::Ident(a)) = self.peek() {
-                            alias = Some(a.clone());
-                            self.consume();
-                        }
-                    }
+                    let alias = self.parse_optional_alias()?;
                     items.push(ReturnItem::Variable {
                         var: var_name,
                         alias,
@@ -352,6 +426,118 @@ impl Parser {
         }
 
         Ok(items)
+    }
+
+    fn peek_aggregate_func(&self) -> Option<AggregateFunc> {
+        match self.peek() {
+            Some(Token::Count) => Some(AggregateFunc::Count),
+            Some(Token::Sum) => Some(AggregateFunc::Sum),
+            Some(Token::Avg) => Some(AggregateFunc::Avg),
+            Some(Token::Min) => Some(AggregateFunc::Min),
+            Some(Token::Max) => Some(AggregateFunc::Max),
+            _ => None,
+        }
+    }
+
+    fn parse_aggregate_item(&mut self, func: AggregateFunc) -> Result<ReturnItem, GraphError> {
+        self.expect(&Token::LParen)?;
+
+        let arg = if self.peek() == Some(&Token::Star) {
+            self.consume();
+            AggregateArg::Star
+        } else if let Some(Token::Ident(var)) = self.peek() {
+            let var_name = var.clone();
+            self.consume();
+            if self.peek() == Some(&Token::Dot) {
+                self.consume();
+                match self.peek() {
+                    Some(Token::Ident(prop)) => {
+                        let prop_name = prop.clone();
+                        self.consume();
+                        AggregateArg::Property {
+                            var: var_name,
+                            prop: prop_name,
+                        }
+                    }
+                    _ => {
+                        return Err(GraphError::General(
+                            "Expected property name after '.'".into(),
+                        ))
+                    }
+                }
+            } else {
+                AggregateArg::Variable(var_name)
+            }
+        } else {
+            return Err(GraphError::General(format!(
+                "{}() expects '*', a variable, or a property",
+                func.as_str()
+            )));
+        };
+
+        self.expect(&Token::RParen)?;
+        let alias = self.parse_optional_alias()?;
+
+        Ok(ReturnItem::Aggregate { func, arg, alias })
+    }
+
+    fn parse_optional_alias(&mut self) -> Result<Option<String>, GraphError> {
+        if self.peek() == Some(&Token::As) {
+            self.consume();
+            match self.peek() {
+                Some(Token::Ident(a)) => {
+                    let alias = a.clone();
+                    self.consume();
+                    Ok(Some(alias))
+                }
+                _ => Err(GraphError::General("Expected alias after AS".into())),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// 解析 ORDER BY 项：ORDER BY n.age DESC, m.name
+    fn parse_order_items(&mut self) -> Result<Vec<OrderItem>, GraphError> {
+        let mut items = Vec::new();
+
+        loop {
+            let expr = self.parse_expr()?;
+            let desc = match self.peek() {
+                Some(Token::Asc) => {
+                    self.consume();
+                    false
+                }
+                Some(Token::Desc) => {
+                    self.consume();
+                    true
+                }
+                _ => false,
+            };
+            items.push(OrderItem { expr, desc });
+
+            if self.peek() == Some(&Token::Comma) {
+                self.consume();
+            } else {
+                break;
+            }
+        }
+
+        Ok(items)
+    }
+
+    fn parse_usize_literal(&mut self, keyword: &str) -> Result<usize, GraphError> {
+        match self.peek() {
+            Some(Token::Literal(Value::Int(val))) if *val >= 0 => {
+                let result = *val as usize;
+                self.consume();
+                Ok(result)
+            }
+            _ => Err(GraphError::General(format!(
+                "Expected non-negative integer after {}",
+                keyword
+            ))),
+        }
     }
 
     /// 解析 WHERE 表达式
@@ -402,7 +588,7 @@ impl Parser {
 
         if let Some(operator) = op {
             self.consume();
-            let right = self.parse_primary_expr()?;
+            let right = self.parse_comparison_expr()?;
             Ok(Expr::BinaryOp {
                 left: Box::new(left),
                 op: operator,
@@ -436,6 +622,19 @@ impl Parser {
                     } else {
                         Err(GraphError::General("Expected property after '.'".into()))
                     }
+                } else if self.peek() == Some(&Token::Colon) {
+                    // 类型谓词：n:Person
+                    self.consume();
+                    if let Some(Token::Ident(label)) = self.peek() {
+                        let label_name = label.clone();
+                        self.consume();
+                        Ok(Expr::LabelCheck {
+                            var: var_name,
+                            label: label_name,
+                        })
+                    } else {
+                        Err(GraphError::General("Expected label after ':'".into()))
+                    }
                 } else {
                     Ok(Expr::Variable(var_name))
                 }
@@ -446,7 +645,10 @@ impl Parser {
                 self.expect(&Token::RParen)?;
                 Ok(expr)
             }
-            _ => Err(GraphError::General("Unexpected expression token".into())),
+            _ => Err(GraphError::General(format!(
+                "Unexpected expression token: {:?}",
+                self.peek()
+            ))),
         }
     }
 
@@ -477,3 +679,6 @@ impl Parser {
         }
     }
 }
+
+/// 无显式上限的变长匹配默认最大跳数（配合环检测守卫防爆）
+const DEFAULT_MAX_HOPS: usize = 64;

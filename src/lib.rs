@@ -9,21 +9,24 @@ pub mod page;
 pub mod query;
 pub mod storage;
 
-pub use algo::{bfs_shortest_path, dijkstra_shortest_path, find_cycles, has_cycle};
+pub use algo::{
+    bfs_shortest_path, dijkstra_shortest_path, find_cycles, has_cycle, k_hop_subgraph, pagerank,
+    weakly_connected_components, KHopSubgraph, PageRankScore,
+};
 pub use buffer::{BufferPoolManager, BufferStats, DiskManager};
 pub use c_api::*;
 pub use cypher::{
     execute_cypher, execute_mutate, execute_query, CypherResultSet, ExecuteResult, Row,
 };
-pub use disk_graph::DiskGraph;
+pub use disk_graph::{DiskGraph, GraphMetaSnapshot};
 pub use graph::{Direction, Edge, GraphError, Node, Value};
 pub use index::IndexManager;
 pub use page::{EdgeRecord, NodeRecord, PageId, PAGE_SIZE};
 pub use query::{GraphQuery, MultiHopPath, PathMatch, QueryBuilder, QueryResult};
 pub use storage::{StorageEngine, WalRecord};
 
-use crc32fast::Hasher;
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -62,10 +65,10 @@ impl GraphLite {
 
         // 2. 初始化纯磁盘 4KB 物理分页管理器与 LRU Buffer Pool（统一单文件 {path}）
         let disk_manager = Arc::new(DiskManager::open(&db_path)?);
-        let bpm = Arc::new(Mutex::new(BufferPoolManager::new(
-            disk_manager,
-            pool_size.max(2),
-        )));
+        let mut bpm = BufferPoolManager::new(disk_manager, pool_size.max(2));
+        // 挂载页级 WAL：缓冲池据此支持 STEAL 溢出与未提交页安全置换
+        bpm.attach_wal(Arc::clone(storage.wal_writer()));
+        let bpm = Arc::new(Mutex::new(bpm));
         let disk_graph = DiskGraph::new(bpm)?;
 
         // 3. 构建二级索引系统（从持久化 catalog 极速加载，<1ms 杜绝全表 I/O 阻塞）
@@ -111,52 +114,65 @@ impl GraphLite {
 
     /// 执行 Cypher 查询语句 (True MRSW: 只读语句并发持有共享读锁，写操作持有排他写锁并写入 WAL)
     pub fn query_cypher(&self, cypher_str: &str) -> Result<CypherResultSet, GraphError> {
+        self.run_cypher(cypher_str)
+    }
+
+    /// 执行任意 Cypher 语句并按 AST 类型自动路由（只读走共享锁并发路径，写操作走单事务 WAL 路径），
+    /// 统一返回结果集与执行摘要。供 CLI 等需要「一条语句一个结果」的调用方使用。
+    pub fn run_cypher(&self, cypher_str: &str) -> Result<CypherResultSet, GraphError> {
         let lexer = crate::cypher::lexer::Lexer::new(cypher_str);
         let tokens = lexer.tokenize()?;
         let mut parser = crate::cypher::parser::Parser::new(tokens);
         let statement = parser.parse()?;
+        let mutating = statement.is_mutating();
 
-        match statement {
-            crate::cypher::CypherStatement::Match {
-                delete_clause: None,
-                ..
-            } => {
-                // 只读查询：只获取 inner.read() 共享锁，允许几十个读线程无阻塞并发执行！
-                let inner = self
-                    .inner
-                    .read()
-                    .map_err(|e| GraphError::General(e.to_string()))?;
-                cypher::execute_query(cypher_str, &inner.disk_graph, &inner.index_mgr)
-            }
-            _ => {
-                // 写操作：获取 inner.write() 排他锁，记录 WAL 并持久化
-                let mut inner = self
-                    .inner
-                    .write()
-                    .map_err(|e| GraphError::General(e.to_string()))?;
-                let tx_id = inner.next_tx_id;
-                inner.next_tx_id += 1;
-
-                let GraphInner {
-                    disk_graph,
-                    index_mgr,
-                    ..
-                } = &mut *inner;
-                let result = cypher::execute_mutate(cypher_str, disk_graph, index_mgr)?;
-                Self::commit_dirty_pages_to_wal(&mut inner, tx_id)?;
-                Ok(result)
-            }
+        if !mutating {
+            // 只读查询：只获取 inner.read() 共享锁，允许几十个读线程无阻塞并发执行！
+            let inner = self
+                .inner
+                .read()
+                .map_err(|e| GraphError::General(e.to_string()))?;
+            return cypher::execute_query(cypher_str, &inner.disk_graph, &inner.index_mgr);
         }
-    }
 
-    /// 执行检查点 Checkpoint：将 Buffer Pool 所有脏页刷入主文件，并截断 WAL
-    pub fn checkpoint(&self) -> Result<(), GraphError> {
+        // 写操作：获取 inner.write() 排他锁，记录 WAL 并持久化
         let mut inner = self
             .inner
             .write()
             .map_err(|e| GraphError::General(e.to_string()))?;
+        let tx_id = inner.next_tx_id;
+        inner.next_tx_id += 1;
 
+        let GraphInner {
+            disk_graph,
+            index_mgr,
+            ..
+        } = &mut *inner;
+        let result = cypher::execute_mutate(cypher_str, disk_graph, index_mgr)?;
+        Self::commit_dirty_pages_to_wal(&mut inner, tx_id)?;
+        Ok(result)
+    }
+
+    /// 执行检查点 Checkpoint：将 WAL 中所有已提交物理页落回主文件，刷出常驻脏页并截断 WAL。
+    ///
+    /// 未提交事务的溢出帧不会被重放，因此检查点绝不会把任何未提交数据写入主库。
+    pub fn checkpoint(&self) -> Result<(), GraphError> {
+        let inner = self
+            .inner
+            .write()
+            .map_err(|e| GraphError::General(e.to_string()))?;
+
+        // 1. 把 WAL 中已提交的页按序重放到主数据文件
+        inner.storage.apply_committed_to_db()?;
+
+        // 2. 刷出常驻缓冲池的已提交脏页
         inner.disk_graph.flush()?;
+
+        // 3. 主文件已成为全部页的权威副本，WAL 页位置索引失效并截断 WAL
+        {
+            let mut bpm = inner.disk_graph.bpm.lock().unwrap();
+            bpm.clear_wal_page_index();
+        }
         inner.storage.checkpoint()
     }
 
@@ -382,46 +398,15 @@ impl GraphLite {
         Ok(())
     }
 
-    /// 内部辅助：将当前事务修改的物理页作为 PageWrite 帧原子落盘至 WAL 并 Commit
+    /// 内部辅助：把当前事务修改的物理页原子提交到页级 WAL。
+    ///
+    /// 只有常驻缓冲池的脏页需要追加 redo 帧；早先因缓冲池耗尽而被 STEAL 溢出到 WAL 的
+    /// 非常驻页，其最新镜像已在 WAL 中。整个流程以 O(1) 内存完成，绝不随事务规模线性膨胀。
     fn commit_dirty_pages_to_wal(inner: &mut GraphInner, tx_id: u64) -> Result<(), GraphError> {
-        let modified_pages: Vec<PageId> =
-            if let Ok(mut set) = inner.disk_graph.tx_modified_pages.lock() {
-                set.drain().collect()
-            } else {
-                Vec::new()
-            };
-
-        let mut records = Vec::with_capacity(modified_pages.len() + 2);
-        records.push(WalRecord::TxBegin { tx_id });
-
-        {
-            let mut bpm = inner.disk_graph.bpm.lock().unwrap();
-            for &page_id in &modified_pages {
-                if let Ok(frame_id) = bpm.fetch_page(page_id) {
-                    let frame = bpm.get_frame(frame_id);
-                    let mut hasher = Hasher::new();
-                    hasher.update(&frame.data);
-                    let crc = hasher.finalize();
-
-                    records.push(WalRecord::PageWrite {
-                        tx_id,
-                        page_id,
-                        crc32: crc,
-                        data: frame.data.to_vec(),
-                    });
-                    bpm.unpin_page(page_id, false);
-                }
-            }
-        }
-
-        records.push(WalRecord::TxCommit { tx_id });
-        inner.storage.append_records(&records)?;
-
-        // WAL 持久化落盘完成后，放行 BufferPool 脏页允许安全置换
+        let modified_pages = inner.disk_graph.drain_modified_pages();
         let mut bpm = inner.disk_graph.bpm.lock().unwrap();
-        bpm.mark_pages_committed(&modified_pages);
-
-        Ok(())
+        bpm.begin_tx(tx_id);
+        bpm.commit_tx(tx_id, &modified_pages)
     }
 
     /// 开启显式事务
@@ -448,6 +433,28 @@ impl GraphLite {
     pub fn query(&self) -> GraphQuery {
         let inner = self.inner.read().expect("Lock poisoned");
         GraphQuery::new(inner.disk_graph.clone())
+    }
+
+    /// 在单个显式事务内执行一段批量写入，成功自动 `commit`，闭包返回 `Err` 时自动 `rollback`。
+    ///
+    /// 这是批量写入的首选入口：整个闭包内的所有变更共享一次 WAL 追加与**一次 fsync**，
+    /// 因此吞吐量相较逐条自动提交可提升两到三个数量级。
+    pub fn with_transaction<F, R>(&self, f: F) -> Result<R, GraphError>
+    where
+        F: FnOnce(&mut Transaction) -> Result<R, GraphError>,
+    {
+        let mut tx = self.begin_transaction()?;
+        match f(&mut tx) {
+            Ok(value) => {
+                tx.commit()?;
+                Ok(value)
+            }
+            Err(err) => {
+                // 闭包失败：丢弃事务动作，未提交数据绝不落库
+                tx.rollback()?;
+                Err(err)
+            }
+        }
     }
 
     /// 执行带权 Dijkstra 最短路径算法（纯磁盘流式遍历，脱离全局锁并发执行）
@@ -489,6 +496,174 @@ impl GraphLite {
             inner.disk_graph.clone()
         };
         algo::find_cycles(&graph)
+    }
+
+    /// PageRank 阻尼迭代：评估全图节点影响力（默认阻尼 0.85、最长 100 轮、容差 1e-6）
+    pub fn pagerank(&self) -> Vec<algo::PageRankScore> {
+        self.pagerank_with(0.85, 100, 1e-6)
+    }
+
+    /// PageRank 阻尼迭代（自定义阻尼因子、最大迭代轮数与收敛容差），按分数降序返回
+    pub fn pagerank_with(
+        &self,
+        damping_factor: f64,
+        max_iterations: usize,
+        tolerance: f64,
+    ) -> Vec<algo::PageRankScore> {
+        let graph = {
+            let inner = self.inner.read().expect("Lock poisoned");
+            inner.disk_graph.clone()
+        };
+        algo::pagerank(&graph, damping_factor, max_iterations, tolerance)
+    }
+
+    /// 弱连通分量分析（并查集划分社群 / 孤岛检测），按分量规模降序返回
+    pub fn weakly_connected_components(&self) -> Vec<Vec<u64>> {
+        let graph = {
+            let inner = self.inner.read().expect("Lock poisoned");
+            inner.disk_graph.clone()
+        };
+        algo::weakly_connected_components(&graph)
+    }
+
+    /// K-Hop 局部子图提取（默认沿无向边扩展）
+    pub fn k_hop_subgraph(
+        &self,
+        start_id: u64,
+        k: usize,
+    ) -> Result<algo::KHopSubgraph, GraphError> {
+        self.k_hop_subgraph_with(start_id, k, Direction::Both, None)
+    }
+
+    /// K-Hop 局部子图提取（自定义扩展方向与关系类型过滤）
+    pub fn k_hop_subgraph_with(
+        &self,
+        start_id: u64,
+        k: usize,
+        direction: Direction,
+        edge_type: Option<&str>,
+    ) -> Result<algo::KHopSubgraph, GraphError> {
+        let graph = {
+            let inner = self.inner.read().expect("Lock poisoned");
+            inner.disk_graph.clone()
+        };
+        algo::k_hop_subgraph(&graph, start_id, k, direction, edge_type)
+    }
+
+    /// 获取图模式中的全部节点标签
+    pub fn labels(&self) -> Vec<String> {
+        let inner = self.inner.read().expect("Lock poisoned");
+        inner.index_mgr.indexed_labels()
+    }
+
+    /// 获取图模式中的全部关系类型（以 DiskGraph 的持久化目录为权威来源）
+    pub fn edge_types(&self) -> Vec<String> {
+        let inner = self.inner.read().expect("Lock poisoned");
+        inner
+            .disk_graph
+            .index_catalog
+            .edge_types
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    /// 导出当前图数据为可回灌的 Cypher 脚本（流式写入，无中间大字符串）
+    pub fn dump_cypher<W: Write>(&self, mut out: W) -> Result<(), GraphError> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|e| GraphError::General(e.to_string()))?;
+        let graph = &inner.disk_graph;
+
+        writeln!(out, "-- GraphLite-RS logical dump")?;
+        writeln!(
+            out,
+            "-- nodes: {}, edges: {}",
+            graph.node_count, graph.edge_count
+        )?;
+
+        for node_id in graph.all_node_ids()? {
+            let node = match graph.get_node(node_id)? {
+                Some(n) => n,
+                None => continue,
+            };
+            let mut labels: Vec<String> = node.labels.iter().cloned().collect();
+            labels.sort();
+
+            let mut props: Vec<(String, Value)> = node
+                .properties
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            props.sort_by(|a, b| a.0.cmp(&b.0));
+
+            // 节点身份用 `__glid` 承载，标签按需附加
+            let mut create_parts: Vec<String> = Vec::new();
+            if !labels.is_empty() {
+                create_parts.push(format!(":{}", labels.join(":")));
+            }
+            create_parts.push(format!("{{__glid: {}}}", node_id));
+            writeln!(out, "CREATE ({});", create_parts.join(" "))?;
+
+            // 属性走 SET：回灌到既有节点时为「替换」语义，天然幂等
+            if !props.is_empty() {
+                let assignments: Vec<String> = props
+                    .iter()
+                    .map(|(k, v)| format!("n.{} = {}", k, format_literal(v)))
+                    .collect();
+                writeln!(
+                    out,
+                    "MATCH (n {{__glid: {}}}) SET {};",
+                    node_id,
+                    assignments.join(", ")
+                )?;
+            }
+        }
+
+        for node_id in graph.all_node_ids()? {
+            for edge in graph.outgoing_edges(node_id)? {
+                let mut props: Vec<(String, Value)> = edge
+                    .properties
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                props.sort_by(|a, b| a.0.cmp(&b.0));
+
+                let rel = if props.is_empty() {
+                    format!("[:{}]", edge.edge_type)
+                } else {
+                    format!("[:{} {{{}}}]", edge.edge_type, format_props(&props))
+                };
+
+                writeln!(
+                    out,
+                    "MATCH (a {{__glid: {}}}), (b {{__glid: {}}}) CREATE (a)-{}->(b);",
+                    edge.src_id, edge.dst_id, rel
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// 将属性键值对渲染为 Cypher 映射字面量片段
+fn format_props(props: &[(String, Value)]) -> String {
+    props
+        .iter()
+        .map(|(k, v)| format!("{}: {}", k, format_literal(v)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// 将属性值渲染为 Cypher 字面量
+fn format_literal(value: &Value) -> String {
+    match value {
+        Value::Int(v) => v.to_string(),
+        Value::Float(v) => v.to_string(),
+        Value::Bool(v) => v.to_string(),
+        Value::String(s) => format!("'{}'", s.replace('\'', "\\'")),
     }
 }
 
@@ -564,6 +739,9 @@ impl Transaction {
     }
 
     /// 事务内添加边
+    ///
+    /// 此处仅分配槽位并缓存动作；权重合法性（如非负约束）在 `commit` 的 apply 阶段
+    /// 统一由 `DiskGraph` 校验，从而保证一条非法边会令整个事务原子失败并干净回滚。
     pub fn add_edge(
         &mut self,
         src_id: u64,
@@ -572,10 +750,6 @@ impl Transaction {
         properties: HashMap<String, Value>,
         weight: f64,
     ) -> Result<u64, GraphError> {
-        if weight < 0.0 || weight.is_nan() {
-            return Err(GraphError::InvalidWeight(weight));
-        }
-
         let id = {
             let mut inner = self
                 .db
@@ -646,6 +820,13 @@ impl Transaction {
             .inner
             .write()
             .map_err(|e| GraphError::General(e.to_string()))?;
+
+        // 事务生效前采集轻量元数据快照（O(1) 规模，不含图拓扑），用于失败时精确回拨
+        let snapshot = inner.disk_graph.snapshot_meta();
+        {
+            let mut bpm = inner.disk_graph.bpm.lock().unwrap();
+            bpm.begin_tx(self.tx_id);
+        }
 
         let mut failed_err = None;
 
@@ -733,18 +914,15 @@ impl Transaction {
         }
 
         if let Some(err) = failed_err {
-            let failed_pages: Vec<PageId> =
-                if let Ok(mut set) = inner.disk_graph.tx_modified_pages.lock() {
-                    set.drain().collect()
-                } else {
-                    Vec::new()
-                };
-            inner
-                .disk_graph
-                .bpm
-                .lock()
-                .unwrap()
-                .discard_uncommitted_pages(&failed_pages);
+            // 失败事务清理：丢弃未提交页（按基线还原内容与 WAL 位置索引）、
+            // 回拨内存元数据、并使二级索引整体失效，确保零残留、主库零污染。
+            let failed_pages = inner.disk_graph.drain_modified_pages();
+            {
+                let mut bpm = inner.disk_graph.bpm.lock().unwrap();
+                let _ = bpm.rollback_uncommitted_pages(&failed_pages);
+            }
+            inner.disk_graph.restore_meta(&snapshot);
+            inner.index_mgr.invalidate_all();
             return Err(err);
         }
 

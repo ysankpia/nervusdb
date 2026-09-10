@@ -16,6 +16,9 @@ pub enum IndexStatus {
 pub struct IndexCatalog {
     pub labels: BTreeSet<String>,
     pub properties: BTreeSet<(String, String)>,
+    /// 图模式中的关系类型清单（供 `.schema` 与管理工具展示）
+    #[serde(default)]
+    pub edge_types: BTreeSet<String>,
 }
 
 /// 二级索引管理器：支持 Label 索引与 (Label, PropKey) 属性索引加速
@@ -55,10 +58,6 @@ impl IndexManager {
         }
     }
 
-    pub fn catalog(&self) -> &IndexCatalog {
-        &self.catalog
-    }
-
     /// 检查指定标签的索引是否权威完整
     pub fn is_label_complete(&self, label: &str) -> bool {
         self.label_status.get(label) == Some(&IndexStatus::Complete)
@@ -69,6 +68,20 @@ impl IndexManager {
         if self.is_label_complete(label) {
             return;
         }
+        // 重建前清除该标签的陈旧属性索引项，防止旧值索引残留造成幻读
+        let stale_keys: Vec<(String, String)> = self
+            .prop_index
+            .keys()
+            .filter(|(l, _)| l == label)
+            .cloned()
+            .collect();
+        for key in stale_keys {
+            self.prop_index.remove(&key);
+        }
+        if let Some(set) = self.label_index.get_mut(label) {
+            set.clear();
+        }
+
         if let Ok(node_ids) = graph.all_node_ids() {
             let mut set = BTreeSet::new();
             for nid in node_ids {
@@ -90,6 +103,16 @@ impl IndexManager {
             self.label_index.insert(label.to_string(), set);
             self.label_status
                 .insert(label.to_string(), IndexStatus::Complete);
+        }
+    }
+
+    /// 索引整体失效（事务失败/回滚后调用）：降级为 Registered，后续按需从 DiskGraph 重建。
+    /// 这保证了失败事务绝不会留下任何可被查询观察到的索引残留。
+    pub fn invalidate_all(&mut self) {
+        self.label_index.clear();
+        self.prop_index.clear();
+        for status in self.label_status.values_mut() {
+            *status = IndexStatus::Registered;
         }
     }
 
@@ -213,6 +236,11 @@ impl IndexManager {
         let mut set = self.catalog.properties.clone();
         set.extend(self.prop_index.keys().cloned());
         set.into_iter().collect()
+    }
+
+    /// 获取图模式中的关系类型清单
+    pub fn edge_types(&self) -> Vec<String> {
+        self.catalog.edge_types.iter().cloned().collect()
     }
 
     pub fn label_index_count(&self) -> usize {
