@@ -150,7 +150,7 @@ pub struct DeleteClause {
 /// SET 子句条目
 #[derive(Debug, Clone, PartialEq)]
 pub enum SetItem {
-    /// SET n.key = <expr>
+    /// `SET n.key = expr`
     Property {
         var: String,
         key: String,

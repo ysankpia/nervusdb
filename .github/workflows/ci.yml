@@ -27,6 +27,15 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      # Record the exact toolchain so a "green locally, red in CI" drift is
+      # attributable. Note: a floating `stable` can introduce new lints that
+      # turn a previously green tree red; if that happens, fix the lint rather
+      # than pinning an older compiler.
+      - name: Toolchain version
+        run: |
+          rustc --version
+          cargo clippy --version
+
       - name: Cache cargo registry and build
         uses: actions/cache@v4
         with:

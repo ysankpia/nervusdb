@@ -944,7 +944,9 @@ impl Transaction {
         }
 
         let mut failed_err = None;
-        let ops: Vec<TxAction> = self.ops.drain(..).collect();
+        // Take ownership of the action list instead of draining it into a fresh
+        // allocation; the planner needs owned actions and `take` avoids the copy.
+        let ops: Vec<TxAction> = std::mem::take(&mut self.ops);
 
         let mut idx = 0usize;
         while idx < ops.len() {

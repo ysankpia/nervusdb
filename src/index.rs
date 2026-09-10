@@ -30,7 +30,7 @@ pub struct IndexManager {
     /// 标签索引：Label -> 包含该标签的 NodeId 倒排有序集合
     label_index: HashMap<String, BTreeSet<u64>>,
 
-    /// 属性索引：(Label, PropKey) -> BTreeMap<Value, BTreeSet<NodeId>>
+    /// 属性索引：`(Label, PropKey) -> BTreeMap<Value, BTreeSet<NodeId>>`
     /// 支持精确等值查找与有序范围检索
     prop_index: PropIndexMap,
 }
