@@ -36,3 +36,5 @@ if (!nativeBinding) {
 
 module.exports = nativeBinding;
 module.exports.GraphLite = nativeBinding.GraphLite;
+// 事务句柄别名（napi 依据 Rust 类型名注册为 `Transaction`）
+module.exports.Transaction = nativeBinding.Transaction;

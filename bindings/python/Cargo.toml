@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "graphlite"
+# 目标名与模块名刻意区分：pyo3 的模块名由 `module-name = "graphlite"` 与
+# `#[pymodule] fn graphlite` 决定，此处改名可避免与根 crate 的 cdylib 产物重名。
+name = "graphlite_python"
 crate-type = ["cdylib"]
 
 [dependencies]
