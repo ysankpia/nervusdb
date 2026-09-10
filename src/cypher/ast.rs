@@ -160,23 +160,29 @@ pub enum SetItem {
     Label { var: String, label: String },
 }
 
+/// MATCH 语句子句集合。
+///
+/// 独立成结构体并被 `CypherStatement::Match` 装箱持有：该变体字段数远多于
+/// `Create`，装箱后各变体尺寸均衡，避免枚举整体被最大变体撑大（每条语句仅
+/// 构造一次，此处的间接寻址开销可忽略）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchClause {
+    pub patterns: Vec<PathPattern>,
+    pub where_clause: Option<Expr>,
+    pub set_clause: Vec<SetItem>,
+    pub delete_clause: Option<DeleteClause>,
+    pub create_clause: Option<PathPattern>,
+    pub return_clause: Option<Vec<ReturnItem>>,
+    pub order_by: Vec<OrderItem>,
+    pub skip: Option<usize>,
+    pub limit: Option<usize>,
+}
+
 /// Cypher 语句抽象语法树
 #[derive(Debug, Clone, PartialEq)]
 pub enum CypherStatement {
-    Create {
-        pattern: PathPattern,
-    },
-    Match {
-        patterns: Vec<PathPattern>,
-        where_clause: Option<Expr>,
-        set_clause: Vec<SetItem>,
-        delete_clause: Option<DeleteClause>,
-        create_clause: Option<PathPattern>,
-        return_clause: Option<Vec<ReturnItem>>,
-        order_by: Vec<OrderItem>,
-        skip: Option<usize>,
-        limit: Option<usize>,
-    },
+    Create { pattern: PathPattern },
+    Match(Box<MatchClause>),
 }
 
 impl CypherStatement {
@@ -184,12 +190,11 @@ impl CypherStatement {
     pub fn is_mutating(&self) -> bool {
         match self {
             CypherStatement::Create { .. } => true,
-            CypherStatement::Match {
-                set_clause,
-                delete_clause,
-                create_clause,
-                ..
-            } => !set_clause.is_empty() || delete_clause.is_some() || create_clause.is_some(),
+            CypherStatement::Match(clause) => {
+                !clause.set_clause.is_empty()
+                    || clause.delete_clause.is_some()
+                    || clause.create_clause.is_some()
+            }
         }
     }
 }

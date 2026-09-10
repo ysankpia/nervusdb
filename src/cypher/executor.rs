@@ -1,6 +1,6 @@
 use crate::cypher::ast::{
     AggregateArg, AggregateFunc, BinaryOperator, CypherStatement, DeleteClause, ExecuteResult,
-    Expr, NodePattern, OrderItem, PathPattern, ReturnItem, SetItem,
+    Expr, MatchClause, NodePattern, OrderItem, PathPattern, ReturnItem, SetItem,
 };
 use crate::disk_graph::DiskGraph;
 use crate::graph::{Direction, GraphError, Value};
@@ -962,17 +962,19 @@ impl<'a> CypherExecutor<'a> {
     ) -> Result<CypherResultSet, GraphError> {
         match stmt {
             CypherStatement::Create { pattern } => self.execute_create(&[pattern]),
-            CypherStatement::Match {
-                patterns,
-                where_clause,
-                set_clause,
-                delete_clause,
-                create_clause,
-                return_clause,
-                order_by,
-                skip,
-                limit,
-            } => {
+            CypherStatement::Match(clause) => {
+                let MatchClause {
+                    patterns,
+                    where_clause,
+                    set_clause,
+                    delete_clause,
+                    create_clause,
+                    return_clause,
+                    order_by,
+                    skip,
+                    limit,
+                } = *clause;
+
                 for p in &patterns {
                     if let Some(start_pat) = p.nodes.first() {
                         for lbl in &start_pat.labels {
@@ -1363,10 +1365,8 @@ impl<'a> CypherExecutor<'a> {
                             .remove_node_all_indices(id, &labels_bt, &removed.properties);
                     }
                     Binding::Edge(id) => {
-                        if deleted_edges.insert(id) {
-                            if self.graph.remove_edge(id).is_ok() {
-                                edges_deleted += 1;
-                            }
+                        if deleted_edges.insert(id) && self.graph.remove_edge(id).is_ok() {
+                            edges_deleted += 1;
                         }
                     }
                 }
@@ -1393,23 +1393,15 @@ pub fn execute_cypher_read(
         ));
     }
     match statement {
-        CypherStatement::Match {
-            patterns,
-            where_clause,
-            return_clause,
-            order_by,
-            skip,
-            limit,
-            ..
-        } => {
+        CypherStatement::Match(clause) => {
             let executor = CypherReadOnlyExecutor::new(graph, index_mgr);
             executor.execute_match(
-                patterns,
-                where_clause,
-                return_clause,
-                &order_by,
-                skip,
-                limit,
+                clause.patterns,
+                clause.where_clause,
+                clause.return_clause,
+                &clause.order_by,
+                clause.skip,
+                clause.limit,
             )
         }
         _ => Err(GraphError::General(

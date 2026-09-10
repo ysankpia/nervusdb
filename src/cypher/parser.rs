@@ -1,6 +1,6 @@
 use crate::cypher::ast::{
-    AggregateArg, AggregateFunc, BinaryOperator, CypherStatement, DeleteClause, Expr, NodePattern,
-    OrderItem, PathPattern, RelPattern, ReturnItem, SetItem,
+    AggregateArg, AggregateFunc, BinaryOperator, CypherStatement, DeleteClause, Expr, MatchClause,
+    NodePattern, OrderItem, PathPattern, RelPattern, ReturnItem, SetItem,
 };
 use crate::cypher::lexer::Token;
 use crate::graph::{Direction, GraphError, Value};
@@ -95,7 +95,7 @@ impl Parser {
                     limit = Some(self.parse_usize_literal("LIMIT")?);
                 }
 
-                CypherStatement::Match {
+                CypherStatement::Match(Box::new(MatchClause {
                     patterns,
                     where_clause,
                     set_clause,
@@ -105,7 +105,7 @@ impl Parser {
                     order_by,
                     skip,
                     limit,
-                }
+                }))
             }
             _ => {
                 return Err(GraphError::General(

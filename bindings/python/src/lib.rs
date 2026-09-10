@@ -1,4 +1,8 @@
 #![allow(unexpected_cfgs)]
+// pyo3 的 `#[pymethods]` 宏会在每个以 `PyResult<T>` 为返回类型的导出方法处注入
+// `.into()`，当 T 本身已是 `PyErr`/`PyObject` 系列时即触发 `useless_conversion`。
+// 这是宏生成代码而非手写逻辑，无法在源码层面消除，故在此 crate 内定点豁免。
+#![allow(clippy::useless_conversion)]
 
 use graphlite_core::{
     GraphError, GraphLite as CoreGraphLite, Transaction as CoreTransaction, Value,
