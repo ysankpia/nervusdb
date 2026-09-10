@@ -1,0 +1,94 @@
+name: Bug report
+description: Something behaves incorrectly. Please include a reproduction.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report — these are the most useful thing you can send to
+        this project.
+
+        One thing before you start: **this repository does not accept external
+        code contributions**, only issues. A patch that arrives as a pull request
+        will be closed automatically. That is a licensing decision, not a
+        judgement on your work. See CONTRIBUTING.md.
+
+        The most important field below is the reproduction. A report that can be
+        reproduced gets fixed; one that cannot is very hard to act on.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The observed behaviour. Paste raw output rather than summarising it.
+      placeholder: |
+        Expected ... but got ...
+
+        Raw output:
+        ```
+        (paste here)
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: |
+        The smallest sequence that shows the problem: ideally a short Rust or
+        Cypher snippet, or the exact commands. If the issue involves a database
+        file, say how it was produced.
+      placeholder: |
+        ```rust
+        let db = GraphLite::open(":memory:")?;
+        // ...
+        ```
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: "v1.0.0-rc.1, or the commit SHA"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Storage / WAL / recovery
+        - Transactions / rollback
+        - Cypher query engine
+        - Graph algorithms
+        - Indexing
+        - CLI
+        - Python SDK
+        - Node.js SDK
+        - Documentation or benchmark numbers
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and version, CPU architecture, and the buffer-pool size if you set one.
+      placeholder: "macOS 15.7.5, Apple M4, pool 1024 frames"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for the same problem.
+          required: true
+        - label: This is not a security issue (those go to luhuizhx@gmail.com instead).
+          required: true

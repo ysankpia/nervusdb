@@ -1,11 +1,27 @@
 # GraphLite-RS (图数据库界的 SQLite)
 
+[![CI](https://github.com/ysankpia/graphlite/actions/workflows/ci.yml/badge.svg)](https://github.com/ysankpia/graphlite/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.98%2B-orange.svg)](https://www.rust-lang.org)
+
 > **GraphLite-RS** 是一个采用现代 Rust 构建的嵌入式、单文件持久化属性图数据库引擎。
 > 它融合了 **SQLite 的轻量零依赖与单文件部署体验** 与 **原生图数据库（如 Neo4j）的定长记录磁盘免索引邻接性能**，彻底打破超大图谱常驻内存瓶颈。
 
 > ⚠️ **当前为 `v1.0.0-rc.1` 预发布版本。** 核心引擎、Cypher 1.0、图算法与生产安全防线均已实现并通过 91 项测试，
 > 但仍有若干已知生产缺口（单句柄限制、数据页无校验和、超大批量需分块等）。
 > **上线前请先阅读 [已知限制](ROADMAP.md#next-planned)**，不要在未评估这些限制的情况下用于生产。
+
+**文档导航**
+
+| 文档                               | 内容                                       |
+| ---------------------------------- | ------------------------------------------ |
+| [CHANGELOG.md](CHANGELOG.md)       | 版本变更记录；升级前先看这里               |
+| [ROADMAP.md](ROADMAP.md)           | 已完成的、计划中的、以及明确不做的事       |
+| [AGENTS.md](AGENTS.md)             | 架构不变量与开发规范（改代码前必读）       |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献政策：**仅接受 Issue，不接受外部代码** |
+| [SECURITY.md](SECURITY.md)         | 漏洞私密报告流程                           |
+| [LICENSING.md](LICENSING.md)       | 双授权（AGPL + 商业）说明                  |
+| [CLA.md](CLA.md)                   | 贡献者许可协议（仅适用于受邀改动）         |
 
 ## 📊 实测数据一览
 

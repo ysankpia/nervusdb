@@ -1,0 +1,64 @@
+name: Feature request or design discussion
+description: Propose a capability, or disagree with a design decision.
+title: "[idea] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For discussion of what the project should do — including pushback on a
+        design decision in ROADMAP.md or AGENTS.md.
+
+        Note: **this repository does not accept external code**, only issues. If
+        your proposal is accepted, the maintainer implements it. See
+        CONTRIBUTING.md for why.
+
+        Before filing, please check ROADMAP.md. Some things are deliberately out
+        of scope (distributed operation, an in-memory graph mode, `MERGE`), and
+        it saves us both time if you know that up front — though if you have a
+        concrete use case that argues against a non-goal, say so.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem you are hitting
+      description: |
+        Describe the situation, not the solution. What are you trying to do, and
+        what stops you today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like to see
+      description: Optional. A concrete idea is welcome, but the problem matters more.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you have tried instead
+      description: |
+        Workarounds you found, or why the existing APIs do not cover it. This
+        often shows that no change is needed, which is also a useful outcome.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Storage / performance
+        - Transactions / concurrency
+        - Cypher language surface
+        - Graph algorithms
+        - Indexing
+        - CLI
+        - SDKs
+        - Documentation
+        - Other
+    validations:
+      required: true
