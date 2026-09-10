@@ -665,6 +665,18 @@ cd bindings/python && PYTHONPATH=. python3 benches/throughput.py
 cd bindings/nodejs && node benches/throughput.mjs
 ```
 
+SDK 实测（同一台 M4，冒烟规模 10 万节点 + 40 万边）：
+
+| SDK            | 节点写入     | 边写入        |
+| -------------- | ------------ | ------------- |
+| Python (PyO3)  | 63,000 ops/s | 112,000 ops/s |
+| Node.js (NAPI) | 64,000 ops/s | 117,000 ops/s |
+
+> 差距来自**跨语言 FFI 边界**：SDK 每条写入都是一次跨语言调用，
+> 而 Rust 原生批量路径在语言内部完成。这是接口形态的固有成本，不是引擎慢。
+> 若 SDK 侧追求吞吐，应改用批量传入（例如一次提交一个数组），
+> 这已记录在 ROADMAP 中。
+
 **引用性能数字的规则**：必须同时给出上述命令、硬件（CPU / 存储 / OS）与属性载荷。
 本仓库曾出现过无法复现的数字，因此该规则是硬性要求，详见 [ROADMAP.md](ROADMAP.md)。
 

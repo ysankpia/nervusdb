@@ -78,6 +78,12 @@ The Python and Node.js bindings build and pass their tests but are not published
 to PyPI or npm. Publishing needs packaging polish, versioning policy and
 platform wheel/prebuild matrices.
 
+Their throughput is also bounded by the one-call-per-write FFI boundary
+(measured ~63k ops/s in Python and ~64k in Node, against ~550k for the native
+Rust path at the same scale). A batch API that accepts an array of entities per
+call would close most of that gap; that is the higher-value change and should
+land before publication.
+
 ### 7. Concurrency stress at high core counts
 
 The current suite exercises 20 threads. Behaviour under sustained load on
