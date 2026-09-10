@@ -143,23 +143,44 @@ graphlite-rs/
 
 ## 3. Engineering Workflows & Verification Commands
 
-All agents modifying this codebase must execute the relevant checks before concluding any task:
+All agents modifying this codebase must execute the relevant checks before concluding any task.
 
-### 3.1 Workspace Compilation Check
+### 3.1 The Full CI Gate (run all of these)
 
-Must compile with **zero warnings and zero errors**:
-
-```bash
-cargo check --workspace
-```
-
-### 3.2 Full Test Suite Regression
-
-Must pass every test suite (including the 1MB out-of-core memory stress tests):
+CI runs exactly this set, on Linux and macOS. Anything less is incomplete verification:
 
 ```bash
+cargo fmt --all -- --check
+cargo check --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
+
+Two of these are easy to forget and have already caused a red CI:
+
+- **`rustdoc -D warnings`** rejects unescaped angle brackets in doc comments
+  (`<expr>`, `<NodeId>` are parsed as HTML tags).
+- **clippy's lint set moves with the compiler.** A toolchain update can introduce
+  a new lint that turns a previously green tree red. When that happens, fix the
+  code; **never pin an older compiler to silence it**, because the lint is
+  usually correct.
+
+### 3.2 Release-Mode Throughput Suites
+
+These carry throughput assertions that only mean anything when optimised:
+
+```bash
+cargo test --release --test batch_tx_tests
+cargo test --release --test edge_locality_tests
+```
+
+**Throughput assertions must not depend on machine speed.** The suite previously
+asserted "batch is >20x faster than autocommit", which passed locally and failed
+on CI at ~16x because a cloud disk's fsync characteristics differ from a local
+SSD. Assert the _mechanism_ instead (N autocommitted writes cost N fsyncs; one
+batched transaction of N writes costs exactly 1), which holds on any hardware,
+and keep any speed ratio as a loose lower bound.
 
 ### 3.3 Target-Specific Verification
 
@@ -190,6 +211,12 @@ cargo test --workspace
 - **Run Production Safety Suite Only** (includes a real child-process lock probe):
   ```bash
   cargo test --test production_safety_tests
+  ```
+- **Run the benchmarks**:
+  ```bash
+  cargo bench --bench throughput      # full; GL_SCALE=small for a smoke run
+  cargo bench --bench pool_probe
+  cargo bench --bench mem_probe
   ```
 - **Verify Interactive CLI**:
   ```bash
@@ -280,8 +307,69 @@ Execution pipeline: `find_matches` (per-pattern resolution + shared-variable joi
 
 ---
 
-## 5. Cleanliness & Commit Standards
+## 5. Cleanliness, Development Workflow & Commit Standards
+
+### 5.1 Development workflow: PR-based, `main` is protected
+
+`main` has branch protection enabled: force pushes and deletions are refused, and
+all three CI checks (`Test (ubuntu-latest)`, `Test (macos-latest)`, `Docs build`)
+must pass. Changes therefore go through a pull request, including the
+maintainer's own work:
+
+```bash
+git switch -c fix/short-description
+# ... make the change, run the full CI gate from §3.1 ...
+git push -u origin fix/short-description
+gh pr create --fill
+# merge once CI is green
+gh pr merge --squash --delete-branch
+```
+
+Branch naming: `feat/…`, `fix/…`, `perf/…`, `refactor/…`, `test/…`, `docs/…`,
+`chore/…`, matching the commit type it will produce.
+
+The maintainer may bypass protection in an emergency, but a bypassed change must
+be followed up by a verified green run. Do not make bypassing the normal path.
+
+### 5.2 External contributions are refused by policy
+
+This repository does not accept code from outside contributors; pull requests
+raised by anyone other than the owner, a member or a collaborator are closed
+automatically by `.github/workflows/close-external-prs.yml`. The reason is
+licensing (dual AGPL + commercial), not code quality — see CONTRIBUTING.md.
+
+Issues are welcome and are the correct channel for outside reports. Work that
+comes from an issue is implemented by the maintainer on a branch, then merged via
+PR.
+
+**Never** relax the automation condition in that workflow to accept an
+unsolicited pull request, and never merge one, without first resolving the
+licensing question (accepting outside code would require a CLA, which the project
+deliberately does not collect).
+
+### 5.3 Commit standards
+
+- Message format: `type(scope): summary`, imperative and concise — e.g.
+  `fix(storage): reject a second handle on the same file`.
+- The body must explain the **root cause**, not only the symptom that was patched.
+  If a hypothesis was tested and disproved, say so.
+- State plainly what was verified and what was not. Never claim a check was run
+  when it was skipped.
+- If a change alters a documented performance number, update the number **and**
+  its measurement conditions in the same commit.
+
+### 5.4 Housekeeping
 
 - Never commit test database artifacts (`*.db`, `*.db.wal`, `*.paged`).
-- Keep `.gitignore` updated for target builds, Node binaries (`*.node`), and Python dynamic libraries (`*.so`, `*.dylib`).
-- No placeholder code: Strictly forbidden to introduce `todo!()` or `unimplemented!()`.
+- Keep `.gitignore` updated for target builds, Node binaries (`*.node`), and
+  Python dynamic libraries (`*.so`, `*.dylib`).
+- No placeholder code: strictly forbidden to introduce `todo!()` or
+  `unimplemented!()`.
+- **Keep `CHANGELOG.md` current.** Every user-visible change adds an entry under
+  `## [Unreleased]` in the same commit, grouped as Added / Changed / Fixed /
+  Removed / Security. The commit type alone is not enough: the changelog is what
+  tells a user whether they need to act (a storage format bump or a behavioural
+  change certainly qualifies).
+- Update the relevant documentation in the same change: `README.md` for
+  user-facing behaviour, `AGENTS.md` for invariants or workflows, `ROADMAP.md`
+  when a planned item lands or a new limitation is discovered.
