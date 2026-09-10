@@ -43,17 +43,29 @@ Any modification that violates these rules must be rejected immediately:
    - Autocommitted single writes each cost one WAL append plus one fsync. Bulk ingestion must use `GraphLite::with_transaction` (Rust), `db.begin_transaction()` (Python/Node), and commit once so the whole batch shares **exactly one fsync**.
    - `BufferStats::wal_fsync_count` / `wal_frames_written` are the observable contract for this: a test asserting bulk-commit semantics asserts the fsync delta is exactly 1.
 
-6. **Storage Format Versioning**
+6. **Two-Phase Batch Edge Weaving**
+   - Edge batches with `EDGE_BATCH_WEAVE_MIN` or more consecutive `AddEdge` actions in one commit must go through `DiskGraph::insert_edges_batch`, never per-edge head insertion. Per-edge weaving touches the source node page, the target node page and the old head page for every edge; on a graph whose pages far exceed the pool the same page is evicted and re-read many times per batch, and each miss spills a full 4KB page to the WAL ("false spill").
+   - `insert_edges_batch` must keep this shape: (0) read the distinct touched nodes **sorted by logical page** so each node page is paged in once; (1) derive `src_prev`/`src_next`/`dst_next` in memory from per-node sequences, using position indexes so a heavily shared target cannot degrade to O(n²); (2) write edge records low-id-first then high-id-first, never interleaved (head fix-ups and new edges can be thousands of pages apart and would thrash each other); (3) write node head pointers once per node, sorted by logical page.
+   - Chain semantics must stay identical to per-edge insertion: chains are "reverse insertion order", the first in-batch edge's `src_next` points at the pre-batch head, and the pre-batch head's `src_prev` is rewritten. `tests/edge_locality_tests.rs` pins this equivalence.
+   - Admitted consequence: reordering within a batch changes **incoming** chain order for a shared target (outgoing order is preserved because ordering is per source node). Batches and per-edge insertion therefore differ only in `Node.incoming` ordering; membership, edge contents and all analytics results are identical.
+
+7. **O(1) Buffer Pool Replacer & Protected Pages**
+   - `LRUReplacer` must stay O(1) per operation (intrusive doubly-linked list indexed by frame id). A `VecDeque` with linear scans is O(pool size) per page operation and becomes the throughput ceiling at 16K frames. `victim_filter` must scan without mutating list structure and then unlink once; implementations that reshuffle during the scan drift out of sync with `len` and raise false NO-STEAL errors.
+   - Page 0 (Header) and every multi-level page directory page must be registered via `BufferPoolManager::protect_page` and excluded from **both** eviction rounds in `acquire_frame`. Directory pages are traversed on every node/edge address resolution, so letting data pages evict them forces the whole chain to be re-read.
+   - `restore_meta` must call `sync_protected_pages()` so a rolled-back transaction cannot leave stale or missing directory protection.
+
+8. **Storage Format Versioning**
    - `DB_PAGE_VERSION` is `2` (slotted property pages). Version 1 databases (one 4KB property page per entity) are **not readable**: `GraphLite::open` returns an explicit error directing the user to export with GraphLite 1.0 via `.dump` and re-import. Never silently reinterpret an old file.
 
-7. **Freelist Slot Reclamation**
+9. **Freelist Slot Reclamation**
    - Page 0 (Header Page) stores `first_free_node_id` and `first_free_edge_id`.
    - Deleted records must be chained into the respective Freelist.
    - New allocations must prioritize popping from the Freelist before advancing `next_id`, completely eliminating disk space fragmentation.
 
-8. **Lock De-escalation & Concurrency Safety**
-   - Avoid holding global write locks during long traversals. Read queries and graph algorithms (`dijkstra`, `bfs`, `has_cycle`, `query()`) must clone the lightweight `DiskGraph` handle, release the global read lock immediately, and execute concurrently under page-level latches.
-   - All pointer traversal loops (`while curr != 0`) must enforce cycle-detection guards (`seen: HashSet<u64>`) to guarantee zero infinite loops under concurrent pointer updates.
+10. **Lock De-escalation & Concurrency Safety**
+
+- Avoid holding global write locks during long traversals. Read queries and graph algorithms (`dijkstra`, `bfs`, `has_cycle`, `query()`) must clone the lightweight `DiskGraph` handle, release the global read lock immediately, and execute concurrently under page-level latches.
+- All pointer traversal loops (`while curr != 0`) must enforce cycle-detection guards (`seen: HashSet<u64>`) to guarantee zero infinite loops under concurrent pointer updates.
 
 ---
 
@@ -138,6 +150,10 @@ cargo test --workspace
 - **Run Batched Transaction Suite Only** (use `--release` for the 20,000+ ops/s target):
   ```bash
   cargo test --release --test batch_tx_tests -- --nocapture
+  ```
+- **Run Edge Locality Suite Only**:
+  ```bash
+  cargo test --test edge_locality_tests
   ```
 - **Verify Interactive CLI**:
   ```bash
