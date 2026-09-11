@@ -197,7 +197,48 @@ impl WalWriter {
         }
     }
 
+    /// 打开一个顺序扫描 WAL 的流式游标。
+    ///
+    /// 与 [`WalWriter::read_all_frames`] 的关键区别：游标一次只持有一帧的载荷，
+    /// 因此峰值内存是 O(1)（外加一个复用缓冲）而不是 O(WAL 体积)。回放 1.5GB 的
+    /// WAL 不会再把 1.5GB 拉进内存。
+    ///
+    /// 文件模式下游标持有 `try_clone` 得到的**独立 fd**，因此流式扫描期间不会
+    /// 阻塞 `append`（后者每次写入前都会 seek 到文件末尾）。`:memory:` 模式只保留
+    /// 排序后的帧偏移（8 字节/帧），载荷按需查表，同样避免整表拷贝。
+    pub fn cursor(&self) -> Result<WalCursor<'_>, GraphError> {
+        if self.is_memory {
+            let mut offsets: Vec<u64> = self.lock_mem().keys().copied().collect();
+            offsets.sort_unstable();
+            return Ok(WalCursor::Memory {
+                wal: self,
+                offsets,
+                idx: 0,
+                payload: Vec::new(),
+            });
+        }
+
+        let guard = self.lock_file();
+        let file = guard
+            .as_ref()
+            .ok_or_else(|| GraphError::StorageError("WAL file handle unavailable".into()))?
+            .try_clone()?;
+        drop(guard);
+
+        let mut reader = io::BufReader::new(file);
+        reader.seek(SeekFrom::Start(0))?;
+
+        Ok(WalCursor::File {
+            reader,
+            offset: 0,
+            payload: Vec::new(),
+        })
+    }
+
     /// 顺序扫描全部有效帧（遇到损坏/截断半帧立即安全停止）
+    ///
+    /// 注意：该函数会把整个 WAL 载入内存，只适合小日志或诊断用途。
+    /// 回放路径请使用 [`WalWriter::cursor`]，它是流式的。
     pub fn read_all_frames(&self) -> Result<Vec<WalRecord>, GraphError> {
         if self.is_memory {
             let mut offsets: Vec<u64> = self.lock_mem().keys().copied().collect();
@@ -298,6 +339,98 @@ impl WalWriter {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+/// WAL 的顺序流式游标。
+///
+/// 一次只持有一帧载荷，因此峰值内存与 WAL 体积无关。遇到截断、CRC 失败或
+/// 魔数不匹配时返回 `Ok(None)` 安全停止——尾部残帧是正常现象（崩溃时留下），
+/// 不是错误。
+pub enum WalCursor<'a> {
+    /// 文件模式：持独立 fd，顺序读取
+    File {
+        reader: io::BufReader<File>,
+        offset: u64,
+        /// 复用缓冲，避免每帧一次分配
+        payload: Vec<u8>,
+    },
+    /// `:memory:` 模式：只保留排序后的偏移表（8 字节/帧），载荷按需取
+    Memory {
+        wal: &'a WalWriter,
+        offsets: Vec<u64>,
+        idx: usize,
+        payload: Vec<u8>,
+    },
+}
+
+impl WalCursor<'_> {
+    /// 读取下一帧，返回 `(帧起始偏移, 记录)`；遍历结束或遇到残帧时返回 `Ok(None)`。
+    pub fn next_frame(&mut self) -> Result<Option<(u64, WalRecord)>, GraphError> {
+        match self {
+            WalCursor::File {
+                reader,
+                offset,
+                payload,
+            } => {
+                let mut header = [0u8; WAL_FRAME_HEADER_SIZE as usize];
+                match reader.read_exact(&mut header) {
+                    Ok(()) => {}
+                    Err(_) => return Ok(None), // 正常结束或尾部残帧
+                }
+                if &header[0..4] != WAL_MAGIC {
+                    return Ok(None);
+                }
+                let len = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
+                let expected_crc =
+                    u32::from_le_bytes([header[8], header[9], header[10], header[11]]);
+
+                // 复用缓冲：仅在需要更大空间时扩容，之后不再分配
+                if payload.len() < len {
+                    payload.resize(len, 0);
+                }
+                if reader.read_exact(&mut payload[..len]).is_err() {
+                    return Ok(None);
+                }
+                if payload_crc(&payload[..len]) != expected_crc {
+                    return Ok(None);
+                }
+
+                let frame_offset = *offset;
+                *offset += WAL_FRAME_HEADER_SIZE + len as u64;
+
+                match bincode::deserialize::<WalRecord>(&payload[..len]) {
+                    Ok(rec) => Ok(Some((frame_offset, rec))),
+                    Err(_) => Ok(None),
+                }
+            }
+            WalCursor::Memory {
+                wal,
+                offsets,
+                idx,
+                payload,
+            } => {
+                let frame_offset = match offsets.get(*idx).copied() {
+                    Some(o) => o,
+                    None => return Ok(None),
+                };
+                *idx += 1;
+
+                let bytes = match wal.lock_mem().get(&frame_offset).cloned() {
+                    Some(b) => b,
+                    None => return Ok(None),
+                };
+                if payload.len() < bytes.len() {
+                    payload.resize(bytes.len(), 0);
+                }
+                payload[..bytes.len()].copy_from_slice(&bytes);
+
+                match bincode::deserialize::<WalRecord>(&payload[..bytes.len()]) {
+                    Ok(rec) => Ok(Some((frame_offset, rec))),
+                    Err(_) => Ok(None),
+                }
+            }
+        }
     }
 }
 
@@ -410,43 +543,75 @@ impl StorageEngine {
     }
 }
 
-/// 将 WAL 中所有已提交事务的物理页按序重放到主数据文件。
+/// 将 WAL 中所有已提交事务的物理页重放到主数据文件（**流式，两遍扫描**）。
 ///
-/// 未提交事务（仅有 `PageWrite` 而无 `TxCommit`）的溢出帧会被安全忽略，
-/// 这正是 STEAL 策略下「主库零污染」的根本保证。
+/// 未提交事务（只有 `PageWrite` 而没有 `TxCommit`）的帧会被忽略，这是 STEAL
+/// 策略下「主库零污染」的根本保证。
+///
+/// ## 为什么是两遍
+///
+/// 第一遍必须先知道「哪些事务算提交」，第二遍才能决定写哪些页。旧实现用
+/// `read_all_frames()` 一次拿到全部帧，在 1.5GB 的 WAL 上会把整个日志拉进内存，
+/// 违反「常驻内存受缓冲池硬约束」这一不变量。改成流式后：
+///
+/// - 峰值内存 = 单帧载荷(4KB) + 事务状态集，即 `O(已提交事务数)`，与 WAL 体积无关
+/// - 代价是多读一遍 WAL，但两遍都是顺序读且走页缓存，实测远低于原实现的内存代价
+///
+/// ## 崩溃一致性
+///
+/// 数据页与 CRC 目录**都 fsync 之后**才返回；调用方随后才允许截断 WAL。
+/// 若在返回前崩溃，WAL 仍在，重启会重放并重算校验和，因此不会产生假阳性。
 pub fn apply_committed_pages(wal: &WalWriter, db_path: &Path) -> Result<usize, GraphError> {
-    let records = wal.read_all_frames()?;
-    if records.is_empty() {
-        return Ok(0);
-    }
+    apply_committed_pages_with(wal, db_path, &mut |_, _| Ok(()))
+}
 
+/// 第一遍：流式收集事务状态（提交集 / 回滚集），4KB 页镜像在此遍立即丢弃。
+///
+/// 单独抽出来是因为「回放写页」与「补算校验和」是两件必须分先后的事
+/// （见 [`for_each_committed_page`]），但两者都需要同一份事务状态。
+fn collect_committed_txs(wal: &WalWriter) -> Result<(HashSet<u64>, HashSet<u64>), GraphError> {
     let mut committed_txs: HashSet<u64> = HashSet::new();
     let mut aborted_txs: HashSet<u64> = HashSet::new();
-    for record in &records {
+    let mut cursor = wal.cursor()?;
+    while let Some((_, record)) = cursor.next_frame()? {
         match record {
             WalRecord::TxCommit { tx_id } => {
-                committed_txs.insert(*tx_id);
+                committed_txs.insert(tx_id);
             }
             WalRecord::TxRollback { tx_id } => {
-                aborted_txs.insert(*tx_id);
+                aborted_txs.insert(tx_id);
             }
             _ => {}
         }
     }
+    Ok((committed_txs, aborted_txs))
+}
 
+/// 遍历 WAL 中所有**已提交**页并回调，但**不写主数据文件**。
+///
+/// ## 为什么与回放分开
+///
+/// 校验和必须与页内容成对更新，但回放（由 [`StorageEngine::open`] 完成）发生在
+/// `CrcStore` 之前，且**必须先于** `DiskManager::open`：回放会把主文件补长，
+/// 而 `DiskManager::allocate_page` 的页号高水位是从文件长度推导的，
+/// 若在回放前创建，后续分配就可能与刚回放的页号相撞。
+///
+/// 因此顺序固定为：回放 → 创建 `DiskManager` → 创建 `CrcStore` → 本函数补算校验和。
+/// 分两次遍历 WAL 的代价是顺序读一遍日志，换掉的是「回放后校验和与实际内容不符」
+/// ——那会让恢复出来的页在读取时报校验和错误，而 `get_node` 是 lossy 的，
+/// 表现为**看起来像丢数据**。
+pub fn for_each_committed_page<F>(wal: &WalWriter, mut f: F) -> Result<usize, GraphError>
+where
+    F: FnMut(PageId, &[u8; PAGE_SIZE]) -> Result<(), GraphError>,
+{
+    let (committed_txs, aborted_txs) = collect_committed_txs(wal)?;
     if committed_txs.is_empty() {
         return Ok(0);
     }
 
-    let mut db_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(db_path)?;
-
-    let mut applied = 0usize;
-    for record in records {
+    let mut seen = 0usize;
+    let mut cursor = wal.cursor()?;
+    while let Some((_, record)) = cursor.next_frame()? {
         if let WalRecord::PageWrite {
             tx_id,
             page_id,
@@ -458,9 +623,60 @@ pub fn apply_committed_pages(wal: &WalWriter, db_path: &Path) -> Result<usize, G
                 && !aborted_txs.contains(&tx_id)
                 && data.len() == PAGE_SIZE
             {
+                let mut page = [0u8; PAGE_SIZE];
+                page.copy_from_slice(&data);
+                f(page_id, &page)?;
+                seen += 1;
+            }
+        }
+    }
+    Ok(seen)
+}
+
+/// 与 [`apply_committed_pages`] 相同，但每写回一页就回调一次，
+/// 供上层同步页校验和（CRC 目录）。
+pub fn apply_committed_pages_with<F>(
+    wal: &WalWriter,
+    db_path: &Path,
+    on_page_written: &mut F,
+) -> Result<usize, GraphError>
+where
+    F: FnMut(PageId, &[u8; PAGE_SIZE]) -> Result<(), GraphError>,
+{
+    let (committed_txs, aborted_txs) = collect_committed_txs(wal)?;
+
+    if committed_txs.is_empty() {
+        return Ok(0);
+    }
+
+    // ── Pass 2：再次流式遍历，只写已提交页 ──
+    let mut db_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(db_path)?;
+
+    let mut applied = 0usize;
+    let mut cursor = wal.cursor()?;
+    while let Some((_, record)) = cursor.next_frame()? {
+        if let WalRecord::PageWrite {
+            tx_id,
+            page_id,
+            data,
+            ..
+        } = record
+        {
+            if committed_txs.contains(&tx_id)
+                && !aborted_txs.contains(&tx_id)
+                && data.len() == PAGE_SIZE
+            {
+                let mut page = [0u8; PAGE_SIZE];
+                page.copy_from_slice(&data);
                 let offset = (page_id as u64) * (PAGE_SIZE as u64);
                 db_file.seek(SeekFrom::Start(offset))?;
-                db_file.write_all(&data)?;
+                db_file.write_all(&page)?;
+                on_page_written(page_id, &page)?;
                 applied += 1;
             }
         }

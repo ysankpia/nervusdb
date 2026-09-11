@@ -25,6 +25,12 @@ dist/
 *.db.tmp
 *.paged
 
+# Benchmark scratch output (DB_DIR defaults here)
+/bench_db/
+
+# Tool-generated indexes
+.codegraph/
+
 # OS
 .DS_Store
 Thumbs.db

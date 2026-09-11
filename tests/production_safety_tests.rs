@@ -236,17 +236,23 @@ fn test_integrity_check_detects_corruption() -> Result<(), GraphError> {
         !report.is_ok(),
         "corruption MUST be detected; a silent pass is the defect we are fixing"
     );
-    // 应给出结构性问题（计数/链/悬空引用之一），而非只是「属性不可读」
-    let structural = report.count_of(graphlite::IntegrityIssueKind::CountMismatch)
-        + report.count_of(graphlite::IntegrityIssueKind::DanglingEdge)
-        + report.count_of(graphlite::IntegrityIssueKind::OutgoingChainCountMismatch)
-        + report.count_of(graphlite::IntegrityIssueKind::IncomingChainCountMismatch)
-        + report.count_of(graphlite::IntegrityIssueKind::ChainCycleOrOutOfRange)
-        + report.count_of(graphlite::IntegrityIssueKind::PropertyUnreadable);
+
+    // 报告必须**点名坏页**，而不是只说「图好像小了一圈」。
+    // 页级 CRC 体检排在最前，因此在内容检查被读错误中断之前，
+    // 坏页已经带着页号进入报告——这是本用例的核心断言。
     assert!(
-        structural > 0,
-        "expected at least one structural issue, got {:?}",
+        report.count_of(graphlite::IntegrityIssueKind::PageChecksumMismatch) > 0,
+        "report must name the corrupt page, got {:?}",
         report.issues
+    );
+    let mentions_victim = report.issues.iter().any(|i| {
+        i.kind == graphlite::IntegrityIssueKind::PageChecksumMismatch
+            && i.detail.contains(&format!("page {}", victim_page))
+    });
+    assert!(
+        mentions_victim,
+        "report must name page {} specifically, got {:?}",
+        victim_page, report.issues
     );
 
     // verify() 必须返回 Err 并携带诊断信息
@@ -264,6 +270,15 @@ fn test_integrity_check_detects_corruption() -> Result<(), GraphError> {
 // =========================================================================
 // 4b. 度数守恒 oracle：只破坏链指针（计数仍自洽）也必须被抓出
 // =========================================================================
+//
+// 这是「逻辑损坏」而非「介质损坏」：页字节被改坏之后，我们**重算该页的 CRC 并
+// 回写**，使页级校验和仍然自洽。这模拟的是**写路径自身的 bug**——数据被按照
+// 当时的代码逻辑「正确」写坏，页内容完整、CRC 相符，介质层面毫无异常。
+//
+// 为什么必须这样构造：页级 CRC 只能发现意外位翻转（介质损坏），它对写路径 bug
+// 完全失明，因为坏值是被合法写入并合法计算校验和的。能发现这类损坏的只有
+// 度数守恒 oracle：链口径（沿指针走出）与独立扫描口径（遍历边记录）必须相等。
+// 两条路径都不看 CRC，因此本用例真正锁定的是 oracle，而非校验和。
 #[test]
 fn test_integrity_catches_chain_only_corruption() -> Result<(), GraphError> {
     let dir = tempdir()?;
@@ -307,18 +322,58 @@ fn test_integrity_catches_chain_only_corruption() -> Result<(), GraphError> {
     }
     let victim = victim.expect("a node record page must exist");
 
+    // 读入该页、破坏链指针、重算 CRC，然后连同新 CRC 一起写回。
+    // 回写 CRC 是本用例的关键：它让损坏在页级校验下「合法」，
+    // 从而逼迫完整性检查走度数守恒这条独立路径。
+    let mut page = bytes[victim * 4096..(victim + 1) * 4096].to_vec();
+    // NodeRecord 布局: in_use(1) reserved(3) label_id(4) 之后是
+    // first_outgoing_edge_id 的 8 字节；清零它即打断出边链
+    page[8..16].copy_from_slice(&0u64.to_le_bytes());
+
     {
         use std::fs::OpenOptions;
         use std::io::{Seek, SeekFrom};
         let mut f = OpenOptions::new().write(true).open(&db_path)?;
-        // NodeRecord 布局: in_use(1) reserved(3) label_id(4) 之后是
-        // first_outgoing_edge_id 的 8 字节；清零它即打断出边链
-        f.seek(SeekFrom::Start(((victim as u64) * 4096) + 8))?;
-        f.write_all(&[0u8; 8])?;
+        f.seek(SeekFrom::Start((victim * 4096) as u64))?;
+        f.write_all(&page)?;
         f.flush()?;
     }
 
+    // 用库自身的 CrcStore 重算并落盘该页校验和。
+    //
+    // 刻意复用生产代码而不是在测试里手写偏移量：CRC 布局（内联区 / 两级目录）
+    // 是要害细节，测试自己抄一份必然会在下次改布局时悄悄过期，
+    // 那样「损坏已经骗过校验」这个前提就不再成立，而测试仍会假装通过。
+    {
+        let dm = std::sync::Arc::new(graphlite::DiskManager::open(&db_path)?);
+
+        // 目录根页号是 Page 0 的持久化字段，用库常量读取
+        let mut page0 = [0u8; graphlite::PAGE_SIZE];
+        dm.read_page(0, &mut page0)?;
+        let root = u32::from_le_bytes(
+            page0[graphlite::page::HeaderPage::CRC_DIR_PAGE_OFFSET
+                ..graphlite::page::HeaderPage::CRC_DIR_PAGE_OFFSET + 4]
+                .try_into()
+                .unwrap(),
+        );
+
+        let mut store = graphlite::crc::CrcStore::new(dm, root);
+        let mut page_arr = [0u8; graphlite::PAGE_SIZE];
+        page_arr.copy_from_slice(&page);
+        store.record(victim as u32, &page_arr)?;
+        store.flush()?;
+    }
+
     let db = GraphLite::open(&db_path)?;
+
+    // 前提校验：损坏必须已经骗过了页级校验，否则本用例退化成 CRC 用例，
+    // 无法证明度数 oracle 本身有效。
+    assert!(
+        db.verify_page_on_disk(victim as u32).is_ok(),
+        "constructed corruption must pass the page CRC, else this test \
+         does not exercise the degree oracle"
+    );
+
     let report = db.integrity_check()?;
     assert!(
         !report.is_ok(),
@@ -523,6 +578,97 @@ fn test_engine_usable_after_internal_panic() -> Result<(), GraphError> {
     assert_eq!(db.node_count(), 2);
     let report = db.integrity_check()?;
     assert!(report.is_ok(), "engine must remain self-consistent");
+
+    Ok(())
+}
+
+// =========================================================================
+// 9. 页校验和必须覆盖 **256 页之后**的页
+// =========================================================================
+//
+// 这条测试存在的原因值得记录：对手实现（gemlite_droid_gemini_ds_plan）的
+// `verify_page_crc_static` 第一行就写着 `if page_id >= INLINE_CRC_PAGE_COUNT
+// { return Ok(()); }`，即只会校验前 256 页，而它那条「超出部分走目录链」的分支
+// 没有任何调用者、是死代码。它的自测篡改的是 Page 2，正好落在受保护范围内，
+// 于是「测试通过、实际无保护」。
+//
+// 这里刻意破坏一张**远超 256** 的页，确保目录链真的在工作。
+#[test]
+fn test_page_checksum_covers_pages_beyond_256() -> Result<(), GraphError> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    let dir = tempdir()?;
+    let db_path = dir.path().join("beyond256.db");
+
+    // 写入足够多的节点，使文件远大于 512 页（512 页 = 2MB）。
+    //
+    // 这里刻意取 512 页而不是 256 页作为下界：靶页取的是 `file_pages / 2`，
+    // 只有当文件超过 512 页时，中位页才必然落在 256 之后的内联区之外。
+    // 40k 节点带属性只能铺出约 475 页，因此需要更大的 fixture。
+    let node_count: u64 = 90_000;
+    {
+        let db = GraphLite::open(&db_path)?;
+        db.with_transaction(|tx| {
+            for i in 1..=node_count {
+                let mut p = HashMap::new();
+                p.insert("idx".to_string(), Value::from(i as i64));
+                tx.add_node(HashSet::from(["N".to_string()]), p)?;
+            }
+            Ok(())
+        })?;
+        db.checkpoint()?;
+    }
+
+    let page_size = graphlite::PAGE_SIZE as u64;
+    let file_pages = std::fs::metadata(&db_path)?.len() / page_size;
+    assert!(
+        file_pages > 512,
+        "fixture must exceed twice the inline CRC range so a mid-file page \\
+         is provably beyond it, got {} pages",
+        file_pages
+    );
+
+    // 选择一张**确定是数据页**的页。
+    //
+    // 不能简单取最后一页：CRC 目录页本身就在文件尾部（目录页用 `self_crc` 自我保护，
+    // 不参与数据页校验），取到它们会得到「无 CRC 记录」的假阴性。
+    // 取文件中位：它远在 256 页之后，且不可能是尾部的一两张目录页。
+    let victim_page = (file_pages / 2) as u32;
+
+    // 翻转该页中间的一个字节
+    {
+        let mut f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&db_path)?;
+        f.seek(SeekFrom::Start(victim_page as u64 * page_size + 64))?;
+        let mut b = [0u8; 1];
+        f.read_exact(&mut b)?;
+        b[0] ^= 0xFF;
+        f.seek(SeekFrom::Start(victim_page as u64 * page_size + 64))?;
+        f.write_all(&b)?;
+        f.flush()?;
+    }
+
+    // 从磁盘读取该页并校验：必须报出校验和错误，而不是静默返回坏数据。
+    // `verify_page_on_disk` 绕过缓冲池缓存，读的是磁盘上的实际内容。
+    {
+        let db = GraphLite::open(&db_path)?;
+        match db.verify_page_on_disk(victim_page) {
+            Err(GraphError::PageChecksumMismatch { page_id, .. }) => {
+                assert_eq!(
+                    page_id, victim_page as u64,
+                    "must report the corrupted page"
+                );
+            }
+            Err(other) => panic!("expected PageChecksumMismatch, got: {}", other),
+            Ok(()) => panic!(
+                "corruption in page {} (>=256) was NOT detected — the CRC directory \
+                 chain is not covering pages beyond the inline range",
+                victim_page
+            ),
+        }
+    }
 
     Ok(())
 }

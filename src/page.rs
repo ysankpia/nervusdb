@@ -18,9 +18,11 @@ pub const EDGE_RECORDS_PER_PAGE: usize = PAGE_SIZE / EdgeRecord::RECORD_SIZE;
 /// 数据库物理文件头魔数 "GLDB" (GraphLite Database)
 pub const DB_PAGE_MAGIC: &[u8; 4] = b"GLDB";
 pub const DB_PAGE_MAGIC_LEGACY: &[u8; 4] = b"GLP4";
-/// 物理存储格式版本。2 = Slotted Property Page 紧凑属性存储（1.1 起）；
-/// 版本 1（每实体独占整张 4KB 属性页）不再支持，打开时返回明确错误。
-pub const DB_PAGE_VERSION: u32 = 2;
+/// 物理存储格式版本。
+/// - 1：每实体独占一整张 4KB 属性页（早期原型，已不兼容）
+/// - 2：开槽属性页（`SlottedPropPage`）
+/// - 3：在 2 之上增加主数据文件的**页级 CRC32**（Page 0 内联 + 两级目录页）
+pub const DB_PAGE_VERSION: u32 = 3;
 
 /// Page 0 Header 物理页规范与偏移常量定义
 pub struct HeaderPage;
@@ -48,7 +50,14 @@ impl HeaderPage {
     pub const DIRECT_EDGE_PAGES_OFFSET: usize = 224; // 32 * 4 = 128 bytes (覆盖前 2048 条边无需分配间接目录页)
     pub const PROP_FREELIST_OFFSET: usize = 352; // 4 bytes: 已腾空的槽位属性页回收链
     pub const LAST_PROP_PAGE_OFFSET: usize = 356; // 4 bytes: 最近分配过的槽位属性页（写入位点提示）
-    pub const INLINE_PAYLOAD_OFFSET: usize = 360; // 剩余 3736 字节用于内联字典与索引元数据紧凑存储
+    pub const CRC_DIR_PAGE_OFFSET: usize = 360; // 4 bytes: 页校验和目录（L1 链头）
+    /// 256 * 4 = 1024 bytes：前 256 页的 CRC32 内联区。
+    ///
+    /// 内联是必需的：极小库（1 节点 + 1 边）必须守住「≤16KB = 4 页」的约束，
+    /// 因此不能为校验和单独分配目录页。页号 ≥256 的部分才走目录链。
+    pub const INLINE_CRC_OFFSET: usize = 364;
+    pub const INLINE_CRC_PAGE_COUNT: usize = 256;
+    pub const INLINE_PAYLOAD_OFFSET: usize = 1388; // 剩余 2708 字节用于内联字典与索引元数据
     pub const DIRECT_NODE_PAGES_COUNT: usize = 32;
     pub const DIRECT_EDGE_PAGES_COUNT: usize = 32;
     pub const MAX_INLINE_PAYLOAD_SIZE: usize = PAGE_SIZE - Self::INLINE_PAYLOAD_OFFSET;
@@ -690,4 +699,100 @@ pub fn decode_props(data: &[u8]) -> Option<std::collections::HashMap<String, cra
         props.insert(key, value);
     }
     Some(props)
+}
+
+// =========================================================================
+// CRC 目录页
+// =========================================================================
+
+/// 页校验和的两级 radix 目录页（L1 与 L2 共用同一布局）。
+///
+/// ```text
+/// 0..4     next_page_id   同层链后继
+/// 4..8     entry_count    有效条目数
+/// 8..12    self_crc       本页自身 CRC（计算时该字段置 0），用于目录页防损坏
+/// 12..16   level          1 或 2
+/// 16..4096 entries[1020]  16 + 1020*4 = 4096
+/// ```
+///
+/// L1 页的条目是 L2 页号；L2 页的条目是数据页的 CRC32。
+/// 单条 L1 条目覆盖 `1020 × 1020` 页 ≈ 4.06 GiB。
+pub struct CrcDirPage;
+
+impl CrcDirPage {
+    /// 布局常量
+    pub const ENTRIES_OFFSET: usize = 16;
+    pub const ENTRIES_PER_PAGE: usize = (PAGE_SIZE - Self::ENTRIES_OFFSET) / 4; // 1020
+
+    fn read_u32(page: &[u8; PAGE_SIZE], off: usize) -> u32 {
+        u32::from_le_bytes(page[off..off + 4].try_into().unwrap())
+    }
+
+    fn write_u32(page: &mut [u8; PAGE_SIZE], off: usize, v: u32) {
+        page[off..off + 4].copy_from_slice(&v.to_le_bytes());
+    }
+
+    /// 初始化一张空目录页
+    pub fn init(page: &mut [u8; PAGE_SIZE], level: u8) {
+        page.fill(0);
+        Self::write_u32(page, 0, INVALID_PAGE_ID); // next
+        Self::write_u32(page, 4, 0); // entry_count
+        Self::write_u32(page, 8, 0); // self_crc
+        Self::write_u32(page, 12, level as u32);
+    }
+
+    pub fn next(page: &[u8; PAGE_SIZE]) -> PageId {
+        Self::read_u32(page, 0)
+    }
+
+    pub fn set_next(page: &mut [u8; PAGE_SIZE], next: PageId) {
+        Self::write_u32(page, 0, next);
+    }
+
+    pub fn entry_count(page: &[u8; PAGE_SIZE]) -> usize {
+        Self::read_u32(page, 4) as usize
+    }
+
+    pub fn set_entry_count(page: &mut [u8; PAGE_SIZE], count: usize) {
+        Self::write_u32(page, 4, count as u32);
+    }
+
+    pub fn level(page: &[u8; PAGE_SIZE]) -> u8 {
+        Self::read_u32(page, 12) as u8
+    }
+
+    pub fn entry(page: &[u8; PAGE_SIZE], idx: usize) -> u32 {
+        debug_assert!(idx < Self::ENTRIES_PER_PAGE);
+        Self::read_u32(page, Self::ENTRIES_OFFSET + idx * 4)
+    }
+
+    pub fn set_entry(page: &mut [u8; PAGE_SIZE], idx: usize, value: u32) {
+        debug_assert!(idx < Self::ENTRIES_PER_PAGE);
+        Self::write_u32(page, Self::ENTRIES_OFFSET + idx * 4, value);
+    }
+
+    /// 计算本页自身 CRC（`self_crc` 字段按 0 参与，避免自引用）
+    pub fn compute_self_crc(page: &[u8; PAGE_SIZE]) -> u32 {
+        let saved = Self::read_u32(page, 8);
+        let mut copy = *page;
+        Self::write_u32(&mut copy, 8, 0);
+        let crc = crc32fast::hash(&copy);
+        let _ = saved;
+        crc
+    }
+
+    /// 写入本页自身 CRC
+    pub fn seal(page: &mut [u8; PAGE_SIZE]) {
+        let crc = Self::compute_self_crc(page);
+        Self::write_u32(page, 8, crc);
+    }
+
+    /// 校验本页自身 CRC（未设 CRC 的页返回 `true`）
+    pub fn verify_sealed(page: &[u8; PAGE_SIZE]) -> bool {
+        let stored = Self::read_u32(page, 8);
+        if stored == 0 {
+            return true;
+        }
+        Self::compute_self_crc(page) == stored
+    }
 }

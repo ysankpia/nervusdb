@@ -41,6 +41,10 @@ pub enum IntegrityIssueKind {
     PropertyUnreadable,
     /// 自增 id 小于已使用的 id（单调性被破坏）
     SequenceRegression,
+    /// 页 CRC32 与校验和目录记录不符（介质损坏或半写页）
+    PageChecksumMismatch,
+    /// 页无法读取（I/O 故障，或结构损坏导致扫描中断）
+    PageUnreadable,
 }
 
 impl IntegrityIssueKind {
@@ -56,6 +60,8 @@ impl IntegrityIssueKind {
             Self::FreelistCycle => "freelist_cycle",
             Self::PropertyUnreadable => "property_unreadable",
             Self::SequenceRegression => "sequence_regression",
+            Self::PageChecksumMismatch => "page_checksum_mismatch",
+            Self::PageUnreadable => "page_unreadable",
         }
     }
 }
@@ -116,9 +122,36 @@ const MAX_FREELIST_WALK: usize = 10_000_000;
 pub fn check_integrity(graph: &DiskGraph) -> Result<IntegrityReport, GraphError> {
     let mut report = IntegrityReport::default();
 
+    // ---------- 0. 页级 CRC 全文件体检 ----------
+    // 必须排在最前：一张坏的页会让后续基于内容的检查（计数、链、属性）产生
+    // 大量派生噪音（坏页被跳过 → 存活数变少 → 满屏 DanglingEdge）。
+    // 先点名坏页，报告才能回答「我的库到底坏在哪」。
+    for (pid, detail) in graph.verify_all_pages_on_disk()? {
+        report.push(
+            IntegrityIssueKind::PageChecksumMismatch,
+            format!("page {} checksum mismatch ({})", pid, detail),
+        );
+    }
+
     // ---------- 1. 枚举存活节点 ----------
     // all_node_ids 依赖 header 中的 node_count 提前终止，因此先做计数守恒校验。
-    let node_ids = graph.all_node_ids()?;
+    //
+    // 读错误在此**转成报告条目**而不是直接返回 Err：完整性检查的职责是
+    // 「发现问题并说清楚」，把错误抛给调用方等于让运维探针在最需要它的时候失效。
+    // 坏页的具体页号已由上一步的 CRC 体检点名。
+    let node_ids = match graph.all_node_ids() {
+        Ok(ids) => ids,
+        Err(e) => {
+            // 用 PageUnreadable 而不是 PageChecksumMismatch：扫描中断既可能是
+            // 校验和不符，也可能是纯 I/O 故障，把它说成「校验和不符」是在
+            // 断言一件未经验证的事。坏页的具体页号由上一节的 CRC 体检点名。
+            report.push(
+                IntegrityIssueKind::PageUnreadable,
+                format!("node scan aborted by a read error: {}", e),
+            );
+            return Ok(report);
+        }
+    };
     report.nodes_checked = node_ids.len();
 
     // ---------- 2. 计数守恒 ----------
