@@ -14,16 +14,14 @@ Official Python bindings for **GraphLite-RS**, the SQLite of Graph Databases.
 
 ## Installation
 
-```bash
-pip install graphlite
-```
-
-Or build from source:
+**Not published to PyPI yet** — build from source:
 
 ```bash
 cd bindings/python
 maturin develop
 ```
+
+Requires [maturin](https://www.maturin.rs/) and the Rust toolchain.
 
 ## Quick Start
 
