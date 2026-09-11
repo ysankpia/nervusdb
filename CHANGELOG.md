@@ -16,7 +16,167 @@ user has to act on them:
 
 ## [Unreleased]
 
+### Storage format
+
+- **Format version 3 — page-level CRC32 coverage for the whole data file. This
+  is a breaking change: databases written by `v1.0.0-rc.1` (version 2) or the
+  `v1.0.0` line (version 1) will not open.**
+
+  Previously only WAL frames were checksummed; a bit flip or half-written page in
+  `{path}` was silently returned as "not found" and the graph quietly came back
+  wrong. Every data page now carries a CRC32: pages `1..256` inline in Page 0,
+  pages `>= 256` through a two-level `CrcDirPage` radix directory. A directory
+  page that covers ~4 GiB of address space costs 4 KiB, so the smallest database
+  still fits in 16 KiB (4 pages).
+
+  Checksums are computed lazily, only when a page is written to `{path}` or read
+  back, so the write hot path pays nothing. A stored checksum of `0` means "not
+  recorded" and the page is skipped rather than reported — after a crash the
+  server must not refuse to start over a page it simply never got to.
+
+  **To migrate**: export with the older build via `.dump`, then re-import.
+
+- Directory pages are self-checksummed (`self_crc`, sealed on write, verified on
+  load). Without this, one silently corrupted L2 page would report every data
+  page it covers as a mismatch — thousands of false alarms naming innocent pages.
+
+### Added
+
+- **`integrity_check()` now names the corrupt pages.** It sweeps every page's
+  checksum first and reports `PageChecksumMismatch` with the page number, before
+  any content-level check runs. Previously a bad page produced a vague "node
+  count mismatch" plus a wall of dangling-edge errors that pointed at healthy
+  edges. A new `PageUnreadable` kind distinguishes an I/O failure from a
+  checksum mismatch rather than asserting the latter.
+
+- **`GraphLite::open_with_options` / `GraphLiteOptions`**: `buffer_pool_frames`
+  and `wal_auto_checkpoint_bytes`. Setting the latter (default 64 MB) makes the
+  engine checkpoint automatically once the WAL grows past it, so a long-lived
+  writer cannot accumulate an unbounded WAL.
+
+  **The default costs throughput on bulk ingest, and that is a deliberate
+  trade.** Measured on LiveJournal edge ingestion (1 GiB pool, 10 M edges):
+  447k ops/s with auto-checkpoint off, 232k with the 64 MB default — roughly
+  half, because each automatic checkpoint flushes and fsyncs the whole dirty set
+  on top of whatever rhythm the caller already has. Bulk loaders that checkpoint
+  on their own schedule should set `wal_auto_checkpoint_bytes: 0`; that is what
+  the shipped benchmarks do, and they print the setting so the number and the
+  configuration stay together. The default stays on for the general case, where
+  the alternative is an unbounded WAL.
+
+- Page-level WAL replay is now **streaming**. `WalCursor` walks the WAL frame by
+  frame and applies committed pages through a callback, so peak memory during
+  recovery is O(number of transactions) instead of O(size of the WAL). A 1.5 GB
+  WAL no longer has to be materialised in memory to recover.
+
+- `CrcStore` and the `crc` module are public, so an embedder can verify a page
+  on disk (`GraphLite::verify_page_on_disk`) without opening the buffer pool.
+
+### Changed
+
+- **Checkpoint ordering is now load-bearing and documented.** `sync_header()`
+  runs before `flush_crc()`: `CrcStore` is the last writer of Page 0 (it owns the
+  inline CRC array and `crc_dir_root`), so writing the header afterwards would
+  silently erase the checksums.
+
+- **Long edge batches are chunked at `MAX_BATCH_EDGES_IN_MEMORY` (100,000).**
+  Two-phase batch weaving builds O(batch) hash tables and record vectors; a
+  ten-million-edge transaction previously grew those without bound, breaking the
+  promise that resident memory is set by the buffer pool rather than by input
+  size. Chunk boundaries are transparent — the next chunk's "previous head" is
+  the head the previous chunk wrote — and `edge_locality_tests` pins the
+  equivalence.
+
+- **`try_get_node` / `try_get_edge` are the error-preserving readers**;
+  `get_node` / `get_edge` remain lossy and are now documented as such. Internal
+  scans propagate read errors instead of skipping unreadable pages, which is what
+  previously let a corrupt page shrink the graph silently.
+
+- **Committed data appeared to be lost after a hard crash (SIGKILL).**
+  `StorageEngine::open` replays the WAL into the main data file, and it must run
+  before `DiskManager::open` — replay extends the file, and the page high-water
+  mark is derived from its length. So replay happens while no `CrcStore` exists,
+  and the pages it writes keep their **previous** checksums. Every later read of
+  such a page reported a checksum mismatch, and because `get_node` is lossy the
+  caller saw a _missing node_ — the data was on disk the whole time.
+
+  `for_each_committed_page` now walks the committed frames once more after the
+  CRC store is attached and refreshes their checksums in memory; the existing
+  `flush()` persists them. Cost is one sequential pass over the WAL at open.
+
+  Getting a regression test that actually reproduces this required a real
+  `SIGKILL`: a normal `drop` flushes the buffer pool and writes the checksums
+  along with the pages, hiding the defect. `test_wal_replay_refreshes_page_checksums`
+  now forks a child that commits batches and kills it with `kill -9`. With the
+  fix reverted it fails with 128 unreadable nodes on a single page; with the fix
+  it is clean.
+
+- Benchmark examples and both SDK benchmarks take `DATASET_PATH`, `DATASET_DIR`,
+  `DB_DIR`, `DB_PATH` and `POOL_FRAMES` instead of hardcoded absolute paths, and
+  print what to set when a dataset is missing rather than panicking.
+
+- **Hub selection in the SNAP benchmarks is now an explicit total order**
+  (degree descending, then raw id ascending). It previously sorted by degree
+  alone, and in com-DBLP three nodes tie at degree 164 _exactly at rank 50_ —
+  so which hub was the fiftieth depended on sort internals, and the same data
+  produced 2-hop totals of 161,789 / 161,877 / 162,158. All three are "correct"
+  for their own hub set, which made the number impossible to compare across runs.
+
+  An independent reimplementation over the raw dataset (union of the neighbours
+  of every node adjacent to a hub) gives 161,877, and the benchmark now reports
+  exactly that.
+
 ### Fixed
+
+- **`crc_dir_root` was never persisted, so checksums beyond page 256 were never
+  actually verified.** Three faults overlapped: `CrcStore` read-modify-wrote
+  Page 0's disk bytes for the inline CRCs while `sync_header()` wrote the same
+  page through a buffer-pool frame (two writers, last one wins); `flush_crc()`
+  never wrote the root at all; and `CrcStore::flush()` re-read Page 0 from disk,
+  so a stale read silently erased a root that a buffer-pool frame was still
+  holding. `CrcStore` now keeps the inline array in memory and writes Page 0 once,
+  last, containing both the inline CRCs and the root.
+
+  The register that masked this was the coverage test: it corrupted the last page
+  of the file, which is a _directory_ page (self-protected, not a data page), and
+  a 40,000-node fixture only reached 475 pages, so the mid-file page it fell back
+  to was still inside the inline range. The fixture is now large enough that a
+  mid-file page is provably beyond 256.
+
+- **Two further CRC-directory defects, both only reachable once the directory
+  outgrows its 64-page cache** (≈65,000 data pages). The unit suites could not
+  reach them; the LiveJournal run did.
+
+  1. **The root page number was still not written to Page 0.** After the fix
+     above, `flush()` gated the Page 0 update on "something changed this round".
+     Once the directory existed and a round merely rewrote pages that already had
+     entries, neither flag was set, Page 0 was skipped, and `crc_dir_root` stayed
+     `0` on disk — the entire chain unreadable on the next open. It now re-pins
+     its two Page 0 fields whenever a directory exists, which is idempotent and
+     costs one 4 KiB read-modify-write per checkpoint.
+  2. **Directory pages were written back unsealed during cache eviction.**
+     Eviction wrote the page without recomputing `self_crc`, so a page sealed in
+     an earlier round went to disk holding new contents and an old checksum. The
+     next load reported it corrupt, which is exactly how the LiveJournal ingest
+     aborted: `CRC directory page 65255 is corrupt (self-checksum mismatch)`.
+
+  `test_crc_directory_survives_churn_beyond_cache` drives `CrcStore` across
+  300,000 pages with repeated rewrites. Each fix was confirmed by reverting it
+  alone and watching that test fail (`root on disk = 0`, and the corrupt-page
+  error respectively) — the first attempt at a reproducer passed with the fix
+  removed, so it proved nothing until the interleaving was corrected.
+
+- `all_node_ids()` used `if let Ok(fid) = bpm.fetch_page(pid)`, so a page that
+  failed its CRC was skipped and the caller saw a _smaller graph_ instead of an
+  error. Now propagated.
+
+- The degree-conservation test exercised the wrong failure class. It flipped a
+  pointer byte and expected the degree oracle to catch it, but the page CRC now
+  catches that case first — which is correct behaviour, and it left the oracle
+  untested. The test now recomputes the page's checksum after corrupting it,
+  modelling a _write-path bug_ (self-consistent page, valid CRC) rather than
+  media corruption, and asserts as a precondition that the corruption really did
+  pass the CRC.
 
 - **`pip install graphlite` and `npm install graphlite-node` were documented but
   neither package is published.** Both binding READMEs now say so explicitly and

@@ -26,7 +26,7 @@ cargo test --release --test edge_locality_tests
 
 ## Current state
 
-**92 test cases across 9 suites — 91 pass, 1 intentionally `#[ignore]`d** (a
+**100 test cases across 10 suites — 99 pass, 1 intentionally `#[ignore]`d** (a
 child-process lock probe launched by its parent test).
 
 | Suite                        | Cases | Covers                                                             |
@@ -39,6 +39,7 @@ child-process lock probe launched by its parent test).
 | `batch_tx_tests.rs`          | 7     | Batch commits, single-fsync contract, throughput                   |
 | `edge_locality_tests.rs`     | 9     | Weave equivalence, self-loops, false-spill elimination             |
 | `production_safety_tests.rs` | 12    | Exclusive lock, integrity check, error visibility, poison recovery |
+| `robustness_tests.rs`        | 8     | File lock, auto-checkpoint, page CRC, WAL replay, chunking         |
 | `cli_tests.rs`               | 6     | REPL end-to-end                                                    |
 
 Run one suite:

@@ -95,7 +95,7 @@ dependencies = [
 
 [[package]]
 name = "graphlite-node"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "graphlite-rs",
  "napi",
@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "graphlite-python"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "graphlite-rs",
  "pyo3",
@@ -115,7 +115,7 @@ dependencies = [
 
 [[package]]
 name = "graphlite-rs"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 dependencies = [
  "bincode",
  "crc32fast",

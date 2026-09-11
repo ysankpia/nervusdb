@@ -77,7 +77,54 @@ competition entirely.
 
 **Therefore: chunk very large writes into multiple transactions.** The kernel
 should cap and spill planner state instead of relying on the caller; that is
-tracked in the roadmap as "bounded-memory batch planning".
+tracked in the roadmap as "bounded-memory batch planning". Edge batches are now
+additionally chunked internally at `MAX_BATCH_EDGES_IN_MEMORY` (100,000), so the
+weaving step's own working set is bounded regardless of transaction size.
+
+### Real-world graphs (SNAP)
+
+`examples/snap_dblp_bench.rs` and `examples/snap_livejournal_bench.rs`. Both take
+`DATASET_PATH`/`DATASET_DIR`, `DB_DIR`, `POOL_MB` and `AUTO_CHECKPOINT_MB`, and
+print the configuration they ran with.
+
+com-DBLP (317,080 nodes / 1,049,866 edges, 256MB pool):
+
+| Metric             | Value                             |
+| ------------------ | --------------------------------- |
+| Node ingestion     | 892,000 ops/s                     |
+| Edge ingestion     | **598,902 ops/s**                 |
+| Hub 1-hop (top 50) | 40.7 µs avg, **10,080** neighbors |
+| Hub 2-hop (top 50) | 1.63 ms avg, **161,877** reached  |
+
+LiveJournal (4,847,571 nodes / 68,993,773 edges, 1GiB pool, auto-checkpoint off):
+
+| Metric             | Value                             |
+| ------------------ | --------------------------------- |
+| Node ingestion     | 713,000 ops/s                     |
+| Edge ingestion     | **200,618 ops/s**                 |
+| Hub 1-hop (top 50) | 0.35 s avg, **335,194** neighbors |
+| Hub 2-hop (top 50) | 8.1 s avg, **10,027,730** reached |
+| On-disk size       | 4.34 GB                           |
+
+Both 1-hop and 2-hop totals are **exact** against an independent recomputation
+over the raw dataset. Getting there required fixing a real determinism bug: the
+top-50 hub set is selected by degree, and in com-DBLP three nodes tie at degree
+164 _exactly at rank 50_, so the fiftieth hub — and therefore the 2-hop total —
+depended on sort internals. Runs produced 161,789 / 161,877 / 162,158, all
+"correct" for their own hub set. The sort is now a total order (degree
+descending, then raw id ascending).
+
+**Auto-checkpoint roughly halves bulk edge throughput** and the benchmarks
+therefore turn it off:
+
+| `wal_auto_checkpoint_bytes` | 10M-edge ingest   |
+| --------------------------- | ----------------- |
+| `0` (off)                   | **447,122 ops/s** |
+| 64MB (engine default)       | 232,350 ops/s     |
+
+Each automatic checkpoint flushes and fsyncs the entire dirty set on top of the
+caller's own rhythm. The default stays on because the alternative is an unbounded
+WAL; a bulk loader that checkpoints on its own schedule should set it to `0`.
 
 ### Edge-write locality work
 

@@ -10,7 +10,7 @@ conditions are quoted with it.
 
 ---
 
-## Current state (v1.0.0-rc.1)
+## Current state (v1.0.0-rc.2)
 
 Working and covered by tests:
 
@@ -27,12 +27,13 @@ Working and covered by tests:
   variable-length and undirected paths, label predicates.
 - Analytics: BFS, Dijkstra, cycle detection, PageRank, weakly connected
   components, K-hop subgraph extraction.
-- Production safety: exclusive single-writer open lock, structural integrity
-  check with a degree-conservation oracle, error-preserving read accessors,
-  poison-recovering locks.
+- Production safety: exclusive single-writer open lock, page-level CRC32 over
+  the whole data file with self-checked directory pages, structural integrity
+  check with a degree-conservation oracle that names corrupt pages,
+  error-preserving read accessors, poison-recovering locks, WAL auto-checkpoint.
 - Tooling: interactive CLI with dot commands and logical dump; Python and
   Node.js SDKs with transaction support.
-- 92 test cases across 9 suites (91 run, 1 intentionally `#[ignore]`d for a
+- 100 test cases across 10 suites (99 run, 1 intentionally `#[ignore]`d for a
   child-process lock probe); `cargo fmt`, `cargo clippy -D warnings` and
   `rustdoc -D warnings` all clean.
 
@@ -47,12 +48,27 @@ let multiple readers coexist with one writer, matching SQLite's model. Blocked
 on: WAL replay writes the main file, so read-only open must first establish that
 the WAL has nothing committed to apply.
 
-### 2. Page checksums on the main data file
+### 2. Quadratic edge expansion in `MATCH`
 
-`integrity_check` currently validates structure, not page content. A checksum
-per data page would catch bit rot that leaves structure self-consistent. This is
-a storage format change (version 3) and therefore a breaking change, so it needs
-its own release.
+**Measured, not theoretical.** Expanding a pattern whose source is constrained by
+`WHERE id(a) = N` costs O(edges²):
+
+```text
+edges      1k      2k      8k     32k
+elapsed   117ms   369ms  7.1s   127s
+```
+
+The same query without the `WHERE` is also quadratic (2k → 119ms, 32k → 42.6s),
+and `LIMIT 1` does not help — it expands everything before applying the limit.
+Both effects were reproduced identically on the `v1.0.0-rc.1` tag, so this is
+pre-existing, not a regression.
+
+The fix is start-node selection: when a pattern's node is pinned by an id or a
+label/property predicate, the expansion should begin at that node and walk its
+adjacency chain, instead of expanding every edge and then filtering. `LIMIT`
+should also short-circuit rather than materialise the full result set. This is
+the highest-value query-planner item and is a prerequisite for usable
+interactive queries on large graphs.
 
 ### 3. Maintenance operations
 
@@ -60,15 +76,14 @@ its own release.
 open). Both are currently absent; the logical dump path covers the migration use
 case but not operational hygiene.
 
-### 4. Bounded-memory batch planning
+### 4. Planner memory beyond edges
 
-A single transaction queues all its actions in memory before commit; a
-multi-million-edge transaction therefore holds hundreds of megabytes and shows a
-measurable throughput inversion at very large batch sizes. Chunked transactions
-already avoid this, but the kernel should cap planner memory and spill planning
-state rather than relying on callers to chunk.
+A single transaction still queues **all** its actions in memory before commit; a
+multi-million-_node_ transaction holds the whole action list even though edge
+weaving is now chunked at `MAX_BATCH_EDGES_IN_MEMORY`. Capping and spilling the
+planner queue itself is the remaining step.
 
-### 5. Query planner work
+### 5. Cost-based query planning
 
 Secondary indexes are used for start-node selection only. There is no cost-based
 planning, no join reordering, no index-nested-loop selection. Adequate for the

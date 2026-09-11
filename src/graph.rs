@@ -35,6 +35,13 @@ pub enum GraphError {
     #[error("Integrity check failed: {0}")]
     IntegrityError(String),
 
+    #[error("Page checksum mismatch at page {page_id}: expected {expected:#010x}, actual {actual:#010x}")]
+    PageChecksumMismatch {
+        page_id: u64,
+        expected: u32,
+        actual: u32,
+    },
+
     #[error("General database error: {0}")]
     General(String),
 }

@@ -257,12 +257,54 @@ process abort.
 
 ## 12. Storage format versioning
 
-`DB_PAGE_VERSION` is currently `2` (slotted property pages). Version 1 files —
-one 4KB property page per entity — are **not readable**: `open` returns an
-explicit error directing you to export with `.dump` and re-import. It never
+`DB_PAGE_VERSION` is currently `3`. Version 2 (slotted property pages) and
+version 1 (one 4KB property page per entity) are **not readable**: `open` returns
+an explicit error directing you to export with `.dump` and re-import. It never
 silently reinterprets an old file.
 
 The logical dump (`dump_cypher`) emits `CREATE` plus `SET`, so replaying into an
 existing node **replaces** properties rather than appending, which makes it
 idempotent and doubles as the migration path.
+
+## 13. Page CRCs (version 3)
+
+Version 2 checksummed WAL frames but not the pages already in `{path}`, so a bit
+flip or a half-written page was read back as "not found" and the graph quietly
+returned wrong answers. Version 3 covers every data page:
+
+```text
+Page 1 .. 255      inline CRC32 array in Page 0
+                   (INLINE_CRC_OFFSET, 4 bytes per page)
+Page >= 256        two-level CrcDirPage radix directory
+                   (CRC_DIR_PAGE_OFFSET in Page 0 -> L1 -> L2)
+```
+
+A stored value of `0` means "not recorded" and the page is skipped, never
+reported. That asymmetry is deliberate: after a crash, a page the engine never
+got around to recording must not make the database refuse to open.
+
+Checksums are computed lazily — on eviction, on flush, and during WAL replay —
+so a page write in the hot path pays nothing.
+
+Three details are load-bearing:
+
+- **`CrcStore` bypasses `BufferPoolManager`.** Routing directory I/O through the
+  pool creates the recursion `fetch_page -> acquire_frame -> evict_frame ->
+  record CRC -> fetch_page`. The dependency direction is therefore
+  `BufferPoolManager -> CrcStore -> DiskManager`, and `CrcStore` carries its own
+  bounded 64-page cache (256 KB) holding directory metadata only.
+- **`CrcStore` is the last writer of Page 0.** It owns both the inline CRC array
+  and `crc_dir_root`. The checkpoint sequence is replay (recording CRCs) →
+  `sync_header` (dirties the Page 0 frame) → `flush` (Page 0 reaches disk with the
+  root) → `flush_crc` (overlays the inline array and root) → truncate WAL.
+  Writing the header after `flush_crc` silently erases the checksums.
+- **Directory pages are self-checksummed.** `self_crc` is sealed on every write
+  and verified on every load. Without it, one corrupted L2 page would report
+  every data page it covers as a mismatch — thousands of false positives naming
+  innocent pages while the real culprit stayed hidden.
+
+`integrity_check` sweeps all page checksums first and names the bad pages, then
+runs the content-level checks. The sweep is O(file size) page reads, which is the
+right trade for an explicitly-invoked probe but is not meant to run in a hot loop.
+
 $$

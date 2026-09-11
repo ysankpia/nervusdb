@@ -3,7 +3,7 @@ members = [".", "bindings/python", "bindings/nodejs"]
 
 [package]
 name = "graphlite-rs"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 edition = "2021"
 authors = ["GraphLite-RS Contributors"]
 description = "Embedded, single-file property graph database: the SQLite model applied to graphs"

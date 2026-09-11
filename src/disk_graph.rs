@@ -37,6 +37,20 @@ pub struct EdgeInsert {
 /// 建立哈希表；只有大批量才值得换取「节点页每页只触碰一次」的收益。
 pub const EDGE_BATCH_WEAVE_MIN: usize = 64;
 
+/// 单次批量织网的边数上限。
+///
+/// 织网会在内存中为整段边构建若干张哈希表（`src_seq` / `dst_seq` / `meta` /
+/// `dst_pos`）与两个记录向量，规模都是 O(段长)。一次提交上千万条边时，
+/// 这个常驻内存会远超「内存占用由缓冲池决定」的架构承诺
+/// （AGENTS.md §1 有界内存）。因此把长段切成子段逐段织网，
+/// 使峰值内存由该常量而非用户输入决定。
+///
+/// 切分子段**不改变图结构**：链指针的推导只依赖「同批次内该节点的边序列」，
+/// 而子段按同一顺序依次施加，后一子段的「批次前旧链头」正是前一子段写入的
+/// 链头，拼起来与一次织完整段完全等价。边的 id 在 `add_edge` 时就已单调分配，
+/// 切分不会重排 id。等价性由 `tests/edge_locality_tests.rs` 逐项对照。
+pub const MAX_BATCH_EDGES_IN_MEMORY: usize = 100_000;
+
 /// 字符串字典管理器：将 Label 和 EdgeType 映射为 u32 ID
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StringDict {
@@ -93,6 +107,8 @@ pub struct AllocatorMeta {
     pub first_free_prop_page: PageId,
     /// 最近分配过的槽位属性页（写入位点提示，避免每次写入都从头探测）
     pub last_prop_page_id: PageId,
+    /// 页校验和目录（L1 链头）；`INVALID_PAGE_ID` 表示尚未建立
+    pub crc_dir_page_id: PageId,
     pub node_dir_page_id: PageId,
     pub edge_dir_page_id: PageId,
     pub direct_node_pages: [PageId; HeaderPage::DIRECT_NODE_PAGES_COUNT],
@@ -171,6 +187,7 @@ impl DiskGraph {
                 first_free_overflow_page: INVALID_PAGE_ID,
                 first_free_prop_page: INVALID_PAGE_ID,
                 last_prop_page_id: INVALID_PAGE_ID,
+                crc_dir_page_id: INVALID_PAGE_ID,
                 node_dir_page_id: INVALID_PAGE_ID,
                 edge_dir_page_id: INVALID_PAGE_ID,
                 direct_node_pages: [0; HeaderPage::DIRECT_NODE_PAGES_COUNT],
@@ -200,10 +217,9 @@ impl DiskGraph {
             if file_version < crate::page::DB_PAGE_VERSION {
                 bpm.unpin_page(HEADER_PAGE_ID, false);
                 return Err(GraphError::StorageError(format!(
-                    "Database file format version {} is not supported by GraphLite 1.1 \
-                     (current format version {}). Export the graph with GraphLite 1.0 via \
-                     `graphlite-cli <old.db>` then `.dump <file>`, and re-import the script \
-                     into a fresh database.",
+                    "Database file version {} is not supported by this build \
+                     (current format version {}). Export the graph with an older GraphLite \
+                     via `.dump`, then re-import the script into a fresh database.",
                     file_version,
                     crate::page::DB_PAGE_VERSION
                 )));
@@ -257,6 +273,11 @@ impl DiskGraph {
             let last_prop_page = u32::from_le_bytes(
                 frame.data
                     [HeaderPage::LAST_PROP_PAGE_OFFSET..HeaderPage::LAST_PROP_PAGE_OFFSET + 4]
+                    .try_into()
+                    .unwrap(),
+            );
+            let crc_dir_page = u32::from_le_bytes(
+                frame.data[HeaderPage::CRC_DIR_PAGE_OFFSET..HeaderPage::CRC_DIR_PAGE_OFFSET + 4]
                     .try_into()
                     .unwrap(),
             );
@@ -321,6 +342,7 @@ impl DiskGraph {
                 alloc.first_free_page_id = free_page;
                 alloc.first_free_prop_page = free_prop_page;
                 alloc.last_prop_page_id = last_prop_page;
+                alloc.crc_dir_page_id = crc_dir_page;
                 alloc.direct_node_pages = direct_node_pages;
                 alloc.direct_edge_pages = direct_edge_pages;
             }
@@ -1198,6 +1220,8 @@ impl DiskGraph {
             .copy_from_slice(&alloc.first_free_prop_page.to_le_bytes());
         frame.data[HeaderPage::LAST_PROP_PAGE_OFFSET..HeaderPage::LAST_PROP_PAGE_OFFSET + 4]
             .copy_from_slice(&alloc.last_prop_page_id.to_le_bytes());
+        frame.data[HeaderPage::CRC_DIR_PAGE_OFFSET..HeaderPage::CRC_DIR_PAGE_OFFSET + 4]
+            .copy_from_slice(&alloc.crc_dir_page_id.to_le_bytes());
 
         frame.data[HeaderPage::INLINE_DICT_LEN_OFFSET..HeaderPage::INLINE_DICT_LEN_OFFSET + 4]
             .copy_from_slice(&inline_dict_len.to_le_bytes());
@@ -2326,7 +2350,12 @@ impl DiskGraph {
             if pid == 0 || pid == INVALID_PAGE_ID {
                 continue;
             }
-            if let Ok(fid) = bpm.fetch_page(pid) {
+            // 读取失败必须向上传播，不能 `if let Ok(..)` 跳过：
+            // 页 CRC 不匹配时静默跳过会让存活节点数无声减少，调用方看到的是
+            // 「图变小了」而不是「某页坏了」——这正是 AGENTS.md §12 禁止的
+            // 静默读错误。
+            let fid = bpm.fetch_page(pid)?;
+            {
                 let frame = bpm.get_frame(fid);
                 for slot in 0..NODE_RECORDS_PER_PAGE {
                     let offset = slot * NodeRecord::RECORD_SIZE;
@@ -2339,8 +2368,8 @@ impl DiskGraph {
                         }
                     }
                 }
-                bpm.unpin_page(pid, false);
             }
+            bpm.unpin_page(pid, false);
         }
 
         // 2. 扫描间接目录页
@@ -2363,7 +2392,9 @@ impl DiskGraph {
                 if pid == 0 || pid == INVALID_PAGE_ID {
                     continue;
                 }
-                if let Ok(data_fid) = bpm.fetch_page(pid) {
+                // 同上：读取失败向上传播，不做静默跳过
+                let data_fid = bpm.fetch_page(pid)?;
+                {
                     let data_frame = bpm.get_frame(data_fid);
                     for slot in 0..NODE_RECORDS_PER_PAGE {
                         let offset = slot * NodeRecord::RECORD_SIZE;
@@ -2379,8 +2410,8 @@ impl DiskGraph {
                             }
                         }
                     }
-                    bpm.unpin_page(pid, false);
                 }
+                bpm.unpin_page(pid, false);
             }
 
             current_dir = next_dir;
@@ -2458,5 +2489,78 @@ impl DiskGraph {
         } else {
             Vec::new()
         }
+    }
+
+    /// 页校验和目录的根页号（Header 持久化字段的只读访问）
+    pub fn crc_dir_root(&self) -> PageId {
+        self.allocator.lock_recover().crc_dir_page_id
+    }
+
+    /// 直接从主文件读取并校验指定页的校验和（运维探针）。
+    ///
+    /// 与 `fetch_page` 不同：它**绕过缓冲池缓存**，因此验证的总是磁盘上的实际内容，
+    /// 而不是可能已被修好的内存副本。用于「哪一页坏了」这类定点排查。
+    pub fn verify_page_on_disk(&self, page_id: PageId) -> Result<(), GraphError> {
+        let mut bpm = self.bpm.lock_recover();
+        let mut data = [0u8; crate::page::PAGE_SIZE];
+        bpm.disk_manager().read_page(page_id, &mut data)?;
+
+        // 借出 CRC 存储做一次校验，再归还（它在缓冲池里，因为需要共用缓存）
+        let mut crc = bpm.take_crc();
+        let result = if let Some(store) = crc.as_mut() {
+            store.verify(page_id, &data)
+        } else {
+            Ok(())
+        };
+        if let Some(store) = crc {
+            bpm.attach_crc(store);
+        }
+        result
+    }
+
+    /// 更新页校验和目录根页号（首次建立目录后需写回 Header）
+    pub fn set_crc_dir_root(&mut self, root: PageId) {
+        self.allocator.lock_recover().crc_dir_page_id = root;
+    }
+
+    /// 对主文件中的**每一张**页做一次 CRC 校验，返回坏页清单 `(页号, 细节)`。
+    ///
+    /// 与逐个调用 [`DiskGraph::verify_page_on_disk`] 的区别：本函数只取一次锁、
+    /// 只借出一次 CRC 存储，因此在百万页级的大库上仍是单次扫描而不是百万次加解锁。
+    ///
+    /// 未记录 CRC 的页（新分配、从未落盘、或目录页本身）直接跳过，
+    /// 与 `CrcStore` 的「`0` = 未记录」语义一致。
+    pub fn verify_all_pages_on_disk(&self) -> Result<Vec<(PageId, String)>, GraphError> {
+        let mut bpm = self.bpm.lock_recover();
+        let page_count = (bpm.disk_manager().file_size() / crate::page::PAGE_SIZE as u64) as PageId;
+
+        let mut crc = bpm.take_crc();
+        let mut bad = Vec::new();
+        let mut data = [0u8; crate::page::PAGE_SIZE];
+
+        let result = (|| -> Result<(), GraphError> {
+            for pid in 1..page_count {
+                bpm.disk_manager().read_page(pid, &mut data)?;
+                let Some(store) = crc.as_mut() else {
+                    break;
+                };
+                if let Err(GraphError::PageChecksumMismatch {
+                    expected, actual, ..
+                }) = store.verify(pid, &data)
+                {
+                    bad.push((
+                        pid,
+                        format!("expected {:#010x}, actual {:#010x}", expected, actual),
+                    ));
+                }
+            }
+            Ok(())
+        })();
+
+        if let Some(store) = crc {
+            bpm.attach_crc(store);
+        }
+        result?;
+        Ok(bad)
     }
 }

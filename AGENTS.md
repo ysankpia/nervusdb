@@ -62,7 +62,43 @@ Any modification that violates these rules must be rejected immediately:
    - `restore_meta` must call `sync_protected_pages()` so a rolled-back transaction cannot leave stale or missing directory protection.
 
 8. **Storage Format Versioning**
-   - `DB_PAGE_VERSION` is `2` (slotted property pages). Version 1 databases (one 4KB property page per entity) are **not readable**: `GraphLite::open` returns an explicit error directing the user to export with GraphLite 1.0 via `.dump` and re-import. Never silently reinterpret an old file.
+   - `DB_PAGE_VERSION` is `3`. Version 2 added slotted property pages; version 3 added
+     full page-CRC coverage (`CrcDirPage` directory chain plus the inline CRC array in
+     Page 0). Databases written by GraphLite `v1.0.0-rc.1` (version 2) and by the
+     `v1.0.0` line (version 1: one 4KB property page per entity) are **not readable**:
+     `GraphLite::open` returns an explicit error directing the user to export with the
+     matching older build via `.dump` and re-import. Never silently reinterpret an old file.
+   - Page CRC32 coverage: pages `1..256` are covered by the inline array in Page 0
+     (`INLINE_CRC_OFFSET`, 4 bytes per page); pages `>= 256` by the two-level
+     `CrcDirPage` radix directory. A stored checksum of `0` means "not recorded" and the
+     page is **skipped**, never reported as corrupt ("rather miss than falsely alarm").
+     `CrcStore` deliberately bypasses `BufferPoolManager` to avoid the
+     `fetch_page -> evict -> record CRC -> fetch_page` recursion, and is the **last
+     writer of Page 0** — it owns both the inline CRC array and `crc_dir_root`, so
+     `sync_header()` must run _before_ `flush_crc()` in the checkpoint sequence.
+   - Directory pages carry a `self_crc` (sealed on every write, verified on every load).
+     A silently corrupted L2 page would otherwise misreport every data page it covers as
+     a mismatch — thousands of false positives blaming innocent pages.
+     **Every** write path must seal first: both `flush()` and cache eviction
+     (`evict_if_needed`). An unsealed evict leaves new contents with an old checksum.
+   - `CrcStore::flush()` must re-pin Page 0 whenever a directory exists, not only when
+     something changed this round. `sync_header()` writes other Page 0 fields, so
+     "nothing changed" does not imply "Page 0 on disk is current"; gating on change
+     leaves `crc_dir_root` at `0` and makes the whole chain unreadable.
+   - **WAL replay must refresh checksums.** `StorageEngine::open` replays before
+     `DiskManager::open` (replay extends the file, and the page high-water mark comes
+     from its length), so no `CrcStore` exists yet and the pages it writes would keep
+     their _previous_ checksums. `open_with_options` therefore calls
+     `storage::for_each_committed_page` right after attaching the CRC store and
+     re-records those pages. Skipping this does not lose data, but it makes every
+     replayed page unreadable — and because `get_node` is lossy, it presents as
+     **committed data vanishing after a crash**.
+   - These three defects are only reachable at scale: the first two need more directory
+     pages than `CRC_CACHE_CAPACITY` (64) holds, i.e. ≈65k data pages, and the third
+     needs a real `SIGKILL` (a clean `drop` flushes pages and checksums together and
+     hides it). Fixtures that stay small will pass while the engine is broken —
+     `test_crc_directory_survives_churn_beyond_cache` and
+     `test_wal_replay_refreshes_page_checksums` exist for exactly this reason.
 
 9. **Freelist Slot Reclamation**
    - Page 0 (Header Page) stores `first_free_node_id` and `first_free_edge_id`.
@@ -136,6 +172,7 @@ graphlite-rs/
     ├── batch_tx_tests.rs       # Batched transactions, single-fsync contract, bulk throughput
     ├── edge_locality_tests.rs  # Batch-weave equivalence, self-loops, false-spill elimination
     ├── production_safety_tests.rs # Exclusive lock, integrity check, no silent errors, poison recovery
+    ├── robustness_tests.rs     # File lock, auto-checkpoint, page CRC at scale, WAL replay CRC, chunking
     └── cli_tests.rs            # Interactive REPL end-to-end (multi-line, dot commands, dump round trip)
 ```
 
@@ -182,7 +219,24 @@ SSD. Assert the _mechanism_ instead (N autocommitted writes cost N fsyncs; one
 batched transaction of N writes costs exactly 1), which holds on any hardware,
 and keep any speed ratio as a loose lower bound.
 
-### 3.3 Target-Specific Verification
+### 3.3 Validate Fixes by Reverting Them
+
+**A regression test that passes with the fix removed proves nothing.** For each
+of the three defects found during the v3 page-CRC work, the fix was reverted in
+isolation and the new test re-run to confirm it fails. Two earlier attempts at a
+reproducer passed _with the fix removed_ and were discarded rather than kept.
+
+Two traps made those first attempts useless, and both recur:
+
+- **Too small a fixture.** The CRC-directory defects need more directory pages
+  than `CRC_CACHE_CAPACITY` (64) holds, i.e. roughly 65,000 data pages. 90k- and
+  800k-node fixtures passed while the engine was broken; only 300,000 distinct
+  page numbers reach the eviction path.
+- **Too clean a shutdown.** The replay defect needs a real `SIGKILL`. A normal
+  `drop` flushes the buffer pool and writes pages and checksums together, hiding
+  it entirely.
+
+### 3.4 Target-Specific Verification
 
 - **Run Out-of-Core Stress Test Only**:
   ```bash
@@ -212,12 +266,45 @@ and keep any speed ratio as a loose lower bound.
   ```bash
   cargo test --test production_safety_tests
   ```
+- **Run Robustness Suite Only** (page CRC at scale, WAL replay checksums, chunking):
+  ```bash
+  cargo test --test robustness_tests
+  ```
 - **Run the benchmarks**:
   ```bash
   cargo bench --bench throughput      # full; GL_SCALE=small for a smoke run
   cargo bench --bench pool_probe
   cargo bench --bench mem_probe
   ```
+- **Run a Real Dataset (do this for page, checksum, or replay changes)**:
+
+  ```bash
+  DATASET_PATH=/data/com-dblp.ungraph.txt DB_DIR=/data/bench POOL_MB=256 \
+    cargo run --release --example snap_dblp_bench
+  DATASET_PATH=/data/soc-LiveJournal1.txt DB_DIR=/data/bench POOL_MB=1024 \
+    cargo run --release --example snap_livejournal_bench
+  ```
+
+  The SNAP benchmarks are the only end-to-end check at realistic scale. They take
+  `DATASET_PATH`/`DATASET_DIR`, `DB_DIR`, `POOL_MB`, `MAX_EDGES` and
+  `AUTO_CHECKPOINT_MB`, and print the configuration they ran with.
+
+  `AUTO_CHECKPOINT_MB` defaults to `0` (off) here: the benchmarks checkpoint
+  explicitly, and the engine's 64 MB default roughly halves bulk ingest
+  throughput (LiveJournal: 447k ops/s off vs 232k on). Leave it off when
+  measuring write throughput; turn it on only when testing that path itself.
+
+  Red lines from the last accepted run — a change here is a correctness
+  regression, not noise:
+  - LiveJournal edge ingestion **≥150,000 ops/s** (measured 200,618)
+  - LiveJournal hub 1-hop / 2-hop **exactly** 335,194 / 10,027,730
+  - com-DBLP hub 1-hop / 2-hop **exactly** 10,080 / 161,877
+
+  Hub selection is an explicit total order (degree descending, then raw id
+  ascending). It must stay that way: com-DBLP has three nodes tied at degree 164
+  _exactly at rank 50_, so a partial order makes the 2-hop total depend on sort
+  internals and produced three different "correct" numbers across runs.
+
 - **Verify Interactive CLI**:
   ```bash
   cargo run --bin graphlite-cli -- /tmp/test.db

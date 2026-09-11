@@ -414,6 +414,9 @@ pub struct BufferPoolManager {
     /// 目录页穿透发生在每次节点/边寻址上，一旦被换出会引发整条寻址链反复重读。
     protected_pages: HashSet<PageId>,
     wal: Option<Arc<WalWriter>>,
+    /// 页级校验和存储（惰性计算：只在页真正落盘时算，见
+    /// [`BufferPoolManager::record_checksum_on_flush`]）
+    crc: Option<crate::crc::CrcStore>,
     spill_enabled: bool,
     current_tx_id: u64,
     spill_count: u64,
@@ -445,6 +448,7 @@ impl BufferPoolManager {
             tx_baseline: HashMap::new(),
             protected_pages: HashSet::new(),
             wal: None,
+            crc: None,
             spill_enabled,
             current_tx_id: 0,
             spill_count: 0,
@@ -457,6 +461,88 @@ impl BufferPoolManager {
     /// 挂载 WAL 写入器：挂载后未提交脏页即可在达到最小工作集水位时安全溢出入 WAL
     pub fn attach_wal(&mut self, wal: Arc<WalWriter>) {
         self.wal = Some(wal);
+    }
+
+    /// 挂载页校验和存储：挂载后，页在**落盘时**记录 CRC、在**从主文件读入时**校验。
+    ///
+    /// 校验故意不在事务写入路径上做——那只会在每次写页时叠加一次 CRC 计算，
+    /// 把吞吐拉低数倍（实测对手实现正是因此在 6900 万边场景从 18 万降到 7.2 万）。
+    pub fn attach_crc(&mut self, crc: crate::crc::CrcStore) {
+        self.crc = Some(crc);
+    }
+
+    /// 把 WAL 中已提交的页重放到主数据文件，**同时为每页记录校验和**。
+    ///
+    /// 放在缓冲池上是因为它同时持有 `DiskManager` 与 `CrcStore`，无需把后者借出再借回。
+    /// 校验和在此处（惰性）计算，而不是在事务写入路径上。
+    pub fn replay_wal_with_crc(
+        &mut self,
+        wal: &WalWriter,
+        db_path: &Path,
+    ) -> Result<usize, GraphError> {
+        let dm = Arc::clone(&self.disk_manager);
+        let crc = &mut self.crc;
+        crate::storage::apply_committed_pages_with(wal, db_path, &mut |page_id, data| {
+            if let Some(store) = crc.as_mut() {
+                store.record(page_id, data)?;
+            }
+            let _ = &dm;
+            Ok(())
+        })
+    }
+
+    /// 取出 CRC 存储句柄（提交/检查点路径需要它，见 `GraphLite::checkpoint`）
+    pub fn take_crc(&mut self) -> Option<crate::crc::CrcStore> {
+        self.crc.take()
+    }
+
+    /// 记录某页的校验和（供上层在把页写入主文件后调用）
+    pub fn record_checksum(
+        &mut self,
+        page_id: PageId,
+        data: &[u8; PAGE_SIZE],
+    ) -> Result<(), GraphError> {
+        Self::record_checksum_on_flush(&mut self.crc, page_id, data)
+    }
+
+    /// 把 CRC 目录页刷盘并 fsync。
+    ///
+    /// 必须在**数据页全部落盘之后**调用，否则崩溃时会出现「数据已写、校验和未写」
+    /// 的中间态。
+    pub fn flush_crc(&mut self) -> Result<(), GraphError> {
+        if let Some(store) = self.crc.as_mut() {
+            store.flush()?;
+        }
+        Ok(())
+    }
+
+    /// 当前 CRC 目录根页号（供 Header 持久化）
+    pub fn crc_dir_root(&self) -> Option<PageId> {
+        self.crc.as_ref().map(|s| s.root())
+    }
+
+    /// 记录某页的校验和（页内容已写入主文件之后调用）
+    fn record_checksum_on_flush(
+        crc: &mut Option<crate::crc::CrcStore>,
+        page_id: PageId,
+        data: &[u8; PAGE_SIZE],
+    ) -> Result<(), GraphError> {
+        if let Some(store) = crc.as_mut() {
+            store.record(page_id, data)?;
+        }
+        Ok(())
+    }
+
+    /// 校验从主文件读入的页
+    fn verify_checksum_on_load(
+        crc: &mut Option<crate::crc::CrcStore>,
+        page_id: PageId,
+        data: &[u8; PAGE_SIZE],
+    ) -> Result<(), GraphError> {
+        if let Some(store) = crc.as_mut() {
+            store.verify(page_id, data)?;
+        }
+        Ok(())
     }
 
     pub fn spill_enabled(&self) -> bool {
@@ -486,8 +572,12 @@ impl BufferPoolManager {
             }
         }
         if !restored_from_wal {
+            // 只有从**主文件**读入的页才校验：WAL 镜像自带帧级 CRC32，
+            // 再校验一次主文件的校验和既多余又会因「尚未落盘」而误报。
             self.disk_manager
                 .read_page(page_id, &mut self.frames[frame_id].data)?;
+            let data = self.frames[frame_id].data;
+            Self::verify_checksum_on_load(&mut self.crc, page_id, &data)?;
         }
 
         let frame = &mut self.frames[frame_id];
@@ -524,6 +614,10 @@ impl BufferPoolManager {
 
         // 物理页被重新分配时，历史 WAL 镜像失效
         self.wal_pages.remove(&page_id);
+        // 页被复用：清掉上一任主人的校验和，避免新内容被旧 CRC 误判为损坏
+        if let Some(store) = self.crc.as_mut() {
+            store.clear(page_id)?;
+        }
 
         let frame = &mut self.frames[frame_id];
         frame.data.fill(0);
@@ -549,6 +643,8 @@ impl BufferPoolManager {
             }
             let data = self.frames[i].data;
             self.disk_manager.write_page(pid, &data)?;
+            // 惰性校验和：页刚落到主文件，此刻才算 CRC，避免污染写入热路径
+            Self::record_checksum_on_flush(&mut self.crc, pid, &data)?;
             self.frames[i].is_dirty = false;
             self.wal_pages.remove(&pid);
         }
@@ -622,6 +718,8 @@ impl BufferPoolManager {
             }
             let data = self.frames[frame_id].data;
             self.disk_manager.write_page(page_id, &data)?;
+            // 惰性校验和：换出落盘时计算，与写入热路径解耦
+            Self::record_checksum_on_flush(&mut self.crc, page_id, &data)?;
             self.frames[frame_id].is_dirty = false;
             self.wal_pages.remove(&page_id);
         }
