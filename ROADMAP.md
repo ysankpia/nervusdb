@@ -10,7 +10,7 @@ conditions are quoted with it.
 
 ---
 
-## Current state (v1.0.0)
+## Current state (v1.0.0-rc.1)
 
 Working and covered by tests:
 
@@ -32,7 +32,9 @@ Working and covered by tests:
   poison-recovering locks.
 - Tooling: interactive CLI with dot commands and logical dump; Python and
   Node.js SDKs with transaction support.
-- 92 tests across 9 suites; `cargo clippy -D warnings` clean.
+- 92 test cases across 9 suites (91 run, 1 intentionally `#[ignore]`d for a
+  child-process lock probe); `cargo fmt`, `cargo clippy -D warnings` and
+  `rustdoc -D warnings` all clean.
 
 ---
 

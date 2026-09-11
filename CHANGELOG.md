@@ -18,6 +18,17 @@ user has to act on them:
 
 ### Fixed
 
+- **`pip install graphlite` and `npm install graphlite-node` were documented but
+  neither package is published.** Both binding READMEs now say so explicitly and
+  give the build-from-source steps instead.
+
+- Stale content removed from the docs: they still narrated "1.0 added four test
+  suites, 1.1 added three more" when there is a single version, and the test
+  description still claimed the batch speedup is ">20x" long after that
+  assertion was replaced with a machine-independent one. `ROADMAP.md` also
+  referred to the release as `v1.0.0` rather than `v1.0.0-rc.1`, and quoted "92
+  tests" without noting one is intentionally ignored.
+
 - **CI was red on the `v1.0.0-rc.1` tag.** Two checks failed that local
   verification had missed, both because the local toolchain was older than CI's:
   `rustdoc -D warnings` rejected unescaped angle brackets in doc comments
@@ -30,6 +41,12 @@ user has to act on them:
   `main` or a later tag._
 
 ### Changed
+
+- **README rewritten and slimmed from 759 to ~265 lines.** It had grown into a
+  reference manual: 13 architecture subsections inline, an 80-line CLI
+  walkthrough, a per-case description of every test, and a 70-line file tree. It
+  now follows the shape well-regarded embedded databases use — what it is, a
+  runnable example, features, then links — with the depth split out into `docs/`.
 
 - **Contribution policy: this repository no longer accepts external code.**
   Pull requests from anyone other than the owner, a member or a collaborator are
@@ -52,6 +69,11 @@ user has to act on them:
 
 ### Added
 
+- `docs/` for depth: `architecture.md` (paging, WAL, STEAL, slotted pages, batch
+  weave, Cypher, indexing, algorithms, concurrency, production safety, storage
+  versioning), `benchmarks.md` (measured results with their conditions plus the
+  correction notice), `testing.md` (the suite and the adversarial style).
+  Root keeps only the files a reader expects.
 - `CHANGELOG.md` (this file).
 - `ROADMAP.md` — planned work, explicit non-goals, and the rule that any
   performance claim must ship with a runnable scenario and its measurement

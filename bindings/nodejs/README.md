@@ -16,11 +16,17 @@ Official Node.js and TypeScript bindings for **GraphLite-RS**, the SQLite of Gra
 
 ## Installation
 
+**Not published to npm yet** — build from source:
+
 ```bash
-npm install graphlite-node
-# or
-npm install @graphlite/core
+cd bindings/nodejs
+cargo build -p graphlite-node
+cp ../../target/debug/libgraphlite_node.dylib graphlite.node   # libgraphlite_node.so on Linux
+node test.mjs
 ```
+
+The `index.js` glue layer also picks up the library straight from `target/` if
+you prefer not to copy it.
 
 ## Quick Start
 
