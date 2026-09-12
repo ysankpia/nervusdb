@@ -97,14 +97,17 @@ jobs:
       - name: Build the binding
         run: cargo build ${{ matrix.build }}
 
-      # The Node loader searches `target/{release,debug}/` itself, so it needs no
-      # copy. Python does: the module must be importable as `nervusdb`, and the
-      # built artifact is `libnervusdb_python.{so,dylib}`. The rename step is the
-      # platform-dependent part — verified by removing the copy and watching the
-      # suite fail with ModuleNotFoundError.
+      # Both bindings need the built artifact renamed to the name the runtime
+      # looks for. Node's `require` only loads a `.node` file — pointing it at a
+      # `.so`/`.dylib` fails with "Invalid or unexpected token", not a helpful
+      # message — so the copy is mandatory, not a convenience. Verified locally by
+      # removing the copy and watching the suite fail.
       - name: Run the Node.js end-to-end suite
         if: matrix.sdk == 'node'
-        run: node bindings/nodejs/test.mjs
+        run: |
+          cp target/debug/libnervusdb_node.so bindings/nodejs/nervusdb.node 2>/dev/null \
+            || cp target/debug/libnervusdb_node.dylib bindings/nodejs/nervusdb.node
+          node bindings/nodejs/test.mjs
 
       - uses: actions/setup-python@v5
         if: matrix.sdk == 'python'
