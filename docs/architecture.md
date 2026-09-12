@@ -237,9 +237,20 @@ or concurrently-mutated chain cannot spin forever.
 
 ## 10. Concurrency model
 
-- Read queries and graph algorithms clone the lightweight `DiskGraph` handle,
-  release the global read lock immediately, and run concurrently under page-level
-  latches.
+- Read queries and graph algorithms clone the lightweight `DiskGraph` handle and
+  release the global read lock immediately, so a long traversal does not block
+  writers for its whole duration.
+- **Reads are serialized, not parallel, and this is measured.** The buffer pool is
+  reached through a single `Arc<Mutex<BufferPoolManager>>`, so every page touch
+  acquires one global mutex — a `get_node` at least three times, plus once per
+  incident edge (degree 343 ⇒ ≈345 acquisitions). On com-DBLP, 16 threads doing
+  plain point reads achieved **0.6×–1.4% of single-thread throughput**: adding
+  threads made reads *slower*. Control runs in the same process (pure CPU spin, and
+  a loop taking only the outer read lock) both scaled to ≈40% at 16 threads, so the
+  collapse is attributable to the buffer-pool mutex rather than to the machine.
+  Numbers and method: [benchmarks.md](benchmarks.md#concurrency-scaling).
+- `BufferPoolManager::latch` is dead code (declared, never used); there is no
+  page-level latching. See ROADMAP item 1.
 - Exactly **one handle per database file**, process-wide and across processes.
   See §11 for why.
 - `Transaction` is a write-side object: it buffers actions, resolves edge chains
@@ -249,11 +260,10 @@ or concurrently-mutated chain cannot spin forever.
   `get_edge` each take and release the read lock, so a traversal that reads an
   adjacency list and then fetches each named edge can stitch together two states and
   observe an edge that a concurrent delete removed in between. The snapshot closes
-  that correctness gap.
+  that correctness gap — it does **not** add parallelism.
 - A snapshot **blocks writers** while it lives, so keep it short, and never call a
   write entry point while holding one (it would wait on the lock the snapshot itself
-  holds). Making readers genuinely non-blocking needs versioned page visibility —
-  readers pinning a commit point while a writer appends — which is ROADMAP item 1.
+  holds).
 - The transaction action queue is **bounded** (`DEFAULT_MAX_TRANSACTION_ACTIONS`), since
   a transaction holds every action in memory until commit at ≈502 bytes per node action
   and 128 bytes per edge action. Overflow is an error, never an automatic flush:

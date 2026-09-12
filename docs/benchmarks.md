@@ -165,6 +165,78 @@ defect: 4M edge-record pages (15,625) plus 1M node pages (7,813) need roughly
 91MB against a 4MB pool. At 8192 frames the miss rate is flat, which is what
 distinguishes capacity from defect.
 
+### Concurrency scaling
+
+**Result: read throughput degrades as threads are added.** This is the one measured
+number in this document that is bad, and it is recorded here rather than left out
+because a reader deciding whether to use this database needs it.
+
+Method: com-DBLP database (317,080 nodes / 1,049,866 edges, 81.26 MB) opened
+read-only, 10-core machine, release build. Each configuration ran for a fixed 1.2 s
+wall-clock budget so that slow configurations are not flattered by finishing first;
+the reported figure is completed operations ÷ elapsed.
+
+| Threads | Hub point reads (high lock count) | Random point reads | `MATCH (n) RETURN count(*)` |
+| ------- | --------------------------------- | ------------------ | --------------------------- |
+| 1       | 14,581 ops/s (1.00×)              | 55,972 ops/s (1.00×) | 5 ops/s (1.00×)           |
+| 2       | 11,275 ops/s (0.77×)              | 49,001 ops/s (0.88×) | 5 ops/s (0.90×)           |
+| 4       | 7,991 ops/s (0.55×)               | 40,521 ops/s (0.72×) | 4 ops/s (0.80×)           |
+| 8       | 9,865 ops/s (0.68×)               | 37,184 ops/s (0.66×) | 2 ops/s (0.46×)           |
+| 16      | 10,420 ops/s (0.71×)              | 38,790 ops/s (0.69×) | 2 ops/s (0.47×)           |
+
+At 16 threads the scaling efficiency (`speedup ÷ threads`) is **0.6%–4.5%** — adding
+threads makes reads slower, not faster.
+
+**Control runs, because a bad number must be shown to be real.** The collapse could
+plausibly be the measuring machine rather than the database, so three variants ran in
+the same process:
+
+| Variant                                  | 16-thread speedup | Efficiency |
+| ---------------------------------------- | ----------------- | ---------- |
+| Pure CPU spin (no database calls)        | 6.34×             | 39.6%      |
+| Loop taking only the outer read lock     | 6.40×             | 40.0%      |
+| Point reads (any, i.e. touching the pool)| 0.10×–0.23×       | 0.6%–1.4%  |
+
+The first two establish what this 10-core machine can deliver (≈6.4×, ≈40%
+efficiency) and show that neither the environment nor the outer `RwLock` is at fault.
+The two point-read rows use disjoint node ranges and a shared contiguous range
+respectively, so cache-line sharing is not the explanation either. The common factor
+is `BufferPoolManager`.
+
+**Cause**: `DiskGraph` reaches the pool through one `Arc<Mutex<BufferPoolManager>>`,
+so every page touch takes a global mutex. A `get_node` acquires it at least three
+times (record, properties, and once **per incident edge**): a degree-343 hub costs
+≈345 acquisitions. Serializing 345 critical sections per read is what turns extra
+threads into contention.
+
+**Mitigation applied: collapse the per-edge acquisitions.** `get_node` now walks a
+whole adjacency chain inside **one** buffer-pool acquisition instead of one per edge
+(`DiskGraph::collect_edge_chain_batched`), so a degree-343 hub costs a handful of
+acquisitions rather than ≈345. Measured under contention — 8 threads all reading the
+same hub, which is the worst case for a global mutex, alternating the old and new
+builds:
+
+| Build                          | Run 1 | Run 2 | Run 3 |
+| ------------------------------ | ----- | ----- | ----- |
+| before (per-edge acquisition)  | 17,431 ops/s | 27,605 ops/s | 27,813 ops/s |
+| after (per-chain acquisition)  | **38,283** | **37,842** | **38,071** |
+
+Roughly 1.4–2.2×, and the "after" column varies by under 2% while "before" varies by
+60% — less lock traffic means less sensitivity to scheduling.
+
+**What this does not fix.** Readers are still serialized: the mutex is still global
+and still taken once per call, so scaling efficiency at 16 threads remains ≈4%
+rather than ≈40%. Reducing acquisitions shortens each critical section; it does not
+let two readers proceed at once. Genuine read parallelism needs per-frame latching,
+which is a redesign of the buffer pool's concurrency model rather than a patch.
+
+**Scope of the claim.** This is about *read parallelism*, not correctness or
+single-threaded speed: the full suite passes, and the batched walk is
+indistinguishable from the per-edge walk in every existing test (the chain semantics,
+the `in_use` filter and the `seen` cycle guard are all reproduced). Writes were not
+profiled here. See [architecture.md §10](architecture.md#10-concurrency-model) and
+`ROADMAP.md`.
+
 ### SDK throughput
 
 50,000 nodes with properties (and 100,000 edges), 4096-frame pool, file-backed.

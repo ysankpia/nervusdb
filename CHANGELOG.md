@@ -75,6 +75,34 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
 ### Fixed
 
+- **Read concurrency was *negative*: more threads made reads slower.** Measured on
+  com-DBLP, 16 threads doing plain point reads reached **0.6%–1.4% of single-thread
+  throughput**. The cause was lock traffic, not the machine: every page touch goes
+  through one `Arc<Mutex<BufferPoolManager>>`, and a `get_node` took it once per
+  incident edge, so a degree-343 hub cost ≈345 acquisitions per read. A whole
+  adjacency chain is now walked inside **one** acquisition. Under 8-thread
+  contention on a shared hub this measured 1.4–2.2× (17.4–27.8k → 37.8–38.3k ops/s),
+  and the "after" runs varied by under 2% against 60% before.
+
+  Control runs ruled out the measuring environment before the cause was accepted:
+  duplicate variants doing a pure CPU spin and taking only the *outer* read lock both
+  scaled to ≈40% at 16 threads in the same process, so the collapse is attributable
+  to the buffer-pool mutex. Method and both tables: `docs/benchmarks.md`.
+
+  **Readers are still serialized**, because the mutex remains global and is still
+  taken once per call — 16-thread efficiency is ≈4% against the ≈40% the machine can
+  deliver. Real parallelism needs per-frame latching, which is a buffer-pool redesign
+  (ROADMAP item 1). The documentation no longer claims otherwise.
+
+- **Two documentation claims did not match the implementation.** `AGENTS.md` §10 and
+  `docs/architecture.md` §10 described reads running "concurrently under page-level
+  latches", and the module maps advertised "page latches". There is no page-level
+  latching: `BufferPoolManager::latch` is declared and initialized but never read or
+  written anywhere — dead code since the initial commit. The claims now state what the
+  code does, with the measured numbers, rather than what it was meant to do.
+
+### Fixed
+
 - **Unique constraints did not survive closing and reopening the database.**
   `create_unique_constraint` mutated the in-memory `index_catalog` but never called
   `sync_header()`, so the change never reached Page 0 or the WAL —

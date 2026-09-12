@@ -33,7 +33,7 @@ fn main() -> Result<(), GraphError> {
 ## Status
 
 **`v1.1.0` — stable.** The engine, Cypher surface, analytics and safety guarantees
-are implemented and covered by 192 tests. The on-disk format is frozen at version 4
+are implemented and covered by 196 tests. The on-disk format is frozen at version 4
 and unchanged by 1.1.0; see `FORMAT.md`. Several known gaps remain — read
 [Known limitations](ROADMAP.md#next-planned) before considering production use.
 
@@ -185,7 +185,7 @@ let node = db.try_get_node(42)?;
 src/
   lib.rs            Public facade: GraphLite, Transaction, ACID coordination
   page.rs           4KB pages, NodeRecord, EdgeRecord, SlottedPropPage, PropCodec
-  buffer.rs         DiskManager and the LRU buffer pool (page latches, STEAL spill)
+  buffer.rs         DiskManager and the LRU buffer pool (STEAL spill)
   disk_graph.rs     Direct addressing, disk adjacency, freelists, page iterators
   storage.rs        Page-level WAL, CRC verification, checkpoint, recovery
   index.rs          Label and property secondary indexes

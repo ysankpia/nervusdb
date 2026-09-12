@@ -54,7 +54,7 @@ Working and covered by tests:
 - Tooling: Python and Node.js SDKs with transaction and batch-write support.
   Inspection and dump go through the library API — the CLI and the browser
   workbench were removed in 1.1.0.
-- 193 test cases across 16 suites (192 run, 1 intentionally `#[ignore]`d for a
+- 197 test cases across 16 suites (196 run, 1 intentionally `#[ignore]`d for a
   child-process lock probe); `cargo fmt`, `cargo clippy -D warnings` and
   `rustdoc -D warnings` all clean.
 
@@ -106,13 +106,30 @@ both sides in release the bindings run at 0.85-0.93x of the native path. See
 
 ### 5. Latch contention profile on many-core machines
 
-**Stress coverage added in 1.1.0.** `concurrency_stress_tests.rs` scales its thread
-count to the machine and asserts the hardware-independent guarantees (no deadlock, no
-lost writes, self-consistent structure, readers make progress).
+**Measured in 1.1.0, and the answer is worse than "not characterised".**
+`concurrency_stress_tests.rs` covers the correctness guarantees (no deadlock, no lost
+writes, self-consistent structure, readers make progress). A separate profiling run on
+the real com-DBLP database found that read throughput **degrades** as threads are
+added: 16 threads reached 0.6-1.4% of single-thread throughput, i.e. reads got slower.
+See [benchmarks.md](docs/benchmarks.md#concurrency-scaling) for the method and the
+control runs that rule out the machine.
 
-What is still missing is the *measurement*: which properties degrade as cores grow,
-and where the page latches become the bottleneck. That needs a profiling run on a
-many-core machine, not another correctness test.
+The cause is structural, not a tuning problem: every page touch goes through the one
+`Arc<Mutex<BufferPoolManager>>`, and a single `get_node` of a degree-343 hub used to
+cost ≈345 acquisitions.
+
+**Half done.** The per-edge acquisitions are now collapsed into one per chain
+(`collect_edge_chain_batched`), which under 8-thread contention on a shared hub
+measured 1.4-2.2× (17.4-27.8k → 37.8-38.3k ops/s, and far more stable run to run).
+
+**Still open:** readers remain serialized, because the mutex is still global and still
+taken once per call — 16-thread scaling efficiency is ≈4%, against the ≈40% this
+machine can deliver. Closing that needs per-frame latching, i.e. a redesign of the
+buffer pool's concurrency model, not a patch. It is the largest remaining piece of
+work in this file.
+
+Also found while profiling: `BufferPoolManager::latch` is dead code — declared and
+initialized since the initial commit, never used. Delete it or make it real.
 
 ## Explicitly out of scope
 

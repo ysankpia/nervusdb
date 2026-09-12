@@ -594,3 +594,144 @@ fn test_mixed_transaction_never_takes_batch_path() -> Result<(), GraphError> {
     // 冷重启后一致
     Ok(())
 }
+
+// =========================================================================
+// 批量链遍历的等价性（锁流量优化，不得改变语义）
+// =========================================================================
+//
+// `collect_outgoing_edge_ids` / `collect_incoming_edge_ids` 原先每读一条边就取
+// 一次全局缓冲池锁，度为 D 的节点要 D 次加锁；实测这使只读并发变成**负扩展**
+// （16 线程吞吐降到单线程的 0.6%–1.4%，见 docs/benchmarks.md#concurrency-scaling）。
+// 现在整条链在**一次**加锁内走完（`collect_edge_chain_batched`）。
+//
+// 优化减少了加锁次数，因此必须证明它**没有改变任何可观察行为**。下面覆盖链遍历
+// 的各个边界：顺序、空链、单边、以及遍历沿途被删除的记录。
+
+#[test]
+fn test_batched_chain_walk_matches_per_edge_semantics() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = GraphLite::open(dir.path().join("chain_equiv.db"))?;
+
+    // 1) 出边链顺序：链是「插入序的逆序」，批量遍历必须保持同一顺序
+    let hub = db.add_node(HashSet::from(["Hub".to_string()]), HashMap::new())?;
+    let mut targets = Vec::new();
+    for i in 0..50 {
+        let mut props = HashMap::new();
+        props.insert("i".to_string(), Value::from(i));
+        let t = db.add_node(HashSet::from(["T".to_string()]), props)?;
+        db.add_edge(hub, t, "OUT", HashMap::new(), 1.0)?;
+        targets.push(t);
+    }
+
+    let node = db.get_node(hub).expect("hub must exist");
+    assert_eq!(node.outgoing.len(), 50, "出边链长度必须等于边数");
+    // 逆序：最后插入的在链头
+    let expected: Vec<u64> = (1..=50u64).rev().collect();
+    let got: Vec<u64> = node
+        .outgoing
+        .iter()
+        .map(|eid| db.get_edge(*eid).expect("edge must exist").dst_id)
+        .collect();
+    let expected_ids: Vec<u64> = expected
+        .iter()
+        .map(|i| targets[(*i as usize) - 1])
+        .collect();
+    assert_eq!(got, expected_ids, "批量遍历必须保持逆插入序");
+
+    // 2) 入边链：另一批边指向 hub
+    for i in 0..30 {
+        let s = db.add_node(HashSet::from(["S".to_string()]), HashMap::new())?;
+        db.add_edge(s, hub, "IN", HashMap::new(), 1.0)?;
+        let _ = i;
+    }
+    let node = db.get_node(hub).expect("hub must exist");
+    assert_eq!(node.incoming.len(), 30, "入边链长度必须等于边数");
+
+    Ok(())
+}
+
+#[test]
+fn test_batched_chain_walk_handles_empty_and_single() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = GraphLite::open(dir.path().join("chain_edge.db"))?;
+
+    // 孤立节点：空链，两个方向都必须返回空
+    let lone = db.add_node(HashSet::from(["Lone".to_string()]), HashMap::new())?;
+    let n = db.get_node(lone).expect("node must exist");
+    assert!(n.outgoing.is_empty(), "孤立节点出边链必须为空");
+    assert!(n.incoming.is_empty(), "孤立节点入边链必须为空");
+
+    // 单边：链长为 1
+    let a = db.add_node(HashSet::new(), HashMap::new())?;
+    let b = db.add_node(HashSet::new(), HashMap::new())?;
+    let e = db.add_edge(a, b, "ONE", HashMap::new(), 1.0)?;
+    let na = db.get_node(a).expect("a must exist");
+    assert_eq!(na.outgoing, vec![e], "单边链应恰好含该边");
+    let nb = db.get_node(b).expect("b must exist");
+    assert_eq!(nb.incoming, vec![e], "单边入链应恰好含该边");
+
+    Ok(())
+}
+
+#[test]
+fn test_batched_chain_walk_stops_at_deleted_record() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = GraphLite::open(dir.path().join("chain_deleted.db"))?;
+
+    let hub = db.add_node(HashSet::new(), HashMap::new())?;
+    let mut edges = Vec::new();
+    for _ in 0..10 {
+        let t = db.add_node(HashSet::new(), HashMap::new())?;
+        edges.push(db.add_edge(hub, t, "E", HashMap::new(), 1.0)?);
+    }
+    assert_eq!(db.get_node(hub).unwrap().outgoing.len(), 10);
+
+    // 删除链中一条（不是链头）：遍历必须跳过它并继续，且长度减一
+    db.remove_edge(edges[4])?;
+    let n = db.get_node(hub).expect("hub must exist");
+    assert_eq!(n.outgoing.len(), 9, "被删除的边不得出现在邻接表中");
+    assert!(!n.outgoing.contains(&edges[4]), "被删除的边 ID 不得残留");
+
+    // 其余边仍全部可达 —— 证明遍历没有在删除处提前截断
+    for eid in &edges {
+        if *eid == edges[4] {
+            continue;
+        }
+        assert!(
+            n.outgoing.contains(eid),
+            "边 {eid} 不应因链中另一条被删除而丢失"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_batched_chain_walk_on_high_degree_node() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = GraphLite::open(dir.path().join("chain_hub.db"))?;
+
+    // 高度节点：正是锁流量优化针对的场景，必须完整且不重不漏
+    let hub = db.add_node(HashSet::new(), HashMap::new())?;
+    let mut spurs = Vec::new();
+    for _ in 0..200 {
+        let s = db.add_node(HashSet::new(), HashMap::new())?;
+        db.add_edge(s, hub, "IN", HashMap::new(), 1.0)?;
+        spurs.push(s);
+    }
+    let n = db.get_node(hub).expect("hub must exist");
+    assert_eq!(n.incoming.len(), 200, "高度节点入链必须完整");
+
+    // 无重复（链遍历的 `seen` 守卫必须仍在工作）
+    let uniq: HashSet<u64> = n.incoming.iter().copied().collect();
+    assert_eq!(uniq.len(), 200, "入链不得出现重复边 ID");
+
+    // 每条边的另一端点必须正确
+    for eid in &n.incoming {
+        let e = db.get_edge(*eid).expect("edge must exist");
+        assert_eq!(e.dst_id, hub, "入边的目标必须是 hub");
+        assert!(spurs.contains(&e.src_id), "入边的源必须是已建的 spur");
+    }
+
+    Ok(())
+}

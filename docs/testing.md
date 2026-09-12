@@ -36,12 +36,12 @@ cargo test --test robustness_tests        # page CRC at scale, WAL replay, chunk
 
 ## Current state
 
-**193 test cases — 192 pass, 1 intentionally `#[ignore]`d** (a child-process lock
+**197 test cases — 196 pass, 1 intentionally `#[ignore]`d** (a child-process lock
 probe launched by its parent test).
 
-Run as 15 integration suites (171 cases, of which 1 is `#[ignore]`d) plus 20 inline
+Run as 15 integration suites (175 cases, of which 1 is `#[ignore]`d) plus 20 inline
 unit tests in the hand-written codecs (`src/codec.rs`, `src/json.rs`, `src/crc32.rs`),
-which are what the on-disk format is made of, plus 2 doc-tests: 171 + 20 + 2 = 193.
+which are what the on-disk format is made of, plus 2 doc-tests: 175 + 20 + 2 = 197.
 
 The table below is checked against the files by
 `zero_dependency_tests::documented_suite_table_matches_the_files`, so a case added or
@@ -56,7 +56,7 @@ removed without updating this table fails the build rather than drifting:
 | `merge_tests.rs`             | 14    | `MERGE` idempotence, ON CREATE / ON MATCH                           |
 | `concurrency_isolation_tests.rs` | 9 | Snapshot consistency, atomic visibility, no lost writes             |
 | `concurrency_stress_tests.rs` | 3   | Core-count-adaptive mixed read/write stress                         |
-| `edge_locality_tests.rs`     | 9     | Weave equivalence, self-loops, false-spill elimination             |
+| `edge_locality_tests.rs`     | 13    | Weave equivalence, self-loops, false spill, chain-walk equivalence |
 | `robustness_tests.rs`        | 8     | File lock, auto-checkpoint, page CRC at scale, WAL replay, chunking |
 | `batch_tx_tests.rs`          | 7     | Batch commits, single-fsync contract, throughput                   |
 | `slotted_property_tests.rs`  | 7     | Page packing, slot reuse, compaction, density                      |
