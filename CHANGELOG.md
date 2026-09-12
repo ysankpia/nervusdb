@@ -16,15 +16,232 @@ user has to act on them:
 
 ## [Unreleased]
 
-### Storage format
+_No unreleased changes yet._
 
-- **Format version 3 — page-level CRC32 coverage for the whole data file. This
-  is a breaking change: databases written by `v1.0.0-rc.1` (version 2) or the
-  `v1.0.0` line (version 1) will not open.**
+## [1.0.0-rc.3] — 2026-09-12
+
+### Added
+
+- **`graphlite-studio` — a local browser workbench.** `graphlite-studio novel.db`
+  opens the database read-only, serves a force-directed graph on
+  `127.0.0.1:<random port>`, and opens your browser.
+
+  The page is embedded in the binary (`include_str!`) and references **no external
+  resources**, so it works offline — a local database tool that cannot render its
+  own UI on a plane would be absurd. Layout, pan/zoom, drag, label filtering and a
+  read-only Cypher console are all hand-written vanilla JS. The repulsion step uses
+  a spatial grid: the naive O(n²) version is 4 million distance computations per
+  frame at 2,000 nodes, which locks the browser.
+
+  The HTTP server is hand-written over `std::net::TcpListener` — three GET routes
+  did not justify letting a dependency into the tree that `zero_dependency_tests`
+  is guarding. It binds **127.0.0.1 only**: the server has no authentication, so
+  binding elsewhere would publish the database.
+
+  Export is capped at 5,000 nodes and requests above that are **refused with an
+  explanation**, not silently clamped. A silently truncated graph reads as "this is
+  the whole picture", which is the wrong impression to leave.
+
+- **The file lock is now taken per request, not held for the process lifetime.**
+  This is the difference between the studio being usable and not: shared read locks
+  and the write lock are mutually exclusive, so holding a read lock for as long as
+  the UI is open would block the agent that is writing — the exact scenario the
+  tool exists for. Found by end-to-end testing: while the studio ran, a writer in
+  another process was refused.
+
+  A writer can now write between requests, and the studio observes the change on
+  its next request. **This is still not concurrent read-write**: if the writer
+  happens to hold the lock during a request, that request gets a 503 and can be
+  retried. True concurrency needs snapshot isolation, which is a different order of
+  change and is recorded in `ROADMAP.md` rather than pretended here.
+
+
+- **`Transaction::add_nodes` / `Transaction::add_edges`** in the core, exposed as
+  `tx.add_nodes(...)` / `tx.add_edges(...)` in both SDKs. One boundary crossing and
+  one lock acquisition per batch instead of per record.
+
+- **Correction: the SDKs were never 9x slower than the native path.** The recorded
+  "Python 63k, Node 64k vs Rust 550k ops/s" figures came from **debug** builds of
+  the bindings compared against a **release** core. Measured with both sides in
+  release, on 50,000 nodes with properties:
+
+  | Path | Throughput |
+  | --- | --- |
+  | Rust, file-backed | 382,000 ops/s |
+  | Python | 355,000 ops/s |
+  | Node.js | 326,000 ops/s |
+
+  Same script, debug versus release binding: 78,603 vs 499,599 ops/s — a 6.4x
+  difference that the old figure was attributing to the FFI boundary. Direct
+  measurement of the boundary itself: 0.037 s crossing and parsing a 50,000-node
+  batch versus 0.095 s committing it to disk. The commit is the cost.
+
+  This means the batch API is **not** the large win it was planned as. It is kept
+  for ergonomics and to avoid one lock acquisition per record, and the docs now say
+  exactly that rather than implying a throughput claim.
+
+  The SDK benchmarks now require `BUILD_PROFILE=release` and print the profile,
+  and both warm up before measuring — the first run is 3-4x slower than steady
+  state (Node measured 68k on a cold run and 241k-276k across three warm runs),
+  which is enough to mistake warmup for a performance difference.
+
+
+- **`db.backup(path)` — a consistent online copy.** The sequence is what makes it
+  consistent: checkpoint first (so the data file becomes the single authoritative
+  snapshot and the WAL is empty), then copy while holding the write lock (so no
+  writer can interleave), then fsync. Copying a WAL that still held half a
+  transaction is the failure mode this ordering avoids.
+
+  The copy is a complete database, not a read-only snapshot: it opens
+  independently, retains multi-page overflow properties, and accepts writes. An
+  empty WAL is created beside it so the two-file invariant holds for the copy too.
+
+  It **refuses to overwrite an existing file** — the value of a backup is having a
+  second copy, so silently replacing a previous one could destroy the only good
+  one. Backing up onto the source path is refused for the same reason.
+
+- **`db.vacuum()` — reports reclaimable space.** Record slots were already
+  reclaimed on delete (new nodes immediately reuse deleted slots), so the honest
+  answer is a measurement rather than a compaction claim. `vacuum` checkpoints to
+  converge state and returns a `VacuumReport`: live counts, file size, and how many
+  whole property and overflow pages are on the free chains.
+
+  **It does not truncate the file, and says so.** Page numbers are a
+  logical-to-physical map, so truncating would require rewriting that map — the one
+  operation that could corrupt addressing. That trade is stated in the report's
+  documentation rather than left as a surprise for someone expecting `VACUUM` to
+  shrink their file.
+
+
+- **Unique constraints**: `db.create_unique_constraint("Character", "name")` makes a
+  `(label, property)` pair's values unique across every node carrying that label.
+  Violations raise `GraphError::UniqueConstraintViolation` — a distinct variant so
+  callers can tell an expected data conflict from a general failure.
+
+  This is the last line of defence for data cleanliness. Without it, a buggy writer
+  or a retrying agent can create two nodes for one entity while queries return only
+  half the data, and nothing surfaces the problem until much later.
+
+  Three details that matter:
+
+  - **Declaring a constraint over existing duplicates fails**, naming the nodes that
+    conflict. Discovering the conflict at the next write instead would point the
+    error at the wrong place — the writer rather than the historical data.
+  - **Updating a node to its own current value is allowed**; the check excludes the
+    node being modified, so a no-op update is not mistaken for a self-conflict.
+  - **Constraints persist** in the Page 0 index catalog and still apply after a
+    restart. `db.unique_constraints()` lists them.
+
+  Implementation reuses the existing `(label, property)` index rather than adding a
+  parallel structure, and when that index is not yet built the write is **refused**
+  rather than allowed through — optimistically permitting a write would make the
+  constraint silently meaningless.
+
+
+- **Multiple readers can now share a database while a single writer holds it.**
+  Previously exactly one handle could open a file, so a background process writing
+  and a foreground process observing were mutually exclusive — the most common
+  shape of an agent-plus-UI workload.
+
+  Read-only handles take a **shared** lock and coexist; a write handle takes the
+  exclusive lock and excludes everyone. The kernel enforces it (`try_lock_shared`),
+  so there is no spinning or retry loop. `GraphLite::open_read_only(path)` is the
+  entry point, and `GraphLiteOptions::read_only` covers the options-based path.
+
+  The subtlety is that **a reader must not trigger WAL replay**, since replay
+  writes the data file. So a read-only open first checks
+  `StorageEngine::pending_replay_pages()`: if the WAL still holds committed pages
+  that have not reached the data file, the open fails and says to open once with a
+  read-write handle. Silently skipping those pages would return stale data — the
+  failure a reader is least equipped to notice.
+
+  Write entry points on a read-only handle return a clear error naming the cause
+  rather than attempting the write. Covered by two tests: reader/writer mutual
+  exclusion in both directions including lock release on drop, and the pending-WAL
+  refusal followed by a successful read-only open after one replay.
+
+
+- **`LIMIT` is pushed down into matching when it is safe to do so.** The engine
+  used to expand every match and truncate at the very end, so `LIMIT 1` cost as
+  much as the full query. It now stops as soon as enough rows are collected.
+
+  Measured on a 4-hub graph:
+
+  | Query | Before | After |
+  | --- | --- | --- |
+  | `LIMIT 1`, 32,000 edges | 60,577 ms | **6 ms** |
+  | `LIMIT 1`, 100,000 edges | — | 53 ms |
+
+  Push-down is gated on three conditions, and the gate is conservative on purpose:
+
+  - **No `ORDER BY`** — sorting needs every row, so truncating early would return
+    the wrong prefix.
+  - **No `SKIP`** — the cut-off point would be computed against the wrong offset.
+  - **No aggregate, and no `RETURN *`** — both need the full row set (the latter
+    because the column list is derived from the contexts).
+
+  Equivalence was verified by running each query twice — once with `LIMIT`, once
+  without — and asserting the limited result equals the first N rows of the full
+  result, including the cases where push-down is refused.
+
+- **`EXPLAIN <query>`** prints the plan without running the query: the start-node
+  selection (label index, property index, or full scan), the expansion steps with
+  direction, type and hop range, whether `LIMIT` was pushed down and why not if it
+  was not, and whether aggregation or sorting is involved.
+
+  It exists because a slow query used to offer no way to see which path the engine
+  took — the O(N²) expansion in the previous commit could only be diagnosed by
+  reading the source. Every line reflects a branch the executor actually takes, so
+  the plan cannot drift from the behaviour without the code moving.
+
+  `EXPLAIN` is side-effect free and therefore works on a read-only handle, and
+  `EXPLAIN CREATE ...` / `EXPLAIN ... SET ...` are permitted — they describe the
+  write path without performing it. Pinned by a test asserting `node_count` is
+  unchanged after `EXPLAIN CREATE`, and that no property is modified by
+  `EXPLAIN ... SET`.
+
+- Scalar functions `id(x)`, `labels(n)`, and `type(r)` in `WHERE` and `RETURN`.
+  `id` returns the internal node or edge id as an integer, which is what start-node
+  anchoring will key on.
+
+- `test_cli_rejects_unparsable_trailing_input` asserts both halves of the fix: the
+  error is reported, **and** the malformed statement produced no side effects —
+  a prefix must not be executed while the tail is dropped.
+
+- **Format version 4 — the frozen format, and the core library now has zero
+  runtime dependencies. This is a breaking change: databases written by
+  `v1.0.0-rc.2` (version 3) or any earlier version will not open.**
+
+  WAL frames and Page 0 metadata were encoded by `bincode`. That crate **ceased
+  maintenance in December 2025** — its final release contains only a compiler
+  error and a notice. The bytes on disk must not be owned by someone else's
+  release schedule, so the format is now defined and implemented in this
+  repository (`src/codec.rs`, `src/json.rs`, `src/crc32.rs`), with every byte
+  specified in the new `FORMAT.md`. `serde`, `serde_json`, `crc32fast`, and
+  `thiserror` are gone as well.
+
+  Timing was the whole point: the format was not yet frozen, so the swap cost
+  nothing. Once frozen there is no second free opportunity, and the database's
+  lifetime would have been tied to an abandoned crate with no security updates —
+  the same shape of risk that left Kuzu's users stranded when that project was
+  archived. `tests/zero_dependency_tests.rs` now enforces the invariant, including
+  a negative test confirming that adding a dependency makes the guard fail.
+
+  **To migrate**: export with the older build via `.dump`, then re-import.
+
+- **`FORMAT.md` is new, and it is a commitment.** It specifies every offset, the
+  record layouts, the WAL frame and payload encoding, and the limits — so a future
+  version or a third-party reader can be written without reverse-engineering the
+  code. The stability promise is stated there in the same terms SQLite uses: the
+  format does not change in incompatible ways, and a future change that genuinely
+  cannot be expressed will be opt-in (a DuckDB-style storage-version selector),
+  never a silent reinterpretation.
+
+- **Format version 3 — page-level CRC32 coverage for the whole data file.**
 
   Previously only WAL frames were checksummed; a bit flip or half-written page in
   `{path}` was silently returned as "not found" and the graph quietly came back
-  wrong. Every data page now carries a CRC32: pages `1..256` inline in Page 0,
+  wrong. Every data page now carries a CRC32: pages `1..255` inline in Page 0,
   pages `>= 256` through a two-level `CrcDirPage` radix directory. A directory
   page that covers ~4 GiB of address space costs 4 KiB, so the smallest database
   still fits in 16 KiB (4 pages).
@@ -34,13 +251,28 @@ user has to act on them:
   recorded" and the page is skipped rather than reported — after a crash the
   server must not refuse to start over a page it simply never got to.
 
-  **To migrate**: export with the older build via `.dump`, then re-import.
+- **The 24-bit property-pointer overflow is now a hard error instead of a silent
+  corruption.** `pack_prop_ptr` used `debug_assert!` plus a `& 0x00FFFFFF` mask;
+  `debug_assert!` is compiled out in release builds, so a page number beyond the
+  24-bit limit (a file over 64 GiB) would have been **truncated to a wrong page,
+  returning another entity's data with no error at all** — the worst failure mode
+  a database can have. The packer now returns `Result` and `open` refuses an
+  oversized file up front.
+
+  This is documented as a permanent limit in `FORMAT.md` §6. It is deliberate:
+  widening the pointer would grow `NodeRecord` from 32 to 40 bytes, dropping each
+  page from 128 records to 102 — a 20% capacity loss on the hot path, paid by
+  every deployment, to buy address space the target workload does not use.
+
+- **The format and size gates now run before any write, including WAL replay.**
+  Both live at the top of `open_with_options`. Replay writes the main data file,
+  so a check placed after it would already have reinterpreted an old file under
+  current-version semantics. `test_version_guard_rejects_v1_v2` now asserts the
+  rejected file comes out byte-identical to how it went in.
 
 - Directory pages are self-checksummed (`self_crc`, sealed on write, verified on
   load). Without this, one silently corrupted L2 page would report every data
   page it covers as a mismatch — thousands of false alarms naming innocent pages.
-
-### Added
 
 - **`integrity_check()` now names the corrupt pages.** It sweeps every page's
   checksum first and reports `PageChecksumMismatch` with the page number, before
@@ -71,6 +303,28 @@ user has to act on them:
 
 - `CrcStore` and the `crc` module are public, so an embedder can verify a page
   on disk (`GraphLite::verify_page_on_disk`) without opening the buffer pool.
+
+- `docs/` for depth: `architecture.md` (paging, WAL, STEAL, slotted pages, batch
+  weave, Cypher, indexing, algorithms, concurrency, production safety, storage
+  versioning), `benchmarks.md` (measured results with their conditions plus the
+  correction notice), `testing.md` (the suite and the adversarial style).
+  Root keeps only the files a reader expects.
+- `CHANGELOG.md` (this file).
+- `ROADMAP.md` — planned work, explicit non-goals, and the rule that any
+  performance claim must ship with a runnable scenario and its measurement
+  conditions.
+- `LICENSING.md` — plain-language explanation of the dual-licence model,
+  including that AGPL does not prohibit commercial use.
+- `CONTRIBUTING.md`, `CLA.md`.
+- `SECURITY.md` — how to report a vulnerability privately.
+- Reproducible benchmarks: `benches/throughput.rs`, `benches/pool_probe.rs`,
+  `benches/mem_probe.rs`, plus `benches/throughput.py` and
+  `benches/throughput.mjs` for the SDKs. Each scenario prints its own
+  configuration, so a number cannot be quoted without its conditions.
+- GitHub Actions CI (format, check, clippy, tests, release-mode throughput
+  suites, rustdoc) on Linux and macOS.
+
+---
 
 ### Changed
 
@@ -126,7 +380,159 @@ user has to act on them:
   of every node adjacent to a hub) gives 161,877, and the benchmark now reports
   exactly that.
 
+- **README rewritten and slimmed from 759 to ~265 lines.** It had grown into a
+  reference manual: 13 architecture subsections inline, an 80-line CLI
+  walkthrough, a per-case description of every test, and a 70-line file tree. It
+  now follows the shape well-regarded embedded databases use — what it is, a
+  runnable example, features, then links — with the depth split out into `docs/`.
+
+- **Contribution policy: this repository no longer accepts external code.**
+  Pull requests from anyone other than the owner, a member or a collaborator are
+  closed automatically. The reason is licensing (dual AGPL + commercial), not
+  code quality: merging an outside patch licensed under AGPL alone would make
+  that code unusable for the commercial licence and break the model
+  project-wide. Issues remain welcome and are acted on. See CONTRIBUTING.md.
+
+  _If you were planning to send a patch, please open an issue with a
+  reproduction instead._
+
+- `CLA.md` now applies **only** to changes the maintainer explicitly invites.
+  Opening a pull request on your own is no longer, and is not treated as,
+  acceptance of it.
+
+- The README no longer describes the project as "production-grade". The release
+  notes and roadmap list known production gaps, so the claim contradicted them.
+  It now states plainly that this is a release candidate and links to the
+  limitations.
+
 ### Fixed
+
+- **`graphlite-studio` died when its stdout reader went away.** `println!` panics
+  if the write fails, and that panic happened on the main thread — so piping the
+  output anywhere that stops reading (a test harness, `head`, a log collector)
+  killed the whole server, and clients saw `ConnectionReset`.
+
+  Reproduced locally with `graphlite-studio db 300 | head -3`: the server exited.
+  Startup output now goes through a helper that ignores write errors, and the same
+  applies to the stderr paths (a closed stderr pipe panics identically).
+
+  The test harness had the matching defect: it read stdout only until it found the
+  port, then dropped the reader, closing the pipe. It now keeps draining both
+  streams for the life of the child. This was latent on macOS, where startup output
+  usually fit in the pipe buffer before the reader closed, and failed reliably on
+  Linux CI.
+
+
+- **A 1.8x write-throughput regression introduced by the zero-dependency
+  conversion.** Replacing `crc32fast` with a hand-written byte-at-a-time CRC32
+  made checksumming the bottleneck: every WAL frame computes two CRCs (the page
+  and the payload), and the naive table lookup cost **7,028 ns per 4 KiB page**
+  against `crc32fast`'s **323 ns** — 21.8x slower, using hardware CRC32
+  instructions (`SSE4.2` + `PCLMULQDQ`) that process 8 bytes per operation.
+
+  Measured on LiveJournal, 20 million edges, interleaved runs on the same machine:
+
+  | | Edge ingestion |
+  | --- | --- |
+  | before (byte-at-a-time CRC) | 136,865 ops/s |
+  | after (slicing-by-8 CRC) | **280,426 ops/s** |
+  | rc.2 baseline (`crc32fast`) | 297,634 ops/s |
+
+  The fix is slicing-by-8: a second table lets the loop consume 8 bytes per
+  iteration and merge their contributions in one pass, taking the page from
+  7,028 ns to 1,750 ns. It stays pure software and dependency-free; hardware
+  instructions would need `std::arch` intrinsics plus runtime CPU feature
+  detection, which is a larger change than this regression warrants.
+
+  The first measurement of the replacement was wrong in a way worth recording:
+  timing `hash()` in a loop over the *same* buffer let the optimiser collapse the
+  repeated work, reporting 545 MB/s for an implementation that actually ran at
+  142 MB/s. The trustworthy number came from timing the real call pattern
+  (`Hasher::new` + `update` + `finalize` per page).
+
+  `slicing_matches_bytewise_for_all_lengths` pins the new path against a
+  byte-at-a-time reference across 0..=24 bytes plus large sizes. An off-by-one in
+  the slicing table would still produce a plausible-looking checksum — one that
+  would then declare every existing page corrupt — so this equivalence is the
+  property that matters, not any single known value.
+
+
+- **A read-only handle could still write, via `run_cypher`.** Every write entry
+  point except this one had the read-only guard: `add_node`, `add_edge`, `execute`
+  and `checkpoint` were covered, but `run_cypher`'s write branch was missed —
+  because `mutating` is only known after parsing, so the guard cannot sit at the
+  top of the function, and it was overlooked.
+
+  Consequence: `GraphLite::open_read_only(...)` would happily execute
+  `run_cypher("CREATE ...")`, `SET`, `DELETE` and `DETACH DELETE`. Anything built
+  on it (the studio's Cypher console, for instance) could modify a database it was
+  supposed to only read.
+
+  Found by the studio's end-to-end test, not by the unit tests, which had no case
+  for "read-only handle runs a write statement through `run_cypher`".
+
+  `test_read_only_handle_rejects_every_write_path` now enumerates **every** write
+  entry point rather than sampling one, because the omission happened while adding
+  guards one by one — so the verification has to be one by one too. Reverting the
+  fix makes it report five leaking paths, which is how the test was confirmed to
+  catch what it claims to.
+
+
+- **`WHERE` conditions containing a function call were silently discarded, so
+  the filter became "always true" and the query returned every row.** This is the
+  worst class of bug a database can have — wrong answers with no error.
+
+  `WHERE id(a) = 1` parsed as the bare variable `id`: the parser recognised `id`
+  as an identifier, saw that the next token was neither `.` nor `:`, returned
+  `Variable("id")`, and never consumed `(a) = 1`. Evaluation then fell through to
+  the catch-all and treated it as true.
+
+  Measured before the fix, on a 5-node graph:
+
+  | Query                                  | Expected | Returned |
+  | -------------------------------------- | -------- | -------- |
+  | `WHERE id(a) = 1`                      | 1 row    | 5 rows   |
+  | `WHERE id(a) = 99` (id does not exist) | 0 rows   | 5 rows   |
+  | `WHERE notafunction(a) = 1`            | 0 rows   | 5 rows   |
+
+  Two changes close it, because either alone would be a patch rather than a fix:
+
+  1. **The parser now rejects trailing input.** After a complete statement only an
+     optional semicolon is allowed. SQLite and Postgres behave the same way, for
+     the same reason: a query that returns wrong data is far worse than one that
+     fails.
+  2. **`id()`, `labels()`, and `type()` are actually implemented**, in both `WHERE`
+     and `RETURN`. Unknown function names are a parse error naming the supported
+     set, rather than a silent no-op.
+
+  A side effect worth noting: `tests/cli_tests.rs` had a multi-line script whose
+  first line lacked a semicolon, so it concatenated two statements into
+  `CREATE (...) RETURN a`. The old parser dropped the `RETURN a` and the test
+  passed; the strict parser failed it immediately. **The test had encoded the
+  bug**, and its script was corrected rather than the check being relaxed.
+
+- **A 1-hop expansion over a high-degree node was O(D²) instead of O(D).**
+  `node_matches_pattern` called `graph.get_node`, which returns a full `Node`
+  _including its adjacency lists_ — so checking one label walked the node's entire
+  outgoing and incoming chains. Since `match_path_step` calls it for every
+  candidate at every step, a hub of degree D cost D² per expansion.
+
+  It now reads only the record and the property payload. Measured on a 4-hub
+  graph, doubling the edge count:
+
+  |                                 | Before    | After     |
+  | ------------------------------- | --------- | --------- |
+  | 1,000 edges                     | 55 ms     | 1 ms      |
+  | 8,000 edges                     | 2,385 ms  | 6 ms      |
+  | 32,000 edges                    | 48,249 ms | **27 ms** |
+  | 32,000 edges, `WHERE id(a) = 1` | 73,576 ms | **21 ms** |
+
+  Growth is now linear in edge count rather than quadratic — 32× the edges costs
+  27× the time. The 32k-edge case improved by roughly 1,800×, and the filtered case
+  by roughly 3,500×.
+
+  A regression test pins the complexity, not just the result: a test that only
+  checks correctness passes at any speed, which is how this survived.
 
 - **`crc_dir_root` was never persisted, so checksums beyond page 256 were never
   actually verified.** Three faults overlapped: `CrcStore` read-modify-wrote
@@ -199,57 +605,6 @@ user has to act on them:
   _If you build the `v1.0.0-rc.1` tag itself, expect those two lint failures;
   they are doc-comment and lint-level only and do not affect the library. Use
   `main` or a later tag._
-
-### Changed
-
-- **README rewritten and slimmed from 759 to ~265 lines.** It had grown into a
-  reference manual: 13 architecture subsections inline, an 80-line CLI
-  walkthrough, a per-case description of every test, and a 70-line file tree. It
-  now follows the shape well-regarded embedded databases use — what it is, a
-  runnable example, features, then links — with the depth split out into `docs/`.
-
-- **Contribution policy: this repository no longer accepts external code.**
-  Pull requests from anyone other than the owner, a member or a collaborator are
-  closed automatically. The reason is licensing (dual AGPL + commercial), not
-  code quality: merging an outside patch licensed under AGPL alone would make
-  that code unusable for the commercial licence and break the model
-  project-wide. Issues remain welcome and are acted on. See CONTRIBUTING.md.
-
-  _If you were planning to send a patch, please open an issue with a
-  reproduction instead._
-
-- `CLA.md` now applies **only** to changes the maintainer explicitly invites.
-  Opening a pull request on your own is no longer, and is not treated as,
-  acceptance of it.
-
-- The README no longer describes the project as "production-grade". The release
-  notes and roadmap list known production gaps, so the claim contradicted them.
-  It now states plainly that this is a release candidate and links to the
-  limitations.
-
-### Added
-
-- `docs/` for depth: `architecture.md` (paging, WAL, STEAL, slotted pages, batch
-  weave, Cypher, indexing, algorithms, concurrency, production safety, storage
-  versioning), `benchmarks.md` (measured results with their conditions plus the
-  correction notice), `testing.md` (the suite and the adversarial style).
-  Root keeps only the files a reader expects.
-- `CHANGELOG.md` (this file).
-- `ROADMAP.md` — planned work, explicit non-goals, and the rule that any
-  performance claim must ship with a runnable scenario and its measurement
-  conditions.
-- `LICENSING.md` — plain-language explanation of the dual-licence model,
-  including that AGPL does not prohibit commercial use.
-- `CONTRIBUTING.md`, `CLA.md`.
-- `SECURITY.md` — how to report a vulnerability privately.
-- Reproducible benchmarks: `benches/throughput.rs`, `benches/pool_probe.rs`,
-  `benches/mem_probe.rs`, plus `benches/throughput.py` and
-  `benches/throughput.mjs` for the SDKs. Each scenario prints its own
-  configuration, so a number cannot be quoted without its conditions.
-- GitHub Actions CI (format, check, clippy, tests, release-mode throughput
-  suites, rustdoc) on Linux and macOS.
-
----
 
 ## [1.0.0-rc.1] — 2026-09-11
 

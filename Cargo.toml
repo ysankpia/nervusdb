@@ -3,7 +3,7 @@ members = [".", "bindings/python", "bindings/nodejs"]
 
 [package]
 name = "graphlite-rs"
-version = "1.0.0-rc.2"
+version = "1.0.0-rc.3"
 edition = "2021"
 authors = ["GraphLite-RS Contributors"]
 description = "Embedded, single-file property graph database: the SQLite model applied to graphs"
@@ -18,13 +18,18 @@ keywords = ["graph", "database", "sqlite", "cypher", "embedded"]
 categories = ["database-implementations", "embedded-database"]
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-bincode = "1.3"
-crc32fast = "1.4"
-thiserror = "1.0"
+# 运行时零依赖：磁盘格式的每一个字节都由本仓库自己定义与编码。
+#
+# 这不是洁癖。`bincode` 曾同时编码 WAL 帧与 Page 0 元数据，而它在 2025-12 停止
+# 维护（作者遭遇人肉骚扰后终止项目，3.0.0 版本里只有一个编译错误和一段墓志铭）。
+# 把磁盘格式的字节布局委托给第三方 crate，等于把数据库的寿命绑在别人的发布节奏上
+# ——这正是 Kuzu 归档后用户被迫迁移的同一类风险。
+#
+# 格式因此全部手写：`codec.rs`（字节原语）、`json.rs`（输出）、`crc32.rs`（校验和）。
+# Cargo.lock 中的依赖树应当为空；`tests/zero_dependency_tests.rs` 守住这条不变量。
 
 [dev-dependencies]
+# 仅用于测试的临时目录，不进最终产物。
 tempfile = "3.10"
 
 [[bench]]
@@ -46,6 +51,12 @@ path = "src/main.rs"
 [[bin]]
 name = "graphlite-cli"
 path = "src/bin/cli.rs"
+
+# 可视化工作台。**刻意独立于核心库**：它要开网络端口、要嵌入一个 HTML 页面，
+# 而这些都不该进入数据库的核心路径。核心库保持零依赖，Studio 只是它的消费者。
+[[bin]]
+name = "graphlite-studio"
+path = "src/bin/studio.rs"
 
 [lib]
 name = "graphlite"

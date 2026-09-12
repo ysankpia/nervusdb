@@ -61,14 +61,32 @@ Any modification that violates these rules must be rejected immediately:
    - Page 0 (Header) and every multi-level page directory page must be registered via `BufferPoolManager::protect_page` and excluded from **both** eviction rounds in `acquire_frame`. Directory pages are traversed on every node/edge address resolution, so letting data pages evict them forces the whole chain to be re-read.
    - `restore_meta` must call `sync_protected_pages()` so a rolled-back transaction cannot leave stale or missing directory protection.
 
-8. **Storage Format Versioning**
-   - `DB_PAGE_VERSION` is `3`. Version 2 added slotted property pages; version 3 added
-     full page-CRC coverage (`CrcDirPage` directory chain plus the inline CRC array in
-     Page 0). Databases written by GraphLite `v1.0.0-rc.1` (version 2) and by the
-     `v1.0.0` line (version 1: one 4KB property page per entity) are **not readable**:
-     `GraphLite::open` returns an explicit error directing the user to export with the
-     matching older build via `.dump` and re-import. Never silently reinterpret an old file.
-   - Page CRC32 coverage: pages `1..256` are covered by the inline array in Page 0
+8. **Storage Format Versioning & Zero Dependencies**
+   - `DB_PAGE_VERSION` is `4`, and **this is the frozen format**. `FORMAT.md` is the
+     authoritative byte-level specification; any change to the bytes on disk must
+     update it in the same commit.
+   - Version history: v2 added slotted property pages; v3 added full page-CRC coverage
+     (`CrcDirPage` chain plus the inline CRC array in Page 0); v4 replaced the
+     `bincode`-encoded WAL frames and Page 0 metadata with this repository's own
+     encoders, and turned the 24-bit property-pointer overflow from a silent
+     truncation into a hard error. Versions 1–3 are **not readable**: `open` returns an
+     explicit error directing the user to export with the matching older build via
+     `.dump` and re-import. Never silently reinterpret an old file.
+   - **The version and size gates run before any write, including WAL replay.** Both
+     live at the top of `open_with_options`, ahead of `StorageEngine::open`. Replay
+     writes the main data file, so a check placed after it would already have
+     reinterpreted an old file under current-version semantics. A rejected file must
+     come out byte-identical to how it went in — `test_version_guard_rejects_v1_v2`
+     asserts exactly that.
+   - **The core library has zero runtime dependencies, and this is load-bearing.**
+     `src/codec.rs`, `src/json.rs`, and `src/crc32.rs` define the format's bytes.
+     The reason is concrete: `bincode` used to encode both the WAL frames and the
+     Page 0 metadata, and it ceased maintenance in December 2025 — its final release
+     contains only a compiler error and a notice. Had the format been frozen first,
+     the database's lifetime would have been tied to an abandoned crate with no
+     security updates. `tests/zero_dependency_tests.rs` enforces the invariant, and
+     adding a dependency must be treated as a format change, not a convenience.
+   - Page CRC32 coverage: pages `1..255` are covered by the inline array in Page 0
      (`INLINE_CRC_OFFSET`, 4 bytes per page); pages `>= 256` by the two-level
      `CrcDirPage` radix directory. A stored checksum of `0` means "not recorded" and the
      page is **skipped**, never reported as corrupt ("rather miss than falsely alarm").
@@ -445,11 +463,35 @@ deliberately does not collect).
 - If a change alters a documented performance number, update the number **and**
   its measurement conditions in the same commit.
 
-### 5.4 Housekeeping
+### 5.4 File safety — never destroy untracked work
+
+**No `rm` on a file that is not tracked by git.** This is not hypothetical: an
+agent working on this repository deleted `src/crc.rs` while testing a baseline.
+The file was untracked, so `git stash` had not captured it, and there was no
+recovery path — it had to be rebuilt from a session log, and the reconstruction
+silently lost two fixes that had to be re-derived afterwards.
+
+Untracked files (new modules, scratch harnesses, `examples/`) are the easiest
+thing to lose and the hardest to get back. Therefore:
+
+- **Move, don't delete.** Send anything you want out of the way to
+  `.trash/<YYYY-MM-DD>/` and leave it there. `.trash/` is gitignored; a human
+  decides when it is truly dead.
+- **Track before you touch.** If an untracked file is about to be affected by an
+  operation (a baseline comparison, a format refactor, a stash), `git add` it
+  first. A file in the index is recoverable; an untracked one is not.
+- **Never `git stash` to isolate a baseline.** Stash without `--include-untracked`
+  silently ignores exactly the files at risk. Use `git worktree add` for a clean
+  baseline checkout instead.
+- **`rm -rf` requires explicit human authorization**, every time, with the target
+  named. "It looked like scratch" is not authorization.
+
+### 5.5 Housekeeping
 
 - Never commit test database artifacts (`*.db`, `*.db.wal`, `*.paged`).
-- Keep `.gitignore` updated for target builds, Node binaries (`*.node`), and
-  Python dynamic libraries (`*.so`, `*.dylib`).
+- Keep `.gitignore` updated for target builds, Node binaries (`*.node`), Python
+  dynamic libraries (`*.so`, `*.dylib`), benchmark scratch output (`/bench_db/`),
+  tool-generated indexes (`.codegraph/`), and the `.trash/` directory above.
 - No placeholder code: strictly forbidden to introduce `todo!()` or
   `unimplemented!()`.
 - **Keep `CHANGELOG.md` current.** Every user-visible change adds an entry under
@@ -459,4 +501,6 @@ deliberately does not collect).
   change certainly qualifies).
 - Update the relevant documentation in the same change: `README.md` for
   user-facing behaviour, `AGENTS.md` for invariants or workflows, `ROADMAP.md`
-  when a planned item lands or a new limitation is discovered.
+  when a planned item lands or a new limitation is discovered, and **`FORMAT.md`
+  in the same commit as any change to the bytes on disk**. A stale format
+  specification is worse than none, because the next reader will trust it.

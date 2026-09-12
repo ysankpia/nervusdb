@@ -242,7 +242,7 @@ impl CrcStore {
         if !Self::is_covered(page_id) {
             return Ok(());
         }
-        let crc = crc32fast::hash(data);
+        let crc = crate::crc32::hash(data);
 
         if (page_id as usize) < HeaderPage::INLINE_CRC_PAGE_COUNT {
             self.inline[page_id as usize] = crc;
@@ -333,7 +333,7 @@ impl CrcStore {
             Some(v) => v,
             None => return Ok(()),
         };
-        let actual = crc32fast::hash(data);
+        let actual = crate::crc32::hash(data);
         if actual != expected {
             return Err(GraphError::PageChecksumMismatch {
                 page_id: page_id as u64,

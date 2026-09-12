@@ -1,53 +1,113 @@
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use thiserror::Error;
 
-#[derive(Error, Debug)]
+/// 统一的错误类型。
+///
+/// `Display` 与 `std::error::Error` 均手写实现（不再派生 `thiserror`），
+/// 使依赖树保持为空。文案属于**面向用户的接口**：一旦发布就应当保持稳定，
+/// 因此每条消息都写清楚「哪里错了」和「该怎么办」。
+#[derive(Debug)]
 pub enum GraphError {
-    #[error("Node not found: {0}")]
     NodeNotFound(u64),
 
-    #[error("Edge not found: {0}")]
     EdgeNotFound(u64),
 
-    #[error("Invalid weight: {0}, weight must be non-negative")]
     InvalidWeight(f64),
 
-    #[error("Transaction error: {0}")]
     TransactionError(String),
 
-    #[error("Storage I/O error: {0}")]
-    IoError(#[from] std::io::Error),
+    IoError(std::io::Error),
 
-    #[error("Serialization error: {0}")]
     SerializationError(String),
 
-    #[error("Storage error: {0}")]
     StorageError(String),
 
-    #[error("WAL corrupted: {0}")]
     WalCorrupted(String),
 
-    #[error("Database locked: {0}")]
     DatabaseLocked(String),
 
-    #[error("Integrity check failed: {0}")]
     IntegrityError(String),
 
-    #[error("Page checksum mismatch at page {page_id}: expected {expected:#010x}, actual {actual:#010x}")]
     PageChecksumMismatch {
         page_id: u64,
         expected: u32,
         actual: u32,
     },
 
-    #[error("General database error: {0}")]
+    /// 违反唯一约束：`(:Label {prop})` 的取值已存在于另一个节点。
+    ///
+    /// 独立变体而非 `General`：调用方需要能程序化区分「数据违反约束」与
+    /// 「其它一般性失败」，前者是可预期的业务结果，后者通常意味着 bug。
+    UniqueConstraintViolation {
+        label: String,
+        prop: String,
+        detail: String,
+    },
+
     General(String),
 }
 
+impl fmt::Display for GraphError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            GraphError::NodeNotFound(id) => write!(f, "Node not found: {}", id),
+            GraphError::EdgeNotFound(id) => write!(f, "Edge not found: {}", id),
+            GraphError::InvalidWeight(w) => {
+                write!(f, "Invalid weight: {}, weight must be non-negative", w)
+            }
+            GraphError::TransactionError(msg) => write!(f, "Transaction error: {}", msg),
+            GraphError::IoError(e) => write!(f, "Storage I/O error: {}", e),
+            GraphError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
+            GraphError::StorageError(msg) => write!(f, "Storage error: {}", msg),
+            GraphError::WalCorrupted(msg) => write!(f, "WAL corrupted: {}", msg),
+            GraphError::DatabaseLocked(msg) => write!(f, "Database locked: {}", msg),
+            GraphError::IntegrityError(msg) => write!(f, "Integrity check failed: {}", msg),
+            GraphError::PageChecksumMismatch {
+                page_id,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "Page checksum mismatch at page {}: expected {:#010x}, actual {:#010x}",
+                page_id, expected, actual
+            ),
+            GraphError::UniqueConstraintViolation {
+                label,
+                prop,
+                detail,
+            } => write!(
+                f,
+                "Unique constraint violated: (:{}.{}) = {}. \
+                 Each value must be unique across all :{} nodes.",
+                label, prop, detail, label
+            ),
+            GraphError::General(msg) => write!(f, "General database error: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for GraphError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        // 只有 IO 错误有底层 cause；其余都是自包含的诊断信息
+        match self {
+            GraphError::IoError(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+/// `?` 在 `std::io::Error` 上的自动转换（原 `#[from]` 的等价物）。
+///
+/// 手写而非派生：转换只此一条，且必须显式，否则 IO 错误会在调用点悄悄
+/// 变成 `General`，丢掉 `IoError` 这一可判别类型。
+impl From<std::io::Error> for GraphError {
+    fn from(e: std::io::Error) -> Self {
+        GraphError::IoError(e)
+    }
+}
+
 /// 属性图动态值类型
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Int(i64),
     Float(f64),
@@ -210,7 +270,7 @@ impl fmt::Display for Value {
 }
 
 /// 节点模型：免索引邻接直接包含 outgoing/incoming EdgeId 列表
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Node {
     pub id: u64,
     pub labels: HashSet<String>,
@@ -252,7 +312,7 @@ impl Node {
 }
 
 /// 边模型：包含源、目的节点、类型、权重和动态属性
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Edge {
     pub id: u64,
     pub src_id: u64,

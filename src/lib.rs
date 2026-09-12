@@ -1,12 +1,15 @@
 pub mod algo;
 pub mod buffer;
 pub mod c_api;
+pub mod codec;
 pub mod crc;
+pub mod crc32;
 pub mod cypher;
 pub mod disk_graph;
 pub mod graph;
 pub mod index;
 pub mod integrity;
+pub mod json;
 pub mod lock;
 pub mod page;
 pub mod query;
@@ -22,7 +25,7 @@ pub use c_api::*;
 pub use cypher::{
     execute_cypher, execute_mutate, execute_query, CypherResultSet, ExecuteResult, Row,
 };
-pub use disk_graph::{DiskGraph, GraphMetaSnapshot};
+pub use disk_graph::{AllocatorStats, DiskGraph, GraphMetaSnapshot};
 pub use graph::{Direction, Edge, GraphError, Node, Value};
 pub use index::IndexManager;
 pub use integrity::{check_integrity, IntegrityIssue, IntegrityIssueKind, IntegrityReport};
@@ -56,6 +59,126 @@ pub const FRAMES_PER_MB: usize = 256;
 /// 撑爆磁盘。设为 `0` 可关闭（见 [`GraphLiteOptions`]）。
 pub const DEFAULT_WAL_AUTO_CHECKPOINT_BYTES: u64 = 64 * 1024 * 1024;
 
+/// [`GraphLite::vacuum`] 的结果报告。
+///
+/// 它是**只读诊断**，不是「已压缩 N 字节」的承诺：本引擎不截断数据文件
+/// （页号是逻辑到物理的映射，截断会破坏映射），因此 `file_bytes` 在调用前后
+/// 相同。给出实际数字而不是一个含糊的成功标志，是为了让调用方自行判断
+/// 空间状况，而不是相信一句「已优化」。
+#[derive(Debug, Clone)]
+pub struct VacuumReport {
+    /// 当前存活节点数
+    pub nodes_live: usize,
+    /// 当前存活边数
+    pub edges_live: usize,
+    /// 数据文件当前大小（字节）
+    pub file_bytes: u64,
+    /// 整页可复用的槽位属性页数
+    pub free_property_pages: usize,
+    /// 整页可复用的溢出页数
+    pub free_overflow_pages: usize,
+}
+
+impl VacuumReport {
+    /// 单行摘要，适合日志或 CLI 输出。
+    pub fn summary(&self) -> String {
+        format!(
+            "{} node(s), {} edge(s); file {} bytes; {} reusable property page(s), \
+             {} reusable overflow page(s)",
+            self.nodes_live,
+            self.edges_live,
+            self.file_bytes,
+            self.free_property_pages,
+            self.free_overflow_pages
+        )
+    }
+}
+
+/// 可视化导出的一个节点。
+#[derive(Debug, Clone)]
+pub struct ExportNode {
+    pub id: u64,
+    /// 标签已排序，保证同一节点每次导出字节一致
+    pub labels: Vec<String>,
+    pub properties: HashMap<String, Value>,
+}
+
+/// 可视化导出的一条边。只包含两端都在导出集合内的边。
+#[derive(Debug, Clone)]
+pub struct ExportEdge {
+    pub id: u64,
+    pub src: u64,
+    pub dst: u64,
+    pub edge_type: String,
+}
+
+/// [`GraphLite::export_subgraph`] 的结果。
+///
+/// `truncated` 与总数一起给出，是为了让可视化界面能明确告诉用户「这只是前 N 个
+/// 节点」，而不是让人误以为看到了全图——一个静默截断的图会误导判断。
+#[derive(Debug, Clone)]
+pub struct GraphExport {
+    pub nodes: Vec<ExportNode>,
+    pub edges: Vec<ExportEdge>,
+    /// 是否因 `limit` 而截断
+    pub truncated: bool,
+    /// 库中的节点总数（不受 `limit` 影响）
+    pub total_nodes: usize,
+    /// 库中的边总数（不受 `limit` 影响）
+    pub total_edges: usize,
+}
+
+impl GraphExport {
+    /// 渲染为可视化工具的 JSON。
+    ///
+    /// 手写而非派生序列化：核心库零依赖，且这是**面向外部工具**的稳定接口，
+    /// 其形状应当由本文件明确规定（见 `FORMAT.md` 的同类理由）。
+    pub fn to_json(&self) -> String {
+        let mut out = String::with_capacity(self.nodes.len() * 96 + self.edges.len() * 64 + 128);
+        out.push_str("{\"nodes\":[");
+        for (i, n) in self.nodes.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str("{\"id\":");
+            out.push_str(&n.id.to_string());
+            out.push_str(",\"labels\":[");
+            for (j, l) in n.labels.iter().enumerate() {
+                if j > 0 {
+                    out.push(',');
+                }
+                crate::json::write_escaped(&mut out, l);
+            }
+            out.push_str("],\"properties\":");
+            crate::json::write_map(&mut out, &n.properties);
+            out.push('}');
+        }
+        out.push_str("],\"edges\":[");
+        for (i, e) in self.edges.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str("{\"id\":");
+            out.push_str(&e.id.to_string());
+            out.push_str(",\"src\":");
+            out.push_str(&e.src.to_string());
+            out.push_str(",\"dst\":");
+            out.push_str(&e.dst.to_string());
+            out.push_str(",\"type\":");
+            crate::json::write_escaped(&mut out, &e.edge_type);
+            out.push('}');
+        }
+        out.push_str("],\"truncated\":");
+        out.push_str(if self.truncated { "true" } else { "false" });
+        out.push_str(",\"total_nodes\":");
+        out.push_str(&self.total_nodes.to_string());
+        out.push_str(",\"total_edges\":");
+        out.push_str(&self.total_edges.to_string());
+        out.push('}');
+        out
+    }
+}
+
 /// 打开数据库时的可调参数。
 ///
 /// 既有构造器（`open` / `open_with_pool_size` / `open_with_pool_mb`）都使用
@@ -66,6 +189,12 @@ pub struct GraphLiteOptions {
     pub buffer_pool_frames: usize,
     /// WAL 体积达到该阈值后自动 Checkpoint；`0` 表示关闭
     pub wal_auto_checkpoint_bytes: u64,
+    /// 以只读模式打开：取共享锁，可与其它读者共存，但与任何写者互斥。
+    ///
+    /// 只读句柄**绝不写主数据文件**，因此不触发 WAL 回放。若 WAL 中确有已提交
+    /// 但未回放的页，打开会失败并提示先用读写句柄打开一次——静默忽略那些页会
+    /// 让读者看到过期数据。
+    pub read_only: bool,
 }
 
 impl Default for GraphLiteOptions {
@@ -73,6 +202,7 @@ impl Default for GraphLiteOptions {
         Self {
             buffer_pool_frames: DEFAULT_BUFFER_POOL_FRAMES,
             wal_auto_checkpoint_bytes: DEFAULT_WAL_AUTO_CHECKPOINT_BYTES,
+            read_only: false,
         }
     }
 }
@@ -94,9 +224,11 @@ pub struct GraphInner {
 pub struct GraphLite {
     inner: Arc<RwLock<GraphInner>>,
     db_path: PathBuf,
-    /// 进程级排他锁守卫：保证同一数据库同时只有一个打开的句柄（跨进程与同进程）。
+    /// 进程级锁守卫：写句柄取排他锁，只读句柄取共享锁。
     /// 锁随句柄 Drop 自动释放；`:memory:` 模式为 `None`。
     lock: Arc<Option<DbLock>>,
+    /// 本句柄是否以只读方式打开（决定写入口是否拒绝）
+    read_only: bool,
 }
 
 impl GraphLite {
@@ -111,6 +243,23 @@ impl GraphLite {
     /// `open_with_pool_mb(path, 16)` 等价于 4096 帧（16MB）。
     pub fn open_with_pool_mb<P: AsRef<Path>>(path: P, mb: usize) -> Result<Self, GraphError> {
         Self::open_with_pool_size(path, (mb * FRAMES_PER_MB).max(2))
+    }
+
+    /// 以**只读**模式打开图数据库：取共享锁，可与其它读者共存。
+    ///
+    /// 适合「一个进程写入、多个进程观察」的场景（例如后台 Agent 写、前台界面读）。
+    /// 写入口在只读句柄上会返回明确错误，而不是静默尝试。
+    ///
+    /// 若 WAL 中还有未回放的已提交页，打开会失败并提示先用读写句柄打开一次——
+    /// 读者不能回放（那会写主数据文件），静默跳过会让它看到过期数据。
+    pub fn open_read_only<P: AsRef<Path>>(path: P) -> Result<Self, GraphError> {
+        Self::open_with_options(
+            path,
+            GraphLiteOptions {
+                read_only: true,
+                ..GraphLiteOptions::default()
+            },
+        )
     }
 
     /// 打开图数据库并自定义 Buffer Pool 帧数上限（纯磁盘受控，无内存泄露）
@@ -136,14 +285,52 @@ impl GraphLite {
         let db_path = path.as_ref().to_path_buf();
         let is_memory = db_path.to_str() == Some(":memory:") || db_path.as_os_str().is_empty();
 
-        // 0. 先获取进程级排他锁，再执行任何读写。
+        // 0. 先获取进程级锁，再执行任何读写。
         //    顺序至关重要：`StorageEngine::open` 会回放 WAL 并**写主数据文件**，
         //    若在其之后才加锁，并发回放本身就已经破坏了数据。
+        //
+        //    只读模式取**共享**锁：多个读者可以共存，但与写者互斥。
         let lock = if is_memory {
             None
+        } else if options.read_only {
+            Some(DbLock::acquire_shared(&db_path)?)
         } else {
             Some(DbLock::acquire(&db_path)?)
         };
+
+        // 0a. 只读模式不得回放 WAL：那会写主数据文件。
+        //     因此必须先确认没有待回放内容，否则读者会看到过期数据。
+        //     这一步必须在 `StorageEngine::open` 之前——顺序反了就已经写了。
+        if options.read_only && !is_memory {
+            let engine = StorageEngine::open_readonly(&db_path)?;
+            let pending = engine.pending_replay_pages()?;
+            if pending > 0 {
+                return Err(GraphError::StorageError(format!(
+                    "Cannot open '{}' read-only: its WAL holds {} committed page(s) \
+                     not yet replayed into the data file.\n\
+                     A read-only handle never writes, so it cannot apply them and would \
+                     return stale data.\n\
+                     Open the database once with a read-write handle to replay the WAL, \
+                     then open it read-only.",
+                    db_path.display(),
+                    pending
+                )));
+            }
+        }
+
+        // 0b. 格式与尺寸闸门：**必须在任何写入之前**。
+        //
+        //     顺序是硬约束，原因是 WAL 回放会写主数据文件。若等到回放之后才检查
+        //     格式版本，就已经用**当前版本的语义**解释并写回了一个旧格式的库——
+        //     那时文件已经被污染，再报错也晚了。
+        //
+        //     这里同时挡住两件事：
+        //     - 版本不符（v1/v2 旧库）：明确指引用户用匹配的旧版导出再导入
+        //     - 文件超过 64 GiB：属性指针只有 24 位页号，越界会静默指向错误页
+        if !is_memory {
+            Self::check_format_version(&db_path)?;
+            Self::check_file_size_limit(&db_path)?;
+        }
 
         // 1. 初始化页级 WAL 持久化引擎（若存在未 Checkpoint 的 WAL，自动将已提交页重放至主文件）
         let storage = StorageEngine::open(&db_path)?;
@@ -199,11 +386,162 @@ impl GraphLite {
             inner: Arc::new(RwLock::new(inner)),
             db_path,
             lock: Arc::new(lock),
+            read_only: options.read_only,
         })
+    }
+
+    /// 本句柄是否为只读（共享锁）。
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    /// 只读句柄上的写操作统一入口：给出可操作的错误，而不是让写入静默失败。
+    fn reject_write(&self, what: &str) -> Result<(), GraphError> {
+        if self.read_only {
+            return Err(GraphError::General(format!(
+                "Cannot {}: this handle was opened read-only (`GraphLite::open_read_only`).\n\
+                 Read-only handles hold a shared lock and never write the data file.\n\
+                 Open the database with `GraphLite::open` to modify it.",
+                what
+            )));
+        }
+        Ok(())
+    }
+
+    /// 写入前校验唯一约束；返回 `Err` 时该写入必须整体放弃。
+    ///
+    /// 遍历节点标签与属性的**笛卡尔关系**：约束声明在 `(:Label {prop})` 上，
+    /// 因此只有「节点带该标签 **且** 带该属性」才需要检查。
+    ///
+    /// `exclude` 是正在被更新的节点自身（新建时为 `None`）：更新一个节点的属性
+    /// 不应与它自己的旧值冲突。
+    fn check_unique_constraints(
+        index_mgr: &IndexManager,
+        labels: &HashSet<String>,
+        properties: &HashMap<String, Value>,
+        exclude: Option<u64>,
+    ) -> Result<(), GraphError> {
+        // 无约束时立即返回：这是绝大多数写入的路径，不应有任何额外开销
+        if index_mgr.unique_constraints().is_empty() {
+            return Ok(());
+        }
+        for label in labels {
+            for (prop, value) in properties {
+                if let Some((l, p, detail)) =
+                    index_mgr.check_unique_violation(label, prop, value, exclude)
+                {
+                    return Err(GraphError::UniqueConstraintViolation {
+                        label: l,
+                        prop: p,
+                        detail,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// 打开前校验磁盘格式版本，**早于任何写入**（含 WAL 回放）。
+    ///
+    /// 只读主文件的前 4096 字节——足够读到 magic 与版本字段，且不需要
+    /// `DiskManager`（它在回放之后才能创建）。
+    ///
+    /// 空文件与全新文件直接放行：它们还没有格式，即将由本版本创建。
+    fn check_format_version(db_path: &Path) -> Result<(), GraphError> {
+        let mut file = match std::fs::File::open(db_path) {
+            Ok(f) => f,
+            // 文件不存在是正常的首次创建路径
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(GraphError::IoError(e)),
+        };
+
+        let mut header = [0u8; crate::page::PAGE_SIZE];
+        // 短读说明文件比一页还小：尚无格式，放行
+        if std::io::Read::read(&mut file, &mut header).unwrap_or(0) < crate::page::PAGE_SIZE {
+            return Ok(());
+        }
+
+        let magic = &header[0..4];
+        if magic != crate::page::DB_PAGE_MAGIC && magic != crate::page::DB_PAGE_MAGIC_LEGACY {
+            // 不是本项目的文件。交由后续路径处理（会按「新库」初始化），
+            // 这里不越权判定。
+            return Ok(());
+        }
+
+        let file_version = u32::from_le_bytes(
+            header[crate::page::HeaderPage::VERSION_OFFSET
+                ..crate::page::HeaderPage::VERSION_OFFSET + 4]
+                .try_into()
+                .unwrap_or([0; 4]),
+        );
+
+        if file_version < crate::page::DB_PAGE_VERSION {
+            return Err(GraphError::StorageError(format!(
+                "Database file format version {} is not readable by this build \
+                 (current format version {}).\n\
+                 GraphLite 1.0 froze the on-disk format and does not silently \
+                 reinterpret older files.\n\
+                 To migrate: export the graph with the matching older GraphLite \
+                 build via `.dump`, then re-import that script into a fresh database.",
+                file_version,
+                crate::page::DB_PAGE_VERSION
+            )));
+        }
+        if file_version > crate::page::DB_PAGE_VERSION {
+            return Err(GraphError::StorageError(format!(
+                "Database file format version {} is newer than this build supports \
+                 (current format version {}).\n\
+                 Upgrade GraphLite to open this file; do not open it with an older \
+                 version, as that risks writing an incompatible format.",
+                file_version,
+                crate::page::DB_PAGE_VERSION
+            )));
+        }
+        Ok(())
+    }
+
+    /// 打开前拒绝超过格式上限的主文件，**早于任何写入**（含 WAL 回放）。
+    ///
+    /// 属性指针以 24 位存页号，因此只有 `2^24 × 4 KiB = 64 GiB` 的地址空间。
+    /// 越界写入会被 `pack_prop_ptr` 拒绝，但**读取**一条已越界的旧数据无法
+    /// 自我修复，且越界页号在 24 位空间里会与合法页号混淆。因此在打开时就拒绝，
+    /// 而不是等到某次写入才失败——那时库可能已经处于半损坏状态。
+    fn check_file_size_limit(db_path: &Path) -> Result<(), GraphError> {
+        let size = match std::fs::metadata(db_path) {
+            Ok(m) => m.len(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(GraphError::IoError(e)),
+        };
+        let limit_bytes =
+            (crate::page::MAX_PROP_PAGE_ID as u64 + 1) * crate::page::PAGE_SIZE as u64;
+        if size > limit_bytes {
+            return Err(GraphError::StorageError(format!(
+                "Database file is {} bytes, which exceeds the {} byte ({} GiB) format limit.\n\
+                 Property pointers encode a page number in 24 bits, so the largest \
+                 addressable file is 2^24 pages x 4 KiB = 64 GiB.\n\
+                 This limit is part of the frozen 1.0 format and will not be raised \
+                 without a format version bump.",
+                size,
+                limit_bytes,
+                limit_bytes / 1024 / 1024 / 1024
+            )));
+        }
+        Ok(())
     }
 
     /// 执行 Cypher 变更语句 (如 CREATE / DETACH DELETE)
     pub fn execute(&self, cypher_str: &str) -> Result<ExecuteResult, GraphError> {
+        // 变更语句在只读句柄上明确拒绝（读查询仍走 `run_cypher`）
+        if self.read_only
+            && crate::cypher::parser::Parser::new(
+                crate::cypher::lexer::Lexer::new(cypher_str).tokenize()?,
+            )
+            .parse()
+            .map(|st| st.is_mutating())
+            .unwrap_or(false)
+        {
+            self.reject_write("execute a mutating Cypher statement")?;
+        }
         let mut inner = self
             .inner
             .write()
@@ -254,6 +592,15 @@ impl GraphLite {
             return cypher::execute_query(cypher_str, &inner.disk_graph, &inner.index_mgr);
         }
 
+        // 写语句必须走守卫。位置只能在**解析之后**——`mutating` 要解析完才知道
+        // ——因此不能像其它写入口那样放在函数开头。
+        //
+        // 这个守卫曾经缺失：`add_node` / `add_edge` / `execute` / `checkpoint` 都
+        // 加了，唯独 `run_cypher` 的写分支漏掉，于是只读句柄可以经它写数据。
+        // 由 Studio 的端到端测试发现——已有单元测试没有覆盖「只读句柄用
+        // `run_cypher` 跑写语句」这条路径。
+        self.reject_write("run a mutating Cypher statement")?;
+
         // 写操作：获取 inner.write() 排他锁，记录 WAL 并持久化
         let mut inner = self
             .inner
@@ -279,6 +626,7 @@ impl GraphLite {
     ///
     /// 未提交事务的溢出帧不会被重放，因此检查点绝不会把任何未提交数据写入主库。
     pub fn checkpoint(&self) -> Result<(), GraphError> {
+        self.reject_write("run a checkpoint")?;
         let mut inner = self.inner.write_recover();
 
         // 1. 把 WAL 中已提交的页按序重放到主数据文件，同时为每页记录校验和。
@@ -370,9 +718,199 @@ impl GraphLite {
         inner.index_mgr.indexed_properties()
     }
 
+    /// 声明 `(:label {prop})` 上的唯一约束。
+    ///
+    /// ## 为什么先检查再声明
+    ///
+    /// 若**既有数据**已经违反约束，必须立即报错并指出冲突的节点。否则约束会在
+    /// 下一次写入时才炸出来，而那时用户已无从知道是历史数据的问题——错误被推迟
+    /// 且指向了错误的位置。
+    ///
+    /// 声明本身会持久化到 Page 0 的索引目录，冷重启后依然生效。
+    pub fn create_unique_constraint(&self, label: &str, prop: &str) -> Result<(), GraphError> {
+        self.reject_write("create a constraint")?;
+        let mut inner = self
+            .inner
+            .write()
+            .map_err(|e| GraphError::General(e.to_string()))?;
+
+        // 先建/刷新该标签的索引，否则无法判定既有数据是否已违规
+        let GraphInner {
+            disk_graph,
+            index_mgr,
+            ..
+        } = &mut *inner;
+        index_mgr.ensure_label_index(disk_graph, label);
+
+        // 查**候选约束**而非已声明的约束：声明时它还没进 catalog，
+        // 查已声明的集合会永远返回「无重复」，静默接受脏数据。
+        // （这是初版的实际行为，端到端验证时被抓出来。）
+        if let Some((value, nodes)) = index_mgr
+            .find_duplicates_for(label, prop)
+            .into_iter()
+            .next()
+        {
+            return Err(GraphError::UniqueConstraintViolation {
+                label: label.to_string(),
+                prop: prop.to_string(),
+                detail: format!(
+                    "{:?} is already shared by {} nodes ({:?}); \
+                     resolve the duplicates before declaring the constraint",
+                    value,
+                    nodes.len(),
+                    nodes
+                ),
+            });
+        }
+
+        let GraphInner {
+            disk_graph,
+            index_mgr,
+            ..
+        } = &mut *inner;
+        index_mgr.declare_unique(label, prop);
+        // 持久化到 Page 0 目录；与其它元数据一样随 checkpoint 落盘
+        disk_graph
+            .index_catalog
+            .unique_constraints
+            .insert(crate::index::UniqueConstraint {
+                label: label.to_string(),
+                prop: prop.to_string(),
+            });
+
+        let tx_id = inner.next_tx_id;
+        inner.next_tx_id += 1;
+        Self::commit_dirty_pages_to_wal(&mut inner, tx_id)?;
+        drop(inner);
+        self.maybe_auto_checkpoint()?;
+        Ok(())
+    }
+
+    /// 列出已声明的唯一约束，格式为 `(label, prop)`。
+    pub fn unique_constraints(&self) -> Vec<(String, String)> {
+        let inner = self.inner.read_recover();
+        inner
+            .index_mgr
+            .unique_constraints()
+            .iter()
+            .map(|c| (c.label.clone(), c.prop.clone()))
+            .collect()
+    }
+
     /// 获取数据库主文件路径
     pub fn db_path(&self) -> &Path {
         &self.db_path
+    }
+
+    /// WAL 文件路径（`{path}.wal`）
+    pub fn wal_path(&self) -> PathBuf {
+        let mut s = self.db_path.as_os_str().to_os_string();
+        s.push(".wal");
+        PathBuf::from(s)
+    }
+
+    /// 生成一份**一致的**在线副本。
+    ///
+    /// ## 一致性从哪来
+    ///
+    /// 步骤顺序是关键：
+    ///
+    /// 1. **先 checkpoint**：把 WAL 的已提交页落回主文件并截断 WAL。此后主文件
+    ///    自身就是权威且完整的快照；不必也不该复制 WAL，否则副本可能带着半个
+    ///    事务。
+    /// 2. **持写锁复制**：整段复制在写锁内完成，因此期间没有并发写入，读到的页
+    ///    集合自洽。这比「边写边拷 + 增量捕获」简单得多，也不需要额外日志。
+    /// 3. **fsync 副本**：返回时数据确实在盘上。
+    ///
+    /// 目标路径已存在时**拒绝**，不覆盖：备份的价值在于「多一份」，静默覆盖可能
+    /// 抹掉上一份有效备份。
+    pub fn backup<P: AsRef<Path>>(&self, dest: P) -> Result<u64, GraphError> {
+        let dest = dest.as_ref().to_path_buf();
+
+        if dest.exists() {
+            return Err(GraphError::General(format!(
+                "Refusing to overwrite the existing file '{}'. \
+                 Backup creates a new copy; remove or rename the target first.",
+                dest.display()
+            )));
+        }
+        if dest == self.db_path {
+            return Err(GraphError::General(
+                "Backup target must differ from the source database path.".into(),
+            ));
+        }
+        if let Some(parent) = dest.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+
+        // 1. 清空 WAL，使主文件成为唯一权威副本
+        self.checkpoint()?;
+
+        // 2. 持写锁完成复制
+        let inner = self
+            .inner
+            .write()
+            .map_err(|e| GraphError::General(e.to_string()))?;
+
+        let copied = {
+            let src = std::fs::File::open(&self.db_path)?;
+            let mut reader = std::io::BufReader::with_capacity(1 << 20, src);
+            let mut out = std::fs::File::create(&dest)?;
+            let n = std::io::copy(&mut reader, &mut out)?;
+            out.sync_all()?;
+            n
+        };
+
+        // 副本要能独立打开：「两文件」不变量对它同样成立，故建一个空 WAL。
+        // 若省略，副本上第一次写入会因缺少 WAL 而多一次创建——不是错误，但
+        // 让副本与源库结构一致更可预期。
+        let mut wal_dest = dest.as_os_str().to_os_string();
+        wal_dest.push(".wal");
+        std::fs::File::create(PathBuf::from(wal_dest))?.sync_all()?;
+
+        drop(inner);
+        Ok(copied)
+    }
+
+    /// 回收已删除记录占据的空间，并报告实际情况。
+    ///
+    /// ## 它做什么、不做什么
+    ///
+    /// **记录槽位在删除时已即时回收**（`first_free_node_id` /
+    /// `first_free_edge_id` 链表），因此逻辑容量不会碎片化——新节点立刻复用被删
+    /// 节点的槽位。这是本项目与「删了要手动整理」的数据库的重要区别。
+    ///
+    /// 真正会闲置的是**属性页与溢出页**：记录被删除后其属性页链入 freelist，
+    /// 但要等下一次分配属性时才复用。
+    ///
+    /// `vacuum` 的承诺是：**执行 checkpoint 使状态收敛，并把可回收页与文件大小
+    /// 如实报告出来**。它**不截断文件**，因为页号是「逻辑页 → 物理页」的映射，
+    /// 截断会破坏该映射；这是有意的取舍——截断是唯一需要重写整个逻辑映射的操作，
+    /// 而它换来的空间对单机场景并不值得这个风险。
+    pub fn vacuum(&self) -> Result<VacuumReport, GraphError> {
+        self.reject_write("run vacuum")?;
+        self.checkpoint()?;
+
+        let inner = self
+            .inner
+            .read()
+            .map_err(|e| GraphError::General(e.to_string()))?;
+        let graph = &inner.disk_graph;
+
+        let file_bytes = std::fs::metadata(&self.db_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let alloc = graph.allocator_snapshot();
+
+        Ok(VacuumReport {
+            nodes_live: graph.node_count,
+            edges_live: graph.edge_count,
+            file_bytes,
+            free_property_pages: alloc.free_property_pages,
+            free_overflow_pages: alloc.free_overflow_pages,
+        })
     }
 
     /// 扫描数据库的结构完整性（只读，不修改任何页）。
@@ -430,6 +968,86 @@ impl GraphLite {
         inner.disk_graph.edge_count
     }
 
+    /// 导出一张子图，供可视化工具消费。
+    ///
+    /// ## 为什么有 `limit` 而不是「导出全部」
+    ///
+    /// 可视化页面能有效呈现的规模是有限的（几百到几千个节点，再多就是一团毛线）。
+    /// 让调用方显式给出上限，比提供一个会在大库上把浏览器拖死、还顺带复制出几十
+    /// MB JSON 的接口更诚实。
+    ///
+    /// 边只保留**两端都在导出集合内**的那些，因此结果是自洽的子图，不会出现指向
+    /// 缺失节点的悬空边。
+    ///
+    /// 返回的是纯数据结构（`GraphExport`），序列化交给调用方——核心库不假设
+    /// 传输格式。
+    pub fn export_subgraph(&self, limit: usize) -> Result<GraphExport, GraphError> {
+        // 先取元数据与节点 ID 列表，随后**释放读锁**再逐个物化节点。
+        // 持有全局读锁去遍历整张子图会阻塞写入；这里只把轻量的 ID 列表留在锁内。
+        let (node_ids, total_nodes, total_edges) = {
+            let inner = self.inner.read_recover();
+            let graph = &inner.disk_graph;
+            let ids: Vec<u64> = graph.all_node_ids()?.into_iter().take(limit).collect();
+            (ids, graph.node_count, graph.edge_count)
+        };
+
+        let mut nodes = Vec::with_capacity(node_ids.len());
+        for id in &node_ids {
+            // 用 try_get_node（保留错误）而非 lossy 版本：导出工具应把损坏如实
+            // 报出来，而不是产出一张静默缺数据的图。
+            if let Some(node) = self.try_get_node(*id)? {
+                nodes.push(ExportNode {
+                    id: *id,
+                    labels: {
+                        let mut l: Vec<String> = node.labels.iter().cloned().collect();
+                        l.sort_unstable();
+                        l
+                    },
+                    properties: node.properties.clone(),
+                });
+            }
+        }
+
+        let mut present = std::collections::HashSet::with_capacity(node_ids.len());
+        present.extend(nodes.iter().map(|n| n.id));
+
+        // 边：只保留两端都在集合内的，得到一个自洽子图
+        let mut edges = Vec::new();
+        let mut seen_edges = std::collections::HashSet::new();
+        for id in &node_ids {
+            let node = match self.try_get_node(*id)? {
+                Some(n) => n,
+                None => continue,
+            };
+            for eid in node.outgoing.iter().chain(node.incoming.iter()) {
+                // 用集合去重：`Vec::any` 在高度共享的图上会退化成 O(E²)
+                if !seen_edges.insert(*eid) {
+                    continue;
+                }
+                let edge = match self.try_get_edge(*eid)? {
+                    Some(e) => e,
+                    None => continue,
+                };
+                if present.contains(&edge.src_id) && present.contains(&edge.dst_id) {
+                    edges.push(ExportEdge {
+                        id: edge.id,
+                        src: edge.src_id,
+                        dst: edge.dst_id,
+                        edge_type: edge.edge_type.clone(),
+                    });
+                }
+            }
+        }
+
+        Ok(GraphExport {
+            nodes,
+            edges,
+            truncated: total_nodes > node_ids.len(),
+            total_nodes,
+            total_edges,
+        })
+    }
+
     /// 获取指定节点（按需通过 Buffer Pool 调入）。
     ///
     /// **有损 API**：存储层的 I/O 或损坏错误会被折叠为 `None`，因此无法区分
@@ -472,10 +1090,14 @@ impl GraphLite {
         labels: HashSet<String>,
         properties: HashMap<String, Value>,
     ) -> Result<u64, GraphError> {
+        self.reject_write("add a node")?;
         let mut inner = self
             .inner
             .write()
             .map_err(|e| GraphError::General(e.to_string()))?;
+
+        // 唯一约束校验必须在**任何写入之前**：否则失败会留下半个节点。
+        Self::check_unique_constraints(&inner.index_mgr, &labels, &properties, None)?;
 
         let tx_id = inner.next_tx_id;
         inner.next_tx_id += 1;
@@ -513,6 +1135,7 @@ impl GraphLite {
         properties: HashMap<String, Value>,
         weight: f64,
     ) -> Result<u64, GraphError> {
+        self.reject_write("add an edge")?;
         let edge_type_str = edge_type.into();
         let mut inner = self
             .inner
@@ -535,6 +1158,7 @@ impl GraphLite {
 
     /// 删除节点（级联删除关联边，槽位回收至 Freelist）
     pub fn remove_node(&self, id: u64) -> Result<Node, GraphError> {
+        self.reject_write("remove a node")?;
         let mut inner = self
             .inner
             .write()
@@ -559,6 +1183,7 @@ impl GraphLite {
 
     /// 删除边（从双向双环磁盘链表中脱链，槽位回收至 Freelist）
     pub fn remove_edge(&self, id: u64) -> Result<Edge, GraphError> {
+        self.reject_write("remove an edge")?;
         let mut inner = self
             .inner
             .write()
@@ -582,6 +1207,7 @@ impl GraphLite {
         key: impl Into<String>,
         value: V,
     ) -> Result<(), GraphError> {
+        self.reject_write("update a node property")?;
         let key_str = key.into();
         let val = value.into();
 
@@ -598,6 +1224,14 @@ impl GraphLite {
         } else {
             None
         };
+
+        // 唯一约束：在写入之前校验，且排除该节点自身的旧值
+        // （更新一个节点不应与它自己冲突）
+        if let Ok(Some(node)) = inner.disk_graph.get_node(id) {
+            let mut props = HashMap::new();
+            props.insert(key_str.clone(), val.clone());
+            Self::check_unique_constraints(&inner.index_mgr, &node.labels, &props, Some(id))?;
+        }
 
         inner
             .disk_graph
@@ -634,6 +1268,7 @@ impl GraphLite {
         key: impl Into<String>,
         value: V,
     ) -> Result<(), GraphError> {
+        self.reject_write("update an edge property")?;
         let key_str = key.into();
         let val = value.into();
 
@@ -971,6 +1606,79 @@ pub struct Transaction {
 impl Transaction {
     pub fn tx_id(&self) -> u64 {
         self.tx_id
+    }
+
+    /// 事务内**批量**添加节点，返回按输入顺序排列的 ID 列表。
+    ///
+    /// ## 为什么需要它
+    ///
+    /// 逐条 `add_node` 每次都要取一次 `GraphInner` 的**全局写锁**，仅为分配一个
+    /// 自增 ID。跨语言边界（FFI）本身不贵，贵的是「每条记录一次的固定开销」。
+    /// 实测 Python SDK 逐条写入约 42k ops/s，而原生路径在同一规模下约 550k。
+    ///
+    /// 本函数把 N 次加解锁压成**一次**：一次性预留 N 个 ID（仍在一次加锁内完成，
+    /// 因为 Freelist 遍历需要读记录），此后在**锁外**构造事务动作。
+    ///
+    /// 语义与逐条调用完全一致：同一个事务、同样在 commit 时统一落盘、同样受
+    /// 唯一约束保护。返回的 ID 与输入一一对应。
+    pub fn add_nodes(
+        &mut self,
+        nodes: Vec<(HashSet<String>, HashMap<String, Value>)>,
+    ) -> Result<Vec<u64>, GraphError> {
+        if nodes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids = {
+            let mut inner = self
+                .db
+                .inner
+                .write()
+                .map_err(|e| GraphError::General(e.to_string()))?;
+            inner.disk_graph.allocate_next_node_ids(nodes.len())?
+        };
+
+        self.ops.reserve(nodes.len());
+        for (id, (labels, properties)) in ids.iter().copied().zip(nodes) {
+            self.ops.push(TxAction::AddNode {
+                id,
+                labels,
+                properties,
+            });
+        }
+        Ok(ids)
+    }
+
+    /// 事务内**批量**添加边，返回按输入顺序排列的 ID 列表。
+    ///
+    /// 与 [`Self::add_nodes`] 同理：一次性预留 ID，避免每条边取一次全局写锁。
+    pub fn add_edges(
+        &mut self,
+        edges: Vec<crate::disk_graph::EdgeInsert>,
+    ) -> Result<Vec<u64>, GraphError> {
+        if edges.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids = {
+            let mut inner = self
+                .db
+                .inner
+                .write()
+                .map_err(|e| GraphError::General(e.to_string()))?;
+            inner.disk_graph.allocate_next_edge_ids(edges.len())?
+        };
+
+        self.ops.reserve(edges.len());
+        for (id, e) in ids.iter().copied().zip(edges) {
+            self.ops.push(TxAction::AddEdge {
+                id,
+                src_id: e.src_id,
+                dst_id: e.dst_id,
+                edge_type: e.edge_type,
+                properties: e.properties,
+                weight: e.weight,
+            });
+        }
+        Ok(ids)
     }
 
     /// 事务内添加节点

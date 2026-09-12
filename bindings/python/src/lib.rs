@@ -42,6 +42,15 @@ fn value_to_py(py: Python<'_>, val: &Value) -> PyResult<PyObject> {
     }
 }
 
+/// 批量节点的单项：`(labels, properties)`。
+///
+/// 用具名别名而非裸元组：这个类型在解析、批量接口与文档里各出现一次，
+/// 匿名元组会让三处签名难以对照（clippy 的 `type_complexity` 也在提示这一点）。
+type NodeItem = (HashSet<String>, HashMap<String, Value>);
+
+/// 批量边的单项：`(src, dst, edge_type, properties, weight)`。
+type EdgeItem = (u64, u64, String, HashMap<String, Value>, f64);
+
 fn extract_properties(dict_opt: Option<&Bound<'_, PyDict>>) -> PyResult<HashMap<String, Value>> {
     let mut map = HashMap::new();
     if let Some(dict) = dict_opt {
@@ -52,6 +61,75 @@ fn extract_properties(dict_opt: Option<&Bound<'_, PyDict>>) -> PyResult<HashMap<
         }
     }
     Ok(map)
+}
+
+/// 把一个 `(labels, properties)` 元组解析为批量节点项。
+fn parse_node_item(item: &Bound<'_, PyAny>) -> PyResult<(HashSet<String>, HashMap<String, Value>)> {
+    let labels: Vec<String> = item.get_item(0)?.extract()?;
+    let labels_set: HashSet<String> = labels.into_iter().collect();
+
+    // 属性可选：省略时视作空字典，与逐条 `add_node(labels)` 的默认行为一致
+    let props = match item.get_item(1) {
+        Ok(p) if !p.is_none() => {
+            let d = p
+                .downcast::<PyDict>()
+                .map_err(|_| GraphLiteError::new_err("node properties must be a dict or None"))?;
+            extract_properties(Some(d))?
+        }
+        _ => HashMap::new(),
+    };
+    Ok((labels_set, props))
+}
+
+/// 解析节点批量参数。接受任意可迭代对象，每项为 `(labels, properties)`。
+///
+/// 错误信息带上**元素下标**：批量输入里出现类型错误时，"第几个"是最重要的定位
+/// 信息，没有它用户只能自己二分查找。
+fn parse_node_batch(nodes: &Bound<'_, PyAny>) -> PyResult<Vec<NodeItem>> {
+    let mut out = Vec::new();
+    for (idx, item) in nodes.iter()?.enumerate() {
+        let item = item?;
+        out.push(parse_node_item(&item).map_err(|e| {
+            GraphLiteError::new_err(format!("nodes[{}]: {}", idx, e.value_bound(item.py())))
+        })?);
+    }
+    Ok(out)
+}
+
+/// 把一个 `(src, dst, edge_type[, properties[, weight]])` 元组解析为批量边项。
+fn parse_edge_item(item: &Bound<'_, PyAny>) -> PyResult<EdgeItem> {
+    let src: u64 = item.get_item(0)?.extract()?;
+    let dst: u64 = item.get_item(1)?.extract()?;
+    let ty: String = item.get_item(2)?.extract()?;
+
+    // 属性与权重可省略，默认与逐条 `add_edge(src, dst, ty)` 一致
+    let props = match item.get_item(3) {
+        Ok(p) if !p.is_none() => {
+            let d = p
+                .downcast::<PyDict>()
+                .map_err(|_| GraphLiteError::new_err("edge properties must be a dict or None"))?;
+            extract_properties(Some(d))?
+        }
+        _ => HashMap::new(),
+    };
+    let weight = match item.get_item(4) {
+        Ok(w) if !w.is_none() => w.extract::<f64>()?,
+        _ => 1.0,
+    };
+    Ok((src, dst, ty, props, weight))
+}
+
+/// 解析边批量参数。接受任意可迭代对象，每项为
+/// `(src, dst, edge_type[, properties[, weight]])`。
+fn parse_edge_batch(edges: &Bound<'_, PyAny>) -> PyResult<Vec<EdgeItem>> {
+    let mut out = Vec::new();
+    for (idx, item) in edges.iter()?.enumerate() {
+        let item = item?;
+        out.push(parse_edge_item(&item).map_err(|e| {
+            GraphLiteError::new_err(format!("edges[{}]: {}", idx, e.value_bound(item.py())))
+        })?);
+    }
+    Ok(out)
 }
 
 /// 解析方向参数："out"/"outgoing"、"in"/"incoming"，缺省为双向
@@ -336,6 +414,77 @@ impl PyTransaction {
             .ok_or_else(|| GraphLiteError::new_err("transaction already finished"))?
             .add_edge(src, dst, edge_type, props, weight)
             .map_err(to_py_err)
+    }
+
+    /// 批量添加节点，返回按输入顺序排列的节点 ID 列表。
+    ///
+    /// ## 为什么需要它
+    ///
+    /// 逐条 `add_node` 每次都要跨越 Python/Rust 边界一次，并各自取一次全局写锁。
+    /// 跨边界本身不贵，贵的是「每条记录的固定开销」：实测逐条写入约 63k ops/s，
+    /// 而原生 Rust 路径在同一规模下约 550k ops/s——**差距主要来自调用次数**，
+    /// 不是来自实际写入。
+    ///
+    /// 批量接口把 N 次跨边界与 N 次加解锁压成 1 次，把固定开销摊薄到整批上。
+    ///
+    /// ## 参数形式
+    ///
+    /// `nodes` 是一个可迭代对象，每项为 `(labels, properties)`：
+    ///
+    /// ```python
+    /// with db.begin_transaction() as tx:
+    ///     tx.add_nodes([(["Person"], {"name": "A"}), (["Person"], {"name": "B"})])
+    /// ```
+    ///
+    /// 语义与逐条调用完全一致：同一个事务、同样的索引维护、同样的约束校验。
+    /// 返回的 ID 列表与输入**顺序一一对应**，因此调用方可以据此建立自己的映射。
+    #[pyo3(signature = (nodes))]
+    pub fn add_nodes(&mut self, nodes: &Bound<'_, PyAny>) -> PyResult<Vec<u64>> {
+        let parsed = parse_node_batch(nodes)?;
+        let tx = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| GraphLiteError::new_err("transaction already finished"))?;
+
+        // 走核心的批量路径：一次性预留全部 ID，避免每条记录取一次全局写锁
+        tx.add_nodes(parsed).map_err(to_py_err)
+    }
+
+    /// 批量添加边，返回按输入顺序排列的边 ID 列表。
+    ///
+    /// 每项为 `(src, dst, edge_type, properties, weight)`，其中后两项可省略：
+    ///
+    /// ```python
+    /// with db.begin_transaction() as tx:
+    ///     tx.add_edges([(1, 2, "KNOWS", {"since": 2020}, 1.0),
+    ///                   (2, 3, "KNOWS")])
+    /// ```
+    ///
+    /// 与 `add_nodes` 同理：一次跨边界完成整批写入。整个批量在同一事务内，
+    /// 由事务提交时统一 fsync。
+    #[pyo3(signature = (edges))]
+    pub fn add_edges(&mut self, edges: &Bound<'_, PyAny>) -> PyResult<Vec<u64>> {
+        let parsed = parse_edge_batch(edges)?;
+        let tx = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| GraphLiteError::new_err("transaction already finished"))?;
+
+        // 与 add_nodes 同理：一次性预留全部 ID
+        let inserts = parsed
+            .into_iter()
+            .map(
+                |(src, dst, ty, props, weight)| graphlite_core::disk_graph::EdgeInsert {
+                    edge_id: 0, // 由核心在批量预留时填充
+                    src_id: src,
+                    dst_id: dst,
+                    edge_type: ty,
+                    properties: props,
+                    weight,
+                },
+            )
+            .collect();
+        tx.add_edges(inserts).map_err(to_py_err)
     }
 
     #[pyo3(signature = (node_id, key, value))]

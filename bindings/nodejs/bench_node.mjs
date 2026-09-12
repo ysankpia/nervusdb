@@ -12,8 +12,21 @@ const db = GraphLite.open(dbPath, poolFrames);
 const NODES = 50000;
 const EDGES = 100000;
 
+// 构建模式必须显式声明并打印：debug 绑定比 release 慢约 6 倍，
+// 历史上正是把 debug 数字与 release 核心对比，得出了错误的「SDK 慢 9 倍」结论。
+const buildProfile = process.env.BUILD_PROFILE || "unknown";
+if (buildProfile !== "release") {
+  console.warn(`!! BUILD_PROFILE=${buildProfile}: rebuild with \`cargo build --release -p graphlite-node\` first,`);
+  console.warn("   otherwise these numbers are not comparable with the release figures in the docs.");
+}
+
+// 预热：首次运行包含 JIT/页缓存冷启动，实测首次比稳态低 3-4 倍。
+const warm = db.beginTransaction();
+for (let i = 1; i <= 2000; i++) warm.addNode(["Warmup"], { i });
+warm.commit();
+
 console.log(`=== Node.js SDK Benchmark ===`);
-console.log(`DB: ${dbPath}  pool: ${poolFrames} frames`);
+console.log(`DB: ${dbPath}  pool: ${poolFrames} frames  build: ${buildProfile}`);
 // 1. Nodes
 const t0 = performance.now();
 const tx1 = db.beginTransaction();

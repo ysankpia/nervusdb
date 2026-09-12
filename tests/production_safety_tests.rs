@@ -672,3 +672,438 @@ fn test_page_checksum_covers_pages_beyond_256() -> Result<(), GraphError> {
 
     Ok(())
 }
+
+// =========================================================================
+// 8. 多读单写并发：共享读锁
+// =========================================================================
+/// 只读句柄取共享锁：多个读者共存，但与写者双向互斥。
+///
+/// 这是「后台写入、前台观察」场景的基础。SQLite 的 WAL 模式即此模型。
+#[test]
+fn test_multiple_readers_coexist_with_one_writer_excluded() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("shared_lock.db");
+
+    // 建库并 checkpoint，使 WAL 为空（只读打开要求无可回放内容）
+    {
+        let db = GraphLite::open(&db_path)?;
+        db.with_transaction(|tx| {
+            for i in 1..=5 {
+                tx.add_node(HashSet::from(["N".to_string()]), props(i))?;
+            }
+            Ok(())
+        })?;
+        db.checkpoint()?;
+    }
+
+    // 多个读者共存
+    let r1 = GraphLite::open_read_only(&db_path)?;
+    let r2 = GraphLite::open_read_only(&db_path)?;
+    let r3 = GraphLite::open_read_only(&db_path)?;
+    assert!(r1.is_read_only() && r2.is_read_only() && r3.is_read_only());
+    assert_eq!(r1.node_count(), 5, "reader must see the committed data");
+
+    // 有读者时写者被拒绝
+    let writer = GraphLite::open(&db_path);
+    assert!(
+        writer.is_err(),
+        "a writer must be refused while readers hold shared locks"
+    );
+
+    // 写入口在只读句柄上必须明确报错，而不是静默失败
+    let write_err = r1
+        .add_node(HashSet::new(), HashMap::new())
+        .expect_err("read-only handle must refuse writes");
+    assert!(
+        write_err.to_string().contains("read-only"),
+        "error must explain that the handle is read-only, got: {}",
+        write_err
+    );
+    assert!(
+        r1.checkpoint().is_err(),
+        "read-only handle must refuse checkpoint (it writes)"
+    );
+
+    // 释放读者后写者可用；此时读者反过来被拒绝
+    drop(r1);
+    drop(r2);
+    drop(r3);
+    let w = GraphLite::open(&db_path)?;
+    assert!(
+        GraphLite::open_read_only(&db_path).is_err(),
+        "a reader must be refused while a writer holds the exclusive lock"
+    );
+    drop(w);
+
+    // 写者退出后读者再次可用 —— 证明锁确实随 Drop 释放，没有泄漏
+    let again = GraphLite::open_read_only(&db_path)?;
+    assert_eq!(again.node_count(), 5);
+
+    Ok(())
+}
+
+/// 只读打开不得在 WAL 还有待回放内容时成功。
+///
+/// 读者不能回放（回放会写主数据文件），若静默跳过那些页，它会看到过期数据。
+/// 因此必须明确失败并指出怎么处理。
+#[test]
+fn test_read_only_open_refuses_pending_wal_replay() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("ro_pending_wal.db");
+
+    // 写入但**不** checkpoint：WAL 中留有已提交页
+    {
+        let db = GraphLite::open(&db_path)?;
+        db.with_transaction(|tx| {
+            for i in 1..=5 {
+                tx.add_node(HashSet::from(["N".to_string()]), props(i))?;
+            }
+            Ok(())
+        })?;
+    }
+
+    let err = match GraphLite::open_read_only(&db_path) {
+        Ok(_) => panic!("read-only open must fail while the WAL has committed pages"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("read-only") && msg.contains("not yet replayed"),
+        "error must explain the WAL situation, got: {}",
+        msg
+    );
+    assert!(
+        msg.contains("read-write handle"),
+        "error must say how to resolve it, got: {}",
+        msg
+    );
+
+    // 用读写句柄打开一次即可回放；此后只读可用且能看到全部数据
+    {
+        let db = GraphLite::open(&db_path)?;
+        assert_eq!(db.node_count(), 5);
+        db.checkpoint()?;
+    }
+    let ro = GraphLite::open_read_only(&db_path)?;
+    assert_eq!(
+        ro.node_count(),
+        5,
+        "after replay the reader must see every committed node"
+    );
+
+    Ok(())
+}
+
+// =========================================================================
+// 9. 唯一约束：数据不脏的最后一道防线
+// =========================================================================
+/// 唯一约束的完整语义：声明、拦截、更新、持久化。
+///
+/// 没有约束时，一个有 bug 的写入方（或重试逻辑出错的 Agent）可以给同一个实体
+/// 建两个节点，而查询只返回其中一半——错误被推迟到很久以后才被发现。
+#[test]
+fn test_unique_constraint_full_semantics() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("unique.db");
+
+    let named = |name: &str| {
+        let mut p = HashMap::new();
+        p.insert("name".to_string(), Value::from(name));
+        (HashSet::from(["Character".to_string()]), p)
+    };
+
+    let db = GraphLite::open(&db_path)?;
+
+    // 无约束时重名是允许的
+    db.add_node(named("林渊").0, named("林渊").1)?;
+    db.add_node(named("林渊").0, named("林渊").1)?;
+
+    // 既有数据已重复 → 声明必须被拒绝，且指出冲突
+    let err = db
+        .create_unique_constraint("Character", "name")
+        .expect_err("declaring a constraint over duplicate data must fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("already shared by 2 nodes"),
+        "error must name the conflicting nodes, got: {}",
+        msg
+    );
+
+    // 干净数据上声明成功
+    let clean_path = dir.path().join("clean.db");
+    let db2 = GraphLite::open(&clean_path)?;
+    db2.add_node(named("林渊").0, named("林渊").1)?;
+    db2.create_unique_constraint("Character", "name")?;
+    assert_eq!(
+        db2.unique_constraints(),
+        vec![("Character".to_string(), "name".to_string())]
+    );
+
+    // 重复插入被拒
+    let dup = db2.add_node(named("林渊").0, named("林渊").1);
+    assert!(
+        matches!(dup, Err(GraphError::UniqueConstraintViolation { .. })),
+        "duplicate insert must fail with a constraint violation, got: {:?}",
+        dup.map(|_| ())
+    );
+
+    // 不同值可插入
+    let other = db2.add_node(named("苏晴").0, named("苏晴").1)?;
+
+    // 更新成已存在的值被拒
+    let upd = db2.update_node_property(other, "name", "林渊");
+    assert!(
+        matches!(upd, Err(GraphError::UniqueConstraintViolation { .. })),
+        "updating to an existing value must fail, got: {:?}",
+        upd
+    );
+
+    // 更新为自身当前值必须允许（不得与自己冲突）
+    db2.update_node_property(other, "name", "苏晴")?;
+
+    // 约束跨重启持久化并继续生效
+    db2.checkpoint()?;
+    drop(db2);
+    let reopened = GraphLite::open(&clean_path)?;
+    assert_eq!(
+        reopened.unique_constraints(),
+        vec![("Character".to_string(), "name".to_string())],
+        "constraints must survive a restart"
+    );
+    assert!(
+        reopened.add_node(named("林渊").0, named("林渊").1).is_err(),
+        "the constraint must still be enforced after a restart"
+    );
+
+    Ok(())
+}
+
+// =========================================================================
+// 10. 运维：在线备份与空间回收
+// =========================================================================
+/// `backup` 必须产出**可独立打开且数据一致**的副本。
+///
+/// 这是「小说数据不能丢」的直接保障：副本不依赖源库，也不依赖任何边的存在。
+#[test]
+fn test_backup_produces_consistent_independent_copy() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let src = dir.path().join("src.db");
+    let bak = dir.path().join("bak.db");
+
+    let db = GraphLite::open(&src)?;
+    let mut ids: Vec<u64> = Vec::new();
+    db.with_transaction(|tx| {
+        for i in 1..=100u64 {
+            let mut p = HashMap::new();
+            p.insert("i".to_string(), Value::from(i as i64));
+            // 多 KB 属性：走溢出页链，确保副本覆盖的不只是定长记录页
+            p.insert("pad".to_string(), Value::from("y".repeat(3000)));
+            ids.push(tx.add_node(HashSet::from(["N".to_string()]), p)?);
+        }
+        for i in 0..99 {
+            tx.add_edge(ids[i], ids[i + 1], "NEXT", HashMap::new(), 1.0)?;
+        }
+        Ok(())
+    })?;
+
+    let copied = db.backup(&bak)?;
+    assert!(copied > 0, "backup must copy bytes");
+    assert!(bak.exists(), "backup target must exist");
+
+    // 副本独立可开：释放源句柄（排他锁）后单独打开副本
+    drop(db);
+    let restored = GraphLite::open(&bak)?;
+    assert_eq!(restored.node_count(), 100);
+    assert_eq!(restored.edge_count(), 99);
+
+    // 属性（含溢出页链）必须完整
+    let node = restored
+        .try_get_node(1)?
+        .expect("node 1 must exist in the copy");
+    assert_eq!(
+        node.get_prop("pad")
+            .and_then(|v| v.as_str())
+            .map(|s| s.len()),
+        Some(3000),
+        "multi-page property must survive the copy"
+    );
+
+    // 边链完整
+    let rows = restored.run_cypher("MATCH (a:N)-[:NEXT]->(b) RETURN count(*) AS n")?;
+    assert_eq!(rows.rows[0].values[0].as_i64(), Some(99));
+
+    // 副本自身可写：证明它是完整的数据库，不是只读快照
+    let extra = restored.add_node(HashSet::from(["N".to_string()]), HashMap::new())?;
+    assert!(extra > 0, "the copy must accept writes");
+
+    Ok(())
+}
+
+/// 覆盖已有文件是危险的：可能抹掉上一份有效备份，因此必须拒绝。
+#[test]
+fn test_backup_refuses_to_overwrite() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let src = dir.path().join("s.db");
+    let bak = dir.path().join("b.db");
+
+    let db = GraphLite::open(&src)?;
+    db.add_node(HashSet::from(["N".to_string()]), props(1))?;
+    db.backup(&bak)?;
+
+    // 第二次备份到同一目标必须被拒
+    let err = db
+        .backup(&bak)
+        .expect_err("backup must refuse to overwrite an existing target");
+    assert!(
+        err.to_string().contains("Refusing to overwrite"),
+        "error must explain the refusal, got: {}",
+        err
+    );
+
+    // 备份到自身同样无意义且危险
+    assert!(
+        db.backup(&src).is_err(),
+        "backing up onto the source file must be refused"
+    );
+
+    Ok(())
+}
+
+/// `vacuum` 报告可回收页，且删除后该数字必须增长——否则它只是个装饰性调用。
+#[test]
+fn test_vacuum_reports_reclaimable_pages() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("vac.db");
+    let db = GraphLite::open(&db_path)?;
+
+    let mut ids = Vec::new();
+    db.with_transaction(|tx| {
+        for i in 1..=200u64 {
+            let mut p = HashMap::new();
+            p.insert("i".to_string(), Value::from(i as i64));
+            p.insert("pad".to_string(), Value::from("z".repeat(300)));
+            ids.push(tx.add_node(HashSet::from(["N".to_string()]), p)?);
+        }
+        Ok(())
+    })?;
+
+    let before = db.vacuum()?;
+    assert_eq!(before.nodes_live, 200);
+    let reclaimable_before = before.free_property_pages + before.free_overflow_pages;
+
+    // 全部删除
+    db.with_transaction(|tx| {
+        for id in &ids {
+            tx.remove_node(*id);
+        }
+        Ok(())
+    })?;
+
+    let after = db.vacuum()?;
+    assert_eq!(after.nodes_live, 0, "all nodes were deleted");
+    let reclaimable_after = after.free_property_pages + after.free_overflow_pages;
+    assert!(
+        reclaimable_after > reclaimable_before,
+        "deleting 200 nodes must increase reclaimable pages: before={}, after={}",
+        reclaimable_before,
+        reclaimable_after
+    );
+
+    // 报告必须自洽：它是一个诊断，不能声称文件被截断
+    assert_eq!(
+        after.file_bytes,
+        std::fs::metadata(&db_path)?.len(),
+        "reported file size must match the actual file"
+    );
+
+    // 回收后新节点应复用空间，而不是无限增长
+    db.add_node(HashSet::from(["N".to_string()]), props(1))?;
+    assert_eq!(db.node_count(), 1);
+
+    Ok(())
+}
+
+/// **只读句柄的每一条写入路径都必须被拒绝。**
+///
+/// 这个测试是为一个真实漏洞写的：`add_node` / `add_edge` / `execute` /
+/// `checkpoint` 都加了只读守卫，但 `run_cypher` 的**写分支**漏了——因为
+/// `mutating` 要解析完才知道，守卫不能放在函数开头，于是被遗漏。
+/// 结果只读句柄可以经 `run_cypher("CREATE ...")` 写入。
+///
+/// 逐个覆盖所有写入口，而不是只测一个：遗漏正是发生在「逐个添加守卫」的过程中，
+/// 所以验证也必须逐个做。
+#[test]
+fn test_read_only_handle_rejects_every_write_path() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("ro_writes.db");
+
+    {
+        let db = GraphLite::open(&db_path)?;
+        db.add_node(HashSet::from(["N".to_string()]), props(1))?;
+        db.checkpoint()?;
+    }
+
+    let ro = GraphLite::open_read_only(&db_path)?;
+    assert!(ro.is_read_only());
+
+    // 逐条写路径。任何一条成功都意味着只读语义被破坏。
+    let attempts: Vec<(&str, Result<(), GraphError>)> = vec![
+        (
+            "run_cypher(CREATE)",
+            ro.run_cypher("CREATE (x:ShouldNotExist)").map(|_| ()),
+        ),
+        (
+            "run_cypher(SET)",
+            ro.run_cypher("MATCH (n:N) SET n.pwned = true").map(|_| ()),
+        ),
+        (
+            "run_cypher(DELETE)",
+            ro.run_cypher("MATCH (n:N) DELETE n").map(|_| ()),
+        ),
+        (
+            "run_cypher(DETACH DELETE)",
+            ro.run_cypher("MATCH (n:N) DETACH DELETE n").map(|_| ()),
+        ),
+        (
+            "query_cypher(CREATE)",
+            ro.query_cypher("CREATE (y:AlsoNo)").map(|_| ()),
+        ),
+        ("execute(CREATE)", ro.execute("CREATE (z:No)").map(|_| ())),
+        (
+            "add_node",
+            ro.add_node(HashSet::from(["N".to_string()]), props(2))
+                .map(|_| ()),
+        ),
+        ("checkpoint", ro.checkpoint()),
+    ];
+
+    let mut violations = Vec::new();
+    for (label, result) in &attempts {
+        if result.is_ok() {
+            violations.push(*label);
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "these write paths succeeded on a read-only handle: {:?}",
+        violations
+    );
+
+    // 错误信息要能指导用户怎么办，而不只是「失败了」
+    let err = ro.run_cypher("CREATE (x:Y)").expect_err("must be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("read-only"),
+        "error must name the cause, got: {}",
+        msg
+    );
+
+    // 最关键的断言：库里确实什么都没变
+    drop(ro);
+    let check = GraphLite::open(&db_path)?;
+    assert_eq!(check.node_count(), 1, "no node may have been created");
+    let res = check.run_cypher("MATCH (n) RETURN count(*) AS n")?;
+    assert_eq!(res.rows[0].values[0].as_i64(), Some(1));
+
+    Ok(())
+}

@@ -3,6 +3,7 @@
 //! 通过 `CARGO_BIN_EXE_graphlite-cli` 定位构建产物，把脚本从 stdin 管道喂入，
 //! 校验多行输入、ASCII 表格渲染与全部内置点命令的真实行为。
 
+use graphlite::GraphLite;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -88,10 +89,16 @@ fn test_cli_multi_line_statement() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("cli_multiline.db");
 
-    // 一条语句跨三行，仅最后一行以分号终结
+    // 一条语句跨两行，仅最后一行以分号终结。
+    //
+    // 注意每行**必须**是同一语句的续行：分号才是语句结束符，缺分号的行会被
+    // 缓冲进同一条语句。这个测试最初的脚本写成了 `CREATE (...)` 换行 `RETURN a;`，
+    // 于是被拼成 `CREATE (...) RETURN a;` —— 而 CREATE 不接受 RETURN。
+    // 旧解析器把多余的 `RETURN a` 静默丢弃，测试因此"通过"；尾部检查加上之后
+    // 它立刻失败，暴露了这个脚本自身的错误（以及那个静默丢弃的 bug）。
     let script = "\
 CREATE (a:City {name: 'Beijing'})
-RETURN a;
+;
 MATCH (c:City)
 RETURN c.name;
 .quit
@@ -107,6 +114,54 @@ RETURN c.name;
     assert!(
         stdout.contains("'Beijing'"),
         "multi-line query must actually execute"
+    );
+}
+
+/// 无法被完整理解的语句必须**报错**，而不是丢弃尾部继续执行。
+///
+/// 这是回归守卫：`WHERE id(a) = 1` 曾被解析成裸变量 `id`（`(a) = 1` 被静默
+/// 丢弃），条件退化成恒真，于是任何过滤条件都会返回全部数据且不报错。
+/// 返回错误数据的查询比直接失败的查询危险得多。
+#[test]
+fn test_cli_rejects_unparsable_trailing_input() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("cli_trailing.db");
+
+    let script = "\
+CREATE (a:City {name: 'Beijing'});
+CREATE (b:City {name: 'Shanghai'}) GARBAGE TOKENS HERE;
+.quit
+";
+    let (stdout, stderr, code) = run_cli(&db_path, script);
+    assert_eq!(code, 0, "CLI must survive a bad statement");
+
+    // 报错走 stderr（与既有 `test_cli_error_reporting_keeps_session_alive` 一致）
+    assert!(
+        stderr.contains("Unexpected trailing input"),
+        "a query with unparsable trailing input must be reported on stderr, got: {}",
+        stderr
+    );
+
+    // 第一条（合法）语句生效，第二条（畸形）不得产生任何副作用。
+    // 这正是本测试的重点：畸形语句必须"整条拒绝"，而不是执行它认得的那个前缀
+    // （`CREATE (b:City {...})`）再悄悄丢掉尾部。
+    let db = GraphLite::open(&db_path).unwrap();
+    let count = db
+        .run_cypher("MATCH (c:City) RETURN count(*) AS n")
+        .unwrap();
+    let total = count.rows[0].values[0].as_i64().unwrap_or(-1);
+    assert_eq!(
+        total, 1,
+        "the malformed statement must not have created a node; got {} cities",
+        total
+    );
+
+    // 且只有一次创建成功的提示（来自第一条语句）
+    assert_eq!(
+        stdout.matches("Created 1 nodes").count(),
+        1,
+        "exactly one statement should have succeeded; stdout: {}",
+        stdout
     );
 }
 

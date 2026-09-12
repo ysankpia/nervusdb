@@ -92,7 +92,7 @@ com-DBLP (317,080 nodes / 1,049,866 edges, 256MB pool):
 | Metric             | Value                             |
 | ------------------ | --------------------------------- |
 | Node ingestion     | 892,000 ops/s                     |
-| Edge ingestion     | **598,902 ops/s**                 |
+| Edge ingestion     | **777,257 ops/s**                 |
 | Hub 1-hop (top 50) | 40.7 µs avg, **10,080** neighbors |
 | Hub 2-hop (top 50) | 1.63 ms avg, **161,877** reached  |
 
@@ -101,7 +101,7 @@ LiveJournal (4,847,571 nodes / 68,993,773 edges, 1GiB pool, auto-checkpoint off)
 | Metric             | Value                             |
 | ------------------ | --------------------------------- |
 | Node ingestion     | 713,000 ops/s                     |
-| Edge ingestion     | **200,618 ops/s**                 |
+| Edge ingestion     | **201,823 ops/s**                 |
 | Hub 1-hop (top 50) | 0.35 s avg, **335,194** neighbors |
 | Hub 2-hop (top 50) | 8.1 s avg, **10,027,730** reached |
 | On-disk size       | 4.34 GB                           |
@@ -113,6 +113,14 @@ top-50 hub set is selected by degree, and in com-DBLP three nodes tie at degree
 depended on sort internals. Runs produced 161,789 / 161,877 / 162,158, all
 "correct" for their own hub set. The sort is now a total order (degree
 descending, then raw id ascending).
+
+**Note on the CRC32 cost.** The zero-dependency build was briefly 1.8x slower at
+bulk ingest than the release before it, because the hand-written byte-at-a-time
+CRC32 cost 7,028 ns per 4 KiB page against `crc32fast`'s 323 ns. Every WAL frame
+computes two checksums, so this was the bottleneck. Slicing-by-8 brought the page
+down to 1,750 ns and the throughput back to the figures above. The residual ~6% is
+the measured price of having no runtime dependencies, and it is recorded here
+rather than left implicit.
 
 **Auto-checkpoint roughly halves bulk edge throughput** and the benchmarks
 therefore turn it off:
@@ -146,16 +154,38 @@ distinguishes capacity from defect.
 
 ### SDK throughput
 
-Same host, smoke scale (100k nodes + 400k edges):
+50,000 nodes with properties (and 100,000 edges), 4096-frame pool, file-backed.
+**Bindings must be built with `--release`** — a debug build of the binding against
+a release core produces numbers that are wrong by 6x, which is exactly the mistake
+this section previously contained (see below).
+
+| Path           | Node writes   | Edge writes    |
+| -------------- | ------------- | -------------- |
+| Rust (native)  | 382,000 ops/s | ~450,000 ops/s |
+| Python (PyO3)  | 355,000 ops/s | 422,000 ops/s  |
+| Node.js (NAPI) | 326,000 ops/s | 395,000 ops/s  |
+
+**The bindings are at 0.85–0.93x of the native path.** There is no 9x gap and the
+FFI boundary is not the bottleneck — measured directly, a 50,000-node batch spends
+0.037 s crossing the boundary and parsing, against 0.095 s actually committing to
+disk. The commit is the cost; the boundary is noise.
+
+`Transaction::add_nodes` / `add_edges` exist in both SDKs. They are kept for
+ergonomics and to avoid taking the global write lock once per record, **not** as a
+throughput claim: on the standard benchmark their effect is within run-to-run noise.
+
+Correction history — the previous version of this table read:
 
 | SDK            | Node writes  | Edge writes   |
 | -------------- | ------------ | ------------- |
 | Python (PyO3)  | 63,000 ops/s | 112,000 ops/s |
 | Node.js (NAPI) | 64,000 ops/s | 117,000 ops/s |
 
-The native Rust path is ~550,000 ops/s at the same scale, so the gap is the
-**one-call-per-write FFI boundary**, not engine speed. A batch API accepting an
-array of entities per call would close most of it; see the roadmap.
+Those were produced with **debug** bindings measured against a **release** core.
+The same script measured 499,599 ops/s (release) versus 78,603 ops/s (debug) — a
+6.4x delta that was being attributed to the FFI boundary rather than to the build
+profile. The figure is retracted; the measurement conditions are now stated above
+so the same mistake is harder to repeat.
 
 ---
 

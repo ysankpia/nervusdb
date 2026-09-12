@@ -31,6 +31,10 @@ dist/
 # Tool-generated indexes
 .codegraph/
 
+# Staging area for files that would otherwise be deleted.
+# Never `rm` untracked work — move it here and let a human decide (AGENTS.md §5.4).
+/.trash/
+
 # OS
 .DS_Store
 Thumbs.db

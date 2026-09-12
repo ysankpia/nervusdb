@@ -1,8 +1,8 @@
+use crate::crc32::Hasher;
 use crate::graph::GraphError;
 use crate::page::{PageId, INVALID_PAGE_ID, PAGE_SIZE};
 use crate::storage::{WalRecord, WalWriter};
 use crate::sync_ext::MutexRecoverExt;
-use crc32fast::Hasher;
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};

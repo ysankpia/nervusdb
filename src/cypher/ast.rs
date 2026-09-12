@@ -1,5 +1,4 @@
 use crate::graph::{Direction, Value};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// 二元操作符
@@ -49,6 +48,55 @@ pub enum Expr {
         var: String,
         label: String,
     },
+    /// 函数调用：`id(n)`、`labels(n)`、`type(r)` 等。
+    ///
+    /// 在 AST 中显式表示，而不是让解析器把 `id` 当作裸变量再丢弃参数：
+    /// 后者曾导致 `WHERE id(a) = 1` 静默退化成恒真（见 parser.rs 的尾部检查）。
+    FunctionCall {
+        name: String,
+        args: Vec<Expr>,
+    },
+}
+
+/// 本项目支持的标量函数。
+///
+/// 集中在这里而不是散落在求值分支里，是为了让「支持哪些函数」成为一处可读的
+/// 清单：未知函数名在解析阶段就报错，而不是在执行期静默返回 null。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScalarFunc {
+    /// `id(x)` —— 节点或边的内部 ID（u64，以 Int 返回）
+    Id,
+    /// `labels(n)` —— 节点的标签列表
+    Labels,
+    /// `type(r)` —— 边的关系类型名
+    Type,
+}
+
+impl ScalarFunc {
+    /// 按名称解析；`None` 表示不是受支持的标量函数。
+    pub fn from_name(name: &str) -> Option<Self> {
+        // 大小写不敏感：Cypher 函数名不区分大小写
+        match name.to_ascii_lowercase().as_str() {
+            "id" => Some(ScalarFunc::Id),
+            "labels" => Some(ScalarFunc::Labels),
+            "type" => Some(ScalarFunc::Type),
+            _ => None,
+        }
+    }
+
+    /// 参数个数（用于解析期校验）。
+    pub fn arity(self) -> usize {
+        // 三者都恰好接受一个参数
+        1
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ScalarFunc::Id => "id",
+            ScalarFunc::Labels => "labels",
+            ScalarFunc::Type => "type",
+        }
+    }
 }
 
 /// 节点模式描述
@@ -95,6 +143,12 @@ pub enum ReturnItem {
     Aggregate {
         func: AggregateFunc,
         arg: AggregateArg,
+        alias: Option<String>,
+    },
+    /// 标量函数投影项：`RETURN id(a)`、`labels(n)`、`type(r)`
+    Function {
+        name: String,
+        arg: Box<Expr>,
         alias: Option<String>,
     },
 }
@@ -181,8 +235,15 @@ pub struct MatchClause {
 /// Cypher 语句抽象语法树
 #[derive(Debug, Clone, PartialEq)]
 pub enum CypherStatement {
-    Create { pattern: PathPattern },
+    Create {
+        pattern: PathPattern,
+    },
     Match(Box<MatchClause>),
+    /// `EXPLAIN <query>`：只输出执行计划，**不执行**查询。
+    ///
+    /// 计划由 `Image` 的静态结构推导，不需要触碰磁盘——因此 EXPLAIN 在空库上
+    /// 同样可用，也不会产生任何副作用。
+    Explain(Box<CypherStatement>),
 }
 
 impl CypherStatement {
@@ -190,6 +251,8 @@ impl CypherStatement {
     pub fn is_mutating(&self) -> bool {
         match self {
             CypherStatement::Create { .. } => true,
+            // EXPLAIN 只描述计划，从不写入
+            CypherStatement::Explain(_) => false,
             CypherStatement::Match(clause) => {
                 !clause.set_clause.is_empty()
                     || clause.delete_clause.is_some()
@@ -200,7 +263,7 @@ impl CypherStatement {
 }
 
 /// 变更执行结果摘要
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct ExecuteResult {
     pub nodes_created: usize,
     pub edges_created: usize,

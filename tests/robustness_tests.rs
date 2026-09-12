@@ -44,6 +44,7 @@ fn test_wal_auto_checkpoint_triggers() -> Result<(), GraphError> {
     let opts = GraphLiteOptions {
         buffer_pool_frames: 256,
         wal_auto_checkpoint_bytes: 64 * 1024,
+        ..GraphLiteOptions::default()
     };
     let db = GraphLite::open_with_options(&db_path, opts)?;
 
@@ -147,29 +148,69 @@ fn test_page_checksum_detects_corruption() -> Result<(), GraphError> {
 #[test]
 fn test_version_guard_rejects_v1_v2() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db_path = dir.path().join("old_version.db");
 
-    // 构造一个 Version 2 的 Header Page 假文件
-    {
-        let mut f = std::fs::File::create(&db_path)?;
-        let mut hdr = [0u8; PAGE_SIZE];
-        hdr[0..4].copy_from_slice(DB_PAGE_MAGIC);
-        hdr[4..8].copy_from_slice(&2u32.to_le_bytes()); // Version 2
-        hdr[HeaderPage::PAGE_SIZE_OFFSET..HeaderPage::PAGE_SIZE_OFFSET + 4]
-            .copy_from_slice(&(PAGE_SIZE as u32).to_le_bytes());
-        f.write_all(&hdr)?;
-        f.flush()?;
+    // 对 1/2/3 三个历史版本各构造一个假文件：格式冻结后它们都必须被拒绝，
+    // 且错误信息要指出「怎么迁移」而不只是「不支持」。
+    for old_version in [1u32, 2, 3] {
+        let db_path = dir.path().join(format!("old_v{}.db", old_version));
+
+        {
+            let mut f = std::fs::File::create(&db_path)?;
+            let mut hdr = [0u8; PAGE_SIZE];
+            hdr[0..4].copy_from_slice(DB_PAGE_MAGIC);
+            hdr[4..8].copy_from_slice(&old_version.to_le_bytes());
+            hdr[HeaderPage::PAGE_SIZE_OFFSET..HeaderPage::PAGE_SIZE_OFFSET + 4]
+                .copy_from_slice(&(PAGE_SIZE as u32).to_le_bytes());
+            f.write_all(&hdr)?;
+            f.flush()?;
+        }
+
+        let before = std::fs::read(&db_path)?;
+
+        let open_res = GraphLite::open(&db_path);
+        assert!(
+            open_res.is_err(),
+            "opening a version {} file must be rejected",
+            old_version
+        );
+        let err_msg = open_res.err().unwrap().to_string();
+        assert!(
+            err_msg.contains(&format!("version {} is not readable", old_version)),
+            "error must name the offending version, got: {}",
+            err_msg
+        );
+        assert!(
+            err_msg.contains("current format version 4"),
+            "error must name the version this build speaks, got: {}",
+            err_msg
+        );
+        // 迁移指引是这条错误存在的意义：只报「不支持」会让用户无处下手。
+        assert!(
+            err_msg.contains("dump") && err_msg.contains("re-import"),
+            "error must explain the migration path, got: {}",
+            err_msg
+        );
+
+        // 关键断言：拒绝必须发生在**任何写入之前**。
+        // 该检查位于 `open_with_options` 的开头，早于 WAL 回放——若顺序反了，
+        // 回放会用当前版本的语义写回旧文件，此时再报错只会留下被污染的库。
+        let after = std::fs::read(&db_path)?;
+        assert_eq!(
+            before, after,
+            "a rejected version {} file must not be modified by the failed open",
+            old_version
+        );
     }
 
-    let open_res = GraphLite::open(&db_path);
-    assert!(open_res.is_err(), "Opening Version 2 file must be rejected");
-    let err_msg = open_res.err().unwrap().to_string();
-    assert!(
-        err_msg.contains("Database file version 2 is not supported")
-            && err_msg.contains("current format version 3"),
-        "Error message must clearly state version 2 is rejected, got: {}",
-        err_msg
-    );
+    // 反向对照：**当前**版本必须能正常打开，否则上面的拒绝毫无意义。
+    let cur_path = dir.path().join("current.db");
+    {
+        let db = GraphLite::open(&cur_path)?;
+        db.add_node(HashSet::from(["N".to_string()]), HashMap::new())?;
+        db.checkpoint()?;
+    }
+    let reopened = GraphLite::open(&cur_path)?;
+    assert_eq!(reopened.node_count(), 1, "current version must open fine");
 
     Ok(())
 }

@@ -1,7 +1,6 @@
+use crate::crc32::Hasher;
 use crate::graph::GraphError;
 use crate::page::{PageId, PAGE_SIZE};
-use crc32fast::Hasher;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -15,7 +14,7 @@ const WAL_MAGIC: &[u8; 4] = b"GWAL";
 pub const WAL_FRAME_HEADER_SIZE: u64 = 12;
 
 /// 页级 WAL 日志记录
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum WalRecord {
     TxBegin {
         tx_id: u64,
@@ -33,6 +32,108 @@ pub enum WalRecord {
         tx_id: u64,
     },
     Checkpoint,
+}
+
+/// `WalRecord` 的变体标签。**这些数值是磁盘格式的一部分，永不重用。**
+///
+/// 与 `bincode` 的变体序号不同，这里是显式且文档化的：新增变体只能追加新标签，
+/// 已废弃的标签必须保留占位，否则旧 WAL 文件会被解码成错误的记录类型。
+pub mod wal_tag {
+    pub const TX_BEGIN: u8 = 1;
+    pub const PAGE_WRITE: u8 = 2;
+    pub const TX_COMMIT: u8 = 3;
+    pub const TX_ROLLBACK: u8 = 4;
+    pub const CHECKPOINT: u8 = 5;
+}
+
+impl WalRecord {
+    /// 编码为 WAL 帧载荷。
+    ///
+    /// 布局（小端，见 `FORMAT.md`）：
+    ///
+    /// ```text
+    /// tag:u8
+    /// TxBegin     -> tx_id:u64
+    /// TxCommit    -> tx_id:u64
+    /// TxRollback  -> tx_id:u64
+    /// Checkpoint  -> (无载荷)
+    /// PageWrite   -> tx_id:u64, page_id:u32, crc32:u32, data:len:u32 + bytes
+    /// ```
+    pub fn encode(&self) -> Vec<u8> {
+        let mut w = crate::codec::Writer::with_capacity(PAGE_SIZE + 16);
+        match self {
+            WalRecord::TxBegin { tx_id } => {
+                w.u8(wal_tag::TX_BEGIN);
+                w.u64(*tx_id);
+            }
+            WalRecord::TxCommit { tx_id } => {
+                w.u8(wal_tag::TX_COMMIT);
+                w.u64(*tx_id);
+            }
+            WalRecord::TxRollback { tx_id } => {
+                w.u8(wal_tag::TX_ROLLBACK);
+                w.u64(*tx_id);
+            }
+            WalRecord::Checkpoint => {
+                w.u8(wal_tag::CHECKPOINT);
+            }
+            WalRecord::PageWrite {
+                tx_id,
+                page_id,
+                crc32,
+                data,
+            } => {
+                w.u8(wal_tag::PAGE_WRITE);
+                w.u64(*tx_id);
+                w.u32(*page_id);
+                w.u32(*crc32);
+                w.bytes(data);
+            }
+        }
+        w.finish()
+    }
+
+    /// 从 WAL 帧载荷解码。任何畸形输入都返回 `Err`，绝不 panic。
+    ///
+    /// 调用方（`read_frame_at` 等）把 `Err` 视为「这一帧无效」并停止回放，
+    /// 与尾部撕裂帧的处理一致。
+    pub fn decode(buf: &[u8]) -> Result<WalRecord, GraphError> {
+        let mut r = crate::codec::Reader::new(buf);
+        let tag = r.u8()?;
+        let rec = match tag {
+            wal_tag::TX_BEGIN => WalRecord::TxBegin { tx_id: r.u64()? },
+            wal_tag::TX_COMMIT => WalRecord::TxCommit { tx_id: r.u64()? },
+            wal_tag::TX_ROLLBACK => WalRecord::TxRollback { tx_id: r.u64()? },
+            wal_tag::CHECKPOINT => WalRecord::Checkpoint,
+            wal_tag::PAGE_WRITE => {
+                let tx_id = r.u64()?;
+                let page_id = r.u32()?;
+                let crc32 = r.u32()?;
+                let data = r.bytes()?;
+                WalRecord::PageWrite {
+                    tx_id,
+                    page_id,
+                    crc32,
+                    data,
+                }
+            }
+            other => {
+                return Err(GraphError::SerializationError(format!(
+                    "unknown WAL record tag {}",
+                    other
+                )))
+            }
+        };
+        // 拒绝尾部垃圾：编码器从不留多余字节，有残余说明数据被篡改或损坏。
+        if !r.is_exhausted() {
+            return Err(GraphError::SerializationError(format!(
+                "WAL record tag {} has {} trailing byte(s)",
+                tag,
+                r.remaining()
+            )));
+        }
+        Ok(rec)
+    }
 }
 
 fn payload_crc(payload: &[u8]) -> u32 {
@@ -118,8 +219,7 @@ impl WalWriter {
 
     /// 追加单条 WAL 记录，返回该帧在 WAL 中的起始偏移（用于 O(1) 随机回读）
     pub fn append(&self, record: &WalRecord) -> Result<u64, GraphError> {
-        let payload = bincode::serialize(record)
-            .map_err(|e| GraphError::SerializationError(e.to_string()))?;
+        let payload = record.encode();
         let crc = payload_crc(&payload);
 
         if self.is_memory {
@@ -149,7 +249,7 @@ impl WalWriter {
         if self.is_memory {
             let payload = self.lock_mem().get(&offset).cloned();
             return match payload {
-                Some(bytes) => Ok(bincode::deserialize::<WalRecord>(&bytes).ok()),
+                Some(bytes) => Ok(WalRecord::decode(&bytes).ok()),
                 None => Ok(None),
             };
         }
@@ -179,7 +279,7 @@ impl WalWriter {
             return Ok(None);
         }
 
-        match bincode::deserialize::<WalRecord>(&payload) {
+        match WalRecord::decode(&payload) {
             Ok(rec) => Ok(Some(rec)),
             Err(_) => Ok(None),
         }
@@ -285,7 +385,7 @@ impl WalWriter {
                 break;
             }
 
-            match bincode::deserialize::<WalRecord>(&payload) {
+            match WalRecord::decode(&payload) {
                 Ok(rec) => records.push(rec),
                 Err(_) => break,
             }
@@ -399,7 +499,7 @@ impl WalCursor<'_> {
                 let frame_offset = *offset;
                 *offset += WAL_FRAME_HEADER_SIZE + len as u64;
 
-                match bincode::deserialize::<WalRecord>(&payload[..len]) {
+                match WalRecord::decode(&payload[..len]) {
                     Ok(rec) => Ok(Some((frame_offset, rec))),
                     Err(_) => Ok(None),
                 }
@@ -425,7 +525,7 @@ impl WalCursor<'_> {
                 }
                 payload[..bytes.len()].copy_from_slice(&bytes);
 
-                match bincode::deserialize::<WalRecord>(&payload[..bytes.len()]) {
+                match WalRecord::decode(&payload[..bytes.len()]) {
                     Ok(rec) => Ok(Some((frame_offset, rec))),
                     Err(_) => Ok(None),
                 }
@@ -456,6 +556,70 @@ impl StorageEngine {
 
     pub fn wal_writer(&self) -> &Arc<WalWriter> {
         &self.wal
+    }
+
+    /// 回放到主数据文件的**待办量**：WAL 中已提交但尚未写回主文件的页数。
+    ///
+    /// ## 为什么需要它
+    ///
+    /// 只读打开不能碰主数据文件，但 [`StorageEngine::open`] 的回放**会写**。
+    /// 因此只读者必须先确认「没有待回放内容」，否则它无法保证自己看到的
+    /// 是与主文件一致的状态。
+    ///
+    /// 判定与回放本身共用同一套事务状态推导（`collect_committed_txs`），
+    /// 避免出现「这里说没有、回放时却有」的不一致。
+    ///
+    /// 返回 `Ok(0)` 表示可以安全地只读打开。
+    pub fn pending_replay_pages(&self) -> Result<usize, GraphError> {
+        if self.is_memory {
+            return Ok(0);
+        }
+        let (committed, aborted) = collect_committed_txs(&self.wal)?;
+        if committed.is_empty() {
+            return Ok(0);
+        }
+        let mut pending = 0usize;
+        let mut cursor = self.wal.cursor()?;
+        while let Some((_, record)) = cursor.next_frame()? {
+            if let WalRecord::PageWrite { tx_id, .. } = record {
+                if committed.contains(&tx_id) && !aborted.contains(&tx_id) {
+                    pending += 1;
+                }
+            }
+        }
+        Ok(pending)
+    }
+
+    /// 打开存储引擎但**不回放** WAL。
+    ///
+    /// 供只读打开前的预检使用：它只读 WAL 与主文件，不写任何字节。
+    /// 调用方随后用 [`StorageEngine::pending_replay_pages`] 判断能否安全地
+    /// 以只读方式打开。
+    pub fn open_readonly<P: AsRef<Path>>(path: P) -> Result<Self, GraphError> {
+        let path_ref = path.as_ref();
+        let is_memory = path_ref.to_str() == Some(":memory:") || path_ref.as_os_str().is_empty();
+
+        if is_memory {
+            return Ok(Self {
+                db_path: PathBuf::from(":memory:"),
+                wal: WalWriter::open(":memory:.wal", true)?,
+                is_memory: true,
+            });
+        }
+
+        let db_path = path_ref.to_path_buf();
+        let mut wal_path_str = db_path.as_os_str().to_os_string();
+        wal_path_str.push(".wal");
+        let wal_path = PathBuf::from(wal_path_str);
+
+        // 主文件不存在时**不创建**：只读打开不应产生副作用
+        let wal = WalWriter::open(&wal_path, false)?;
+
+        Ok(Self {
+            db_path,
+            wal,
+            is_memory: false,
+        })
     }
 
     /// 打开存储引擎：如果存在 WAL 则回放已提交的页到主数据文件

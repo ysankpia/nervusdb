@@ -22,7 +22,12 @@ pub const DB_PAGE_MAGIC_LEGACY: &[u8; 4] = b"GLP4";
 /// - 1：每实体独占一整张 4KB 属性页（早期原型，已不兼容）
 /// - 2：开槽属性页（`SlottedPropPage`）
 /// - 3：在 2 之上增加主数据文件的**页级 CRC32**（Page 0 内联 + 两级目录页）
-pub const DB_PAGE_VERSION: u32 = 3;
+/// - 4：WAL 帧与 Page 0 元数据改为**本仓库自定义的编码**（`codec.rs`），
+///   不再依赖 `bincode`。同时把属性指针的 24 位越界从静默截断改为硬错误。
+///
+/// **这是格式冻结前的最后一个版本。** 自 1.0.0 起不再做不兼容变更，
+/// 详见 `FORMAT.md`。
+pub const DB_PAGE_VERSION: u32 = 4;
 
 /// Page 0 Header 物理页规范与偏移常量定义
 pub struct HeaderPage;
@@ -256,18 +261,51 @@ pub const MAX_SLOTS_PER_PAGE: usize = SLOT_OVERFLOW as usize;
 /// 单条属性记录的内联上限：超过 1KB 的行记录改走溢出页链
 pub const INLINE_RECORD_MAX: usize = 1024;
 
-/// 打包属性指针：PageId 占高 24 位，SlotId 占低 8 位
-pub fn pack_prop_ptr(page_id: PageId, slot: u8) -> u32 {
-    debug_assert!(
-        page_id <= 0x00FF_FFFF,
-        "PageId exceeds 24-bit address space"
-    );
-    ((page_id & 0x00FF_FFFF) << 8) | (slot as u32)
+/// 属性指针能寻址的最大页号（含）。
+///
+/// 属性指针 = 高 24 位页号 + 低 8 位槽位，因此页号只有 24 位：
+/// `2^24 × 4 KiB = 64 GiB`。这是**主文件的大小硬上限**，与 `PageId`（u32）
+/// 自身可达的 16 TiB 不同——后者只在页号不被压缩存储时才成立。
+pub const MAX_PROP_PAGE_ID: PageId = 0x00FF_FFFF;
+
+/// 打包属性指针：PageId 占高 24 位，SlotId 占低 8 位。
+///
+/// `slot == SLOT_OVERFLOW`（255）是**合法入参**：它表示「记录在溢出链里」，
+/// 由溢出路径显式传入（见 `write_prop_record`）。槽位页自身的 `insert`
+/// 只会分配 `0..=254`，因此 255 永远不会与真实槽位冲突。
+///
+/// ## 为什么必须返回 `Result` 而不是 `debug_assert!`
+///
+/// 旧实现用 `debug_assert!` 加 `& 0x00FF_FFFF` 掩码：
+///
+/// ```text
+/// debug_assert!(page_id <= 0x00FF_FFFF);
+/// ((page_id & 0x00FF_FFFF) << 8) | (slot as u32)
+/// ```
+///
+/// `debug_assert!` 在 release 构建下**被整个编译掉**，而掩码会把超限页号
+/// **静默绕回**：页 `0x0100_0000` 被写成页 `0`。后果是属性指针指向错误的页，
+/// **读到别的实体的数据，且不报任何错**——数据库最坏的失败模式。
+///
+/// 因此这里改为运行期检查：超出 24 位立即返回错误，让「文件超过 64 GiB」
+/// 变成一次明确的写入失败，而不是一次静默的数据错乱。
+///
+/// 越界的实际触发条件是文件超过 64 GiB 且属性落在第 16,777,216 页之后；
+/// `GraphLite::open` 也会在打开时提前拒绝这种文件（见 `check_file_size_limit`）。
+pub fn pack_prop_ptr(page_id: PageId, slot: u8) -> Result<u32, crate::graph::GraphError> {
+    if page_id > MAX_PROP_PAGE_ID {
+        return Err(crate::graph::GraphError::StorageError(format!(
+            "page {} exceeds the 24-bit property-pointer limit ({}); \
+             the database file has grown past the 64 GiB format limit",
+            page_id, MAX_PROP_PAGE_ID
+        )));
+    }
+    Ok((page_id << 8) | (slot as u32))
 }
 
 /// 解包属性指针为 (PageId, SlotId)
 pub fn unpack_prop_ptr(ptr: u32) -> (PageId, u8) {
-    ((ptr >> 8) & 0x00FF_FFFF, (ptr & 0xFF) as u8)
+    ((ptr >> 8) & MAX_PROP_PAGE_ID, (ptr & 0xFF) as u8)
 }
 
 /// 该属性指针是否指向溢出页链
@@ -776,7 +814,7 @@ impl CrcDirPage {
         let saved = Self::read_u32(page, 8);
         let mut copy = *page;
         Self::write_u32(&mut copy, 8, 0);
-        let crc = crc32fast::hash(&copy);
+        let crc = crate::crc32::hash(&copy);
         let _ = saved;
         crc
     }

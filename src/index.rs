@@ -1,5 +1,4 @@
-use crate::graph::Value;
-use serde::{Deserialize, Serialize};
+use crate::graph::{GraphError, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 type PropIndexMap = HashMap<(String, String), BTreeMap<Value, BTreeSet<u64>>>;
@@ -11,14 +10,152 @@ pub enum IndexStatus {
     Complete,   // 已全量构建，权威可信
 }
 
+/// 唯一约束：`(label, prop)` 组合的取值在全部该标签节点中必须唯一。
+///
+/// ## 为什么需要它
+///
+/// 这是**数据不脏**的最后一道防线。没有约束时，一个有 bug 的写入方（或一个
+/// 重试逻辑出错的 Agent）可以给同一个实体建两个节点，而查询只会返回其中一半
+/// 数据——错误被延迟到很久以后才被发现。
+///
+/// ## 与索引的关系
+///
+/// 约束检查复用既有的 `(label, prop)` 属性索引，不额外维护数据结构：
+/// 索引本身就把「值 → 节点集合」建好了，违例检测就是看目标值对应的集合是否
+/// 已包含别的节点。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct UniqueConstraint {
+    pub label: String,
+    pub prop: String,
+}
+
 /// 二级索引持久化目录元数据（对齐 SQLite 模式表架构）
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+///
+/// 磁盘布局见 `FORMAT.md`：
+///
+/// ```text
+/// labels_count:u32      labels_count × (len:u32 + UTF-8)
+/// props_count:u32       props_count  × ( label_len:u32 + label,
+///                                        key_len:u32   + key   )
+/// edge_types_count:u32  edge_types_count × (len:u32 + UTF-8)
+/// unique_count:u32      unique_count × ( label_len:u32 + label,
+///                                        prop_len:u32  + prop  )
+/// ```
+#[derive(Debug, Clone, Default)]
 pub struct IndexCatalog {
     pub labels: BTreeSet<String>,
     pub properties: BTreeSet<(String, String)>,
     /// 图模式中的关系类型清单（供 `.schema` 与管理工具展示）
-    #[serde(default)]
     pub edge_types: BTreeSet<String>,
+    /// 唯一约束清单
+    pub unique_constraints: BTreeSet<UniqueConstraint>,
+}
+
+impl IndexCatalog {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut w = crate::codec::Writer::with_capacity(
+            self.labels.len() * 16
+                + self.properties.len() * 32
+                + self.edge_types.len() * 16
+                + self.unique_constraints.len() * 32
+                + 16,
+        );
+        w.u32(self.labels.len() as u32);
+        for l in &self.labels {
+            w.string(l);
+        }
+        w.u32(self.properties.len() as u32);
+        for (l, k) in &self.properties {
+            w.string(l);
+            w.string(k);
+        }
+        w.u32(self.edge_types.len() as u32);
+        for t in &self.edge_types {
+            w.string(t);
+        }
+        w.u32(self.unique_constraints.len() as u32);
+        for c in &self.unique_constraints {
+            w.string(&c.label);
+            w.string(&c.prop);
+        }
+        w.finish()
+    }
+
+    pub fn decode(buf: &[u8]) -> Result<IndexCatalog, GraphError> {
+        let mut r = crate::codec::Reader::new(buf);
+
+        // 每个集合成员至少 4 字节（长度前缀），据此拒绝荒谬的计数，
+        // 避免用损坏的计数预分配巨量内存。
+        let n = r.u32()? as usize;
+        if n.saturating_mul(4) > r.remaining() {
+            return Err(GraphError::SerializationError(format!(
+                "index catalog claims {} label(s) but only {} byte(s) remain",
+                n,
+                r.remaining()
+            )));
+        }
+        let mut labels = BTreeSet::new();
+        for _ in 0..n {
+            labels.insert(r.string()?);
+        }
+
+        let n = r.u32()? as usize;
+        if n.saturating_mul(8) > r.remaining() {
+            return Err(GraphError::SerializationError(format!(
+                "index catalog claims {} propert(y|ies) but only {} byte(s) remain",
+                n,
+                r.remaining()
+            )));
+        }
+        let mut properties = BTreeSet::new();
+        for _ in 0..n {
+            let l = r.string()?;
+            let k = r.string()?;
+            properties.insert((l, k));
+        }
+
+        let n = r.u32()? as usize;
+        if n.saturating_mul(4) > r.remaining() {
+            return Err(GraphError::SerializationError(format!(
+                "index catalog claims {} edge type(s) but only {} byte(s) remain",
+                n,
+                r.remaining()
+            )));
+        }
+        let mut edge_types = BTreeSet::new();
+        for _ in 0..n {
+            edge_types.insert(r.string()?);
+        }
+
+        let n = r.u32()? as usize;
+        if n.saturating_mul(8) > r.remaining() {
+            return Err(GraphError::SerializationError(format!(
+                "index catalog claims {} unique constraint(s) but only {} byte(s) remain",
+                n,
+                r.remaining()
+            )));
+        }
+        let mut unique_constraints = BTreeSet::new();
+        for _ in 0..n {
+            let label = r.string()?;
+            let prop = r.string()?;
+            unique_constraints.insert(UniqueConstraint { label, prop });
+        }
+
+        if !r.is_exhausted() {
+            return Err(GraphError::SerializationError(format!(
+                "index catalog has {} trailing byte(s)",
+                r.remaining()
+            )));
+        }
+
+        Ok(IndexCatalog {
+            labels,
+            properties,
+            edge_types,
+            unique_constraints,
+        })
+    }
 }
 
 /// 二级索引管理器：支持 Label 索引与 (Label, PropKey) 属性索引加速
@@ -61,6 +198,122 @@ impl IndexManager {
     /// 检查指定标签的索引是否权威完整
     pub fn is_label_complete(&self, label: &str) -> bool {
         self.label_status.get(label) == Some(&IndexStatus::Complete)
+    }
+
+    /// 声明一个唯一约束。
+    ///
+    /// **不做既有数据校验**：调用方应先确认现有数据不违反约束（`check_unique_violation`），
+    /// 否则约束会在下一次写入时才炸出来，而那时用户已经不知道是历史数据的问题。
+    /// 库为空或调用方已检查时可直接声明。
+    pub fn declare_unique(&mut self, label: &str, prop: &str) {
+        self.catalog.unique_constraints.insert(UniqueConstraint {
+            label: label.to_string(),
+            prop: prop.to_string(),
+        });
+    }
+
+    /// 当前全部唯一约束
+    pub fn unique_constraints(&self) -> &BTreeSet<UniqueConstraint> {
+        &self.catalog.unique_constraints
+    }
+
+    /// 在写入前检查唯一约束：返回违反约束的 `(label, prop, value)` 描述。
+    ///
+    /// `exclude` 是要排除的节点 ID（更新已有节点的属性时传自身，避免自己和自己冲突）。
+    ///
+    /// ## 判定依据
+    ///
+    /// 复用 `(label, prop)` 属性索引：它已经把「值 → 节点集合」建好，因此违例
+    /// 就是「该值对应的集合里存在别的节点」。索引不完整时**拒绝写入**而不是
+    /// 放行——放行会让约束形同虚设，而「拒绝」至少是可见且可恢复的。
+    pub fn check_unique_violation(
+        &self,
+        label: &str,
+        prop: &str,
+        value: &Value,
+        exclude: Option<u64>,
+    ) -> Option<(String, String, String)> {
+        let constrained = self
+            .catalog
+            .unique_constraints
+            .iter()
+            .any(|c| c.label == label && c.prop == prop);
+        if !constrained {
+            return None;
+        }
+
+        // 索引不可用时不能保证唯一性：返回违例让写入失败，
+        // 而不是乐观放行（那会静默破坏约束）
+        if !self.is_label_complete(label) {
+            return Some((
+                label.to_string(),
+                prop.to_string(),
+                format!(
+                    "{:?} (label index for :{} is not built; cannot verify uniqueness)",
+                    value, label
+                ),
+            ));
+        }
+
+        let existing = self
+            .prop_index
+            .get(&(label.to_string(), prop.to_string()))
+            .and_then(|m| m.get(value));
+
+        if let Some(nodes) = existing {
+            let conflict = nodes.iter().find(|nid| Some(**nid) != exclude).copied();
+            if let Some(nid) = conflict {
+                return Some((
+                    label.to_string(),
+                    prop.to_string(),
+                    format!("{:?} (already held by node {})", value, nid),
+                ));
+            }
+        }
+        None
+    }
+
+    /// 检查**指定的** `(label, prop)` 在现有数据上是否已有重复值。
+    ///
+    /// 返回每个重复取值及其节点集合；空表示可以安全声明约束。
+    ///
+    /// ## 为什么必须接受「候选约束」而不是只查已声明的
+    ///
+    /// 声明约束时它尚未进入 `catalog.unique_constraints`。若只遍历已声明的约束，
+    /// 这个函数永远返回「无重复」——既有脏数据会被静默接受，直到下一次写入才以
+    /// 一条指向错误位置的错误炸出来。这正是它初版的行为，实测被抓出来。
+    pub fn find_duplicates_for(&self, label: &str, prop: &str) -> Vec<(Value, Vec<u64>)> {
+        let mut found = Vec::new();
+        if let Some(map) = self.prop_index.get(&(label.to_string(), prop.to_string())) {
+            for (value, nodes) in map {
+                if nodes.len() > 1 {
+                    found.push((value.clone(), nodes.iter().copied().collect()));
+                }
+            }
+        }
+        found
+    }
+
+    /// 检查某标签的**全部已声明**唯一约束在现有数据上是否满足。
+    ///
+    /// 与 [`Self::find_duplicates_for`] 的分工：这个用于**巡检**已生效的约束，
+    /// 那个用于**声明前**验证候选约束。
+    pub fn find_duplicates_for_label(
+        &self,
+        label: &str,
+    ) -> Vec<(UniqueConstraint, Value, Vec<u64>)> {
+        let mut found = Vec::new();
+        for c in self
+            .catalog
+            .unique_constraints
+            .iter()
+            .filter(|c| c.label == label)
+        {
+            for (value, nodes) in self.find_duplicates_for(&c.label, &c.prop) {
+                found.push((c.clone(), value, nodes));
+            }
+        }
+        found
     }
 
     /// 按需全量构建并完成指定标签及其属性的索引

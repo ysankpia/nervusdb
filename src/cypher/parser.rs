@@ -17,6 +17,16 @@ impl Parser {
     }
 
     pub fn parse(&mut self) -> Result<CypherStatement, GraphError> {
+        // EXPLAIN 前缀：包住整条内层语句。
+        //
+        // 在**递归调用 parse** 之外单独处理前缀，而不是把它塞进每个分支：
+        // 这样 `EXPLAIN EXPLAIN` 这类嵌套也会被自然拒绝（内层只允许 CREATE/MATCH）。
+        if self.peek() == Some(&Token::Explain) {
+            self.consume();
+            let inner = self.parse()?;
+            return Ok(CypherStatement::Explain(Box::new(inner)));
+        }
+
         let statement = match self.peek() {
             Some(Token::Create) => {
                 self.consume();
@@ -114,8 +124,25 @@ impl Parser {
             }
         };
 
+        // 尾部必须是干净的：只允许一个可选分号。
+        //
+        // 这道检查是**正确性防线**，不是风格洁癖。`parse_expr` 在遇到无法识别的
+        // 表达式时只消费它认得的部分就返回，剩余 token 会被后续解析静默跳过。
+        // 曾经的实际后果：`WHERE id(a) = 1` 里 `id` 被当作裸变量解析，`(a) = 1`
+        // 整段丢弃，条件退化成恒真——不报错，但返回全部数据。
+        //
+        // SQLite 与 Postgres 遇到无法解析的尾部同样报错，理由相同：**返回错误
+        // 数据的查询比直接失败的查询危险得多。**
         if self.peek() == Some(&Token::Semicolon) {
             self.consume();
+        }
+        if let Some(tok) = self.peek() {
+            return Err(GraphError::General(format!(
+                "Unexpected trailing input after a complete statement: {:?}. \
+                 The query was not fully understood; refusing to run it rather than \
+                 silently ignoring the remainder.",
+                tok
+            )));
         }
 
         Ok(statement)
@@ -407,6 +434,22 @@ impl Parser {
                             "Expected property name after '.'".into(),
                         ));
                     }
+                } else if self.peek() == Some(&Token::LParen) {
+                    // 标量函数调用：`RETURN id(a)`、`labels(n)`、`type(r)`
+                    let param = self.parse_function_param()?;
+                    if crate::cypher::ast::ScalarFunc::from_name(&var_name).is_none() {
+                        return Err(GraphError::General(format!(
+                            "Unknown function `{}`. Supported scalar functions are \
+                             id(), labels(), type().",
+                            var_name
+                        )));
+                    }
+                    let alias = self.parse_optional_alias()?;
+                    items.push(ReturnItem::Function {
+                        name: var_name,
+                        arg: Box::new(param),
+                        alias,
+                    });
                 } else {
                     let alias = self.parse_optional_alias()?;
                     items.push(ReturnItem::Variable {
@@ -635,6 +678,23 @@ impl Parser {
                     } else {
                         Err(GraphError::General("Expected label after ':'".into()))
                     }
+                } else if self.peek() == Some(&Token::LParen) {
+                    // 函数调用：`id(n)`、`labels(n)`、`type(r)`
+                    //
+                    // 未知函数名必须在此报错。若放行，`WHERE foo(a) = 1` 会解析成
+                    // 一个裸变量并与 `= 1` 脱节，条件退化为恒真——静默返回错误数据。
+                    let param = self.parse_function_param()?;
+                    match crate::cypher::ast::ScalarFunc::from_name(&var_name) {
+                        Some(_) => Ok(Expr::FunctionCall {
+                            name: var_name,
+                            args: vec![param],
+                        }),
+                        None => Err(GraphError::General(format!(
+                            "Unknown function `{}`. Supported scalar functions are \
+                             id(), labels(), type().",
+                            var_name
+                        ))),
+                    }
                 } else {
                     Ok(Expr::Variable(var_name))
                 }
@@ -650,6 +710,17 @@ impl Parser {
                 self.peek()
             ))),
         }
+    }
+
+    /// 解析函数调用的参数列表：`( <expr> )`，恰好一个参数。
+    ///
+    /// 本项目支持的三个标量函数都是单参数；若将来引入多参数函数，把这里
+    /// 改成循环并在调用处按 `ScalarFunc::arity()` 校验即可。
+    fn parse_function_param(&mut self) -> Result<Expr, GraphError> {
+        self.expect(&Token::LParen)?;
+        let param = self.parse_expr()?;
+        self.expect(&Token::RParen)?;
+        Ok(param)
     }
 
     fn peek(&self) -> Option<&Token> {

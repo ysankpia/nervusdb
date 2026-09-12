@@ -173,6 +173,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         GraphLiteOptions {
             buffer_pool_frames: pool_mb * graphlite::FRAMES_PER_MB,
             wal_auto_checkpoint_bytes: auto_checkpoint_bytes(),
+            ..GraphLiteOptions::default()
         },
     )?;
 

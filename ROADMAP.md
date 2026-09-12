@@ -10,10 +10,19 @@ conditions are quoted with it.
 
 ---
 
-## Current state (v1.0.0-rc.2)
+## Current state (v1.0.0-rc.3)
 
 Working and covered by tests:
 
+- **Zero runtime dependencies.** The core library pulls in no third-party crates;
+  `tests/zero_dependency_tests.rs` enforces it, including a negative test. The
+  on-disk format's bytes are defined and implemented in this repository
+  (`src/codec.rs`, `src/json.rs`, `src/crc32.rs`) and specified byte by byte in
+  `FORMAT.md`.
+- **Frozen format (version 4).** The stability promise and the two permanent
+  limits (64 GiB file, 24-bit property pointers) are documented with the reasoning;
+  both limits are enforced rather than assumed. Older versions are refused before
+  any write, including WAL replay.
 - Pure disk-backed storage: one data file plus one page-level WAL, fixed-size
   records (32B nodes, 64B edges), O(1) physical addressing, disk-native
   index-free adjacency.
@@ -22,18 +31,29 @@ Working and covered by tests:
 - ACID: explicit transactions, single-fsync group commit, STEAL spilling to WAL
   under constrained memory, crash recovery, exact rollback with zero main-file
   pollution.
+- **Concurrency: any number of readers with one writer.** Read-only handles take a
+  shared lock; a write handle excludes everyone. Read-only open refuses when the
+  WAL still holds unreplayed pages rather than returning stale data.
 - Cypher 1.0: `CREATE`, `MATCH` (multi-pattern), `WHERE`, `SET`, `DELETE` /
   `DETACH DELETE`, `ORDER BY`, `SKIP`, `LIMIT`, `count/sum/avg/min/max`,
-  variable-length and undirected paths, label predicates.
+  variable-length and undirected paths, label predicates, scalar functions
+  (`id`, `labels`, `type`), and `EXPLAIN`.
+- **Query performance**: start-node selection walks adjacency chains instead of
+  expanding the whole graph; `LIMIT` is pushed into matching when it cannot change
+  the result. A 32,000-edge expansion went from 48 s to 27 ms.
+- **Unique constraints** on `(label, property)`, persisted, enforced on insert and
+  update, and refused over pre-existing duplicates.
 - Analytics: BFS, Dijkstra, cycle detection, PageRank, weakly connected
   components, K-hop subgraph extraction.
-- Production safety: exclusive single-writer open lock, page-level CRC32 over
-  the whole data file with self-checked directory pages, structural integrity
-  check with a degree-conservation oracle that names corrupt pages,
-  error-preserving read accessors, poison-recovering locks, WAL auto-checkpoint.
-- Tooling: interactive CLI with dot commands and logical dump; Python and
-  Node.js SDKs with transaction support.
-- 100 test cases across 10 suites (99 run, 1 intentionally `#[ignore]`d for a
+- Production safety: page-level CRC32 over the whole data file with self-checked
+  directory pages, structural integrity check with a degree-conservation oracle
+  that names corrupt pages, error-preserving read accessors, poison-recovering
+  locks, WAL auto-checkpoint.
+- Operations: `backup()` for a consistent online copy, `vacuum()` for a space
+  report, and `graphlite-studio` for browser-based inspection.
+- Tooling: interactive CLI with dot commands and logical dump; Python and Node.js
+  SDKs with transaction and batch-write support.
+- 139 test cases across 12 suites (138 run, 1 intentionally `#[ignore]`d for a
   child-process lock probe); `cargo fmt`, `cargo clippy -D warnings` and
   `rustdoc -D warnings` all clean.
 
@@ -41,73 +61,55 @@ Working and covered by tests:
 
 ## Next (planned)
 
-### 1. Multi-reader concurrency
+### 1. True concurrent read-write (snapshot isolation)
 
-Today exactly one handle may open a database. A shared-lock read-only mode would
-let multiple readers coexist with one writer, matching SQLite's model. Blocked
-on: WAL replay writes the main file, so read-only open must first establish that
-the WAL has nothing committed to apply.
+Today a reader and a writer are mutually exclusive: shared read locks and the
+write lock cannot coexist. The studio works around this by taking its lock per
+request, so a writer can write between requests — but a write that lands *during*
+a request makes that request fail with a retryable error.
 
-### 2. Quadratic edge expansion in `MATCH`
+Real concurrency needs snapshot isolation: readers pin a consistent snapshot
+(typically by reading from the WAL up to a known commit point) while the writer
+appends. That is a substantial change to recovery and page visibility, and it is
+the largest remaining gap against the "agent writes while you watch" workload.
 
-**Measured, not theoretical.** Expanding a pattern whose source is constrained by
-`WHERE id(a) = N` costs O(edges²):
+### 2. Planner memory beyond edges
 
-```text
-edges      1k      2k      8k     32k
-elapsed   117ms   369ms  7.1s   127s
-```
+A transaction still queues all its actions in memory before commit. Edge batches
+are chunked at `MAX_BATCH_EDGES_IN_MEMORY`, but a multi-million-**node** transaction
+still holds the whole action list. Capping and spilling the planner queue itself is
+the remaining step.
 
-The same query without the `WHERE` is also quadratic (2k → 119ms, 32k → 42.6s),
-and `LIMIT 1` does not help — it expands everything before applying the limit.
-Both effects were reproduced identically on the `v1.0.0-rc.1` tag, so this is
-pre-existing, not a regression.
+### 3. Cost-based query planning
 
-The fix is start-node selection: when a pattern's node is pinned by an id or a
-label/property predicate, the expansion should begin at that node and walk its
-adjacency chain, instead of expanding every edge and then filtering. `LIMIT`
-should also short-circuit rather than materialise the full result set. This is
-the highest-value query-planner item and is a prerequisite for usable
-interactive queries on large graphs.
+Start-node selection is rule-based (index when available, otherwise a scan) and
+`LIMIT` push-down is decided by a fixed safety check. There is no cost model, no
+join reordering and no index-nested-loop selection. Adequate at the current scale;
+a limitation for complex analytical queries.
 
-### 3. Maintenance operations
+### 4. `MERGE` and `UNWIND`
 
-`vacuum` (reclaim space after mass deletion) and `backup` (consistent copy while
-open). Both are currently absent; the logical dump path covers the migration use
-case but not operational hygiene.
+Both are natural next additions to the Cypher surface: `MERGE` leans on the unique
+constraints that now exist, and `UNWIND` makes batch ingestion expressible in a
+query rather than only through the SDK. Each needs design work rather than a patch,
+which is why neither is in 1.0.
 
-### 4. Planner memory beyond edges
+### 5. SDK publication
 
-A single transaction still queues **all** its actions in memory before commit; a
-multi-million-_node_ transaction holds the whole action list even though edge
-weaving is now chunked at `MAX_BATCH_EDGES_IN_MEMORY`. Capping and spilling the
-planner queue itself is the remaining step.
+The Python and Node.js bindings build and pass their tests but are not published to
+PyPI or npm. Publishing needs packaging polish, versioning policy, and platform
+wheel/prebuild matrices.
 
-### 5. Cost-based query planning
+**The previously recorded "9x slower than native" figure is retracted** — it came
+from debug builds of the bindings compared against a release core. Measured with
+both sides in release the bindings run at 0.85-0.93x of the native path. See
+`docs/benchmarks.md` for the corrected table and the retraction.
 
-Secondary indexes are used for start-node selection only. There is no cost-based
-planning, no join reordering, no index-nested-loop selection. Adequate for the
-current scope; a limitation for complex analytical queries at scale.
-
-### 6. SDK publication
-
-The Python and Node.js bindings build and pass their tests but are not published
-to PyPI or npm. Publishing needs packaging polish, versioning policy and
-platform wheel/prebuild matrices.
-
-Their throughput is also bounded by the one-call-per-write FFI boundary
-(measured ~63k ops/s in Python and ~64k in Node, against ~550k for the native
-Rust path at the same scale). A batch API that accepts an array of entities per
-call would close most of that gap; that is the higher-value change and should
-land before publication.
-
-### 7. Concurrency stress at high core counts
+### 6. Concurrency stress at high core counts
 
 The current suite exercises 20 threads. Behaviour under sustained load on
 many-core machines, and the contention profile of the page latches, are not yet
 characterised.
-
----
 
 ## Explicitly out of scope
 
