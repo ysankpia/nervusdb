@@ -39,7 +39,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
 
 /// 微型缓冲池：1MB（256 帧），用于极低内存环境与受限内存回归测试
 pub const SMALL_POOL_FRAMES: usize = 256;
@@ -229,6 +229,90 @@ pub struct GraphLite {
     lock: Arc<Option<DbLock>>,
     /// 本句柄是否以只读方式打开（决定写入口是否拒绝）
     read_only: bool,
+}
+
+/// 一个自洽的只读视图，由 [`GraphLite::read_snapshot`] 创建。
+///
+/// 它在存活期间持有共享读锁，因此**同一快照内的多次读取一定看到同一个状态**：
+/// 遍历邻接表时按边 ID 读边记录不会再撞上「这条边刚好被并发删掉了」。
+///
+/// 代价是写者会被快照阻塞到它释放为止（见 [`GraphLite::read_snapshot`] 的说明）。
+/// 因此快照应当**短命**：用于完成一次遍历或一次导出，而不是长时间持有。
+///
+/// # 不要在持有快照时调用 `GraphLite`
+///
+/// 快照已经持有共享读锁，而 `GraphLite::add_node` 等写入口要拿排他写锁。
+/// 同一个句柄上「持有快照的同时发起写入」会自锁等待：
+///
+/// ```no_run
+/// # use graphlite::{GraphLite, GraphError};
+/// # use std::collections::{HashMap, HashSet};
+/// # fn main() -> Result<(), GraphError> {
+/// # let db = GraphLite::open(":memory:")?;
+/// let snapshot = db.read_snapshot();
+/// let node = snapshot.get_node(1)?;      // 可以：走快照
+/// // let id = db.add_node(HashSet::new(), HashMap::new())?;  // 死锁：等自己释放
+/// drop(snapshot);                        // 先释放
+/// let id = db.add_node(HashSet::new(), HashMap::new())?;     // 现在可以写
+/// # let _ = (node, id);
+/// # Ok(())
+/// # }
+/// ```
+///
+/// 快照只提供读操作；需要读写的组合请用 [`GraphLite::with_transaction`]，
+/// 它按顺序持锁而不是嵌套持锁。
+pub struct ReadSnapshot<'a> {
+    guard: RwLockReadGuard<'a, GraphInner>,
+    /// 让 `'a` 只体现在 guard 上：快照本身不复制任何图状态
+    _marker: std::marker::PhantomData<&'a GraphLite>,
+}
+
+impl ReadSnapshot<'_> {
+    /// 读取节点（保留存储错误，`Ok(None)` 表示确实不存在）
+    pub fn get_node(&self, id: u64) -> Result<Option<Node>, GraphError> {
+        self.guard.disk_graph.get_node(id)
+    }
+
+    /// 读取边（保留存储错误，`Ok(None)` 表示确实不存在）
+    pub fn get_edge(&self, id: u64) -> Result<Option<Edge>, GraphError> {
+        self.guard.disk_graph.get_edge(id)
+    }
+    /// 快照内的节点总数
+    pub fn node_count(&self) -> usize {
+        self.guard.disk_graph.node_count
+    }
+
+    /// 快照内的边总数
+    pub fn edge_count(&self) -> usize {
+        self.guard.disk_graph.edge_count
+    }
+
+    /// 在快照内执行一条**只读** Cypher 查询。
+    ///
+    /// 写语句被拒绝：快照持有的是读锁，执行写操作会破坏它存在的意义
+    /// （一份自洽的只读视图）。要写请用 `GraphLite` 自身的写入口。
+    pub fn query(&self, cypher_str: &str) -> Result<CypherResultSet, GraphError> {
+        let statement = crate::cypher::parser::Parser::new(
+            crate::cypher::lexer::Lexer::new(cypher_str).tokenize()?,
+        )
+        .parse()?;
+
+        if statement.is_mutating() {
+            return Err(GraphError::General(
+                "Read snapshot cannot execute a mutating Cypher statement: it is a read-only view"
+                    .into(),
+            ));
+        }
+        cypher::execute_query(cypher_str, &self.guard.disk_graph, &self.guard.index_mgr)
+    }
+
+    /// 全图结构完整性检查，**在同一个读锁内完成**。
+    ///
+    /// 与 `GraphLite::integrity_check` 的区别只在于：这里保证整个检查过程中
+    /// 没有写者插入，因此报告描述的是一个真实存在过的状态。
+    pub fn integrity_check(&self) -> Result<IntegrityReport, GraphError> {
+        check_integrity(&self.guard.disk_graph)
+    }
 }
 
 impl GraphLite {
@@ -992,6 +1076,54 @@ impl GraphLite {
     /// 锁字段被真实读取，而非仅在构造时赋值。
     pub fn is_locked(&self) -> bool {
         self.lock.is_some()
+    }
+
+    /// 取得一个**读快照**：在它存活期间，看到的图是同一个状态。
+    ///
+    /// ## 为什么需要它
+    ///
+    /// 单个 `get_node` / `get_edge` 各自持锁、各自释放，因此一次多步遍历
+    /// （读邻接表 → 按边 ID 读边记录）在两次调用之间可能被写者插入。中间发生的
+    /// 删除会让遍历看到「邻接表引用的边已经不存在」——不是引擎内部撕裂，而是
+    /// **读者自己把两个不同时刻的状态拼在了一起**。
+    ///
+    /// 这不是理论问题：`tests/concurrency_isolation_tests.rs` 里
+    /// `test_reader_never_observes_torn_adjacency_under_writes` 在读线程一边用
+    /// API 遍历、写线程一边增删边时，稳定复现该现象（首个复现即
+    /// 「节点 2 的邻接表引用了不存在的边 1」）。同期用 `integrity_check`
+    /// （它在**一次**读锁内完成整个检查）跑了 22,540 轮，零不一致——这正好界定了
+    /// 问题边界：引擎的检查是自洽的，缺的是暴露给调用方的一致性窗口。
+    ///
+    /// ## 用法
+    ///
+    /// ```no_run
+    /// # use graphlite::{GraphLite, GraphError};
+    /// # fn main() -> Result<(), GraphError> {
+    /// # let db = GraphLite::open(":memory:")?;
+    /// let snapshot = db.read_snapshot();
+    /// if let Some(node) = snapshot.get_node(1)? {
+    ///     for eid in &node.outgoing {
+    ///         let edge = snapshot.get_edge(*eid)?; // 与上面那次读同处一个状态
+    ///         assert!(edge.is_some(), "快照内不应出现悬空邻接项");
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// ## 代价与语义
+    ///
+    /// 快照持有共享读锁，因此**写者会被阻塞**直到快照释放。这是当前架构的
+    /// 直接后果：缓冲区池与页表是共享可变状态，让读者与写者真正并行需要版本化
+    /// 的页可见性（见 `ROADMAP.md` 第 1 项）。提供快照是为了让「需要自洽读」的
+    /// 调用方有正确选项，而不是宣称已经实现了无阻塞的 MVCC。
+    ///
+    /// 长事务式的「边读边写」仍应使用 [`GraphLite::with_transaction`]；快照是只读的。
+    pub fn read_snapshot(&self) -> ReadSnapshot<'_> {
+        ReadSnapshot {
+            guard: self.inner.read_recover(),
+            _marker: std::marker::PhantomData,
+        }
     }
 
     /// 获取当前节点总数（纯磁盘定长元数据头统计）

@@ -192,6 +192,7 @@ graphlite-rs/
     ├── cypher_advanced_tests.rs# Cypher 1.0 syntax closure (SET/DETACH DELETE/ORDER BY/aggregates/paging)
     ├── unwind_tests.rs         # UNWIND expansion, batch ingestion, statement atomicity
     ├── merge_tests.rs          # MERGE idempotence, ON CREATE / ON MATCH, whole-pattern semantics
+    ├── concurrency_isolation_tests.rs # Snapshot consistency, atomic visibility, no lost writes
     ├── analytics_tests.rs      # PageRank / WCC / K-Hop subgraph analytics
     ├── steal_spill_tests.rs    # STEAL spilling, rollback zero-pollution, checkpoint semantics
     ├── slotted_property_tests.rs # Slotted page packing, slot reuse, compaction, density target
@@ -418,6 +419,16 @@ load-bearing and both are pinned by tests:
   entire pattern is created, including parts that already exist elsewhere in the
   graph. Partial reuse would make the outcome depend on which parts happened to be
   present first, which is not predictable from the query.
+
+`GraphLite::read_snapshot()` returns a `ReadSnapshot` that holds the shared read
+lock for its lifetime, giving a multi-step traversal one consistent view. Use it for
+anything that reads an entity and then follows what it references: without it,
+`get_node` and `get_edge` each take and release the lock separately, so a concurrent
+delete between them makes the traversal observe a reference to an edge that is no
+longer readable by the time it is fetched. That is not an internal tear — the caller
+simply assembled two different states. Snapshots block writers while they live, so
+keep them short, and never call a `GraphLite` write entry point while holding one
+(it would wait on a lock the snapshot itself holds).
 
 A write statement is **atomic at statement granularity**: `GraphLite::execute` and
 `run_cypher` snapshot allocator metadata, open a transaction context, and undo a

@@ -54,7 +54,7 @@ Working and covered by tests:
 - Tooling: Python and Node.js SDKs with transaction and batch-write support.
   Inspection and dump go through the library API — the CLI and the browser
   workbench were removed in 1.1.0.
-- 167 test cases across 14 suites (166 run, 1 intentionally `#[ignore]`d for a
+- 177 test cases across 15 suites (176 run, 1 intentionally `#[ignore]`d for a
   child-process lock probe); `cargo fmt`, `cargo clippy -D warnings` and
   `rustdoc -D warnings` all clean.
 
@@ -62,17 +62,19 @@ Working and covered by tests:
 
 ## Next (planned)
 
-### 1. True concurrent read-write (snapshot isolation)
+### 1. Non-blocking readers (versioned page visibility)
 
-Today a reader and a writer are mutually exclusive: shared read locks and the
-write lock cannot coexist. The studio works around this by taking its lock per
-request, so a writer can write between requests — but a write that lands *during*
-a request makes that request fail with a retryable error.
+**Partially done in 1.1.0.** `GraphLite::read_snapshot()` now gives a caller a
+self-consistent view: it holds the shared read lock for its lifetime, so a
+multi-step traversal cannot stitch two states together. That closed the correctness
+gap (see `tests/concurrency_isolation_tests.rs`).
 
-Real concurrency needs snapshot isolation: readers pin a consistent snapshot
-(typically by reading from the WAL up to a known commit point) while the writer
-appends. That is a substantial change to recovery and page visibility, and it is
-the largest remaining gap against the "agent writes while you watch" workload.
+What remains is the *performance* gap: a snapshot blocks writers while it lives,
+because a reader and a writer still exclude each other. Removing that needs
+versioned page visibility — readers pin a snapshot (typically by reading from the WAL
+up to a known commit point) while the writer appends. That is a substantial change to
+recovery and page visibility, and it is the largest remaining gap against the
+"agent writes while you watch" workload.
 
 ### 2. Planner memory beyond edges
 

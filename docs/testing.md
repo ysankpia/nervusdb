@@ -29,16 +29,17 @@ Target-specific suites:
 ```bash
 cargo test --test unwind_tests            # UNWIND and batch ingestion
 cargo test --test merge_tests             # MERGE idempotence
+cargo test --test concurrency_isolation_tests  # snapshot consistency under load
 cargo test --test production_safety_tests # exclusive lock, read-only writes, rollback
 cargo test --test robustness_tests        # page CRC at scale, WAL replay, chunking
 ```
 
 ## Current state
 
-**167 test cases — 166 pass, 1 intentionally `#[ignore]`d** (a child-process lock
+**177 test cases — 176 pass, 1 intentionally `#[ignore]`d** (a child-process lock
 probe launched by its parent test).
 
-Run as 13 integration suites plus 20 inline unit tests in the hand-written codecs
+Run as 14 integration suites plus 20 inline unit tests in the hand-written codecs
 (`src/codec.rs`, `src/json.rs`, `src/crc32.rs`), which are what the on-disk format
 is made of:
 
@@ -49,6 +50,7 @@ is made of:
 | `cypher_advanced_tests.rs`   | 17    | Cypher 1.0 syntax closure, EXPLAIN, aggregate semantics            |
 | `unwind_tests.rs`            | 16    | `UNWIND`, batch ingestion, statement atomicity                     |
 | `merge_tests.rs`             | 14    | `MERGE` idempotence, ON CREATE / ON MATCH                           |
+| `concurrency_isolation_tests.rs` | 9 | Snapshot consistency, atomic visibility, no lost writes             |
 | `edge_locality_tests.rs`     | 9     | Weave equivalence, self-loops, false-spill elimination             |
 | `robustness_tests.rs`        | 8     | File lock, auto-checkpoint, page CRC at scale, WAL replay, chunking |
 | `batch_tx_tests.rs`          | 7     | Batch commits, single-fsync contract, throughput                   |

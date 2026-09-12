@@ -35,6 +35,27 @@ user has to act on them:
   asserts both halves: `"null"` as a value counts like any other, and `avg` / `min`
   over an empty set return `Null`.
 
+- **`GraphLite::read_snapshot()` — a self-consistent read view.** It holds the shared
+  read lock for its lifetime, so a multi-step traversal (read a node's adjacency
+  list, then read each of those edges) sees one state instead of stitching together
+  two. Without it the second read can miss an edge the first read named:
+
+  ```text
+  node 5's adjacency list references edge 1 -> that edge reads back as absent
+  ```
+
+  This is not an internal tear — the engine's own `integrity_check`, which runs
+  entirely inside one lock, stayed healthy across 22,540 rounds of concurrent
+  writes. The gap was that callers had no way to get the same window. Verified by
+  `tests/concurrency_isolation_tests.rs`, whose first run reproduced the dangling
+  reference and whose deterministic case now fails 100% of the time if the snapshot
+  stops holding the lock.
+
+  The snapshot blocks writers while it lives, because the buffer pool and page table
+  are shared mutable state — true reader/writer parallelism needs versioned page
+  visibility, which remains ROADMAP item 1. The snapshot gives callers a *correct*
+  option; it does not claim to be non-blocking MVCC.
+
 - **`MERGE <pattern>` — the idempotent write clause.** It matches the pattern and
   reuses what it finds; only when nothing matches does it create:
 
