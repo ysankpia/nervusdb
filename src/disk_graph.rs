@@ -1010,9 +1010,11 @@ impl DiskGraph {
             is_write,
         )?;
         if let Some(pid) = res {
+            // 用 `lock_recover` 而非 `.lock().unwrap()`：AGENTS.md §13 禁止后者。
+            // 这里只缓存一个页号提示，中毒后继续使用是安全的——丢了它只是少一次
+            // 缓存命中，不影响正确性；而 panic 会终止整个进程。
             allocator
-                .lock()
-                .unwrap()
+                .lock_recover()
                 .node_page_cache
                 .insert(logical_page, pid);
         }
@@ -1087,9 +1089,9 @@ impl DiskGraph {
             is_write,
         )?;
         if let Some(pid) = res {
+            // 同上：这是可重建的缓存提示，中毒恢复优于进程终止
             allocator
-                .lock()
-                .unwrap()
+                .lock_recover()
                 .edge_page_cache
                 .insert(logical_page, pid);
         }
@@ -2243,7 +2245,10 @@ impl DiskGraph {
         if let Some(mut dst_node) = self.read_node_record(dst_id)? {
             let mut curr = dst_node.first_incoming_edge_id;
             let mut prev = 0;
-            while curr != 0 {
+            // 环检测守卫：链指针损坏或并发改写可能形成环，无守卫会死循环。
+            // AGENTS.md §10 要求所有指针遍历都带 `seen` 集合，此处曾遗漏。
+            let mut seen = HashSet::new();
+            while curr != 0 && seen.insert(curr) {
                 if curr == edge_id {
                     if prev != 0 {
                         if let Some(mut p) = self.read_edge_record(prev)? {
@@ -2534,8 +2539,12 @@ impl DiskGraph {
         // 2. 扫描间接目录页
         let mut current_dir = self.allocator.lock_recover().node_dir_page_id;
         let mut dir_order = 0;
+        // 环检测守卫：目录链损坏时（`next_dir` 指回上游或自身）无守卫会死循环。
+        // AGENTS.md §10 要求所有指针遍历都带 `seen`，此处曾遗漏——同文件的
+        // `walk_free_chain` 就同时带 `seen` 与步数上限，属不一致的疏漏。
+        let mut seen_dirs = HashSet::new();
 
-        while current_dir != INVALID_PAGE_ID && current_dir != 0 {
+        while current_dir != INVALID_PAGE_ID && current_dir != 0 && seen_dirs.insert(current_dir) {
             let fid = bpm.fetch_page(current_dir)?;
             let frame = bpm.get_frame(fid);
             let next_dir = DirectoryPage::get_next_dir(&frame.data);

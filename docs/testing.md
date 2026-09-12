@@ -26,21 +26,24 @@ cargo test --release --test edge_locality_tests
 
 ## Current state
 
-**100 test cases across 10 suites — 99 pass, 1 intentionally `#[ignore]`d** (a
+**146 test cases across 13 suites — 145 pass, 1 intentionally `#[ignore]`d** (a
 child-process lock probe launched by its parent test).
 
 | Suite                        | Cases | Covers                                                             |
 | ---------------------------- | ----- | ------------------------------------------------------------------ |
 | `integration_tests.rs`       | 26    | CRUD, ACID, concurrency, indexing, out-of-core stress              |
-| `cypher_advanced_tests.rs`   | 14    | Cypher 1.0 syntax closure                                          |
+| `production_safety_tests.rs` | 22    | Exclusive lock, integrity, constraints, read-only writes, backup   |
+| `cypher_advanced_tests.rs`   | 15    | Cypher 1.0 syntax closure, EXPLAIN                                 |
+| `edge_locality_tests.rs`     | 9     | Weave equivalence, self-loops, false-spill elimination             |
+| `robustness_tests.rs`        | 8     | File lock, auto-checkpoint, page CRC at scale, WAL replay, chunking |
+| `batch_tx_tests.rs`          | 7     | Batch commits, single-fsync contract, throughput                   |
+| `slotted_property_tests.rs`  | 7     | Page packing, slot reuse, compaction, density                      |
+| `cli_tests.rs`               | 7     | REPL end-to-end, multi-line input, strict parsing                  |
 | `analytics_tests.rs`         | 6     | PageRank, WCC, K-hop                                               |
 | `steal_spill_tests.rs`       | 5     | Spilling, rollback pollution, checkpoint                           |
-| `slotted_property_tests.rs`  | 7     | Page packing, slot reuse, compaction, density                      |
-| `batch_tx_tests.rs`          | 7     | Batch commits, single-fsync contract, throughput                   |
-| `edge_locality_tests.rs`     | 9     | Weave equivalence, self-loops, false-spill elimination             |
-| `production_safety_tests.rs` | 12    | Exclusive lock, integrity check, error visibility, poison recovery |
-| `robustness_tests.rs`        | 8     | File lock, auto-checkpoint, page CRC, WAL replay, chunking         |
-| `cli_tests.rs`               | 6     | REPL end-to-end                                                    |
+| `equivalence_tests.rs`       | 4     | v1.0.0 behaviour guardrails: query, transaction, API, format       |
+| `studio_tests.rs`            | 4     | Browser workbench: endpoints, read-only, writer interleaving       |
+| `zero_dependency_tests.rs`   | 3     | Enforces the empty dependency tree (with a negative control)       |
 
 Run one suite:
 

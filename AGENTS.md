@@ -314,7 +314,7 @@ Two traps made those first attempts useless, and both recur:
 
   Red lines from the last accepted run — a change here is a correctness
   regression, not noise:
-  - LiveJournal edge ingestion **≥150,000 ops/s** (measured 200,618)
+  - LiveJournal edge ingestion **≥150,000 ops/s** (measured 200,618 on rc.2, 201,823 on rc.3 — see `docs/benchmarks.md`)
   - LiveJournal hub 1-hop / 2-hop **exactly** 335,194 / 10,027,730
   - com-DBLP hub 1-hop / 2-hop **exactly** 10,080 / 161,877
 

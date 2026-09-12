@@ -407,6 +407,49 @@ _No unreleased changes yet._
 
 ### Fixed
 
+- **Two places violated the project's own invariant 13: `.lock().unwrap()` in
+  library code.** `get_or_allocate_node_page` and `get_or_allocate_edge_page` used
+  it for a page-number cache. `AGENTS.md` forbids that pattern outright and
+  `src/sync_ext.rs` exists to replace it, so the documented guarantee was false as
+  shipped. Both now use `lock_recover`: these caches hold rebuildable hints, so
+  recovering from a poisoned lock costs at most one cache miss, while panicking
+  ends the process.
+
+- **Two pointer-traversal loops had no cycle guard**, against invariant 10's rule
+  that every `while curr != 0` walk carry a `seen` set. The incoming-chain walk in
+  `remove_edge` and the node page-directory walk could both spin forever on a
+  corrupted chain. The other eight walks in the same file already had guards, and
+  `walk_free_chain` right below the second one has both a guard and a step cap —
+  the omission was an inconsistency rather than a design choice.
+
+- **Documentation described the old format in three places**, and one of them
+  contradicted itself: `docs/architecture.md` said "the data file has no page
+  checksums" (section 11) while section 13 of the same file described the page
+  checksums, and both the version number and the section heading still said
+  version 3. `SECURITY.md` repeated the no-checksums claim and also stated that
+  only one handle may open a database, which stopped being true when shared read
+  locks landed. A reader could have concluded the release's central safety property
+  did not exist.
+
+- **A doc comment in the public API quoted retracted benchmark figures.**
+  `Transaction::add_nodes` said "Python ~42k ops/s vs native ~550k". Those were the
+  debug-vs-release artifacts retracted in this same release; the corrected
+  release-vs-release measurement is 355k vs 382k. The comment now states the
+  corrected numbers and what the method is actually for (lock traffic, not
+  throughput).
+
+- **Test counts were stale in four documents**, and `docs/testing.md` omitted three
+  suites entirely (studio, zero-dependency, equivalence) while understating others
+  (production safety said 12, it has 22). All now match the tree: 146 cases across
+  13 suites.
+
+- Two claims were made stronger than the evidence supported: a "100GB graph in a
+  4MB pool" (the largest dataset ever exercised is 4.34 GB) and the LiveJournal
+  figure appearing as two different numbers in `AGENTS.md` and
+  `docs/benchmarks.md` without noting they came from different releases. The first
+  now cites what was measured; the second carries its version.
+
+
 - **A graph with roughly 80 or more distinct labels lost its entire schema on
   reopen.** `sync_header` wrote the label/edge-type dictionary into a **single**
   page, and `PropertyPage::encode` silently truncates payloads beyond
