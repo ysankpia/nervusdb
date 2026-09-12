@@ -455,17 +455,47 @@ impl GraphLite {
             Err(e) => return Err(GraphError::IoError(e)),
         };
 
-        let mut header = [0u8; crate::page::PAGE_SIZE];
-        // 短读说明文件比一页还小：尚无格式，放行
-        if std::io::Read::read(&mut file, &mut header).unwrap_or(0) < crate::page::PAGE_SIZE {
+        let len = file.metadata()?.len();
+
+        // 长度为 0 是唯一被认可的「空文件」形态：等同于文件不存在，可以初始化。
+        //
+        // **不能放宽到「全部字节为 0」。** 一个 4 KiB 全零文件更可能是被截断的
+        // 其它数据，而不是一个恰好还没写过任何内容的新库。把它当新库初始化会
+        // 静默覆盖用户的文件，而「打开」这个动作从不被期望具有破坏性。
+        if len == 0 {
             return Ok(());
+        }
+
+        let mut header = [0u8; crate::page::PAGE_SIZE];
+        if std::io::Read::read(&mut file, &mut header).unwrap_or(0) < crate::page::PAGE_SIZE {
+            return Err(GraphError::StorageError(format!(
+                "'{}' is {} bytes and does not start with a GraphLite header.\n\
+                 It is too small to be a GraphLite database and is not empty, so \
+                 opening it would risk overwriting whatever it actually contains.\n\
+                 Refusing to touch it. Move the file aside if you meant to create a \
+                 new database at this path.",
+                db_path.display(),
+                len
+            )));
         }
 
         let magic = &header[0..4];
         if magic != crate::page::DB_PAGE_MAGIC && magic != crate::page::DB_PAGE_MAGIC_LEGACY {
-            // 不是本项目的文件。交由后续路径处理（会按「新库」初始化），
-            // 这里不越权判定。
-            return Ok(());
+            // 非本项目的文件。**必须拒绝**：下面会走到「初始化新库」的路径并把
+            // Page 0 写掉，从而毁掉原文件。
+            //
+            // 修复前的行为正是直接放行（注释写着「交由后续路径处理」），实测结果是
+            // 一个 8 KB 的任意文件被打开、写入后前 8 KB 内容全部被覆盖。
+            return Err(GraphError::StorageError(format!(
+                "'{}' exists but is not a GraphLite database (its header does not \
+                 begin with the '{}' magic).\n\
+                 Refusing to open it: doing so would initialize the file and \
+                 overwrite its current contents.\n\
+                 If you meant to create a new database, choose a path that does not \
+                 exist yet.",
+                db_path.display(),
+                String::from_utf8_lossy(crate::page::DB_PAGE_MAGIC)
+            )));
         }
 
         let file_version = u32::from_le_bytes(

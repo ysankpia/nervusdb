@@ -407,6 +407,29 @@ _No unreleased changes yet._
 
 ### Fixed
 
+- **Opening a non-database file silently destroyed it.** `check_format_version`
+  passed through any file whose magic did not match — the comment said "let the
+  later path handle it", and the later path initialised it as a **new database**,
+  writing Page 0 over whatever was there.
+
+  Measured before the fix: an 8 KB file of arbitrary bytes opened successfully, and
+  after a single write its first 8 KB were overwritten. `open` is never expected to
+  be destructive, so this was release-blocking.
+
+  The criterion is now deliberately narrow: only a **nonexistent** path or a
+  **zero-length** file is treated as a new database. Everything else with a
+  non-GraphLite header is refused with an error that says why and what to do.
+
+  A 4 KiB all-zero file is refused too. It is the shape most likely to be mistaken
+  for "an empty database", but it is equally likely to be truncated data from
+  something else, and guessing wrong here destroys a file.
+
+  `test_open_refuses_non_database_files_without_modifying_them` asserts both halves:
+  the open fails, **and** the file's bytes are unchanged — the second part is what
+  actually pins the defect. It also checks the two legitimate new-database shapes
+  still work, so the check is not merely over-tightened.
+
+
 - **`graphlite-studio` died when its stdout reader went away.** `println!` panics
   if the write fails, and that panic happened on the main thread — so piping the
   output anywhere that stops reading (a test harness, `head`, a log collector)

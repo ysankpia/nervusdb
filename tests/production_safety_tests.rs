@@ -4,6 +4,7 @@
 //! 1. 同一数据库被两个句柄同时写入导致静默丢数据；
 //! 2. 数据页损坏后静默返回错误/缺失数据而无人报错。
 
+use graphlite::page::PAGE_SIZE;
 use graphlite::{GraphError, GraphLite, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -1104,6 +1105,83 @@ fn test_read_only_handle_rejects_every_write_path() -> Result<(), GraphError> {
     assert_eq!(check.node_count(), 1, "no node may have been created");
     let res = check.run_cypher("MATCH (n) RETURN count(*) AS n")?;
     assert_eq!(res.rows[0].values[0].as_i64(), Some(1));
+
+    Ok(())
+}
+
+/// **打开一个非数据库文件不得破坏它。**
+///
+/// 这是为一个真实的发布阻断级缺陷写的：`check_format_version` 对 magic 不匹配的
+/// 文件直接放行（注释写着「交由后续路径处理」），而后续路径把它当**新库初始化**，
+/// 调用 `sync_header()` 写掉 Page 0。实测：一个 8 KB 的任意文件被打开后，前 8 KB
+/// 内容全部被覆盖——`open` 这个动作静默毁掉了用户的文件。
+///
+/// 判据刻意收得很紧：只有「文件不存在」与「长度为 0」才算新库。一个 4 KiB 全零
+/// 文件也拒绝——它更可能是被截断的其它数据，而不是恰好没写过内容的新库。
+#[test]
+fn test_open_refuses_non_database_files_without_modifying_them() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        // 看起来像图片/压缩包：有内容、magic 不符
+        ("photo.png", (0..8192u32).map(|i| (i % 256) as u8).collect()),
+        // 一整页全零：最容易被误判成「空库」的形态
+        ("zeros.bin", vec![0u8; PAGE_SIZE]),
+        // 短文本：比一页短且非空
+        ("notes.txt", b"my important notes".to_vec()),
+        // 大文件：确认不是只对小文件生效
+        (
+            "big.dat",
+            (0..200_000u32).map(|i| (i * 7 % 251) as u8).collect(),
+        ),
+    ];
+
+    for (name, content) in cases {
+        let path = dir.path().join(name);
+        std::fs::write(&path, &content)?;
+        let before = std::fs::read(&path)?;
+
+        let result = GraphLite::open(&path);
+        assert!(
+            result.is_err(),
+            "'{}' is not a GraphLite database and must be refused",
+            name
+        );
+
+        // 本测试的核心断言：拒绝必须是无副作用的。
+        let after = std::fs::read(&path)?;
+        assert_eq!(
+            before, after,
+            "refusing to open '{}' must not modify it, but its bytes changed",
+            name
+        );
+    }
+
+    // 反向对照：真正的「新库」两种形态必须仍然可用，否则上面的拒绝就是过度收紧
+    let fresh = dir.path().join("fresh.db");
+    {
+        let db = GraphLite::open(&fresh)?;
+        db.add_node(HashSet::from(["N".to_string()]), props(1))?;
+        db.checkpoint()?;
+    }
+    assert_eq!(
+        GraphLite::open(&fresh)?.node_count(),
+        1,
+        "opening a nonexistent path must still create a new database"
+    );
+
+    let empty = dir.path().join("empty.db");
+    std::fs::write(&empty, b"")?;
+    {
+        let db = GraphLite::open(&empty)?;
+        db.add_node(HashSet::from(["N".to_string()]), props(2))?;
+        db.checkpoint()?;
+    }
+    assert_eq!(
+        GraphLite::open(&empty)?.node_count(),
+        1,
+        "a zero-length file must still be treated as a new database"
+    );
 
     Ok(())
 }
