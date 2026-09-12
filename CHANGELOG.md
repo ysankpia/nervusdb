@@ -407,6 +407,55 @@ _No unreleased changes yet._
 
 ### Fixed
 
+- **`LIMIT` push-down silently discarded `WHERE`, returning wrong rows.** The
+  fast path added for `LIMIT` used the predicate only to narrow the *candidate
+  start nodes* via the index; it never applied the row filter, which the normal
+  path does with a trailing `retain(eval_expr_truthy)`.
+
+  Measured on five nodes with `age` 10..50:
+
+  ```text
+  MATCH (n:P) WHERE n.age < 30 RETURN n.age LIMIT 5  ->  5 rows (expected 2)
+  MATCH (n:P) WHERE id(n) = 3 RETURN n.age LIMIT 1   ->  10   (expected 30)
+  ```
+
+  The verification written at the time missed it because every query it compared
+  had **no** `WHERE` clause — it only checked "with LIMIT" against "without LIMIT",
+  and both were wrong in the same way. The regression test now covers seven
+  predicate shapes (comparisons, `AND`/`OR`, `id()`), and asserts that the cap
+  counts only rows that pass the filter, so `LIMIT 10` cannot return fewer rows
+  than exist.
+
+- **Unique constraints were enforced on only two of five write paths.**
+  `GraphLite::add_node` and `update_node_property` checked them; `Cypher CREATE`,
+  `MATCH ... CREATE`, and `Transaction::commit` all call `DiskGraph::add_node`
+  directly and bypassed the check entirely.
+
+  Measured: after declaring `(:C {name})` unique, `CREATE (x:C {name:'林渊'})`
+  silently inserted a duplicate, as did a transaction — while the Rust API
+  correctly refused. A constraint that only holds for some callers is worse than
+  no constraint, because it implies the data is clean.
+
+  The check now lives on `IndexManager` (which owns both the constraint set and
+  the index needed to evaluate it) and all five paths route through it.
+
+- **A failed transaction made a constrained label permanently unwritable.**
+  `invalidate_all()` downgrades every label index to `Registered`, and the
+  constraint guard treated "index not built" as a violation. So after one
+  rejected duplicate, *every* subsequent write to that label failed — including
+  perfectly valid values:
+
+  ```text
+  CREATE (x:C {name:'林渊'})   -> rejected (correct)
+  CREATE (y:C {name:'苏晴'})   -> rejected (wrong: not a duplicate)
+  ```
+
+  The guard now rebuilds the index on demand instead of refusing. The original
+  reasoning ("if uniqueness cannot be verified, do not write") had the right
+  intent but the wrong remedy: refusing is only correct if the index can never be
+  rebuilt, and it can.
+
+
 - **Two places violated the project's own invariant 13: `.lock().unwrap()` in
   library code.** `get_or_allocate_node_page` and `get_or_allocate_edge_page` used
   it for a page-number cache. `AGENTS.md` forbids that pattern outright and

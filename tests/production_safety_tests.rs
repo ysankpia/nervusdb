@@ -1253,3 +1253,96 @@ fn test_graph_metadata_survives_beyond_one_page() -> Result<(), GraphError> {
 
     Ok(())
 }
+
+/// **唯一约束必须拦住每一条写入路径，而不只是 Rust API 的两个入口。**
+///
+/// 这是为一个真实的严重缺陷写的：约束检查只挂在 `GraphLite::add_node` 与
+/// `update_node_property` 上，而 `Cypher CREATE`（`execute_create`、
+/// `apply_create_clause`）与 `Transaction::commit` 都直接调用 `DiskGraph::add_node`，
+/// 于是**绕过了约束**。
+///
+/// 实测：声明 `(:C {name})` 唯一之后，
+/// - `CREATE (x:C {name:'林渊'})` 静默插入第二个同名节点
+/// - 事务里的 `add_node` 同样
+/// - 而 Rust 的 `add_node` 被正确拦住
+///
+/// 也就是说约束只在「用户恰好用 Rust API 写」时才生效——一条声明了却不生效的
+/// 约束比没有约束更危险，因为它会让人以为数据是干净的。
+///
+/// 本测试逐条覆盖每个写入口，并验证它**没有过度收紧**（不同值仍可写入）。
+#[test]
+fn test_unique_constraint_applies_to_every_write_path() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = GraphLite::open(dir.path().join("uc_paths.db"))?;
+
+    let named = |name: &str| {
+        let mut p = HashMap::new();
+        p.insert("name".to_string(), Value::from(name));
+        (HashSet::from(["C".to_string()]), p)
+    };
+    let count_of = |db: &GraphLite, name: &str| -> Result<i64, GraphError> {
+        let r = db.run_cypher(&format!(
+            "MATCH (c:C) WHERE c.name = '{}' RETURN count(*) AS n",
+            name
+        ))?;
+        Ok(r.rows[0].values[0].as_i64().unwrap_or(-1))
+    };
+
+    db.add_node(named("林渊").0, named("林渊").1)?;
+    db.create_unique_constraint("C", "name")?;
+    assert_eq!(count_of(&db, "林渊")?, 1);
+
+    // 1) Rust API
+    assert!(
+        db.add_node(named("林渊").0, named("林渊").1).is_err(),
+        "GraphLite::add_node must honour the constraint"
+    );
+
+    // 2) Cypher CREATE —— 修复前这条会成功
+    assert!(
+        db.run_cypher("CREATE (x:C {name: '林渊'})").is_err(),
+        "Cypher CREATE must honour the constraint"
+    );
+
+    // 3) 事务提交 —— 修复前这条也会成功
+    assert!(
+        db.with_transaction(|tx| {
+            tx.add_node(named("林渊").0, named("林渊").1)?;
+            Ok(())
+        })
+        .is_err(),
+        "a transaction must honour the constraint"
+    );
+
+    // 4) MATCH ... CREATE
+    assert!(
+        db.run_cypher("MATCH (c:C) CREATE (y:C {name: '林渊'})")
+            .is_err(),
+        "MATCH ... CREATE must honour the constraint"
+    );
+
+    // 5) 批量接口
+    assert!(
+        db.with_transaction(|tx| {
+            tx.add_nodes(vec![named("林渊")])?;
+            Ok(())
+        })
+        .is_err(),
+        "the batch API must honour the constraint"
+    );
+
+    // 关键收尾：一次都不许漏过去
+    assert_eq!(
+        count_of(&db, "林渊")?,
+        1,
+        "no write path may have created a duplicate"
+    );
+
+    // 反向对照：约束不得变成「这个标签不许再写」
+    db.add_node(named("苏晴").0, named("苏晴").1)?;
+    db.run_cypher("CREATE (z:C {name: '叶辰'})")?;
+    assert_eq!(count_of(&db, "苏晴")?, 1);
+    assert_eq!(count_of(&db, "叶辰")?, 1);
+
+    Ok(())
+}

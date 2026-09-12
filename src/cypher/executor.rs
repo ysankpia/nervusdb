@@ -258,7 +258,20 @@ impl<'a> CypherReadOnlyExecutor<'a> {
                 ctx.insert(var.clone(), Binding::Node(start_id));
             }
 
-            self.match_path_step(pattern, 0, start_id, &ctx, &mut matched)?;
+            // 下推到本起点的行先收进临时缓冲，**过滤 WHERE 之后**才计入 cap。
+            //
+            // 这里不能直接把 `match_path_step` 的输出并进 `matched`：`cap` 统计的
+            // 必须是「已经满足 WHERE 的行数」。若先按未过滤的行数截断，`LIMIT n`
+            // 就可能返回少于 n 行——而那些被丢掉的行里本来有满足条件的。
+            let mut produced = Vec::new();
+            self.match_path_step(pattern, 0, start_id, &ctx, &mut produced)?;
+
+            match where_clause {
+                Some(w) => {
+                    matched.extend(produced.into_iter().filter(|c| self.eval_expr_truthy(w, c)))
+                }
+                None => matched.extend(produced),
+            }
         }
 
         Ok(matched)
@@ -1458,6 +1471,14 @@ impl<'a> CypherExecutor<'a> {
             for node_pat in &pattern.nodes {
                 let labels: HashSet<String> = node_pat.labels.iter().cloned().collect();
 
+                // 唯一约束必须在这里也过一遍：Cypher 直接调 `DiskGraph::add_node`，
+                // 绕过了 `GraphLite::add_node` 上的检查。
+                self.index_mgr.guard_unique_constraints(
+                    self.graph,
+                    &labels,
+                    &node_pat.properties,
+                    None,
+                )?;
                 let node_id = self
                     .graph
                     .add_node(labels.clone(), node_pat.properties.clone())?;
@@ -1633,6 +1654,13 @@ impl<'a> CypherExecutor<'a> {
                 }
 
                 let labels: HashSet<String> = node_pat.labels.iter().cloned().collect();
+                // 同上：约束闸门对 `MATCH ... CREATE` 路径同样必须生效
+                self.index_mgr.guard_unique_constraints(
+                    self.graph,
+                    &labels,
+                    &node_pat.properties,
+                    None,
+                )?;
                 let node_id = self
                     .graph
                     .add_node(labels.clone(), node_pat.properties.clone())?;

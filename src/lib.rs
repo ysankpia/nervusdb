@@ -408,39 +408,6 @@ impl GraphLite {
         Ok(())
     }
 
-    /// 写入前校验唯一约束；返回 `Err` 时该写入必须整体放弃。
-    ///
-    /// 遍历节点标签与属性的**笛卡尔关系**：约束声明在 `(:Label {prop})` 上，
-    /// 因此只有「节点带该标签 **且** 带该属性」才需要检查。
-    ///
-    /// `exclude` 是正在被更新的节点自身（新建时为 `None`）：更新一个节点的属性
-    /// 不应与它自己的旧值冲突。
-    fn check_unique_constraints(
-        index_mgr: &IndexManager,
-        labels: &HashSet<String>,
-        properties: &HashMap<String, Value>,
-        exclude: Option<u64>,
-    ) -> Result<(), GraphError> {
-        // 无约束时立即返回：这是绝大多数写入的路径，不应有任何额外开销
-        if index_mgr.unique_constraints().is_empty() {
-            return Ok(());
-        }
-        for label in labels {
-            for (prop, value) in properties {
-                if let Some((l, p, detail)) =
-                    index_mgr.check_unique_violation(label, prop, value, exclude)
-                {
-                    return Err(GraphError::UniqueConstraintViolation {
-                        label: l,
-                        prop: p,
-                        detail,
-                    });
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// 打开前校验磁盘格式版本，**早于任何写入**（含 WAL 回放）。
     ///
     /// 只读主文件的前 4096 字节——足够读到 magic 与版本字段，且不需要
@@ -1127,7 +1094,16 @@ impl GraphLite {
             .map_err(|e| GraphError::General(e.to_string()))?;
 
         // 唯一约束校验必须在**任何写入之前**：否则失败会留下半个节点。
-        Self::check_unique_constraints(&inner.index_mgr, &labels, &properties, None)?;
+        // 统一走 `IndexManager` 上的闸门：它会在索引不可用时按需重建，
+        // 而不是把合法写入一并拒绝。
+        {
+            let GraphInner {
+                index_mgr,
+                disk_graph,
+                ..
+            } = &mut *inner;
+            index_mgr.guard_unique_constraints(disk_graph, &labels, &properties, None)?;
+        }
 
         let tx_id = inner.next_tx_id;
         inner.next_tx_id += 1;
@@ -1260,7 +1236,14 @@ impl GraphLite {
         if let Ok(Some(node)) = inner.disk_graph.get_node(id) {
             let mut props = HashMap::new();
             props.insert(key_str.clone(), val.clone());
-            Self::check_unique_constraints(&inner.index_mgr, &node.labels, &props, Some(id))?;
+            {
+                let GraphInner {
+                    index_mgr,
+                    disk_graph,
+                    ..
+                } = &mut *inner;
+                index_mgr.guard_unique_constraints(disk_graph, &node.labels, &props, Some(id))?;
+            }
         }
 
         inner
@@ -1917,23 +1900,45 @@ impl Transaction {
                     id,
                     labels,
                     properties,
-                } => inner
-                    .disk_graph
-                    .insert_node_with_id_exact(*id, labels.clone(), properties.clone())
-                    .map(|_| {
-                        for l in labels {
-                            inner.index_mgr.insert_label(l, *id);
-                            inner.disk_graph.index_catalog.labels.insert(l.clone());
-                            for (k, v) in properties {
-                                inner.index_mgr.insert_property(l, k, v.clone(), *id);
-                                inner
-                                    .disk_graph
-                                    .index_catalog
-                                    .properties
-                                    .insert((l.clone(), k.clone()));
+                } => {
+                    // 唯一约束闸门：事务提交同样不得绕过。
+                    // 放在 apply 阶段（而非 `Transaction::add_node`）是有意的——
+                    // 这样一次违例会让**整个事务**原子失败并干净回滚，而不是留下
+                    // 一半已入队的动作。
+                    //
+                    // 先解构借用两个字段：`guard_unique_constraints` 需要同时拿到
+                    // `&mut IndexManager` 与 `&DiskGraph`，而它们是 `inner` 的两个
+                    // 字段，直接写 `&inner.disk_graph` 会与 `inner.index_mgr` 的
+                    // 可变借用冲突。
+                    let GraphInner {
+                        index_mgr,
+                        disk_graph,
+                        ..
+                    } = &mut *inner;
+                    index_mgr
+                        .guard_unique_constraints(disk_graph, labels, properties, None)
+                        .and_then(|_| {
+                            disk_graph.insert_node_with_id_exact(
+                                *id,
+                                labels.clone(),
+                                properties.clone(),
+                            )
+                        })
+                        .map(|_| {
+                            for l in labels {
+                                inner.index_mgr.insert_label(l, *id);
+                                inner.disk_graph.index_catalog.labels.insert(l.clone());
+                                for (k, v) in properties {
+                                    inner.index_mgr.insert_property(l, k, v.clone(), *id);
+                                    inner
+                                        .disk_graph
+                                        .index_catalog
+                                        .properties
+                                        .insert((l.clone(), k.clone()));
+                                }
                             }
-                        }
-                    }),
+                        })
+                }
                 TxAction::AddEdge {
                     id,
                     src_id,

@@ -637,3 +637,120 @@ fn plan_text(res: &graphlite::CypherResultSet) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+// =========================================================================
+// LIMIT 下推不得跳过 WHERE
+// =========================================================================
+/// **`LIMIT` 与 `WHERE` 同时出现时，`WHERE` 必须照常生效。**
+///
+/// 这是为一个真实的严重缺陷写的：为加速 `LIMIT` 而下推匹配时，新的快速路径只
+/// 用 `WHERE` 做**索引层面的候选筛选**，却漏掉了最后的内容过滤——而完整路径
+/// (`find_matches`) 是靠末尾的 `retain(eval_expr_truthy)` 完成过滤的。
+///
+/// 后果是静默返回错误数据：
+///
+/// ```text
+/// MATCH (n:P) WHERE n.age < 30 RETURN n.age LIMIT 5   ->  5 行（应为 2 行）
+/// MATCH (n:P) WHERE id(n) = 3 RETURN n.age LIMIT 1    ->  10（应为 30）
+/// ```
+///
+/// 该缺陷之所以逃过当时的等价性验证，是因为那些查询**没有带 WHERE 条件**——
+/// 只对比了「有 LIMIT / 无 LIMIT」两种写法，而两者的过滤行为恰好都不对。
+/// 因此本测试刻意覆盖多种谓词形态，而不只是一个。
+#[test]
+fn test_limit_pushdown_does_not_drop_where_clause() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = GraphLite::open(dir.path().join("where_limit.db"))?;
+
+    // 5 个节点，age = 10,20,30,40,50
+    db.with_transaction(|tx| {
+        for i in 1..=5i64 {
+            let mut m = HashMap::new();
+            m.insert("age".to_string(), Value::from(i * 10));
+            tx.add_node(HashSet::from(["P".to_string()]), m)?;
+        }
+        Ok(())
+    })?;
+
+    // (查询, 期望行数, 期望的首个值)
+    let cases: &[(&str, usize, Option<i64>)] = &[
+        // 比较运算符：不是索引能处理的形式，最容易暴露漏过滤
+        (
+            "MATCH (n:P) WHERE n.age < 30 RETURN n.age AS a LIMIT 5",
+            2,
+            Some(10),
+        ),
+        (
+            "MATCH (n:P) WHERE n.age < 30 RETURN n.age AS a LIMIT 1",
+            1,
+            Some(10),
+        ),
+        (
+            "MATCH (n:P) WHERE n.age >= 30 RETURN n.age AS a LIMIT 10",
+            3,
+            Some(30),
+        ),
+        // 逻辑组合
+        (
+            "MATCH (n:P) WHERE n.age < 30 OR n.age > 40 RETURN n.age AS a LIMIT 10",
+            3,
+            Some(10),
+        ),
+        (
+            "MATCH (n:P) WHERE n.age < 30 AND n.age > 15 RETURN n.age AS a LIMIT 10",
+            1,
+            Some(20),
+        ),
+        // id 谓词：下推路径确实会被触发，且值本身必须正确
+        (
+            "MATCH (n:P) WHERE id(n) = 3 RETURN n.age AS a LIMIT 1",
+            1,
+            Some(30),
+        ),
+        // 不带 LIMIT 的对照，确认两条路径给出一致结果
+        (
+            "MATCH (n:P) WHERE n.age < 30 RETURN n.age AS a",
+            2,
+            Some(10),
+        ),
+    ];
+
+    for (query, expect_rows, expect_first) in cases {
+        let result = db.run_cypher(query)?;
+        assert_eq!(
+            result.rows.len(),
+            *expect_rows,
+            "wrong row count for `{}` (WHERE must filter before LIMIT applies)",
+            query
+        );
+        if let Some(expected) = expect_first {
+            assert_eq!(
+                result.rows[0].values[0].as_i64(),
+                Some(*expected),
+                "wrong first value for `{}`",
+                query
+            );
+        }
+    }
+
+    // LIMIT 不得让结果**少于**请求数：被过滤掉的行不能计入上限。
+    // 20 个节点里只有 3 个满足 age < 30，`LIMIT 10` 必须给出全部 3 个。
+    let dir2 = tempdir()?;
+    let db2 = GraphLite::open(dir2.path().join("cap.db"))?;
+    db2.with_transaction(|tx| {
+        for i in 1..=20i64 {
+            let mut m = HashMap::new();
+            m.insert("age".to_string(), Value::from(i));
+            tx.add_node(HashSet::from(["Q".to_string()]), m)?;
+        }
+        Ok(())
+    })?;
+    let r = db2.run_cypher("MATCH (n:Q) WHERE n.age < 3 RETURN n.age AS a LIMIT 10")?;
+    assert_eq!(
+        r.rows.len(),
+        2,
+        "the cap must count only rows that pass WHERE, not raw matches"
+    );
+
+    Ok(())
+}
