@@ -35,6 +35,21 @@ user has to act on them:
   asserts both halves: `"null"` as a value counts like any other, and `avg` / `min`
   over an empty set return `Null`.
 
+- **A high-parallelism concurrency stress suite.** The existing stress test pinned
+  20 threads, which over-subscribes an 8-core machine and under-loads a 64-core one.
+  `concurrency_stress_tests.rs` scales its thread count to `available_parallelism()`
+  and asserts only hardware-independent properties: every thread joins (no deadlock),
+  the node count equals the sum of per-thread writes (no lost writes), the structure
+  stays self-consistent, and readers make progress. Throughput is deliberately not
+  asserted — AGENTS.md §3.2 records a previous test that passed locally and failed on
+  CI because a cloud disk's fsync behaviour differs.
+
+- **A version-consistency guard.** The version is written in five manifests (root and
+  both binding crates, `pyproject.toml`, `package.json`). Missing one at release time
+  produces an artifact that claims to be a version it was not built from, and that
+  cannot be corrected after publication. A test now fails if any two disagree, with a
+  negative control for the parser itself.
+
 - **A bound on the transaction action queue.** A transaction holds every action in
   memory until it commits, and that queue was unbounded — which contradicted the
   project's own rule that memory is bounded by the buffer pool. Measured with a real

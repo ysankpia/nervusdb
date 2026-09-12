@@ -145,3 +145,112 @@ delta = \"3.0\"
     let deps = runtime_dependencies(sample);
     assert_eq!(deps, vec!["alpha", "beta", "gamma"]);
 }
+
+// =========================================================================
+// 版本号一致性守卫
+// =========================================================================
+//
+// 版本号写在五个地方：根 `Cargo.toml`，两个绑定 crate 的 `Cargo.toml`，
+// Python 的 `pyproject.toml`，Node 的 `package.json`。发布时任何一处漏改，
+// 都会产生**版本号与代码不符**的产物：用户装到的 SDK 声称是 1.0.0，实际却是
+// 另一个版本的核心。这类问题在发布之后很难发现，也几乎无法收回。
+//
+// 因此用一条编译期测试钉死：所有版本号必须完全相等。
+
+/// 从文本里提取第一个匹配 `key = "value"` / `key: "value"` 的值。
+///
+/// 必须校验**键名边界**：`rust-version` 与 `version-id` 都以 `version` 开头，
+/// 用 `strip_prefix` 直接匹配会把它们误当成版本号——那样守卫可能对着错误的行断言。
+fn extract_version(text: &str, key: &str) -> Option<String> {
+    for raw in text.lines() {
+        let line = raw.trim();
+
+        // 支持 TOML 的 `version` 与 JSON 的 "version"
+        let rest = if let Some(r) = line.strip_prefix(key) {
+            r
+        } else if let Some(r) = line.strip_prefix(&format!("\"{key}\"")) {
+            r
+        } else {
+            continue;
+        };
+
+        // 键名之后必须紧跟分隔符（或空白后紧跟分隔符），否则是另一个键
+        let rest = rest.trim_start();
+        let rest = if let Some(r) = rest.strip_prefix('=') {
+            r
+        } else if let Some(r) = rest.strip_prefix(':') {
+            r
+        } else {
+            continue;
+        };
+
+        let rest = rest.trim_start();
+        let rest = rest.strip_prefix('"')?;
+        let end = rest.find('"')?;
+        return Some(rest[..end].to_string());
+    }
+    None
+}
+
+#[test]
+fn all_manifests_share_one_version() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    let cases = [
+        ("Cargo.toml", root.join("Cargo.toml")),
+        (
+            "bindings/python/Cargo.toml",
+            root.join("bindings/python/Cargo.toml"),
+        ),
+        (
+            "bindings/nodejs/Cargo.toml",
+            root.join("bindings/nodejs/Cargo.toml"),
+        ),
+        (
+            "bindings/python/pyproject.toml",
+            root.join("bindings/python/pyproject.toml"),
+        ),
+        (
+            "bindings/nodejs/package.json",
+            root.join("bindings/nodejs/package.json"),
+        ),
+    ];
+
+    let mut versions: Vec<(&str, String)> = Vec::new();
+    for (label, path) in cases {
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let v = extract_version(&text, "version")
+            .unwrap_or_else(|| panic!("{label} has no version field"));
+        versions.push((label, v));
+    }
+
+    let (first_label, first) = &versions[0];
+    for (label, v) in &versions[1..] {
+        assert_eq!(
+            v, first,
+            "{label} declares {v} but {first_label} declares {first}; \
+             a released artifact whose version does not match the core it was built from \
+             is impossible to correct after the fact"
+        );
+    }
+}
+
+/// 解析器本身要可信，否则上面的守卫可能是假绿。
+#[test]
+fn version_parser_handles_both_formats() {
+    assert_eq!(
+        extract_version("[package]\nversion = \"1.2.3\"\n", "version"),
+        Some("1.2.3".to_string())
+    );
+    assert_eq!(
+        extract_version("{\n  \"version\": \"4.5.6\",\n}\n", "version"),
+        Some("4.5.6".to_string())
+    );
+    // 不误匹配其它以 version 开头的键
+    assert_eq!(
+        extract_version("rust-version = \"1.89\"\n", "version"),
+        None
+    );
+    assert_eq!(extract_version("version-id = \"9\"\n", "version"), None);
+}

@@ -54,7 +54,7 @@ Working and covered by tests:
 - Tooling: Python and Node.js SDKs with transaction and batch-write support.
   Inspection and dump go through the library API — the CLI and the browser
   workbench were removed in 1.1.0.
-- 182 test cases across 15 suites (181 run, 1 intentionally `#[ignore]`d for a
+- 187 test cases across 16 suites (186 run, 1 intentionally `#[ignore]`d for a
   child-process lock probe); `cargo fmt`, `cargo clippy -D warnings` and
   `rustdoc -D warnings` all clean.
 
@@ -104,11 +104,15 @@ from debug builds of the bindings compared against a release core. Measured with
 both sides in release the bindings run at 0.85-0.93x of the native path. See
 `docs/benchmarks.md` for the corrected table and the retraction.
 
-### 5. Concurrency stress at high core counts
+### 5. Latch contention profile on many-core machines
 
-The current suite exercises 20 threads. Behaviour under sustained load on
-many-core machines, and the contention profile of the page latches, are not yet
-characterised.
+**Stress coverage added in 1.1.0.** `concurrency_stress_tests.rs` scales its thread
+count to the machine and asserts the hardware-independent guarantees (no deadlock, no
+lost writes, self-consistent structure, readers make progress).
+
+What is still missing is the *measurement*: which properties degrade as cores grow,
+and where the page latches become the bottleneck. That needs a profiling run on a
+many-core machine, not another correctness test.
 
 ## Explicitly out of scope
 

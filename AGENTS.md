@@ -204,6 +204,7 @@ graphlite-rs/
     ├── unwind_tests.rs         # UNWIND expansion, batch ingestion, statement atomicity
     ├── merge_tests.rs          # MERGE idempotence, ON CREATE / ON MATCH, whole-pattern semantics
     ├── concurrency_isolation_tests.rs # Snapshot consistency, atomic visibility, no lost writes
+    ├── concurrency_stress_tests.rs # Core-count-adaptive read/write stress
     ├── analytics_tests.rs      # PageRank / WCC / K-Hop subgraph analytics
     ├── steal_spill_tests.rs    # STEAL spilling, rollback zero-pollution, checkpoint semantics
     ├── slotted_property_tests.rs # Slotted page packing, slot reuse, compaction, density target

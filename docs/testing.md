@@ -36,10 +36,10 @@ cargo test --test robustness_tests        # page CRC at scale, WAL replay, chunk
 
 ## Current state
 
-**182 test cases — 181 pass, 1 intentionally `#[ignore]`d** (a child-process lock
+**187 test cases — 186 pass, 1 intentionally `#[ignore]`d** (a child-process lock
 probe launched by its parent test).
 
-Run as 14 integration suites plus 20 inline unit tests in the hand-written codecs
+Run as 15 integration suites plus 20 inline unit tests in the hand-written codecs
 (`src/codec.rs`, `src/json.rs`, `src/crc32.rs`), which are what the on-disk format
 is made of:
 
@@ -51,6 +51,7 @@ is made of:
 | `unwind_tests.rs`            | 16    | `UNWIND`, batch ingestion, statement atomicity                     |
 | `merge_tests.rs`             | 14    | `MERGE` idempotence, ON CREATE / ON MATCH                           |
 | `concurrency_isolation_tests.rs` | 9 | Snapshot consistency, atomic visibility, no lost writes             |
+| `concurrency_stress_tests.rs` | 3   | Core-count-adaptive mixed read/write stress                         |
 | `edge_locality_tests.rs`     | 9     | Weave equivalence, self-loops, false-spill elimination             |
 | `robustness_tests.rs`        | 8     | File lock, auto-checkpoint, page CRC at scale, WAL replay, chunking |
 | `batch_tx_tests.rs`          | 7     | Batch commits, single-fsync contract, throughput                   |
@@ -58,7 +59,7 @@ is made of:
 | `analytics_tests.rs`         | 7     | PageRank, WCC, K-hop                                               |
 | `steal_spill_tests.rs`       | 5     | Spilling, rollback pollution, checkpoint                           |
 | `equivalence_tests.rs`       | 4     | v1.0.0 behaviour guardrails: query, transaction, API, format       |
-| `zero_dependency_tests.rs`   | 3     | Enforces the empty dependency tree (with a negative control)       |
+| `zero_dependency_tests.rs`   | 5     | Empty dependency tree, version agreement (with negative controls)   |
 | inline (in `src/`)           | 20    | `codec` / `json` / `crc32` round-trips, truncation, vectors         |
 
 Run one suite:
