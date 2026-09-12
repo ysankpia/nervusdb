@@ -35,6 +35,37 @@ user has to act on them:
   asserts both halves: `"null"` as a value counts like any other, and `avg` / `min`
   over an empty set return `Null`.
 
+- **`MERGE <pattern>` — the idempotent write clause.** It matches the pattern and
+  reuses what it finds; only when nothing matches does it create:
+
+  ```text
+  MERGE (u:User {name: 'alice'})                            -- creates
+  MERGE (u:User {name: 'alice'})                            -- reuses, still 1 node
+  MERGE (a:Acct {id: 7}) ON CREATE SET a.created = 1
+                        ON MATCH  SET a.seen = 9
+  MERGE (x:A {k: 1})-[:R]->(y:B {k: 2})                     -- whole pattern, either way
+  ```
+
+  The point is idempotence: "check, then create" written by hand has a gap between
+  the check and the write, and the duplicates that gap produces are silent — they
+  surface later as a count that is too high. `is_mutating()` returns true for
+  `MERGE` unconditionally, even for a run that writes nothing, because whether it
+  writes is only known after matching and a shared read lock would let two
+  concurrent `MERGE`s both find nothing and both create.
+
+  Two semantics are worth stating because they are easy to get subtly wrong:
+
+  - **Matching uses MATCH filter semantics.** Properties named in the pattern must
+    be equal, but a node carrying *extra* properties still matches. (Cypher's own
+    `MERGE (person:Person) ON MATCH SET ...` example matches all six `Person`
+    nodes.)
+  - **The pattern is matched or created as a whole.** If any part is missing, the
+    *entire* pattern is created — including a second `:A {k: 1}` in
+    `MERGE (x:A {k: 1})-[:R]->(y:B {k: 3})`. Cypher's `HAS_CHAUFFEUR` example makes
+    the same point: it creates `Chauffeur` nodes even though `Person` nodes with
+    those names already exist. Partial reuse would make the result depend on which
+    parts happened to exist, which is not a rule anyone can predict from the query.
+
 - **A failed multi-record statement left part of its work behind.** A write
   statement that failed partway through kept its already-written pages in the
   buffer pool, and the _next_ successful commit flushed them to disk — including

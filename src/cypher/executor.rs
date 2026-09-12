@@ -1463,6 +1463,29 @@ impl<'a> CypherExecutor<'a> {
                 lines.push(format!("     pattern nodes: {}", pattern.nodes.len()));
                 lines.push(format!("     pattern edges: {}", pattern.edges.len()));
             }
+            CypherStatement::Merge {
+                pattern,
+                on_create,
+                on_match,
+                return_clause,
+                ..
+            } => {
+                lines.push("WriteQuery (需要排他写锁)".to_string());
+                lines.push("  ├─ Merge (整体匹配优先，不匹配才创建)".to_string());
+                lines.push(format!("  │    pattern nodes: {}", pattern.nodes.len()));
+                lines.push(format!("  │    pattern edges: {}", pattern.edges.len()));
+                if !on_match.is_empty() {
+                    lines.push(format!("  ├─ OnMatchSet ({} 项)", on_match.len()));
+                }
+                if !on_create.is_empty() {
+                    lines.push(format!("  ├─ OnCreateSet ({} 项)", on_create.len()));
+                }
+                if return_clause.is_some() {
+                    lines.push("  └─ Project".to_string());
+                } else {
+                    lines.push("  └─ (无 RETURN)".to_string());
+                }
+            }
             CypherStatement::Unwind {
                 variable,
                 create_clause,
@@ -1642,6 +1665,23 @@ impl<'a> CypherExecutor<'a> {
                 skip,
                 limit,
                 create_clause,
+            ),
+            CypherStatement::Merge {
+                pattern,
+                on_create,
+                on_match,
+                return_clause,
+                order_by,
+                skip,
+                limit,
+            } => self.execute_merge(
+                &pattern,
+                &on_create,
+                &on_match,
+                return_clause,
+                order_by,
+                skip,
+                limit,
             ),
             CypherStatement::Match(clause) => {
                 let MatchClause {
@@ -1835,6 +1875,112 @@ impl<'a> CypherExecutor<'a> {
         }
 
         Ok((nodes_created, edges_created, bindings))
+    }
+
+    /// 执行 `MERGE <pattern> [ON CREATE SET ...] [ON MATCH SET ...] [RETURN ...]`。
+    ///
+    /// 语义是**幂等写**：模式整体匹配到就复用，匹配不到才创建。这让「先查再写」
+    /// 不必由调用方实现——调用方实现时「检查」与「写入」之间存在空隙，而那条
+    /// 路径产生的重复数据是静默的，只在后续统计时表现为计数偏高。
+    ///
+    /// ## 为什么是整体匹配
+    ///
+    /// 与 Cypher 一致：`MERGE (a:X {k: 1})-[:R]->(b:Y {k: 2})` 只有在**整条路径**
+    /// 存在时才复用。若允许部分复用，同一个查询在不同初始状态下会拼接出
+    /// 「半新半旧」的路径，且没有明确规则可循。整体匹配让结果只取决于模式是否
+    /// 完整存在，是唯一可预测的语义。
+    ///
+    /// ## 为什么必须走排他写锁
+    ///
+    /// `is_mutating()` 对 MERGE 恒返回 true，即使这次命中、一个字节都没写。
+    /// 因为「是否写入」要匹配完才知道，而用共享读锁执行会让两个并发的 MERGE
+    /// 同时判定「不存在」然后各创建一个——正是这个子句要消除的重复。
+    #[allow(clippy::too_many_arguments)]
+    fn execute_merge(
+        &mut self,
+        pattern: &PathPattern,
+        on_create: &[SetItem],
+        on_match: &[SetItem],
+        return_clause: Option<Vec<ReturnItem>>,
+        order_by: Vec<OrderItem>,
+        skip: Option<usize>,
+        limit: Option<usize>,
+    ) -> Result<CypherResultSet, GraphError> {
+        // 1) 先匹配。MERGE 的模式属性已被解析期限定为字面量，与 MATCH 同一套索引路径。
+        let matched = {
+            let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+            ro.find_matches(std::slice::from_ref(pattern), &None)?
+        };
+
+        let mut nodes_created = 0;
+        let mut edges_created = 0;
+        let mut properties_set = 0;
+
+        if matched.is_empty() {
+            // 2a) 不存在：创建整个模式，并把 ON CREATE SET 施加到新节点/边上
+            let (nc, ec, _bindings) =
+                self.create_patterns(std::slice::from_ref(pattern), &RowCtx::new())?;
+            nodes_created = nc;
+            edges_created = ec;
+
+            if !on_create.is_empty() {
+                // 重新匹配以拿到刚创建实体的变量绑定，再施加 SET。
+                // 直接用 _bindings 也可以，但那样必须把「模式里哪个变量对应哪一行」
+                // 再推导一遍；重新匹配复用同一条已测试的路径，少一份实现。
+                let created = {
+                    let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+                    ro.find_matches(std::slice::from_ref(pattern), &None)?
+                };
+                properties_set += self.apply_set(on_create, &created)?;
+            }
+        } else {
+            // 2b) 已存在：只施加 ON MATCH SET。
+            // 这一步可能修改属性，因此必须让二级索引跟上（apply_set 内部负责），
+            // 否则索引会与磁盘数据不一致，后续按属性查询会漏结果。
+            if !on_match.is_empty() {
+                properties_set += self.apply_set(on_match, &matched)?;
+            }
+        }
+
+        // 3) 投影：与 MATCH 的写路径相同——按变更后的图状态重新匹配再投影。
+        // 用变更前的 matched 投影会让 RETURN 看到旧属性（甚至看到还没创建的节点）。
+        let items = match return_clause {
+            Some(items) => items,
+            None => {
+                let mut stats = create_result_set(nodes_created, edges_created).stats;
+                stats.properties_set = properties_set;
+                stats.message = format!(
+                    "Merged: created {} nodes, {} relationships, set {} properties.",
+                    nodes_created, edges_created, properties_set
+                );
+                return Ok(CypherResultSet {
+                    columns: vec!["Status".to_string()],
+                    rows: vec![Row {
+                        values: vec![Value::from(stats.message.clone())],
+                    }],
+                    stats,
+                });
+            }
+        };
+
+        let refreshed = {
+            let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+            ro.find_matches(std::slice::from_ref(pattern), &None)?
+        };
+        let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+        let mut result = ro.project_results(
+            std::slice::from_ref(pattern),
+            refreshed,
+            Some(items),
+            &order_by,
+            skip,
+            limit,
+        )?;
+
+        result.stats.nodes_created = nodes_created;
+        result.stats.edges_created = edges_created;
+        result.stats.properties_set = properties_set;
+        Ok(result)
     }
 
     /// 执行 `UNWIND <expr> AS <var> [CREATE ...] [RETURN ...]`。

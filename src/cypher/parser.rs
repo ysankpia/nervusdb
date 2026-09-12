@@ -133,6 +133,75 @@ impl Parser {
                     limit,
                 }))
             }
+            Some(Token::Merge) => {
+                self.consume();
+                let pattern = self.parse_path_pattern()?;
+
+                // MATCH 同样的字面量规则适用于 MERGE：模式在创建/匹配前无行上下文
+                for node in &pattern.nodes {
+                    reject_non_literal_properties(&node.properties, "MERGE (node)")?;
+                }
+                for edge in &pattern.edges {
+                    reject_non_literal_properties(&edge.properties, "MERGE (relationship)")?;
+                }
+
+                // ON CREATE SET ... / ON MATCH SET ...（顺序任意，可只给其中一个）
+                let mut on_create = Vec::new();
+                let mut on_match = Vec::new();
+                while self.peek() == Some(&Token::On) {
+                    self.consume();
+                    let is_create = match self.peek() {
+                        Some(Token::Create) => true,
+                        Some(Token::Match) => false,
+                        _ => {
+                            return Err(GraphError::General(
+                                "ON must be followed by CREATE or MATCH".into(),
+                            ))
+                        }
+                    };
+                    self.consume();
+                    self.expect(&Token::Set)?;
+                    let items = self.parse_set_items()?;
+                    if is_create {
+                        on_create.extend(items);
+                    } else {
+                        on_match.extend(items);
+                    }
+                }
+
+                let mut return_clause = None;
+                if self.peek() == Some(&Token::Return) {
+                    self.consume();
+                    return_clause = Some(self.parse_return_items()?);
+                }
+
+                let mut order_by = Vec::new();
+                if self.peek() == Some(&Token::Order) {
+                    self.consume();
+                    self.expect(&Token::By)?;
+                    order_by = self.parse_order_items()?;
+                }
+                let mut skip = None;
+                if self.peek() == Some(&Token::Skip) {
+                    self.consume();
+                    skip = Some(self.parse_usize_literal("SKIP")?);
+                }
+                let mut limit = None;
+                if self.peek() == Some(&Token::Limit) {
+                    self.consume();
+                    limit = Some(self.parse_usize_literal("LIMIT")?);
+                }
+
+                CypherStatement::Merge {
+                    pattern,
+                    on_create,
+                    on_match,
+                    return_clause,
+                    order_by,
+                    skip,
+                    limit,
+                }
+            }
             Some(Token::Unwind) => {
                 self.consume();
                 let expr = self.parse_expr()?;
@@ -192,7 +261,8 @@ impl Parser {
             }
             _ => {
                 return Err(GraphError::General(
-                    "Unsupported Cypher query: must start with CREATE, MATCH or UNWIND".into(),
+                    "Unsupported Cypher query: must start with CREATE, MATCH, MERGE or UNWIND"
+                        .into(),
                 ))
             }
         };

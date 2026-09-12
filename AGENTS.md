@@ -191,6 +191,7 @@ graphlite-rs/
     ├── integration_tests.rs    # Core CRUD/ACID/concurrency/index/stress regression suites
     ├── cypher_advanced_tests.rs# Cypher 1.0 syntax closure (SET/DETACH DELETE/ORDER BY/aggregates/paging)
     ├── unwind_tests.rs         # UNWIND expansion, batch ingestion, statement atomicity
+    ├── merge_tests.rs          # MERGE idempotence, ON CREATE / ON MATCH, whole-pattern semantics
     ├── analytics_tests.rs      # PageRank / WCC / K-Hop subgraph analytics
     ├── steal_spill_tests.rs    # STEAL spilling, rollback zero-pollution, checkpoint semantics
     ├── slotted_property_tests.rs # Slotted page packing, slot reuse, compaction, density target
@@ -372,6 +373,9 @@ Two traps made those first attempts useless, and both recur:
 
 ```text
 CREATE pat
+MERGE pat [ON CREATE SET item [, item ...]] [ON MATCH SET item [, item ...]]
+          [RETURN item [, item ...]]
+          [ORDER BY expr [ASC|DESC], ...] [SKIP n] [LIMIT n]
 UNWIND expr AS var [CREATE pat] [RETURN item [, item ...]]
                         [ORDER BY expr [ASC|DESC], ...] [SKIP n] [LIMIT n]
 MATCH pat [, pat ...] [WHERE expr]
@@ -402,6 +406,18 @@ variable. Two rules follow from that and both are enforced, not advisory:
 - `SET` / `DELETE` on a scalar binding is an error, not a silent no-op.
 - `is_mutating()` returns true for `UNWIND` only when it carries a `CREATE`; the
   read-only handle accepts `UNWIND ... RETURN` and rejects `UNWIND ... CREATE`.
+
+`MERGE` is the idempotent write: match the pattern, reuse it, create it only when
+nothing matches. `is_mutating()` returns true for it unconditionally, even when a
+given run writes nothing, because that is only known after matching. Two rules are
+load-bearing and both are pinned by tests:
+
+- Matching uses MATCH **filter** semantics: named properties must be equal, but
+  extra properties on an existing node do not break the match.
+- The pattern is matched or created **as a whole**. If any part is missing, the
+  entire pattern is created, including parts that already exist elsewhere in the
+  graph. Partial reuse would make the outcome depend on which parts happened to be
+  present first, which is not predictable from the query.
 
 A write statement is **atomic at statement granularity**: `GraphLite::execute` and
 `run_cypher` snapshot allocator metadata, open a transaction context, and undo a

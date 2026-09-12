@@ -272,6 +272,26 @@ pub enum CypherStatement {
         create_clause: Option<PathPattern>,
     },
 
+    /// `MERGE <pattern>`：匹配则复用，不匹配则创建。
+    ///
+    /// 这是幂等写：同一个模式重复执行不会产生重复数据，这使得「先查再写」这一
+    /// 常见模式不必由调用方自己实现——调用方实现时会出现「检查与写入之间有空隙」
+    /// 的竞态，而那条路径的失败是静默的重复数据。
+    ///
+    /// 语义要点：模式**整体**匹配。`MERGE (a)-[:R]->(b)` 若整体不存在，则整个模式
+    /// 连同两端节点一起创建（与 Cypher 一致，而不是复用部分匹配的节点）。
+    Merge {
+        pattern: PathPattern,
+        /// `ON CREATE SET ...`：本次创建时额外施加的写操作
+        on_create: Vec<SetItem>,
+        /// `ON MATCH SET ...`：命中既有数据时额外施加的写操作
+        on_match: Vec<SetItem>,
+        return_clause: Option<Vec<ReturnItem>>,
+        order_by: Vec<OrderItem>,
+        skip: Option<usize>,
+        limit: Option<usize>,
+    },
+
     /// `EXPLAIN <query>`：只输出执行计划，**不执行**查询。
     ///
     /// 计划由 `Image` 的静态结构推导，不需要触碰磁盘——因此 EXPLAIN 在空库上
@@ -284,6 +304,9 @@ impl CypherStatement {
     pub fn is_mutating(&self) -> bool {
         match self {
             CypherStatement::Create { .. } => true,
+            // MERGE 命中时虽不写数据，但它**可能**写，因此必须走排他写锁：
+            // 用读锁执行会让「检查—创建」之间的空隙变成重复数据的来源。
+            CypherStatement::Merge { .. } => true,
             // EXPLAIN 只描述计划，从不写入
             CypherStatement::Explain(_) => false,
             CypherStatement::Match(clause) => {

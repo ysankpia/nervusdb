@@ -34,10 +34,10 @@ Working and covered by tests:
 - **Concurrency: any number of readers with one writer.** Read-only handles take a
   shared lock; a write handle excludes everyone. Read-only open refuses when the
   WAL still holds unreplayed pages rather than returning stale data.
-- Cypher 1.0: `CREATE`, `MATCH` (multi-pattern), `WHERE`, `SET`, `DELETE` /
-  `DETACH DELETE`, `ORDER BY`, `SKIP`, `LIMIT`, `count/sum/avg/min/max`,
-  variable-length and undirected paths, label predicates, scalar functions
-  (`id`, `labels`, `type`), and `EXPLAIN`.
+- Cypher: `CREATE`, `MATCH` (multi-pattern), `MERGE`, `UNWIND`, `WHERE`, `SET`,
+  `DELETE` / `DETACH DELETE`, `ORDER BY`, `SKIP`, `LIMIT`,
+  `count/sum/avg/min/max`, variable-length and undirected paths, label
+  predicates, scalar functions (`id`, `labels`, `type`), and `EXPLAIN`.
 - **Query performance**: start-node selection walks adjacency chains instead of
   expanding the whole graph; `LIMIT` is pushed into matching when it cannot change
   the result. A 32,000-edge expansion went from 48 s to 27 ms.
@@ -51,9 +51,10 @@ Working and covered by tests:
   locks, WAL auto-checkpoint.
 - Operations: `backup()` for a consistent online copy, `vacuum()` for a space
   report. Inspection is through the library API — there is no separate CLI or GUI.
-- Tooling: interactive CLI with dot commands and logical dump; Python and Node.js
-  SDKs with transaction and batch-write support.
-- 152 test cases across 13 suites (151 run, 1 intentionally `#[ignore]`d for a
+- Tooling: Python and Node.js SDKs with transaction and batch-write support.
+  Inspection and dump go through the library API — the CLI and the browser
+  workbench were removed in 1.1.0.
+- 167 test cases across 14 suites (166 run, 1 intentionally `#[ignore]`d for a
   child-process lock probe); `cargo fmt`, `cargo clippy -D warnings` and
   `rustdoc -D warnings` all clean.
 
@@ -87,14 +88,7 @@ Start-node selection is rule-based (index when available, otherwise a scan) and
 join reordering and no index-nested-loop selection. Adequate at the current scale;
 a limitation for complex analytical queries.
 
-### 4. `MERGE` and `UNWIND`
-
-Both are natural next additions to the Cypher surface: `MERGE` leans on the unique
-constraints that now exist, and `UNWIND` makes batch ingestion expressible in a
-query rather than only through the SDK. Each needs design work rather than a patch,
-which is why neither is in 1.0.
-
-### 5. SDK publication
+### 4. SDK publication
 
 The Python and Node.js bindings build and pass their tests but are not published to
 PyPI or npm. Publishing needs packaging polish, versioning policy, and platform
@@ -105,7 +99,7 @@ from debug builds of the bindings compared against a release core. Measured with
 both sides in release the bindings run at 0.85-0.93x of the native path. See
 `docs/benchmarks.md` for the corrected table and the retraction.
 
-### 6. Concurrency stress at high core counts
+### 5. Concurrency stress at high core counts
 
 The current suite exercises 20 threads. Behaviour under sustained load on
 many-core machines, and the contention profile of the page latches, are not yet
@@ -117,8 +111,8 @@ characterised.
   embedded file, like SQLite.
 - **In-memory graph mode.** A resident full-graph representation would violate
   the bounded-memory invariant that the whole architecture is built around.
-- **Cypher `MERGE`, `UNWIND`, `WITH`, subqueries, stored procedures.**
-  Interesting, but each needs design work rather than a patch.
+- **Cypher `WITH`, subqueries, stored procedures.** `MERGE` and `UNWIND` landed in
+  1.1.0; the rest each need design work rather than a patch.
 - **Full-text or vector indexes.** Separate problem domain.
 
 ---
