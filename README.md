@@ -33,7 +33,7 @@ fn main() -> Result<(), GraphError> {
 ## Status
 
 **`v0.1.0` — first release under this name.** The engine, Cypher surface, analytics
-and safety guarantees are implemented and covered by 197 tests. The on-disk format is
+and safety guarantees are implemented and covered by 198 passing tests (199 total, 1 intentionally ignored). The on-disk format is
 frozen at **version 5**; see `FORMAT.md` for the one exception to that freeze (the
 Page 0 magic, renamed with the project) and its migration path. Several known gaps
 remain — read [Known limitations](ROADMAP.md#next-planned) before considering
@@ -125,7 +125,7 @@ db.backup("snapshot.db")          # consistent online copy
 ### Node.js
 
 ```javascript
-import { NervusDb } from "nervusdb-node";
+import { NervusDb } from "nervusdb";
 
 const db = NervusDb.open("novel.db");
 const tx = db.beginTransaction();

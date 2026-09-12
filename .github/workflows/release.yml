@@ -74,11 +74,156 @@ jobs:
       - name: Package (validates what would be uploaded)
         run: cargo package --locked
 
-  publish:
-    name: Publish to the registries
+  # One job per platform, on a **native** runner. Cross-compiling would be faster,
+  # but these bindings link against the platform C runtime, and a binary built for
+  # the wrong libc is exactly the kind of thing that installs cleanly and then
+  # fails at import — the failure would land on a user, not on CI.
+  #
+  # Runner labels verified against GitHub's documented list. Note `macos-13` is
+  # *not* offered for public repositories; the Intel macOS runners are
+  # `macos-15-intel` / `macos-26-intel`.
+  build-binaries:
+    name: Build ${{ matrix.artifact }}
     needs: verify
-    # A tag push does not publish; only an explicit `workflow_dispatch` with
-    # `confirm: publish` does. The environment adds a second, repository-side gate.
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            artifact: darwin-arm64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            artifact: darwin-x64
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: linux-x64-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact: linux-arm64-gnu
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: ".node-version"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # --- Python wheel -----------------------------------------------------
+      # `abi3-py38` is set in `bindings/python/Cargo.toml`, so one wheel per
+      # platform covers Python 3.8+. That is why this matrix is platforms only,
+      # not platforms × Python versions. It is also why the old single-runner
+      # job was wrong: it built a Linux wheel and published it as if it were
+      # everything.
+      - name: Build the Python wheel
+        run: |
+          python -m pip install --upgrade maturin
+          cd bindings/python
+          maturin build --release --target ${{ matrix.target }} --out dist
+          ls -l dist
+
+      # --- Node binding -----------------------------------------------------
+      # Named `nervusdb.<triple>.node`, which is what `index.js` looks for.
+      - name: Build the Node binding
+        run: |
+          cd bindings/nodejs
+          npm install
+          npx napi build --platform --release --target ${{ matrix.target }}
+          # Strip debug symbols: 1.6MB -> 1.3MB per platform, and this multiplies
+          # by four in the published package.
+          test -f "nervusdb.${{ matrix.target }}.node" \
+            || { echo "::error::napi did not produce nervusdb.${{ matrix.target }}.node"; ls -l; exit 1; }
+
+      - name: Upload the artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.artifact }}
+          # Flat, with the platform in the filename, so the aggregate job can glob
+          # them without untangling a directory per platform.
+          path: |
+            bindings/python/dist/*.whl
+            bindings/nodejs/nervusdb.${{ matrix.target }}.node
+          if-no-files-found: error
+          retention-days: 7
+
+  # Collect every platform's artifacts and publish. Separate from the build jobs
+  # so that a failure to build one platform does not leave a half-published
+  # version: both registries accept one upload per version, and a second attempt
+  # for the same version is rejected permanently.
+  publish-binaries:
+    name: Publish the SDKs
+    needs: build-binaries
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.confirm == 'publish'
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag }}
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: ".node-version"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Download the artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish the Python wheels
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          python -m pip install --upgrade maturin
+          ls -l artifacts/*.whl
+          # Every platform's wheel is uploaded together. `--skip-existing` makes a
+          # re-run after a partial failure safe: the wheels that already landed are
+          # skipped rather than causing an error.
+          maturin upload --skip-existing artifacts/*.whl
+
+      - name: Publish the Node package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # All four binaries ship in one package. Measured: 1.3 MB each stripped,
+          # so ~5 MB unpacked — against 26 MB for better-sqlite3, which is the
+          # de-facto standard for this. One package also avoids the version-drift
+          # trap of the main-package-plus-platform-subpackages layout, where five
+          # packages must stay in lockstep.
+          mkdir -p bindings/nodejs
+          cp artifacts/*.node bindings/nodejs/
+          ls -l bindings/nodejs/*.node
+
+          cd bindings/nodejs
+          npm install
+          npm publish --access public
+
+  # `cargo publish` gets its own job on its own runner: crates.io accepts exactly
+  # one upload per version, and a second attempt fails with "crate version already
+  # uploaded" — permanently, since a published version cannot be replaced. Running
+  # it in the platform matrix would fail on three of the four jobs and, worse,
+  # would have uploaded successfully from whichever ran first.
+  publish-crate:
+    name: Publish to crates.io
+    needs: verify
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.confirm == 'publish'
@@ -95,30 +240,3 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --locked
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
-      - name: Build and publish the Python wheels
-        env:
-          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          pip install maturin
-          cd bindings/python
-          maturin build --release --out dist
-          maturin upload --skip-existing dist/*
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: ".node-version"
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Build and publish the Node package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          cd bindings/nodejs
-          npm install
-          npx napi build --platform --release
-          npm publish --access public

@@ -550,3 +550,91 @@ fn published_package_names_avoid_known_conflicts() {
         );
     }
 }
+
+// =========================================================================
+// 格式版本号一致性守卫
+// =========================================================================
+//
+// 磁盘格式版本号写在 `src/page.rs` 里，同时被四份文档复述。版本 5 之后
+// **AGENTS.md 与 ROADMAP.md 都漏改了**（仍写 4）——而 AGENTS.md 正是「改代码前
+// 必读」的那份，读者会据此对兼容性做出错误判断。
+//
+// 因此把「文档里的版本号必须等于常量」变成可验证的断言。只扫这四份明确声明
+// 版本的地方，不泛化到全文：CHANGELOG 与 docs/history/ 记录的是**历史**，
+// 那里出现旧版本号是正确的。
+
+#[test]
+fn documented_format_version_matches_the_code() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    // 事实来源：src/page.rs 的 `pub const DB_PAGE_VERSION: u32 = N;`
+    let page = fs::read_to_string(root.join("src/page.rs")).expect("src/page.rs must exist");
+    let actual: u32 = page
+        .lines()
+        .find_map(|l| {
+            let t = l.trim();
+            let rest = t.strip_prefix("pub const DB_PAGE_VERSION: u32 =")?;
+            rest.trim().trim_end_matches(';').trim().parse().ok()
+        })
+        .expect("src/page.rs must declare `pub const DB_PAGE_VERSION: u32 = N;`");
+    assert!(actual > 0, "format version must be a positive integer");
+
+    // 明确声明当前格式版本的文档，以及其中应出现的字面量。
+    //
+    // 每条是 (文件, 必须包含的片段)。片段里带 `{v}` 会被替换成实际版本号。
+    let cases: &[(&str, &str)] = &[
+        ("AGENTS.md", "`DB_PAGE_VERSION` is `{v}`"),
+        ("ROADMAP.md", "**Frozen format (version {v})"),
+        ("README.md", "frozen at **version {v}**"),
+        // FORMAT.md 用「当前值是 N」的写法
+        ("FORMAT.md", "The current value is **{v}**"),
+    ];
+
+    let mut problems: Vec<String> = Vec::new();
+    for (path, needle) in cases {
+        let text = match fs::read_to_string(root.join(path)) {
+            Ok(t) => t,
+            Err(e) => {
+                problems.push(format!("{path}: unreadable ({e})"));
+                continue;
+            }
+        };
+        let expected = needle.replace("{v}", &actual.to_string());
+        if !text.contains(&expected) {
+            // 找出文档里实际写的数字，便于定位是哪种漂移
+            let found = text
+                .lines()
+                .filter(|l| l.contains("version") || l.contains("DB_PAGE_VERSION"))
+                .find(|l| {
+                    [
+                        "version 1",
+                        "version 2",
+                        "version 3",
+                        "version 4",
+                        "version 5",
+                    ]
+                    .iter()
+                    .any(|p| l.contains(p))
+                })
+                .map(|l| l.trim().to_string())
+                .unwrap_or_else(|| "(未找到版本声明行)".to_string());
+            problems.push(format!(
+                "{path} does not state the current format version.\n\
+                 expected to find: {expected}\n\
+                 a version-ish line there: {found}"
+            ));
+        }
+    }
+
+    // 反向对照：确认这些文档**确实**在讨论版本，否则上面可能整体失效
+    assert!(
+        cases.len() >= 4,
+        "expected at least four documents to declare the format version"
+    );
+
+    assert!(
+        problems.is_empty(),
+        "documented format version disagrees with `DB_PAGE_VERSION = {actual}`:\n{}",
+        problems.join("\n")
+    );
+}
