@@ -19,7 +19,7 @@ user has to act on them:
 ### Fixed
 
 - **A property whose value is the string `"null"` was treated as an absent value.**
-  `null` was represented internally as the *string* `"null"`, so the two were
+  `null` was represented internally as the _string_ `"null"`, so the two were
   indistinguishable:
 
   ```text
@@ -35,21 +35,40 @@ user has to act on them:
   asserts both halves: `"null"` as a value counts like any other, and `avg` / `min`
   over an empty set return `Null`.
 
-### Added
+- **A failed multi-record statement left part of its work behind.** A write
+  statement that failed partway through kept its already-written pages in the
+  buffer pool, and the _next_ successful commit flushed them to disk — including
+  the records the failure was supposed to prevent. Measured before the fix:
 
-- **`Value::List` and `Value::Null` as evaluation-time types.** Neither is written
-  to disk: in Cypher, setting a property to null *removes* it, and no current syntax
-  can produce a list-valued property. `FORMAT.md` is therefore unchanged and the
-  format version stays 4 — verified by re-running the real-dataset acceptance, whose
-  red lines (hub 1-hop 10,080 / 2-hop 161,877) and 81.26 MB file size are identical.
+  ```text
+  CREATE (:Num {v: 1}); declare UNIQUE (:Num.v)
+  UNWIND [2, 1, 3] AS v CREATE (n:Num {v: v})   -- fails: 1 already exists
+  CREATE (:Other {x: 99})                        -- an unrelated successful write
+  -- reopen: MATCH (n:Num) returns {v: 1} AND {v: 2}
+  ```
 
-  `PropCodec::push_value` and `encode_props` now return `Result` instead of `()` so a
-  non-storable value is reported rather than silently dropped — a `SET` that appeared
-  to succeed while writing nothing is the failure mode this project keeps removing.
+  `GraphLite::execute` and `run_cypher` now snapshot the allocator metadata, open a
+  transaction context, and undo a failed statement the same way `Transaction::commit`
+  undoes a failed transaction: restore the uncommitted pages from their baselines,
+  roll back the in-memory metadata, and invalidate the secondary indexes.
 
-- Both SDKs map the new variants to their native types: Python gets `None` and
-  `list`, Node.js gets JSON `null` and `Array`.
+  This mattered little while a statement could only write a handful of records; with
+  `UNWIND`, a single statement routinely writes thousands, and a failure partway
+  through is the realistic failure mode.
 
+- **`sum()` / `avg()` / `min()` / `max()` over an `UNWIND` variable returned the row
+  count.** Aggregate arguments were accumulated as the literal `Int(1)` whenever the
+  argument was a variable, because before `UNWIND` a variable could only bind a node
+  or an edge. So `UNWIND [1,2,3,4] AS x RETURN sum(x)` returned `4` rather than `10`.
+  A variable binding now aggregates its own value, and aggregating an entity (a
+  `sum(n)` where `n` is a node) is an explicit error instead of a plausible-looking
+  number.
+
+- **Nodes created by a statement were invisible to its own `RETURN`.** `UNWIND ['a']
+  AS s CREATE (m:Str {s: s}) RETURN m.s` returned `null` for a value that had just
+  been written to disk. `CREATE` now binds the nodes it creates back into the row,
+  so `RETURN` reads the data it just stored. (`MATCH ... CREATE ... RETURN b.x` has
+  the same gap from before this release; it is not addressed here.)
 
 - **The CLI (`graphlite-cli`) and the browser workbench (`graphlite-studio`), plus
   the demo binary (`graphlite`).** All three were separate binaries that
@@ -75,6 +94,44 @@ user has to act on them:
 - `PLAN-1.0.md` moved to `docs/history/` — it records the decisions taken while
   building 1.0 and no longer describes pending work.
 
+### Added
+
+- **`Value::List` and `Value::Null` as evaluation-time types.** Neither is written
+  to disk: in Cypher, setting a property to null _removes_ it, and no current syntax
+  can produce a list-valued property. `FORMAT.md` is therefore unchanged and the
+  format version stays 4 — verified by re-running the real-dataset acceptance, whose
+  red lines (hub 1-hop 10,080 / 2-hop 161,877) and 81.26 MB file size are identical.
+
+  `PropCodec::push_value` and `encode_props` now return `Result` instead of `()` so a
+  non-storable value is reported rather than silently dropped — a `SET` that appeared
+  to succeed while writing nothing is the failure mode this project keeps removing.
+
+- Both SDKs map the new variants to their native types: Python gets `None` and
+  `list`, Node.js gets JSON `null` and `Array`.
+
+- **`UNWIND <list> AS <var>` — the batch-ingestion clause.** It expands a list into
+  rows and binds each element, which is the only way to express bulk data inside a
+  single statement:
+
+  ```text
+  UNWIND [10, 20, 30] AS v CREATE (n:Num {v: v})   -- one statement, three nodes
+  UNWIND [1, 2, 3, 4] AS x RETURN sum(x)           -- 10
+  UNWIND [5,1,4] AS x RETURN x ORDER BY x SKIP 1   -- 4, 5
+  ```
+
+  Non-list input yields a single row (`UNWIND 42 AS x` binds 42), an empty list
+  yields zero rows, and row order follows list order. Read-only handles accept
+  `UNWIND ... RETURN` and reject `UNWIND ... CREATE`; `EXPLAIN` reports which of
+  the two a statement is.
+
+  This required pattern properties to become expressions rather than literals, so
+  `CREATE (n {name: x})` can read the `UNWIND` variable. Two consequences follow
+  from that, both deliberate: `MATCH` pattern properties are validated as literals
+  at parse time (a pattern is matched before any variable is bound, so
+  `MATCH (n {k: someVar})` can never be evaluated — rejecting it beats silently
+  matching nothing), and `SET` / `DELETE` on a scalar binding is an error rather
+  than a silent no-op.
+
 ### Fixed
 
 - **`sum()` lost precision on integers above 2^53.** The aggregate computed its
@@ -91,7 +148,6 @@ user has to act on them:
   All-integer sets now accumulate with `checked_add` and report an overflow error
   rather than saturating or wrapping. Mixed int/float sets still return `Float`,
   and an empty set still returns `Int(0)` — both unchanged.
-
 
 ## [1.0.0] — 2026-09-12
 
@@ -130,7 +186,6 @@ user has to act on them:
   retried. True concurrency needs snapshot isolation, which is a different order of
   change and is recorded in `ROADMAP.md` rather than pretended here.
 
-
 - **`Transaction::add_nodes` / `Transaction::add_edges`** in the core, exposed as
   `tx.add_nodes(...)` / `tx.add_edges(...)` in both SDKs. One boundary crossing and
   one lock acquisition per batch instead of per record.
@@ -140,11 +195,11 @@ user has to act on them:
   the bindings compared against a **release** core. Measured with both sides in
   release, on 50,000 nodes with properties:
 
-  | Path | Throughput |
-  | --- | --- |
+  | Path              | Throughput    |
+  | ----------------- | ------------- |
   | Rust, file-backed | 382,000 ops/s |
-  | Python | 355,000 ops/s |
-  | Node.js | 326,000 ops/s |
+  | Python            | 355,000 ops/s |
+  | Node.js           | 326,000 ops/s |
 
   Same script, debug versus release binding: 78,603 vs 499,599 ops/s — a 6.4x
   difference that the old figure was attributing to the FFI boundary. Direct
@@ -159,7 +214,6 @@ user has to act on them:
   and both warm up before measuring — the first run is 3-4x slower than steady
   state (Node measured 68k on a cold run and 241k-276k across three warm runs),
   which is enough to mistake warmup for a performance difference.
-
 
 - **`db.backup(path)` — a consistent online copy.** The sequence is what makes it
   consistent: checkpoint first (so the data file becomes the single authoritative
@@ -187,7 +241,6 @@ user has to act on them:
   documentation rather than left as a surprise for someone expecting `VACUUM` to
   shrink their file.
 
-
 - **Unique constraints**: `db.create_unique_constraint("Character", "name")` makes a
   `(label, property)` pair's values unique across every node carrying that label.
   Violations raise `GraphError::UniqueConstraintViolation` — a distinct variant so
@@ -212,7 +265,6 @@ user has to act on them:
   rather than allowed through — optimistically permitting a write would make the
   constraint silently meaningless.
 
-
 - **Multiple readers can now share a database while a single writer holds it.**
   Previously exactly one handle could open a file, so a background process writing
   and a foreground process observing were mutually exclusive — the most common
@@ -235,17 +287,16 @@ user has to act on them:
   exclusion in both directions including lock release on drop, and the pending-WAL
   refusal followed by a successful read-only open after one replay.
 
-
 - **`LIMIT` is pushed down into matching when it is safe to do so.** The engine
   used to expand every match and truncate at the very end, so `LIMIT 1` cost as
   much as the full query. It now stops as soon as enough rows are collected.
 
   Measured on a 4-hub graph:
 
-  | Query | Before | After |
-  | --- | --- | --- |
-  | `LIMIT 1`, 32,000 edges | 60,577 ms | **6 ms** |
-  | `LIMIT 1`, 100,000 edges | — | 53 ms |
+  | Query                    | Before    | After    |
+  | ------------------------ | --------- | -------- |
+  | `LIMIT 1`, 32,000 edges  | 60,577 ms | **6 ms** |
+  | `LIMIT 1`, 100,000 edges | —         | 53 ms    |
 
   Push-down is gated on three conditions, and the gate is conservative on purpose:
 
@@ -493,7 +544,6 @@ user has to act on them:
   Every entry costs at least a one-byte length prefix, so a count larger than the
   remaining payload cannot be legitimate.
 
-
 - **Read errors were reported as empty results.** Two paths folded a storage
   failure into a "nothing here" answer:
 
@@ -514,7 +564,6 @@ user has to act on them:
   `get_node` / `try_get_node` split the project already uses — and the lossy
   variants are documented as such.
 
-
 - **`has_cycle()` and `find_cycles()` aborted the process on long chains.** Both
   used recursive DFS, so recursion depth equalled path length. A 60,000-node chain
   — legitimate data, and the natural shape of a citation or chapter chain — blew
@@ -534,7 +583,6 @@ user has to act on them:
   nodes, including the cyclic case, and confirmed by restoring the recursive
   implementation and watching the test abort with SIGABRT.
 
-
 - **Deleting a property-less edge inflated the database file to 64 GiB.** The
   single-edge insert path used `INVALID_PAGE_ID` to mean "no properties", but that
   constant is `u32::MAX` — numerically identical to the `PROP_PTR_OVERFLOW`
@@ -553,10 +601,9 @@ user has to act on them:
   single-edge insertion was affected. That is also why the extensive edge test
   suites never caught it: they exercise the batch path.
 
-
 - **`LIMIT` push-down silently discarded `WHERE`, returning wrong rows.** The
-  fast path added for `LIMIT` used the predicate only to narrow the *candidate
-  start nodes* via the index; it never applied the row filter, which the normal
+  fast path added for `LIMIT` used the predicate only to narrow the _candidate
+  start nodes_ via the index; it never applied the row filter, which the normal
   path does with a trailing `retain(eval_expr_truthy)`.
 
   Measured on five nodes with `age` 10..50:
@@ -589,7 +636,7 @@ user has to act on them:
 - **A failed transaction made a constrained label permanently unwritable.**
   `invalidate_all()` downgrades every label index to `Registered`, and the
   constraint guard treated "index not built" as a violation. So after one
-  rejected duplicate, *every* subsequent write to that label failed — including
+  rejected duplicate, _every_ subsequent write to that label failed — including
   perfectly valid values:
 
   ```text
@@ -601,7 +648,6 @@ user has to act on them:
   reasoning ("if uniqueness cannot be verified, do not write") had the right
   intent but the wrong remedy: refusing is only correct if the index can never be
   rebuilt, and it can.
-
 
 - **Two places violated the project's own invariant 13: `.lock().unwrap()` in
   library code.** `get_or_allocate_node_page` and `get_or_allocate_edge_page` used
@@ -645,7 +691,6 @@ user has to act on them:
   `docs/benchmarks.md` without noting they came from different releases. The first
   now cites what was measured; the second carries its version.
 
-
 - **A graph with roughly 80 or more distinct labels lost its entire schema on
   reopen.** `sync_header` wrote the label/edge-type dictionary into a **single**
   page, and `PropertyPage::encode` silently truncates payloads beyond
@@ -671,7 +716,6 @@ user has to act on them:
   both sides of the old threshold (70 and 200) plus a size far beyond one page
   (2000), and reverting the fix makes it fail.
 
-
 - **Opening a non-database file silently destroyed it.** `check_format_version`
   passed through any file whose magic did not match — the comment said "let the
   later path handle it", and the later path initialised it as a **new database**,
@@ -694,7 +738,6 @@ user has to act on them:
   actually pins the defect. It also checks the two legitimate new-database shapes
   still work, so the check is not merely over-tightened.
 
-
 - **`graphlite-studio` died when its stdout reader went away.** `println!` panics
   if the write fails, and that panic happened on the main thread — so piping the
   output anywhere that stops reading (a test harness, `head`, a log collector)
@@ -710,7 +753,6 @@ user has to act on them:
   usually fit in the pipe buffer before the reader closed, and failed reliably on
   Linux CI.
 
-
 - **A 1.8x write-throughput regression introduced by the zero-dependency
   conversion.** Replacing `crc32fast` with a hand-written byte-at-a-time CRC32
   made checksumming the bottleneck: every WAL frame computes two CRCs (the page
@@ -720,11 +762,11 @@ user has to act on them:
 
   Measured on LiveJournal, 20 million edges, interleaved runs on the same machine:
 
-  | | Edge ingestion |
-  | --- | --- |
-  | before (byte-at-a-time CRC) | 136,865 ops/s |
-  | after (slicing-by-8 CRC) | **280,426 ops/s** |
-  | rc.2 baseline (`crc32fast`) | 297,634 ops/s |
+  |                             | Edge ingestion    |
+  | --------------------------- | ----------------- |
+  | before (byte-at-a-time CRC) | 136,865 ops/s     |
+  | after (slicing-by-8 CRC)    | **280,426 ops/s** |
+  | rc.2 baseline (`crc32fast`) | 297,634 ops/s     |
 
   The fix is slicing-by-8: a second table lets the loop consume 8 bytes per
   iteration and merge their contributions in one pass, taking the page from
@@ -733,7 +775,7 @@ user has to act on them:
   detection, which is a larger change than this regression warrants.
 
   The first measurement of the replacement was wrong in a way worth recording:
-  timing `hash()` in a loop over the *same* buffer let the optimiser collapse the
+  timing `hash()` in a loop over the _same_ buffer let the optimiser collapse the
   repeated work, reporting 545 MB/s for an implementation that actually ran at
   142 MB/s. The trustworthy number came from timing the real call pattern
   (`Hasher::new` + `update` + `finalize` per page).
@@ -743,7 +785,6 @@ user has to act on them:
   the slicing table would still produce a plausible-looking checksum — one that
   would then declare every existing page corrupt — so this equivalence is the
   property that matters, not any single known value.
-
 
 - **A read-only handle could still write, via `run_cypher`.** Every write entry
   point except this one had the read-only guard: `add_node`, `add_edge`, `execute`
@@ -764,7 +805,6 @@ user has to act on them:
   guards one by one — so the verification has to be one by one too. Reverting the
   fix makes it report five leaking paths, which is how the test was confirmed to
   catch what it claims to.
-
 
 - **`WHERE` conditions containing a function call were silently discarded, so
   the filter became "always true" and the query returned every row.** This is the

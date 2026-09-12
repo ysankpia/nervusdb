@@ -148,6 +148,13 @@ Any modification that violates these rules must be rejected immediately:
 - Rationale: these locks guard rebuildable derived state (frame tables, allocator metadata, handle wrappers), not business invariants, so recovering beats converting a local failure into an unrecoverable process abort — especially for embedded callers.
 - `unwrap`/`expect` remain forbidden in library code per §4.1; fixed-offset slice conversions in `page.rs` must carry a comment stating why they cannot fail by construction.
 
+14. **Statement-Level Atomicity**
+
+- **Any Cypher write entry point must undo a partially applied statement before returning its error.** Use `GraphLite::rollback_failed_statement`; do not reimplement the sequence, because a second implementation will drift from the first.
+- Rationale, measured: with no rollback, `UNWIND [2, 1, 3] AS v CREATE (n:Num {v: v})` failed on the duplicate `1` and left `{v: 2}` in the buffer pool. A later, unrelated `CREATE (:Other {x: 99})` committed it, so after reopening, `MATCH (n:Num)` returned the row the constraint had rejected. Partial writes are invisible until something else commits them, which is why this survived as long as statements only wrote a handful of records.
+- The sequence is: drain the modified-page set, restore each page from its transaction baseline (`BufferPoolManager::rollback_uncommitted_pages`), restore the allocator metadata snapshot, and `IndexManager::invalidate_all`. It mirrors `Transaction::commit`'s failure path on purpose — one semantics for both.
+- This is not a substitute for explicit transactions. A single statement is the unit of atomicity here; `GraphLite::with_transaction` remains the way to group several statements.
+
 ---
 
 ## 2. Codebase Map & Module Responsibilities
@@ -173,7 +180,7 @@ graphlite-rs/
 │   ├── cypher/
 │   │   ├── ast.rs              # AST statements, expressions, and pattern nodes
 │   │   ├── lexer.rs            # Cypher tokenizer (comments, aggregate keywords)
-│   │   ├── parser.rs           # Recursive-descent Cypher parser (SET/ORDER BY/SKIP/aggregates)
+│   │   ├── parser.rs           # Recursive-descent Cypher parser (UNWIND/SET/ORDER BY/SKIP/aggregates)
 │   │   ├── executor.rs         # Execution engine leveraging disk cursors and secondary indexes
 │   │   └── mod.rs              # Cypher module exports
 │   └── graph.rs                # Domain models (Node, Edge, Value, Direction, GraphError)
@@ -183,6 +190,7 @@ graphlite-rs/
 └── tests/
     ├── integration_tests.rs    # Core CRUD/ACID/concurrency/index/stress regression suites
     ├── cypher_advanced_tests.rs# Cypher 1.0 syntax closure (SET/DETACH DELETE/ORDER BY/aggregates/paging)
+    ├── unwind_tests.rs         # UNWIND expansion, batch ingestion, statement atomicity
     ├── analytics_tests.rs      # PageRank / WCC / K-Hop subgraph analytics
     ├── steal_spill_tests.rs    # STEAL spilling, rollback zero-pollution, checkpoint semantics
     ├── slotted_property_tests.rs # Slotted page packing, slot reuse, compaction, density target
@@ -364,6 +372,8 @@ Two traps made those first attempts useless, and both recur:
 
 ```text
 CREATE pat
+UNWIND expr AS var [CREATE pat] [RETURN item [, item ...]]
+                        [ORDER BY expr [ASC|DESC], ...] [SKIP n] [LIMIT n]
 MATCH pat [, pat ...] [WHERE expr]
       [SET item [, item ...]]
       [DELETE var... | DETACH DELETE var...]
@@ -374,8 +384,31 @@ MATCH pat [, pat ...] [WHERE expr]
 item   := * | var | var.key [AS alias] | FUNC(*) | FUNC(var[.key]) [AS alias]
 FUNC   := count | sum | avg | min | max
 SET    := var.key = <literal|var.key|var> | var:Label
-pat    := (var:Label1:Label2 {k: v}) -[r:TYPE*min..max {k: v}]-> (var)
+pat    := (var:Label1:Label2 {k: expr}) -[r:TYPE*min..max {k: expr}]-> (var)
+expr   := literal | var | var.key | [expr, ...] | FUNC(...)
 ```
+
+`UNWIND` expands a list into rows, one per element, and binds each element to
+`var`; a non-list value yields a single row and an empty list yields none. It is
+the only way to express bulk data in one statement
+(`UNWIND [1,2,3] AS x CREATE (n:Num {v: x})`), and it is why **pattern property
+values are expressions rather than literals** — `{v: x}` must read the `UNWIND`
+variable. Two rules follow from that and both are enforced, not advisory:
+
+- `MATCH` pattern properties must be literals (checked at parse time). A pattern is
+  matched before any variable is bound, so an expression there cannot be evaluated;
+  rejecting it is required, because silently matching nothing looks like an empty
+  graph.
+- `SET` / `DELETE` on a scalar binding is an error, not a silent no-op.
+- `is_mutating()` returns true for `UNWIND` only when it carries a `CREATE`; the
+  read-only handle accepts `UNWIND ... RETURN` and rejects `UNWIND ... CREATE`.
+
+A write statement is **atomic at statement granularity**: `GraphLite::execute` and
+`run_cypher` snapshot allocator metadata, open a transaction context, and undo a
+partially applied statement through `rollback_failed_statement` before returning the
+error. Without it, a statement that failed on record 500 of 1000 kept the first 499
+in the buffer pool, and the next successful commit wrote them to disk. Do not add a
+write entry point that skips this.
 
 Execution pipeline: `find_matches` (per-pattern resolution + shared-variable join) → `WHERE` →
 `SET` → `CREATE` → `DELETE` → projection (grouped aggregation) → `ORDER BY` → `SKIP` → `LIMIT`.

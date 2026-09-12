@@ -31,11 +31,23 @@ impl CypherResultSet {
     }
 }
 
-/// 变量绑定：明确区分节点与边，彻底杜绝「边 ID 与节点 ID 同号混淆」
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `create_patterns` 的返回值：`(新建节点数, 新建边数, 新节点的变量绑定)`。
+///
+/// 第三个元素让 `UNWIND ... CREATE (n ...) RETURN n.x` 能读到刚写入的值。
+type CreateOutcome = (usize, usize, Vec<(String, u64)>);
+
+/// 变量绑定：明确区分节点、边与标量值。
+///
+/// 节点与边用独立变体，彻底杜绝「边 ID 与节点 ID 同号混淆」。
+/// `Value` 变体供 `UNWIND ... AS x` 绑定列表元素——那些元素不是实体，没有 ID，
+/// 用 `Int(id)` 冒充会让 `RETURN x` 打印出一个没有意义的数字。
+///
+/// 因为 `Value` 含 `String`/`List`，`Binding` 不再是 `Copy`。
+#[derive(Debug, Clone, PartialEq)]
 pub enum Binding {
     Node(u64),
     Edge(u64),
+    Value(Value),
 }
 
 /// 单行匹配上下文：变量名 -> 实体绑定
@@ -474,11 +486,11 @@ impl<'a> CypherReadOnlyExecutor<'a> {
                         let mut keys: Vec<&String> = ctx.keys().collect();
                         keys.sort();
                         for var in keys {
-                            values.push(self.render_binding(var, ctx[var])?);
+                            values.push(self.render_binding(var, &ctx[var])?);
                         }
                     }
                     ReturnItem::Variable { var, .. } => match ctx.get(var) {
-                        Some(binding) => values.push(self.render_binding(var, *binding)?),
+                        Some(binding) => values.push(self.render_binding(var, binding)?),
                         None => values.push(null_value()),
                     },
                     ReturnItem::Property { var, prop, .. } => {
@@ -576,12 +588,37 @@ impl<'a> CypherReadOnlyExecutor<'a> {
                 AggregateArg::Star => {
                     non_null_count += 1;
                 }
-                AggregateArg::Variable(var) => {
-                    if ctx.contains_key(var) {
-                        non_null_count += 1;
-                        collected.push(Value::Int(1));
+                AggregateArg::Variable(var) => match ctx.get(var) {
+                    // 标量绑定：聚合取**值本身**。
+                    //
+                    // 这里原来无条件 `collected.push(Value::Int(1))`，于是
+                    // `UNWIND [1,2,3,4] AS x RETURN sum(x)` 返回 4（行数）而不是 10。
+                    // 在 `UNWIND` 出现之前，变量只能绑定节点或边，这条路径很难被触到；
+                    // 而「对展开出来的数值求和」恰恰是 UNWIND 最常见的用法。
+                    Some(Binding::Value(v)) => {
+                        if !is_null(v) {
+                            non_null_count += 1;
+                            collected.push(v.clone());
+                        }
                     }
-                }
+                    // 实体绑定：`count(x)` 只关心「绑定了」；而 sum/avg/min/max 需要
+                    // 一个数值，实体不是数值。静默按 1 累加会给出一个看起来合法却
+                    // 毫无意义的数字，所以显式报错。
+                    Some(Binding::Node(_) | Binding::Edge(_)) => {
+                        non_null_count += 1;
+                        if func != AggregateFunc::Count {
+                            return Err(GraphError::General(format!(
+                                "{}({}) is not a number: aggregate over an entity is undefined. \
+                                 Use {}({}.property) to aggregate a property.",
+                                func.as_str(),
+                                var,
+                                func.as_str(),
+                                var
+                            )));
+                        }
+                    }
+                    None => {}
+                },
                 AggregateArg::Property { var, prop } => {
                     let val = self.render_property(var, prop, ctx)?;
                     if !is_null(&val) {
@@ -643,7 +680,7 @@ impl<'a> CypherReadOnlyExecutor<'a> {
     fn eval_item_value(&self, item: &ReturnItem, ctx: &RowCtx) -> Result<Value, GraphError> {
         match item {
             ReturnItem::Variable { var, .. } => match ctx.get(var) {
-                Some(binding) => self.render_binding(var, *binding),
+                Some(binding) => self.render_binding(var, binding),
                 None => Ok(null_value()),
             },
             ReturnItem::Property { var, prop, .. } => self.render_property(var, prop, ctx),
@@ -661,11 +698,11 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         }
     }
 
-    fn render_binding(&self, var: &str, binding: Binding) -> Result<Value, GraphError> {
+    fn render_binding(&self, var: &str, binding: &Binding) -> Result<Value, GraphError> {
         let _ = var;
         match binding {
             Binding::Node(id) => {
-                if let Some(node) = self.graph.get_node(id)? {
+                if let Some(node) = self.graph.get_node(*id)? {
                     let json = crate::json::map_to_string(&node.properties);
                     Ok(Value::from(json))
                 } else {
@@ -673,18 +710,137 @@ impl<'a> CypherReadOnlyExecutor<'a> {
                 }
             }
             Binding::Edge(id) => {
-                if let Some(edge) = self.graph.get_edge(id)? {
+                if let Some(edge) = self.graph.get_edge(*id)? {
                     let json = crate::json::map_to_string(&edge.properties);
                     Ok(Value::from(json))
                 } else {
                     Ok(Value::from("{}"))
                 }
             }
+            Binding::Value(v) => Ok(v.clone()),
         }
+    }
+
+    /// 构造 `UNWIND <expr> AS <var>` 的行集合。
+    ///
+    /// 读路径与写路径共用这一份实现：`UNWIND` 的展开语义（非列表值当单元素、
+    /// 元素的绑定方式）必须完全一致，否则 `UNWIND ... RETURN` 与
+    /// `UNWIND ... CREATE` 会对同一输入给出不同行数。
+    fn unwind_rows(
+        &self,
+        expr: &Expr,
+        variable: &str,
+    ) -> Result<(Vec<RowCtx>, PathPattern), GraphError> {
+        let seed = RowCtx::new();
+        let value = self.eval_expr_value(expr, &seed).ok_or_else(|| {
+            GraphError::General(
+                "UNWIND requires an evaluable list expression (e.g. `UNWIND [1,2,3] AS x`)"
+                    .to_string(),
+            )
+        })?;
+
+        let items: Vec<Value> = match value {
+            Value::List(items) => items,
+            // 单个非列表值当作单元素列表：`UNWIND 1 AS x` 产生一行。
+            other => vec![other],
+        };
+
+        let rows: Vec<RowCtx> = items
+            .into_iter()
+            .map(|v| {
+                let mut ctx = RowCtx::new();
+                ctx.insert(variable.to_string(), Binding::Value(v));
+                ctx
+            })
+            .collect();
+
+        // 列集合的推导依据。`RETURN *` 在没有模式可依赖时必须至少给出 UNWIND 变量，
+        // 否则会返回一张零列的表。
+        let synthetic = PathPattern {
+            nodes: vec![NodePattern {
+                variable: Some(variable.to_string()),
+                labels: Vec::new(),
+                properties: HashMap::new(),
+            }],
+            edges: Vec::new(),
+        };
+
+        Ok((rows, synthetic))
+    }
+
+    /// 执行只读的 `UNWIND ... RETURN ...`（无 `CREATE`）。
+    pub fn execute_unwind(
+        &self,
+        expr: &Expr,
+        variable: &str,
+        return_clause: Option<Vec<ReturnItem>>,
+        order_by: &[OrderItem],
+        skip: Option<usize>,
+        limit: Option<usize>,
+    ) -> Result<CypherResultSet, GraphError> {
+        let (rows, synthetic) = self.unwind_rows(expr, variable)?;
+        let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+        ro.project_results(&[synthetic], rows, return_clause, order_by, skip, limit)
+    }
+
+    /// 把模式的属性映射求值为具体值。
+    ///
+    /// `RowCtx::default()` 用于 MATCH：模式属性必须与行无关（Cypher 的
+    /// `MATCH (a {k: b.v})` 里 `b` 尚未绑定），因此遇到变量会**报错**而不是
+    /// 静默判为不匹配。§12 的「禁止静默读错误」同样适用于匹配条件：
+    /// 一个求不出来的条件如果退化成「永远不匹配」，调用方只会看到 0 行。
+    fn resolve_pattern_properties(
+        &self,
+        props: &HashMap<String, Expr>,
+        ctx: &RowCtx,
+    ) -> Result<HashMap<String, Value>, GraphError> {
+        if props.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut out = HashMap::with_capacity(props.len());
+        for (k, expr) in props {
+            match self.eval_expr_value(expr, ctx) {
+                Some(v) => {
+                    out.insert(k.clone(), v);
+                }
+                None => {
+                    return Err(GraphError::General(format!(
+                        "Cannot evaluate property `{k}`: pattern property values must be \
+                         literals or expressions resolvable from the row (found `{expr:?}`)"
+                    )))
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// 与 `resolve_pattern_properties` 相同，但额外拒绝无法落盘的值。
+    ///
+    /// 写入路径必须走这里：`Value::Null` 表示「删除该属性」，`Value::List` 无编码，
+    /// 二者都不是可存储的属性值。让它们进入 `add_node` 会被 `PropCodec` 拒绝，
+    /// 但那条错误信息只会说「无法编码」，不会指出是哪个键。
+    fn resolve_storable_properties(
+        &self,
+        props: &HashMap<String, Expr>,
+        ctx: &RowCtx,
+    ) -> Result<HashMap<String, Value>, GraphError> {
+        let resolved = self.resolve_pattern_properties(props, ctx)?;
+        for (k, v) in &resolved {
+            if !v.is_storable() {
+                return Err(GraphError::General(format!(
+                    "Property `{k}` cannot be stored: {v:?} is not a storable value \
+                     (null deletes a property in SET, and lists are not encodable)"
+                )));
+            }
+        }
+        Ok(resolved)
     }
 
     fn render_property(&self, var: &str, prop: &str, ctx: &RowCtx) -> Result<Value, GraphError> {
         match ctx.get(var) {
+            // 标量绑定没有属性可取。返回 NULL 而不是报错：`UNWIND ... AS x RETURN x.k`
+            // 在 Cypher 里就是 NULL（属性访问不存在的属性也是 NULL）。
+            Some(Binding::Value(_)) => Ok(null_value()),
             Some(Binding::Edge(id)) => {
                 if let Some(edge) = self.graph.get_edge(*id)? {
                     if let Some(val) = edge.get_prop(prop) {
@@ -754,9 +910,13 @@ impl<'a> CypherReadOnlyExecutor<'a> {
     ) -> Result<Vec<u64>, GraphError> {
         if let Some(lbl) = node_pat.labels.first() {
             if self.index_mgr.is_label_complete(lbl) {
-                for (key, val) in &node_pat.properties {
-                    if let Some(set) = self.index_mgr.find_by_property_exact(lbl, key, val) {
-                        return Ok(set.iter().copied().collect());
+                // 索引探测只在属性值为**字面量**时可用：索引里存的是常量，
+                // 而 `{k: someVar}` 的值取决于行上下文，无从查表。
+                for (key, val_expr) in &node_pat.properties {
+                    if let Expr::Literal(val) = val_expr {
+                        if let Some(set) = self.index_mgr.find_by_property_exact(lbl, key, val) {
+                            return Ok(set.iter().copied().collect());
+                        }
                     }
                 }
 
@@ -956,7 +1116,13 @@ impl<'a> CypherReadOnlyExecutor<'a> {
                 return false;
             }
         }
-        for (k, expected_v) in &pattern.properties {
+        let expected = match self.resolve_pattern_properties(&pattern.properties, &RowCtx::new()) {
+            Ok(m) => m,
+            // 解析期已拒绝非字面量属性，走到这里说明有内部调用绕过了校验。
+            // 宁可判为不匹配（真实磁盘状态不会无辜受损）也不能假装匹配成功。
+            Err(_) => return false,
+        };
+        for (k, expected_v) in &expected {
             if k == "weight" {
                 if (edge.weight - expected_v.as_f64().unwrap_or(edge.weight)).abs() > f64::EPSILON {
                     return false;
@@ -1006,9 +1172,16 @@ impl<'a> CypherReadOnlyExecutor<'a> {
             }
         }
 
-        for (k, expected_v) in &pattern.properties {
-            if data.properties.get(k) != Some(expected_v) {
-                return false;
+        if !pattern.properties.is_empty() {
+            let expected =
+                match self.resolve_pattern_properties(&pattern.properties, &RowCtx::new()) {
+                    Ok(m) => m,
+                    Err(_) => return false,
+                };
+            for (k, expected_v) in &expected {
+                if data.properties.get(k) != Some(expected_v) {
+                    return false;
+                }
             }
         }
 
@@ -1067,10 +1240,22 @@ impl<'a> CypherReadOnlyExecutor<'a> {
     pub fn eval_expr_value(&self, expr: &Expr, ctx: &RowCtx) -> Option<Value> {
         match expr {
             Expr::Literal(v) => Some(v.clone()),
+            // 列表字面量：逐元素求值。任一元素求值失败则整体为 None——
+            // 返回一个「部分填充的列表」会让 UNWIND 产生错误的行数，而错误行数
+            // 是静默的：调用方只看到少了几个结果。
+            Expr::ListLiteral(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    out.push(self.eval_expr_value(item, ctx)?);
+                }
+                Some(Value::List(out))
+            }
             Expr::PropertyAccess { var, prop } => self.render_property(var, prop, ctx).ok(),
             Expr::Variable(var) => match ctx.get(var) {
                 Some(Binding::Node(id)) => Some(Value::Int(*id as i64)),
                 Some(Binding::Edge(id)) => Some(Value::Int(*id as i64)),
+                // `UNWIND [1,2,3] AS x ... RETURN x` 走这条：x 绑定的是值本身
+                Some(Binding::Value(v)) => Some(v.clone()),
                 None => None,
             },
             Expr::LabelCheck { var, label } => match ctx.get(var) {
@@ -1109,7 +1294,7 @@ impl<'a> CypherReadOnlyExecutor<'a> {
 
         // 参数求值为一个绑定；三种函数都只接受节点或边
         let binding = match &args[0] {
-            Expr::Variable(var) => *ctx.get(var)?,
+            Expr::Variable(var) => ctx.get(var)?.clone(),
             // `id(r)` 之外的嵌套（如 `id(other.x)`）没有意义：ID 不是属性
             _ => return None,
         };
@@ -1117,6 +1302,8 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         match func {
             ScalarFunc::Id => match binding {
                 Binding::Node(id) | Binding::Edge(id) => Some(Value::Int(id as i64)),
+                // 标量没有 ID：`id('a')` 是 NULL，不是 0
+                Binding::Value(_) => None,
             },
             ScalarFunc::Labels => match binding {
                 Binding::Node(id) => {
@@ -1126,14 +1313,14 @@ impl<'a> CypherReadOnlyExecutor<'a> {
                     labels.sort_unstable();
                     Some(Value::String(labels.join(",")))
                 }
-                Binding::Edge(_) => None,
+                Binding::Edge(_) | Binding::Value(_) => None,
             },
             ScalarFunc::Type => match binding {
                 Binding::Edge(id) => {
                     let edge = self.graph.get_edge(id).ok().flatten()?;
                     Some(Value::String(edge.edge_type.clone()))
                 }
-                Binding::Node(_) => None,
+                Binding::Node(_) | Binding::Value(_) => None,
             },
         }
     }
@@ -1145,7 +1332,7 @@ impl<'a> CypherReadOnlyExecutor<'a> {
 /// （起止必须是同一节点），而不是把先前绑定静默覆盖掉。
 fn bind_or_reject(ctx: &mut RowCtx, var: &str, binding: Binding) -> bool {
     match ctx.get(var) {
-        Some(existing) if *existing != binding => false,
+        Some(existing) if existing != &binding => false,
         Some(_) => true,
         None => {
             ctx.insert(var.to_string(), binding);
@@ -1162,7 +1349,7 @@ fn merge_contexts(base: &RowCtx, candidate: &RowCtx) -> Option<RowCtx> {
             Some(existing) if existing != v => return None,
             Some(_) => {}
             None => {
-                merged.insert(k.clone(), *v);
+                merged.insert(k.clone(), v.clone());
             }
         }
     }
@@ -1198,6 +1385,28 @@ fn is_null(v: &Value) -> bool {
     v.is_null()
 }
 
+/// 构造 CREATE 语句返回的状态结果集。
+///
+/// `execute_create` 与 `execute_unwind` 都要用它：两条路径各自拼一遍
+/// message 格式，迟早会出现「一条说 3 nodes，另一条说 3 个节点」的分歧。
+fn create_result_set(nodes_created: usize, edges_created: usize) -> CypherResultSet {
+    let stats = ExecuteResult {
+        nodes_created,
+        edges_created,
+        nodes_deleted: 0,
+        edges_deleted: 0,
+        properties_set: 0,
+        message: format!("Created {nodes_created} nodes, {edges_created} relationships."),
+    };
+    CypherResultSet {
+        columns: vec!["Status".to_string()],
+        rows: vec![Row {
+            values: vec![Value::from(stats.message.clone())],
+        }],
+        stats,
+    }
+}
+
 /// 完整 Cypher 执行器（支持 CREATE / SET / DELETE 等写操作）
 pub struct CypherExecutor<'a> {
     graph: &'a mut DiskGraph,
@@ -1207,6 +1416,20 @@ pub struct CypherExecutor<'a> {
 impl<'a> CypherExecutor<'a> {
     pub fn new(graph: &'a mut DiskGraph, index_mgr: &'a mut IndexManager) -> Self {
         Self { graph, index_mgr }
+    }
+
+    /// 属性表达式求值（写路径）。
+    ///
+    /// 委托给只读执行器：属性求值不区分读写，两处各写一份必然漂移。
+    /// 只读执行器只借用 `&DiskGraph`，所以这里的可变借用需要在调用点收窄——
+    /// Rust 的重新借用（reborrow）在方法调用里自动完成。
+    fn resolve_storable_properties(
+        &self,
+        props: &HashMap<String, Expr>,
+        ctx: &RowCtx,
+    ) -> Result<HashMap<String, Value>, GraphError> {
+        CypherReadOnlyExecutor::new(self.graph, self.index_mgr)
+            .resolve_storable_properties(props, ctx)
     }
 
     /// 生成执行计划文本（`EXPLAIN`）。
@@ -1239,6 +1462,28 @@ impl<'a> CypherExecutor<'a> {
                 lines.push("  └─ AllocateNodeOrEdge (写路径)".to_string());
                 lines.push(format!("     pattern nodes: {}", pattern.nodes.len()));
                 lines.push(format!("     pattern edges: {}", pattern.edges.len()));
+            }
+            CypherStatement::Unwind {
+                variable,
+                create_clause,
+                return_clause,
+                ..
+            } => {
+                lines.push(if create_clause.is_some() {
+                    "WriteQuery (需要排他写锁)".to_string()
+                } else {
+                    "ReadQuery (共享读锁即可)".to_string()
+                });
+                lines.push("  ├─ Unwind (逐元素展开为行)".to_string());
+                lines.push(format!("  │    AS {}", variable));
+                if create_clause.is_some() {
+                    lines.push("  ├─ Create (每个元素建一个模式)".to_string());
+                }
+                if return_clause.is_some() {
+                    lines.push("  └─ Project".to_string());
+                } else {
+                    lines.push("  └─ (无 RETURN)".to_string());
+                }
             }
             CypherStatement::Match(clause) => {
                 // 与 lib.rs 的路由判断同源：变更子句决定走写锁还是读锁
@@ -1347,14 +1592,17 @@ impl<'a> CypherExecutor<'a> {
     ) -> String {
         if let Some(lbl) = start.labels.first() {
             if index_mgr.is_label_complete(lbl) {
-                for (key, val) in &start.properties {
-                    if index_mgr.find_by_property_exact(lbl, key, val).is_some() {
-                        return format!(
-                            "property index (:{lbl} {{{key}: {val:?}}})",
-                            lbl = lbl,
-                            key = key,
-                            val = val
-                        );
+                for (key, val_expr) in &start.properties {
+                    // 与 find_initial_candidates 同步：只有字面量能查索引
+                    if let Expr::Literal(val) = val_expr {
+                        if index_mgr.find_by_property_exact(lbl, key, val).is_some() {
+                            return format!(
+                                "property index (:{lbl} {{{key}: {val:?}}})",
+                                lbl = lbl,
+                                key = key,
+                                val = val
+                            );
+                        }
                     }
                 }
                 if let (Some(_), Some(v)) = (where_clause, &start.variable) {
@@ -1378,6 +1626,23 @@ impl<'a> CypherExecutor<'a> {
         match stmt {
             CypherStatement::Explain(inner) => Ok(Self::explain_statement(&inner, self.index_mgr)),
             CypherStatement::Create { pattern } => self.execute_create(&[pattern]),
+            CypherStatement::Unwind {
+                expr,
+                variable,
+                return_clause,
+                order_by,
+                skip,
+                limit,
+                create_clause,
+            } => self.execute_unwind(
+                &expr,
+                &variable,
+                return_clause,
+                order_by,
+                skip,
+                limit,
+                create_clause,
+            ),
             CypherStatement::Match(clause) => {
                 let MatchClause {
                     patterns,
@@ -1495,38 +1760,59 @@ impl<'a> CypherExecutor<'a> {
 
     /// 执行 CREATE 语句（纯磁盘写入，维护二级索引）
     fn execute_create(&mut self, patterns: &[PathPattern]) -> Result<CypherResultSet, GraphError> {
+        // 无行上下文的 CREATE：属性里不能引用变量
+        // （`CREATE (n {k: x})` 只会由 `execute_unwind` 逐行构造上下文后调用）。
+        // 返回值里的变量绑定在这里没有用处：纯 CREATE 的返回值是创建摘要。
+        let (nodes_created, edges_created, _) = self.create_patterns(patterns, &RowCtx::new())?;
+        Ok(create_result_set(nodes_created, edges_created))
+    }
+
+    /// 按给定行上下文创建一批模式。
+    ///
+    /// 返回 `(节点数, 边数, 新建节点的变量绑定)`。
+    ///
+    /// 第三个返回值是 `UNWIND ... CREATE (n ...) RETURN n.x` 能工作的原因：
+    /// 新建节点的变量必须回填进行上下文，否则 `RETURN n.x` 会渲染成 NULL——
+    /// 刚创建并写入了 `x` 的节点却报告「没有这个属性」，是静默的错误答案。
+    ///
+    /// `execute_create`（无上下文）与 `execute_unwind`（每行一个上下文）共用这一份
+    /// 实现，避免两条写路径在唯一约束、索引维护上出现分歧。
+    fn create_patterns(
+        &mut self,
+        patterns: &[PathPattern],
+        ctx: &RowCtx,
+    ) -> Result<CreateOutcome, GraphError> {
         let mut nodes_created = 0;
         let mut edges_created = 0;
+        let mut bindings: Vec<(String, u64)> = Vec::new();
 
         for pattern in patterns {
             let mut node_ids = Vec::new();
 
             for node_pat in &pattern.nodes {
                 let labels: HashSet<String> = node_pat.labels.iter().cloned().collect();
+                let props = self.resolve_storable_properties(&node_pat.properties, ctx)?;
 
                 // 唯一约束必须在这里也过一遍：Cypher 直接调 `DiskGraph::add_node`，
                 // 绕过了 `GraphLite::add_node` 上的检查。
-                self.index_mgr.guard_unique_constraints(
-                    self.graph,
-                    &labels,
-                    &node_pat.properties,
-                    None,
-                )?;
-                let node_id = self
-                    .graph
-                    .add_node(labels.clone(), node_pat.properties.clone())?;
+                self.index_mgr
+                    .guard_unique_constraints(self.graph, &labels, &props, None)?;
+                let node_id = self.graph.add_node(labels.clone(), props.clone())?;
                 nodes_created += 1;
                 node_ids.push(node_id);
+                if let Some(ref var) = node_pat.variable {
+                    bindings.push((var.clone(), node_id));
+                }
 
                 for l in &labels {
                     self.index_mgr.insert_label(l, node_id);
                     self.graph.index_catalog.labels.insert(l.clone());
-                    for (k, v) in &node_pat.properties {
+                    for (k, v) in &props {
                         self.index_mgr.insert_property(l, k, v.clone(), node_id);
                         self.graph
                             .index_catalog
                             .properties
-                            .insert((l.clone(), k.clone()));
+                            .insert((l.clone(), (*k).to_string()));
                     }
                 }
             }
@@ -1540,37 +1826,88 @@ impl<'a> CypherExecutor<'a> {
                     .clone()
                     .unwrap_or_else(|| "RELATED".to_string());
                 let weight = edge_pat.weight.unwrap_or(1.0);
+                let edge_props = self.resolve_storable_properties(&edge_pat.properties, ctx)?;
 
-                self.graph.add_edge(
-                    src_id,
-                    dst_id,
-                    &rel_type,
-                    edge_pat.properties.clone(),
-                    weight,
-                )?;
+                self.graph
+                    .add_edge(src_id, dst_id, &rel_type, edge_props, weight)?;
                 edges_created += 1;
             }
         }
 
-        let stats = ExecuteResult {
-            nodes_created,
-            edges_created,
-            nodes_deleted: 0,
-            edges_deleted: 0,
-            properties_set: 0,
-            message: format!(
-                "Created {} nodes, {} relationships.",
-                nodes_created, edges_created
-            ),
+        Ok((nodes_created, edges_created, bindings))
+    }
+
+    /// 执行 `UNWIND <expr> AS <var> [CREATE ...] [RETURN ...]`。
+    ///
+    /// 语义：把 `expr` 求值为列表，为**每个元素**产生一行并绑定到 `var`，
+    /// 然后把可选子句施加到这些行上。这是把「批量数据」表达进查询的唯一方式：
+    ///
+    /// ```text
+    /// UNWIND [1, 2, 3] AS x CREATE (n:Num {v: x})
+    /// ```
+    ///
+    /// 一次调用创建 3 个节点，而不是需要 3 条语句。
+    ///
+    /// 行是**顺序**产生的，因此 `CREATE` 的结果顺序与列表顺序一致。
+    #[allow(clippy::too_many_arguments)]
+    fn execute_unwind(
+        &mut self,
+        expr: &Expr,
+        variable: &str,
+        return_clause: Option<Vec<ReturnItem>>,
+        order_by: Vec<OrderItem>,
+        skip: Option<usize>,
+        limit: Option<usize>,
+        create_clause: Option<PathPattern>,
+    ) -> Result<CypherResultSet, GraphError> {
+        // 行构造复用只读执行器：展开语义只有一处实现
+        let (mut rows, synthetic) =
+            CypherReadOnlyExecutor::new(self.graph, self.index_mgr).unwind_rows(expr, variable)?;
+
+        let mut nodes_created = 0;
+        let mut edges_created = 0;
+
+        if let Some(pattern) = create_clause {
+            // 逐行创建：每行一个模式实例。行数即创建个数。
+            for ctx in rows.iter_mut() {
+                let (n, e, bindings) = self.create_patterns(std::slice::from_ref(&pattern), ctx)?;
+                nodes_created += n;
+                edges_created += e;
+                // 新建节点的变量回填进**这一行**，使 `RETURN n.x` 能拿到刚写入的值。
+                // 不回填的话它会渲染成 NULL——刚创建成功的节点报告「没有该属性」。
+                for (var, id) in bindings {
+                    // 与 UNWIND 变量重名时保留 UNWIND 的绑定：那是本行的输入，
+                    // 覆盖它会让后续表达式引用到意料之外的东西。
+                    ctx.entry(var).or_insert(Binding::Node(id));
+                }
+            }
+        }
+
+        // 无 RETURN：返回创建摘要（与 CREATE 一致）
+        let Some(items) = return_clause else {
+            return Ok(create_result_set(nodes_created, edges_created));
         };
 
-        Ok(CypherResultSet {
-            columns: vec!["Status".to_string()],
-            rows: vec![Row {
-                values: vec![Value::from(stats.message.clone())],
-            }],
-            stats,
-        })
+        // 有 RETURN：走与 MATCH 相同的投影管线（聚合 / ORDER BY / SKIP / LIMIT）。
+        //
+        // 复用只读执行器而不是复制一份投影实现——聚合与分页的语义在这里必须
+        // 与 MATCH 路径完全一致，复制出来的第二份实现迟早会漂移。
+        let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+        let mut result =
+            ro.project_results(&[synthetic], rows, Some(items), &order_by, skip, limit)?;
+
+        // 投影管线只报行数；创建数必须叠加回来，否则调用方看不到写入了多少
+        result.stats.nodes_created = nodes_created;
+        result.stats.edges_created = edges_created;
+        if nodes_created > 0 || edges_created > 0 {
+            result.stats.message = format!(
+                "Created {} nodes, {} relationships, returned {} rows.",
+                nodes_created,
+                edges_created,
+                result.rows.len()
+            );
+        }
+        Ok(result)
     }
 
     /// 应用 SET 子句：更新属性或追加标签（同步维护二级索引）
@@ -1583,6 +1920,13 @@ impl<'a> CypherExecutor<'a> {
                     SetItem::Property { var, key, value } => {
                         let node_id = match ctx.get(var) {
                             Some(Binding::Node(id)) => *id,
+                            // 标量没有可写属性。静默跳过会让 `UNWIND [1] AS x SET x.k = 1`
+                            // 报告成功却什么都没做，所以这里显式报错。
+                            Some(Binding::Value(_)) => {
+                                return Err(GraphError::General(format!(
+                                    "SET requires a node or relationship, but `{var}` is a value"
+                                )))
+                            }
                             Some(Binding::Edge(id)) => {
                                 let val = {
                                     let ro =
@@ -1687,28 +2031,24 @@ impl<'a> CypherExecutor<'a> {
                 }
 
                 let labels: HashSet<String> = node_pat.labels.iter().cloned().collect();
+                // 属性可以引用已绑定的变量：`MATCH (a) CREATE (b {name: a.name})`
+                let props = self.resolve_storable_properties(&node_pat.properties, ctx)?;
                 // 同上：约束闸门对 `MATCH ... CREATE` 路径同样必须生效
-                self.index_mgr.guard_unique_constraints(
-                    self.graph,
-                    &labels,
-                    &node_pat.properties,
-                    None,
-                )?;
-                let node_id = self
-                    .graph
-                    .add_node(labels.clone(), node_pat.properties.clone())?;
+                self.index_mgr
+                    .guard_unique_constraints(self.graph, &labels, &props, None)?;
+                let node_id = self.graph.add_node(labels.clone(), props.clone())?;
                 nodes_created += 1;
                 node_ids.push(node_id);
 
                 for l in &labels {
                     self.index_mgr.insert_label(l, node_id);
                     self.graph.index_catalog.labels.insert(l.clone());
-                    for (k, v) in &node_pat.properties {
+                    for (k, v) in &props {
                         self.index_mgr.insert_property(l, k, v.clone(), node_id);
                         self.graph
                             .index_catalog
                             .properties
-                            .insert((l.clone(), k.clone()));
+                            .insert((l.clone(), (*k).to_string()));
                     }
                 }
             }
@@ -1721,14 +2061,10 @@ impl<'a> CypherExecutor<'a> {
                     .clone()
                     .unwrap_or_else(|| "RELATED".to_string());
                 let weight = edge_pat.weight.unwrap_or(1.0);
+                let edge_props = self.resolve_storable_properties(&edge_pat.properties, ctx)?;
 
-                self.graph.add_edge(
-                    src_id,
-                    dst_id,
-                    &rel_type,
-                    edge_pat.properties.clone(),
-                    weight,
-                )?;
+                self.graph
+                    .add_edge(src_id, dst_id, &rel_type, edge_props, weight)?;
                 edges_created += 1;
             }
         }
@@ -1750,11 +2086,16 @@ impl<'a> CypherExecutor<'a> {
         for ctx in matched {
             for target_var in &del.targets {
                 let binding = match ctx.get(target_var) {
-                    Some(b) => *b,
+                    Some(b) => b.clone(),
                     None => continue,
                 };
 
                 match binding {
+                    Binding::Value(_) => {
+                        return Err(GraphError::General(format!(
+                            "DELETE requires a node or relationship, but `{target_var}` is a value"
+                        )))
+                    }
                     Binding::Node(id) => {
                         if !deleted_nodes.insert(id) {
                             continue;
@@ -1842,6 +2183,21 @@ pub fn execute_cypher_read(
                 clause.skip,
                 clause.limit,
             )
+        }
+        // 只读的 UNWIND（不带 CREATE）在只读句柄上同样合法：
+        // `UNWIND [1,2,3] AS x RETURN x` 不写任何东西。
+        // 带 CREATE 的版本已被上面的 `is_mutating` 守卫挡掉。
+        CypherStatement::Unwind {
+            expr,
+            variable,
+            return_clause,
+            order_by,
+            skip,
+            limit,
+            create_clause: None,
+        } => {
+            let executor = CypherReadOnlyExecutor::new(graph, index_mgr);
+            executor.execute_unwind(&expr, &variable, return_clause, &order_by, skip, limit)
         }
         _ => Err(GraphError::General(
             "Read-only executor cannot execute mutating Cypher statement".into(),

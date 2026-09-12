@@ -547,13 +547,26 @@ impl GraphLite {
         let tx_id = inner.next_tx_id;
         inner.next_tx_id += 1;
 
+        // 语句级原子性，与 `run_cypher` 同源（两条写入口必须给出相同保证）
+        let snapshot = inner.disk_graph.snapshot_meta();
+        {
+            let mut bpm = inner.disk_graph.bpm.lock_recover();
+            bpm.begin_tx(tx_id);
+        }
+
         let result = {
             let GraphInner {
                 disk_graph,
                 index_mgr,
                 ..
             } = &mut *inner;
-            cypher::execute_mutate(cypher_str, disk_graph, index_mgr)?
+            match cypher::execute_mutate(cypher_str, disk_graph, index_mgr) {
+                Ok(r) => r,
+                Err(e) => {
+                    Self::rollback_failed_statement(&mut inner, &snapshot);
+                    return Err(e);
+                }
+            }
         };
 
         // 若产生了物理修改，生成页级 WAL 记录并持久化
@@ -606,12 +619,40 @@ impl GraphLite {
         let tx_id = inner.next_tx_id;
         inner.next_tx_id += 1;
 
+        // 语句级原子性：执行前采集元数据快照并开启事务上下文。
+        //
+        // 没有这一步，一条失败的写语句会留下**部分写入**：已创建的节点留在缓冲池里，
+        // 随后任何一次成功的提交都会把它们一起刷进主文件。实测（本仓库 rc.1 行为）：
+        //
+        // ```text
+        // CREATE (:Num {v: 1}); declare UNIQUE (:Num.v)
+        // UNWIND [2, 1, 3] AS v CREATE (n:Num {v: v})   -- 因重复值失败
+        // CREATE (:Other {x: 99})                        -- 一次无关的成功写入
+        // ```
+        //
+        // 之后重开数据库，`MATCH (n:Num)` 会看到 `{v: 1}` **和** 那个本该被拒绝的
+        // `{v: 2}`。UNWIND 让这条路径变得常见——一条语句本来就可能写上千条记录，
+        // 中途失败是最可能的失败形态，所以必须在提交前把失败语句的写入整体撤掉。
+        let snapshot = inner.disk_graph.snapshot_meta();
+        {
+            let mut bpm = inner.disk_graph.bpm.lock_recover();
+            bpm.begin_tx(tx_id);
+        }
+
         let GraphInner {
             disk_graph,
             index_mgr,
             ..
         } = &mut *inner;
-        let result = cypher::execute_mutate(cypher_str, disk_graph, index_mgr)?;
+
+        let result = match cypher::execute_mutate(cypher_str, disk_graph, index_mgr) {
+            Ok(r) => r,
+            Err(e) => {
+                Self::rollback_failed_statement(&mut inner, &snapshot);
+                return Err(e);
+            }
+        };
+
         Self::commit_dirty_pages_to_wal(&mut inner, tx_id)?;
         drop(inner);
         // 写锁已释放，此时才能安全做 Checkpoint
@@ -1299,6 +1340,35 @@ impl GraphLite {
         drop(inner);
         self.maybe_auto_checkpoint()?;
         Ok(())
+    }
+
+    /// 内部辅助：撤掉一个失败写语句的全部物理影响。
+    ///
+    /// 没有这一步，失败的写语句会留下**部分写入**：已创建/修改的页留在缓冲池里，
+    /// 随后任何一次成功的提交都会把它们一起刷进主文件。实测（修复前）：
+    ///
+    /// ```text
+    /// CREATE (:Num {v: 1}); declare UNIQUE (:Num.v)
+    /// UNWIND [2, 1, 3] AS v CREATE (n:Num {v: v})   -- 因重复值失败
+    /// CREATE (:Other {x: 99})                        -- 一次无关的成功写入
+    /// ```
+    ///
+    /// 之后重开数据库，`MATCH (n:Num)` 会看到 `{v: 1}` **和**那个本该被拒绝的
+    /// `{v: 2}`。`UNWIND` 让这条路径变得常见——一条语句本来就可能写上千条记录。
+    ///
+    /// 三个动作与 `Transaction::commit` 的失败清理完全一致，避免两套回滚语义：
+    /// 按事务基线还原未提交页、回拨内存元数据、使二级索引整体失效。
+    fn rollback_failed_statement(
+        inner: &mut GraphInner,
+        snapshot: &crate::disk_graph::GraphMetaSnapshot,
+    ) {
+        let failed_pages = inner.disk_graph.drain_modified_pages();
+        {
+            let mut bpm = inner.disk_graph.bpm.lock_recover();
+            let _ = bpm.rollback_uncommitted_pages(&failed_pages);
+        }
+        inner.disk_graph.restore_meta(snapshot);
+        inner.index_mgr.invalidate_all();
     }
 
     /// 内部辅助：把当前事务修改的物理页原子提交到页级 WAL。
