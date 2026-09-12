@@ -235,8 +235,15 @@ pub struct MatchClause {
 /// Cypher 语句抽象语法树
 #[derive(Debug, Clone, PartialEq)]
 pub enum CypherStatement {
-    Create { pattern: PathPattern },
+    Create {
+        pattern: PathPattern,
+    },
     Match(Box<MatchClause>),
+    /// `EXPLAIN <query>`：只输出执行计划，**不执行**查询。
+    ///
+    /// 计划由 `Image` 的静态结构推导，不需要触碰磁盘——因此 EXPLAIN 在空库上
+    /// 同样可用，也不会产生任何副作用。
+    Explain(Box<CypherStatement>),
 }
 
 impl CypherStatement {
@@ -244,6 +251,8 @@ impl CypherStatement {
     pub fn is_mutating(&self) -> bool {
         match self {
             CypherStatement::Create { .. } => true,
+            // EXPLAIN 只描述计划，从不写入
+            CypherStatement::Explain(_) => false,
             CypherStatement::Match(clause) => {
                 !clause.set_clause.is_empty()
                     || clause.delete_clause.is_some()

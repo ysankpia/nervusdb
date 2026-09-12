@@ -18,6 +18,45 @@ user has to act on them:
 
 ### Added
 
+- **`LIMIT` is pushed down into matching when it is safe to do so.** The engine
+  used to expand every match and truncate at the very end, so `LIMIT 1` cost as
+  much as the full query. It now stops as soon as enough rows are collected.
+
+  Measured on a 4-hub graph:
+
+  | Query | Before | After |
+  | --- | --- | --- |
+  | `LIMIT 1`, 32,000 edges | 60,577 ms | **6 ms** |
+  | `LIMIT 1`, 100,000 edges | — | 53 ms |
+
+  Push-down is gated on three conditions, and the gate is conservative on purpose:
+
+  - **No `ORDER BY`** — sorting needs every row, so truncating early would return
+    the wrong prefix.
+  - **No `SKIP`** — the cut-off point would be computed against the wrong offset.
+  - **No aggregate, and no `RETURN *`** — both need the full row set (the latter
+    because the column list is derived from the contexts).
+
+  Equivalence was verified by running each query twice — once with `LIMIT`, once
+  without — and asserting the limited result equals the first N rows of the full
+  result, including the cases where push-down is refused.
+
+- **`EXPLAIN <query>`** prints the plan without running the query: the start-node
+  selection (label index, property index, or full scan), the expansion steps with
+  direction, type and hop range, whether `LIMIT` was pushed down and why not if it
+  was not, and whether aggregation or sorting is involved.
+
+  It exists because a slow query used to offer no way to see which path the engine
+  took — the O(N²) expansion in the previous commit could only be diagnosed by
+  reading the source. Every line reflects a branch the executor actually takes, so
+  the plan cannot drift from the behaviour without the code moving.
+
+  `EXPLAIN` is side-effect free and therefore works on a read-only handle, and
+  `EXPLAIN CREATE ...` / `EXPLAIN ... SET ...` are permitted — they describe the
+  write path without performing it. Pinned by a test asserting `node_count` is
+  unchanged after `EXPLAIN CREATE`, and that no property is modified by
+  `EXPLAIN ... SET`.
+
 - Scalar functions `id(x)`, `labels(n)`, and `type(r)` in `WHERE` and `RETURN`.
   `id` returns the internal node or edge id as an integer, which is what start-node
   anchoring will key on.

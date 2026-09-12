@@ -562,3 +562,78 @@ fn test_dump_cypher_script_replay() -> Result<(), GraphError> {
 
     Ok(())
 }
+
+// =========================================================================
+// EXPLAIN：只描述计划，不执行查询
+// =========================================================================
+#[test]
+fn test_explain_reports_plan_without_executing() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("explain.db");
+    let db = GraphLite::open(&db_path)?;
+
+    db.with_transaction(|tx| {
+        let a = tx.add_node(HashSet::from(["City".to_string()]), HashMap::new())?;
+        let b = tx.add_node(HashSet::from(["City".to_string()]), HashMap::new())?;
+        tx.add_edge(a, b, "ROAD", HashMap::new(), 1.0)?;
+        Ok(())
+    })?;
+
+    // 计划必须提到实际使用的起点选择
+    let plan = db.run_cypher("EXPLAIN MATCH (c:City)-[r:ROAD]->(d) RETURN c")?;
+    let text = plan_text(&plan);
+    assert!(
+        text.contains("label index (:City)"),
+        "plan must name the start-node selection, got:\n{}",
+        text
+    );
+
+    // LIMIT 下推的两种情况必须在计划中如实区分
+    let pushable =
+        plan_text(&db.run_cypher("EXPLAIN MATCH (c:City)-[r:ROAD]->(d) RETURN c LIMIT 5")?);
+    assert!(
+        pushable.contains("已下推"),
+        "a pushable LIMIT must be reported as pushed down, got:\n{}",
+        pushable
+    );
+
+    let blocked = plan_text(
+        &db.run_cypher("EXPLAIN MATCH (c:City)-[r:ROAD]->(d) RETURN c ORDER BY c LIMIT 5")?,
+    );
+    assert!(
+        blocked.contains("无法下推") && blocked.contains("ORDER BY"),
+        "a blocked LIMIT must say why, got:\n{}",
+        blocked
+    );
+
+    // 关键断言：EXPLAIN 绝不产生副作用
+    let before = db.node_count();
+    db.run_cypher("EXPLAIN CREATE (x:ShouldNotExist)")?;
+    assert_eq!(
+        db.node_count(),
+        before,
+        "EXPLAIN CREATE must not create anything"
+    );
+
+    db.run_cypher("EXPLAIN MATCH (c:City) SET c.seen = true")?;
+    let seen = db.run_cypher("MATCH (c:City) WHERE c.seen = true RETURN count(*) AS n")?;
+    assert_eq!(
+        seen.rows[0].values[0].as_i64(),
+        Some(0),
+        "EXPLAIN SET must not modify any node"
+    );
+
+    Ok(())
+}
+
+/// 把计划结果集拼成一段文本，便于断言。
+fn plan_text(res: &graphlite::CypherResultSet) -> String {
+    res.rows
+        .iter()
+        .filter_map(|r| match &r.values[0] {
+            Value::String(s) => Some(s.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}

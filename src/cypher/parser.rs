@@ -17,6 +17,16 @@ impl Parser {
     }
 
     pub fn parse(&mut self) -> Result<CypherStatement, GraphError> {
+        // EXPLAIN 前缀：包住整条内层语句。
+        //
+        // 在**递归调用 parse** 之外单独处理前缀，而不是把它塞进每个分支：
+        // 这样 `EXPLAIN EXPLAIN` 这类嵌套也会被自然拒绝（内层只允许 CREATE/MATCH）。
+        if self.peek() == Some(&Token::Explain) {
+            self.consume();
+            let inner = self.parse()?;
+            return Ok(CypherStatement::Explain(Box::new(inner)));
+        }
+
         let statement = match self.peek() {
             Some(Token::Create) => {
                 self.consume();
