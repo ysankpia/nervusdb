@@ -1,6 +1,6 @@
 # Roadmap
 
-GraphLite-RS is an embedded, single-file property graph database: the SQLite
+NervusDB is an embedded, single-file property graph database: the SQLite
 model applied to graphs. This document tracks what is done, what is next, and
 what is explicitly out of scope. It is a living plan, not a promise.
 
@@ -34,10 +34,10 @@ Working and covered by tests:
 - **Concurrency: any number of readers with one writer.** Read-only handles take a
   shared lock; a write handle excludes everyone. Read-only open refuses when the
   WAL still holds unreplayed pages rather than returning stale data.
-- Cypher 1.0: `CREATE`, `MATCH` (multi-pattern), `WHERE`, `SET`, `DELETE` /
-  `DETACH DELETE`, `ORDER BY`, `SKIP`, `LIMIT`, `count/sum/avg/min/max`,
-  variable-length and undirected paths, label predicates, scalar functions
-  (`id`, `labels`, `type`), and `EXPLAIN`.
+- Cypher: `CREATE`, `MATCH` (multi-pattern), `MERGE`, `UNWIND`, `WHERE`, `SET`,
+  `DELETE` / `DETACH DELETE`, `ORDER BY`, `SKIP`, `LIMIT`,
+  `count/sum/avg/min/max`, variable-length and undirected paths, label
+  predicates, scalar functions (`id`, `labels`, `type`), and `EXPLAIN`.
 - **Query performance**: start-node selection walks adjacency chains instead of
   expanding the whole graph; `LIMIT` is pushed into matching when it cannot change
   the result. A 32,000-edge expansion went from 48 s to 27 ms.
@@ -50,10 +50,11 @@ Working and covered by tests:
   that names corrupt pages, error-preserving read accessors, poison-recovering
   locks, WAL auto-checkpoint.
 - Operations: `backup()` for a consistent online copy, `vacuum()` for a space
-  report, and `graphlite-studio` for browser-based inspection.
-- Tooling: interactive CLI with dot commands and logical dump; Python and Node.js
-  SDKs with transaction and batch-write support.
-- 146 test cases across 13 suites (145 run, 1 intentionally `#[ignore]`d for a
+  report. Inspection is through the library API — there is no separate CLI or GUI.
+- Tooling: Python and Node.js SDKs with transaction and batch-write support.
+  Inspection and dump go through the library API — the CLI and the browser
+  workbench were removed before 0.1.0.
+- 198 test cases across 16 suites (197 run, 1 intentionally `#[ignore]`d for a
   child-process lock probe); `cargo fmt`, `cargo clippy -D warnings` and
   `rustdoc -D warnings` all clean.
 
@@ -61,24 +62,29 @@ Working and covered by tests:
 
 ## Next (planned)
 
-### 1. True concurrent read-write (snapshot isolation)
+### 1. Non-blocking readers (versioned page visibility)
 
-Today a reader and a writer are mutually exclusive: shared read locks and the
-write lock cannot coexist. The studio works around this by taking its lock per
-request, so a writer can write between requests — but a write that lands *during*
-a request makes that request fail with a retryable error.
+**Partially done.** `NervusDb::read_snapshot()` now gives a caller a
+self-consistent view: it holds the shared read lock for its lifetime, so a
+multi-step traversal cannot stitch two states together. That closed the correctness
+gap (see `tests/concurrency_isolation_tests.rs`).
 
-Real concurrency needs snapshot isolation: readers pin a consistent snapshot
-(typically by reading from the WAL up to a known commit point) while the writer
-appends. That is a substantial change to recovery and page visibility, and it is
-the largest remaining gap against the "agent writes while you watch" workload.
+What remains is the _performance_ gap: a snapshot blocks writers while it lives,
+because a reader and a writer still exclude each other. Removing that needs
+versioned page visibility — readers pin a snapshot (typically by reading from the WAL
+up to a known commit point) while the writer appends. That is a substantial change to
+recovery and page visibility, and it is the largest remaining gap against the
+"agent writes while you watch" workload.
 
-### 2. Planner memory beyond edges
+### 2. Planner memory: spilling instead of capping
 
-A transaction still queues all its actions in memory before commit. Edge batches
-are chunked at `MAX_BATCH_EDGES_IN_MEMORY`, but a multi-million-**node** transaction
-still holds the whole action list. Capping and spilling the planner queue itself is
-the remaining step.
+**Capped.** The action queue is now bounded by
+`DEFAULT_MAX_TRANSACTION_ACTIONS` and reports an overflow rather than growing without
+limit (see AGENTS.md §5). What remains is _spilling_: a caller that genuinely needs a
+transaction larger than the cap must currently batch it by hand. Writing queued
+actions to the WAL as they arrive and keeping only a location index — the way STEAL
+spilling already works for pages — would let one transaction exceed the cap without
+giving up rollback.
 
 ### 3. Cost-based query planning
 
@@ -87,29 +93,49 @@ Start-node selection is rule-based (index when available, otherwise a scan) and
 join reordering and no index-nested-loop selection. Adequate at the current scale;
 a limitation for complex analytical queries.
 
-### 4. `MERGE` and `UNWIND`
+### 4. SDK publication
 
-Both are natural next additions to the Cypher surface: `MERGE` leans on the unique
-constraints that now exist, and `UNWIND` makes batch ingestion expressible in a
-query rather than only through the SDK. Each needs design work rather than a patch,
-which is why neither is in 1.0.
+**The name is settled: `nervusdb`.** The earlier `graphlite*` names were unusable —
+`graphlite` belongs to unrelated projects on every registry (`eugene-eeo/graphlite`
+on PyPI, `GraphLite-AI/GraphLite` on crates.io), so publishing under it would have
+shipped someone else's name, and a published name cannot be cleanly retracted.
+`nervusdb` is already owned by this project on crates.io, and the old `0.0.x`
+releases there have been yanked, so the name now resolves only to the new line.
 
-### 5. SDK publication
-
-The Python and Node.js bindings build and pass their tests but are not published to
-PyPI or npm. Publishing needs packaging polish, versioning policy, and platform
-wheel/prebuild matrices.
+Remaining work before publishing is packaging, not naming: versioning policy, and
+platform wheel/prebuild matrices.
 
 **The previously recorded "9x slower than native" figure is retracted** — it came
 from debug builds of the bindings compared against a release core. Measured with
 both sides in release the bindings run at 0.85-0.93x of the native path. See
 `docs/benchmarks.md` for the corrected table and the retraction.
 
-### 6. Concurrency stress at high core counts
+### 5. Latch contention: measured, only the fix remains
 
-The current suite exercises 20 threads. Behaviour under sustained load on
-many-core machines, and the contention profile of the page latches, are not yet
-characterised.
+**Measured, and the answer is worse than "not characterised".**
+`concurrency_stress_tests.rs` covers the correctness guarantees (no deadlock, no lost
+writes, self-consistent structure, readers make progress). A separate profiling run on
+the real com-DBLP database found that read throughput **degrades** as threads are
+added: 16 threads reached 0.6-1.4% of single-thread throughput, i.e. reads got slower.
+See [benchmarks.md](docs/benchmarks.md#concurrency-scaling) for the method and the
+control runs that rule out the machine.
+
+The cause is structural, not a tuning problem: every page touch goes through the one
+`Arc<Mutex<BufferPoolManager>>`, and a single `get_node` of a degree-343 hub used to
+cost ≈345 acquisitions.
+
+**Half done.** The per-edge acquisitions are now collapsed into one per chain
+(`collect_edge_chain_batched`), which under 8-thread contention on a shared hub
+measured 1.4-2.2× (17.4-27.8k → 37.8-38.3k ops/s, and far more stable run to run).
+
+**Still open:** readers remain serialized, because the mutex is still global and still
+taken once per call — 16-thread scaling efficiency is ≈4%, against the ≈40% this
+machine can deliver. Closing that needs per-frame latching, i.e. a redesign of the
+buffer pool's concurrency model, not a patch. It is the largest remaining piece of
+work in this file.
+
+Also found while profiling: `BufferPoolManager::latch` is dead code — declared and
+initialized since the initial commit, never used. Delete it or make it real.
 
 ## Explicitly out of scope
 
@@ -117,8 +143,8 @@ characterised.
   embedded file, like SQLite.
 - **In-memory graph mode.** A resident full-graph representation would violate
   the bounded-memory invariant that the whole architecture is built around.
-- **Cypher `MERGE`, `UNWIND`, `WITH`, subqueries, stored procedures.**
-  Interesting, but each needs design work rather than a patch.
+- **Cypher `WITH`, subqueries, stored procedures.** `MERGE` and `UNWIND` landed in
+  0.1.0; the rest each need design work rather than a patch.
 - **Full-text or vector indexes.** Separate problem domain.
 
 ---

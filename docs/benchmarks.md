@@ -83,28 +83,41 @@ weaving step's own working set is bounded regardless of transaction size.
 
 ### Real-world graphs (SNAP)
 
-`examples/snap_dblp_bench.rs` and `examples/snap_livejournal_bench.rs`. Both take
+`benches/real_data/snap_dblp_bench.rs` and `benches/real_data/snap_livejournal_bench.rs`
+(they moved out of `examples/` before 0.1.0; run them with `cargo bench --bench snap_dblp_bench`).
+Both take
 `DATASET_PATH`/`DATASET_DIR`, `DB_DIR`, `POOL_MB` and `AUTO_CHECKPOINT_MB`, and
 print the configuration they ran with.
 
-com-DBLP (317,080 nodes / 1,049,866 edges, 256MB pool):
+com-DBLP (317,080 nodes / 1,049,866 edges, 256MB pool, auto-checkpoint off;
+measured 2026-09-13, release build, pre-rename):
 
 | Metric             | Value                             |
 | ------------------ | --------------------------------- |
-| Node ingestion     | 892,000 ops/s                     |
-| Edge ingestion     | **777,257 ops/s**                 |
-| Hub 1-hop (top 50) | 40.7 µs avg, **10,080** neighbors |
-| Hub 2-hop (top 50) | 1.63 ms avg, **161,877** reached  |
+| Node ingestion     | 579,533 ops/s                     |
+| Edge ingestion     | **761,526 ops/s**                 |
+| Hub 1-hop (top 50) | 42.9 µs avg, **10,080** neighbors |
+| Hub 2-hop (top 50) | 1.86 ms avg, **161,877** reached  |
+| On-disk size       | 81.26 MB                          |
 
-LiveJournal (4,847,571 nodes / 68,993,773 edges, 1GiB pool, auto-checkpoint off):
+LiveJournal (4,847,571 nodes / 68,993,773 edges, 1GiB pool, auto-checkpoint off;
+measured 2026-09-13, release build, pre-rename):
 
 | Metric             | Value                             |
 | ------------------ | --------------------------------- |
-| Node ingestion     | 713,000 ops/s                     |
-| Edge ingestion     | **201,823 ops/s**                 |
+| Node ingestion     | 560,455 ops/s                     |
+| Edge ingestion     | **155,363 ops/s**                 |
 | Hub 1-hop (top 50) | 0.35 s avg, **335,194** neighbors |
-| Hub 2-hop (top 50) | 8.1 s avg, **10,027,730** reached |
+| Hub 2-hop (top 50) | 8.9 s avg, **10,027,730** reached |
 | On-disk size       | 4.34 GB                           |
+
+Throughput on a single machine varies run to run: repeated com-DBLP edge runs
+across this session measured 723,458 / 580,139 / 761,526 ops/s, and LiveJournal
+edge ingest measured 155,363 ops/s pre-rename against 201,823 on the 1.0.0 line — neither
+figure is a regression, since the same binary re-measured at 280,426 earlier in the
+release cycle. The **red lines are the totals, not the rates**: hub 1-hop and 2-hop
+must match exactly, and LiveJournal edge ingest must stay above 150,000 ops/s.
+Rate claims elsewhere in this document carry the run they came from.
 
 Both 1-hop and 2-hop totals are **exact** against an independent recomputation
 over the raw dataset. Getting there required fixing a real determinism bug: the
@@ -151,6 +164,107 @@ residual misses at 1024 frames are **genuine capacity pressure**, not a structur
 defect: 4M edge-record pages (15,625) plus 1M node pages (7,813) need roughly
 91MB against a 4MB pool. At 8192 frames the miss rate is flat, which is what
 distinguishes capacity from defect.
+
+### Concurrency scaling
+
+**Result: read throughput degrades as threads are added.** This is the one measured
+number in this document that is bad, and it is recorded here rather than left out
+because a reader deciding whether to use this database needs it.
+
+Method: com-DBLP database (317,080 nodes / 1,049,866 edges, 81.26 MB) opened
+read-only, 10-core machine, release build. Each configuration ran for a fixed 1.2 s
+wall-clock budget so that slow configurations are not flattered by finishing first;
+the reported figure is completed operations ÷ elapsed.
+
+| Threads | Hub point reads (high lock count) | Random point reads | `MATCH (n) RETURN count(*)` |
+| ------- | --------------------------------- | ------------------ | --------------------------- |
+| 1       | 14,581 ops/s (1.00×)              | 55,972 ops/s (1.00×) | 5 ops/s (1.00×)           |
+| 2       | 11,275 ops/s (0.77×)              | 49,001 ops/s (0.88×) | 5 ops/s (0.90×)           |
+| 4       | 7,991 ops/s (0.55×)               | 40,521 ops/s (0.72×) | 4 ops/s (0.80×)           |
+| 8       | 9,865 ops/s (0.68×)               | 37,184 ops/s (0.66×) | 2 ops/s (0.46×)           |
+| 16      | 10,420 ops/s (0.71×)              | 38,790 ops/s (0.69×) | 2 ops/s (0.47×)           |
+
+At 16 threads the scaling efficiency (`speedup ÷ threads`) is **0.6%–4.5%** — adding
+threads makes reads slower, not faster.
+
+**Control runs, because a bad number must be shown to be real.** The collapse could
+plausibly be the measuring machine rather than the database, so three variants ran in
+the same process:
+
+| Variant                                  | 16-thread speedup | Efficiency |
+| ---------------------------------------- | ----------------- | ---------- |
+| Pure CPU spin (no database calls)        | 6.34×             | 39.6%      |
+| Loop taking only the outer read lock     | 6.40×             | 40.0%      |
+| Point reads (any, i.e. touching the pool)| 0.10×–0.23×       | 0.6%–1.4%  |
+
+The first two establish what this 10-core machine can deliver (≈6.4×, ≈40%
+efficiency) and show that neither the environment nor the outer `RwLock` is at fault.
+The two point-read rows use disjoint node ranges and a shared contiguous range
+respectively, so cache-line sharing is not the explanation either. The common factor
+is `BufferPoolManager`.
+
+**Cause**: `DiskGraph` reaches the pool through one `Arc<Mutex<BufferPoolManager>>`,
+so every page touch takes a global mutex. A `get_node` acquires it at least three
+times (record, properties, and once **per incident edge**): a degree-343 hub costs
+≈345 acquisitions. Serializing 345 critical sections per read is what turns extra
+threads into contention.
+
+**Mitigation applied: collapse the per-edge acquisitions.** `get_node` now walks a
+whole adjacency chain inside **one** buffer-pool acquisition instead of one per edge
+(`DiskGraph::collect_edge_chain_batched`), so a degree-343 hub costs a handful of
+acquisitions rather than ≈345. Measured under contention — 8 threads all reading the
+same hub, which is the worst case for a global mutex, alternating the old and new
+builds:
+
+| Build                          | Run 1 | Run 2 | Run 3 |
+| ------------------------------ | ----- | ----- | ----- |
+| before (per-edge acquisition)  | 17,431 ops/s | 27,605 ops/s | 27,813 ops/s |
+| after (per-chain acquisition)  | **38,283** | **37,842** | **38,071** |
+
+Roughly 1.4–2.2×, and the "after" column varies by under 2% while "before" varies by
+60% — less lock traffic means less sensitivity to scheduling.
+
+**What this does not fix.** Readers are still serialized: the mutex is still global
+and still taken once per call, so scaling efficiency at 16 threads remains ≈4%
+rather than ≈40%. Reducing acquisitions shortens each critical section; it does not
+let two readers proceed at once. Genuine read parallelism needs per-frame latching,
+which is a redesign of the buffer pool's concurrency model rather than a patch.
+
+**Writes were profiled separately, and the bottleneck is different.** Continuing the
+same com-DBLP setup, write workloads were measured at three granularities:
+
+| Workload                                          | 1 thread | 2 | 4 | 8 |
+| ------------------------------------------------- | -------- | --- | --- | --- |
+| one commit per node (`add_node`)                  | 249 ops/s | — | — | — |
+| one transaction per node (`with_transaction`)     | 251 ops/s | 249 | 253 | 249 |
+| one transaction per 20,000 nodes (`add_nodes`)    | 451,576 ops/s | 823,948 | 1,053,810 | — |
+
+The middle row does not scale **at all** — 8 threads equal 1 thread — but the cause is
+not the mutex. Holding the per-transaction cost fixed while varying the number of
+nodes per transaction isolates it:
+
+| Nodes per transaction | Transactions | ops/s | Time per transaction |
+| --------------------- | ------------ | ----- | -------------------- |
+| 1                     | 2,000        | 255   | 3.92 ms |
+| 10                    | 200          | 2,747 | 3.64 ms |
+| 200                   | 10           | 55,971 | 3.57 ms |
+| 2,000                 | 1            | 397,927 | 5.03 ms |
+
+Time per transaction is ≈3.5 ms **regardless of how many nodes it writes**. That is
+the `fsync`, and it is serialized by definition. So the 250 ops/s ceiling for
+one-node transactions is the durability guarantee working as designed, not a defect:
+the fix is batching, which is exactly what `with_transaction` / `add_nodes` are for,
+and the bottom row shows that batched writes do scale (1.83× at 2 threads, 2.33× at 4).
+
+The read-side collapse above is therefore not a general "everything is slow" story —
+reads are serialized by the buffer-pool mutex at any transaction size, while writes
+are limited by one fsync per commit and scale once batching removes that.
+
+**Scope of the claim.** This is about *read parallelism*, not correctness or
+single-threaded speed: the full suite passes, and the batched walk is
+indistinguishable from the per-edge walk in every existing test (the chain semantics,
+the `in_use` filter and the `seen` cycle guard are all reproduced). See [architecture.md §10](architecture.md#10-concurrency-model) and
+`ROADMAP.md`.
 
 ### SDK throughput
 

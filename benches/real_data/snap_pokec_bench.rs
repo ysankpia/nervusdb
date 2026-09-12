@@ -1,4 +1,4 @@
-use graphlite::{GraphLite, GraphLiteOptions, Value};
+use nervusdb::{NervusDb, NervusDbOptions, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -54,36 +54,21 @@ fn auto_checkpoint_bytes() -> u64 {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let dataset_path = resolve_dataset("soc-LiveJournal1.txt", "/data/datasets");
+    let dataset_path = resolve_dataset("soc-pokec-relationships.txt", "/data/datasets");
     let target_dir = resolve_db_dir();
     if missing_dataset(&dataset_path).is_none() {
         return Ok(());
     }
     std::fs::create_dir_all(&target_dir)?;
 
-    let is_team4 = std::env::current_dir()?
-        .display()
-        .to_string()
-        .contains("droid_gemini");
-    let team_name = if is_team4 {
-        "TEAM 4 (Gemini 3.8 Flash Executed Kernel)"
-    } else {
-        "TEAM 3 (Pure DeepSeek Kernel Architecture)"
-    };
-    let db_filename = if is_team4 {
-        "livejournal_team4.db"
-    } else {
-        "livejournal_team3.db"
-    };
-    let db_path = target_dir.join(db_filename);
-
+    let db_path = target_dir.join("pokec_team3.db");
     let _ = std::fs::remove_file(&db_path);
     let _ = std::fs::remove_file(db_path.with_extension("db.wal"));
 
     let pool_mb: usize = std::env::var("POOL_MB")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(1024);
+        .unwrap_or(512);
 
     let max_edges_limit: usize = std::env::var("MAX_EDGES")
         .ok()
@@ -91,14 +76,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(usize::MAX);
 
     println!("============================================================");
-    println!(" [EXTREME STAGE] SNAP soc-LiveJournal1 BENCHMARK (69M EDGES)");
-    println!(" {}", team_name);
+    println!(" [STAGE 2] SNAP soc-Pokec REAL-WORLD GRAPH BENCHMARK (30M EDGES)");
+    println!(" TEAM 3 (Pure DeepSeek Kernel Architecture)");
     println!(" Dataset  : {}", dataset_path.display());
     println!(" Target DB: {} (Internal NVMe SSD)", db_path.display());
     println!(
         " Pool Size: {} MB ({} frames) | Auto-Checkpoint: {}",
         pool_mb,
-        pool_mb * graphlite::FRAMES_PER_MB,
+        pool_mb * nervusdb::FRAMES_PER_MB,
         match auto_checkpoint_bytes() {
             0 => "off (benchmark checkpoints explicitly)".to_string(),
             b => format!("{} MB", b / 1024 / 1024),
@@ -107,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         " Max Edges: {}",
         if max_edges_limit == usize::MAX {
-            "ALL (68.99M)".to_string()
+            "ALL (30.6M)".to_string()
         } else {
             format!("{}", max_edges_limit)
         }
@@ -115,13 +100,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("============================================================");
 
     // 1. Parse & Ingest Raw Dataset
-    println!("-> Step 1: Loading & Analyzing SNAP LiveJournal Dataset...");
+    println!("-> Step 1: Loading & Analyzing SNAP Pokec Dataset...");
     let t_parse = Instant::now();
     let file = File::open(&dataset_path)?;
-    let reader = BufReader::with_capacity(32 * 1024 * 1024, file);
+    let reader = BufReader::with_capacity(16 * 1024 * 1024, file);
 
-    let mut raw_edges: Vec<(u32, u32)> = Vec::with_capacity(70_000_000.min(max_edges_limit));
-    let mut degrees: HashMap<u32, usize> = HashMap::with_capacity(5_000_000);
+    let mut raw_edges: Vec<(u32, u32)> = Vec::with_capacity(31_000_000.min(max_edges_limit));
+    let mut degrees: HashMap<u32, usize> = HashMap::with_capacity(1_700_000);
     let mut max_raw_id = 0u32;
 
     for line in reader.lines() {
@@ -158,7 +143,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut sorted_by_degree: Vec<(u32, usize)> = degrees.iter().map(|(&k, &v)| (k, v)).collect();
     // 按 (度数 DESC, raw id ASC) 排成全序：否则并列名次的取舍取决于排序细节，
     // 同一份数据会产出不同的 top-50 hub 集合，结果无法复现比对。
-    sorted_by_degree.sort_by_key(|a| (std::cmp::Reverse(a.1), a.0));
+    sorted_by_degree.sort_by_key(|r| (std::cmp::Reverse(r.1), r.0));
 
     let max_deg = sorted_by_degree.first().map(|x| x.1).unwrap_or(0);
     let top_raw_hubs: Vec<u32> = sorted_by_degree.iter().take(50).map(|x| x.0).collect();
@@ -183,12 +168,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Open Engine
     println!("\n-> Step 2: Opening Database with {} MB Pool...", pool_mb);
-    let db = GraphLite::open_with_options(
+    let db = NervusDb::open_with_options(
         &db_path,
-        GraphLiteOptions {
-            buffer_pool_frames: pool_mb * graphlite::FRAMES_PER_MB,
+        NervusDbOptions {
+            buffer_pool_frames: pool_mb * nervusdb::FRAMES_PER_MB,
             wal_auto_checkpoint_bytes: auto_checkpoint_bytes(),
-            ..GraphLiteOptions::default()
+            ..NervusDbOptions::default()
         },
     )?;
 
@@ -231,9 +216,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         node_dur, node_ops
     );
 
-    // Checkpoint nodes to flush WAL before 69M edge flood
-    db.checkpoint()?;
-
     // Map top hubs to engine IDs
     let top_hubs: Vec<u64> = top_raw_hubs
         .iter()
@@ -262,13 +244,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         })?;
         edge_idx = end;
-
-        // Periodic checkpoint every 5M edges to truncate WAL and prevent filling internal SSD
-        if edge_idx % 5_000_000 == 0 {
-            db.checkpoint()?;
-        }
-
-        if edge_idx % 1_000_000 == 0 || edge_idx == num_edges {
+        if edge_idx % 500_000 == 0 || edge_idx == num_edges {
             let el = t_edges.elapsed().as_secs_f64();
             let cur_ops = edge_idx as f64 / el;
             print!(
@@ -289,22 +265,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         edge_dur, edge_ops
     );
 
-    // 5. Final Checkpoint
-    println!("-> Step 5: Final Checkpoint to Internal NVMe SSD...");
+    // 5. Checkpoint
+    println!("-> Step 5: Checkpointing to Internal NVMe SSD...");
     let t_ckpt = Instant::now();
     db.checkpoint()?;
-    println!("   => Final Checkpoint in {:.2?}", t_ckpt.elapsed());
+    println!("   => Checkpoint in {:.2?}", t_ckpt.elapsed());
 
     let file_size = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
     let stats = db.buffer_stats();
     println!(
-        "   On-Disk File Size : {:.2} MB ({:.2} GB)",
-        file_size as f64 / 1_048_576.0,
-        file_size as f64 / (1024.0 * 1024.0 * 1024.0)
+        "   On-Disk File Size : {:.2} MB",
+        file_size as f64 / 1_048_576.0
     );
     println!("   Cache Hit Rate    : {:.2}%", stats.hit_rate_percentage);
     println!("   Cache Misses      : {}", stats.cache_misses);
     println!("   WAL Fsync Count   : {}", stats.wal_fsync_count);
+    println!("   Buffer Spills     : {}", stats.spill_count);
+    println!("   Buffer Evictions  : {}", stats.evictions);
 
     // 6. Query Benchmark: Top 50 Hubs 1-Hop & 2-Hop
     println!("\n-> Step 6: Query Benchmark on Real Supernodes (Influencers with High Degree)...");
@@ -424,7 +401,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     println!("============================================================");
-    println!(" BENCHMARK COMPLETE FOR {}", team_name);
+    println!(" BENCHMARK COMPLETE FOR TEAM 3");
     println!("============================================================");
 
     Ok(())

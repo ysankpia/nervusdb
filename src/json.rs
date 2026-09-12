@@ -46,9 +46,13 @@ pub fn write_escaped(out: &mut String, s: &str) {
     out.push('"');
 }
 
-/// 把 `Value` 编码为 JSON。`Value` 只有四个变体，一一对应到 JSON 类型。
+/// 把 `Value` 编码为 JSON。
+///
+/// `Null` 与 `List` 只存在于求值期（见 `graph.rs` 的说明），但查询结果里会出现，
+/// 因此这里必须给出合法的 JSON：`null` 与数组。
 pub fn write_value(out: &mut String, v: &Value) {
     match v {
+        Value::Null => out.push_str("null"),
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
         Value::Int(i) => out.push_str(&i.to_string()),
         Value::Float(f) => {
@@ -61,6 +65,16 @@ pub fn write_value(out: &mut String, v: &Value) {
             }
         }
         Value::String(s) => write_escaped(out, s),
+        Value::List(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_value(out, item);
+            }
+            out.push(']');
+        }
     }
 }
 

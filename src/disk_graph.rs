@@ -280,13 +280,23 @@ impl DiskGraph {
         let frame = bpm.get_frame(frame_id);
 
         let magic = &frame.data[0..4];
-        if magic == crate::page::DB_PAGE_MAGIC || magic == crate::page::DB_PAGE_MAGIC_LEGACY {
-            // 版本守卫**不在这里**：`GraphLite::open` 已在任何写入（含 WAL 回放）
+        let magic_ok = magic == crate::page::DB_PAGE_MAGIC
+            || crate::page::DB_PAGE_MAGIC_LEGACY
+                .iter()
+                .any(|m| m.as_slice() == magic);
+        if magic_ok {
+            // 版本守卫**不在这里**：`NervusDb::open` 已在任何写入（含 WAL 回放）
             // 之前用 `check_format_version` 挡下不匹配的文件（见 lib.rs）。
             //
             // 若在此处再检查一次，就太晚了——回放已经用当前版本的语义解释并写回
             // 了旧格式的文件，此时报错只会留下一个被污染的库。
             // 这里保留一处断言，防止有人绕过 `open` 直接构造 `DiskGraph`。
+            //
+            // 本块内（含下面的断言）每一处 `try_into().unwrap()` 都从**定长**
+            // `frame.data` (`[u8; PAGE_SIZE]`) 上取固定字段，切片的起止都由
+            // `HeaderPage::*_OFFSET` 常量决定、与目标整数宽度对齐，因此
+            // `try_into()` 不可能失败（AGENTS.md §13）。写 `unwrap` 而非 `?` 是
+            // 刻意的：它让「偏移常量与字段宽度不一致」在编译期/测试期立刻暴露。
             debug_assert!(
                 {
                     let v = u32::from_le_bytes(
@@ -398,12 +408,20 @@ impl DiskGraph {
             let mut direct_node_pages = [0; HeaderPage::DIRECT_NODE_PAGES_COUNT];
             for (i, p) in direct_node_pages.iter_mut().enumerate() {
                 let off = HeaderPage::DIRECT_NODE_PAGES_OFFSET + i * 4;
+                // `frame.data` 是 `[u8; PAGE_SIZE]`，`off` 由槽位下标（上界见
+                // `DIRECT_*_PAGES_COUNT` 与 `HeaderPage::DIRECT_*_PAGES_OFFSET`）
+                // 算出，始终满足 `off + 4 <= PAGE_SIZE`。定长数组，转换不可能
+                // 失败（AGENTS.md §13）。
                 *p = u32::from_le_bytes(frame.data[off..off + 4].try_into().unwrap());
             }
 
             let mut direct_edge_pages = [0; HeaderPage::DIRECT_EDGE_PAGES_COUNT];
             for (i, p) in direct_edge_pages.iter_mut().enumerate() {
                 let off = HeaderPage::DIRECT_EDGE_PAGES_OFFSET + i * 4;
+                // `frame.data` 是 `[u8; PAGE_SIZE]`，`off` 由槽位下标（上界见
+                // `DIRECT_*_PAGES_COUNT` 与 `HeaderPage::DIRECT_*_PAGES_OFFSET`）
+                // 算出，始终满足 `off + 4 <= PAGE_SIZE`。定长数组，转换不可能
+                // 失败（AGENTS.md §13）。
                 *p = u32::from_le_bytes(frame.data[off..off + 4].try_into().unwrap());
             }
 
@@ -498,6 +516,7 @@ impl DiskGraph {
             let pid = alloc.first_free_page_id;
             let fid = bpm.fetch_page(pid)?;
             let frame = bpm.get_frame(fid);
+            // 固定偏移 `0..4`，源为定长 `[u8; PAGE_SIZE]`，不可能失败（§13）。
             let next_free = u32::from_le_bytes(frame.data[0..4].try_into().unwrap());
             bpm.unpin_page(pid, false);
             alloc.first_free_page_id = next_free;
@@ -541,6 +560,7 @@ impl DiskGraph {
             let pid = alloc.first_free_overflow_page;
             let fid = bpm.fetch_page(pid)?;
             let frame = bpm.get_frame(fid);
+            // 固定偏移 `0..4`，源为定长 `[u8; PAGE_SIZE]`，不可能失败（§13）。
             let next_free = u32::from_le_bytes(frame.data[0..4].try_into().unwrap());
             bpm.unpin_page(pid, false);
             alloc.first_free_overflow_page = next_free;
@@ -619,6 +639,7 @@ impl DiskGraph {
                 let fid = bpm.fetch_page(pid)?;
                 let next_free = {
                     let frame = bpm.get_frame(fid);
+                    // 固定偏移 `0..4`，源为定长 `[u8; PAGE_SIZE]`，不可能失败（§13）。
                     u32::from_le_bytes(frame.data[0..4].try_into().unwrap())
                 };
                 bpm.unpin_page(pid, false);
@@ -1468,18 +1489,27 @@ impl DiskGraph {
     }
 
     /// 读取原始边记录
-    pub fn read_edge_record_raw(&self, edge_id: u64) -> Result<Option<EdgeRecord>, GraphError> {
+    /// 在**调用方已持有** `bpm` 锁的前提下读一条边记录。
+    ///
+    /// 抽出来的唯一目的是让链式遍历能在一次加锁内完成（见
+    /// [`DiskGraph::collect_edge_chain_batched`]）。语义与
+    /// [`DiskGraph::read_edge_record_raw`] 完全一致。
+    fn read_edge_record_locked(
+        bpm: &mut BufferPoolManager,
+        allocator: &Arc<Mutex<AllocatorMeta>>,
+        tx_modified: &Arc<Mutex<HashSet<PageId>>>,
+        edge_id: u64,
+    ) -> Result<Option<EdgeRecord>, GraphError> {
         if edge_id == 0 {
             return Ok(None);
         }
         let logical_page = (edge_id - 1) as usize / EDGE_RECORDS_PER_PAGE;
         let offset = ((edge_id - 1) as usize % EDGE_RECORDS_PER_PAGE) * EdgeRecord::RECORD_SIZE;
 
-        let mut bpm = self.bpm.lock_recover();
         let physical_page = match Self::get_or_allocate_edge_page(
-            &mut bpm,
-            &self.allocator,
-            &self.tx_modified_pages,
+            bpm,
+            allocator,
+            tx_modified,
             logical_page,
             false,
         )? {
@@ -1488,13 +1518,19 @@ impl DiskGraph {
         };
 
         let frame_id = bpm.fetch_page(physical_page)?;
-        let frame = bpm.get_frame(frame_id);
-
         let mut bytes = [0u8; EdgeRecord::RECORD_SIZE];
-        bytes.copy_from_slice(&frame.data[offset..offset + EdgeRecord::RECORD_SIZE]);
+        {
+            let frame = bpm.get_frame(frame_id);
+            bytes.copy_from_slice(&frame.data[offset..offset + EdgeRecord::RECORD_SIZE]);
+        }
         bpm.unpin_page(physical_page, false);
 
         Ok(Some(EdgeRecord::from_bytes(&bytes)))
+    }
+
+    pub fn read_edge_record_raw(&self, edge_id: u64) -> Result<Option<EdgeRecord>, GraphError> {
+        let mut bpm = self.bpm.lock_recover();
+        Self::read_edge_record_locked(&mut bpm, &self.allocator, &self.tx_modified_pages, edge_id)
     }
 
     /// 读取已使用的边记录
@@ -1593,7 +1629,9 @@ impl DiskGraph {
         if props.is_empty() {
             return Ok(crate::page::PROP_PTR_NONE);
         }
-        let payload = crate::page::encode_props(props);
+        // `encode_props` 会因为 null/list 报错，必须向上传播：静默写入一个不含该键
+        // 的载荷，会让「设置属性」看起来成功而数据其实没变。
+        let payload = crate::page::encode_props(props)?;
 
         let mut bpm = self.bpm.lock_recover();
         Self::write_prop_record(
@@ -1640,9 +1678,13 @@ impl DiskGraph {
             codec.push_key(label);
         }
         codec.push_varint(data.properties.len() as u64);
-        for (key, value) in &data.properties {
+        // 键排序保证同一份数据编码字节稳定
+        let mut keys: Vec<&String> = data.properties.keys().collect();
+        keys.sort_unstable();
+        for key in keys {
             codec.push_key(key);
-            codec.push_value(value);
+            // null/list 不可落盘，`push_value` 会返回错误，这里向上传播
+            codec.push_value(&data.properties[key])?;
         }
         Ok(codec.into_bytes())
     }
@@ -1867,35 +1909,81 @@ impl DiskGraph {
     }
 
     /// 沿磁盘出边链遍历收集出边 ID (Index-Free Adjacency)
-    pub fn collect_outgoing_edge_ids(&self, first_edge_id: u64) -> Result<Vec<u64>, GraphError> {
+    /// 一次加锁走完整条边链（出边或入边），返回边 ID 列表。
+    ///
+    /// ## 为什么需要它
+    ///
+    /// [`DiskGraph::read_edge_record_raw`] 每读一条边就取一次全局 `bpm` 锁。
+    /// 于是一次 `get_node` 的加锁次数是 `3 + 出度 + 入度`——实测 com-DBLP 上
+    /// 度为 343 的枢纽约 **345 次**。这个数字本身就是问题：它把只读并发压成了
+    /// **负扩展**（16 线程吞吐降到单线程的 0.6%–1.4%，见
+    /// `docs/benchmarks.md#concurrency-scaling`）。
+    ///
+    /// 本函数把整条链放进**一次**加锁内完成，加锁次数从 O(度) 降到 O(1)。
+    ///
+    /// ## 为什么这样是安全的
+    ///
+    /// 只读路径（`is_write = false`）不修改任何持久状态：
+    /// `get_or_allocate_edge_page` 在只读时唯一副作用是写 `edge_page_cache`，
+    /// 而它是**可重建的页号提示缓存**（注释原文：「中毒恢复优于进程终止」），
+    /// 重复插入同一个键值是幂等的。链长度本身有 `seen` 环检测守卫，与原实现一致。
+    ///
+    /// ## 它不做什么
+    ///
+    /// **这不等于让读者并行。** `bpm` 仍是单把全局锁，多线程仍会相互排队，
+    /// 只是每次调用占用的锁时间变短。真正并行需要按帧加锁（见 AGENTS.md §10）。
+    ///
+    /// ## 关于下面两个守卫的可达性（实测的诚实说明）
+    ///
+    /// `record.in_use == 1` 过滤与 `seen` 环检测是**纵深防御，当前不可达**：
+    /// `remove_edge` / `remove_node` 在标记 `in_use = 0` 的同时会把记录从链上摘除，
+    /// 因此正常维护下链上不会出现已删记录，也不会出现环（链是单向的）。
+    ///
+    /// 这一点是实测出来的，不是推断：把这两个守卫分别改成恒真后重跑测试，
+    /// 两者都**没有**失败。保留它们是因为链内容可能被并发写者或崩溃恢复后的
+    /// 部分状态影响，而那时遍历会退化为死循环（比报错严重得多）。但不要声称
+    /// 测试覆盖了它们——这里如实记录其不可达性。
+    fn collect_edge_chain_batched(
+        &self,
+        first_edge_id: u64,
+        incoming: bool,
+    ) -> Result<Vec<u64>, GraphError> {
         let mut ids = Vec::new();
         let mut curr = first_edge_id;
         let mut seen = HashSet::new();
+
+        // 锁的持有顺序与既有实现一致（先 bpm，后 allocator），不引入新的锁序。
+        let mut bpm = self.bpm.lock_recover();
         while curr != 0 && seen.insert(curr) {
-            if let Some(edge) = self.read_edge_record(curr)? {
-                ids.push(curr);
-                curr = edge.src_next_edge_id;
-            } else {
-                break;
+            match Self::read_edge_record_locked(
+                &mut bpm,
+                &self.allocator,
+                &self.tx_modified_pages,
+                curr,
+            )? {
+                // 与 `read_edge_record` 一致：只接受 in_use 的记录
+                Some(record) if record.in_use == 1 => {
+                    ids.push(curr);
+                    curr = if incoming {
+                        record.dst_next_edge_id
+                    } else {
+                        record.src_next_edge_id
+                    };
+                }
+                _ => break,
             }
         }
         Ok(ids)
     }
 
+    /// 沿磁盘出边链遍历收集出边 ID (Index-Free Adjacency)
+    pub fn collect_outgoing_edge_ids(&self, first_edge_id: u64) -> Result<Vec<u64>, GraphError> {
+        self.collect_edge_chain_batched(first_edge_id, false)
+    }
+
     /// 沿磁盘入边链遍历收集入边 ID
     pub fn collect_incoming_edge_ids(&self, first_edge_id: u64) -> Result<Vec<u64>, GraphError> {
-        let mut ids = Vec::new();
-        let mut curr = first_edge_id;
-        let mut seen = HashSet::new();
-        while curr != 0 && seen.insert(curr) {
-            if let Some(edge) = self.read_edge_record(curr)? {
-                ids.push(curr);
-                curr = edge.dst_next_edge_id;
-            } else {
-                break;
-            }
-        }
-        Ok(ids)
+        self.collect_edge_chain_batched(first_edge_id, true)
     }
 
     /// 添加单条有向属性边

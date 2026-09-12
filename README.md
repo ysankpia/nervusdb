@@ -1,6 +1,6 @@
-# GraphLite-RS
+# NervusDB
 
-[![CI](https://github.com/ysankpia/graphlite/actions/workflows/ci.yml/badge.svg)](https://github.com/ysankpia/graphlite/actions/workflows/ci.yml)
+[![CI](https://github.com/ysankpia/nervusdb/actions/workflows/ci.yml/badge.svg)](https://github.com/ysankpia/nervusdb/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.98%2B-orange.svg)](https://www.rust-lang.org)
 
@@ -9,10 +9,10 @@ graphs. Two files on disk, no server, no daemon, and resident memory bounded by 
 configurable buffer pool rather than by dataset size.
 
 ```rust
-use graphlite::{GraphLite, GraphError};
+use nervusdb::{NervusDb, GraphError};
 
 fn main() -> Result<(), GraphError> {
-    let db = GraphLite::open("mydb.db")?;
+    let db = NervusDb::open("mydb.db")?;
 
     db.execute(
         "CREATE (a:Person {name: 'Alice', age: 28})-[:KNOWS {weight: 1.5}]->(b:Person {name: 'Bob'})",
@@ -32,10 +32,12 @@ fn main() -> Result<(), GraphError> {
 
 ## Status
 
-**`v1.0.0` — stable.** The engine, Cypher surface, analytics and safety guarantees
-are implemented and covered by 151 tests. The on-disk format is frozen; see
-`FORMAT.md`. Several known gaps remain — read
-[Known limitations](ROADMAP.md#next-planned) before considering production use.
+**`v0.1.0` — first release under this name.** The engine, Cypher surface, analytics
+and safety guarantees are implemented and covered by 197 tests. The on-disk format is
+frozen at **version 5**; see `FORMAT.md` for the one exception to that freeze (the
+Page 0 magic, renamed with the project) and its migration path. Several known gaps
+remain — read [Known limitations](ROADMAP.md#next-planned) before considering
+production use.
 
 ## Features
 
@@ -51,37 +53,48 @@ are implemented and covered by 151 tests. The on-disk format is frozen; see
   40,000 entities with ~150-byte payloads occupy 7.9MB.
 - **ACID.** Explicit transactions, single-fsync group commit, STEAL spilling for
   transactions larger than the pool, crash recovery, exact rollback with a
-  byte-identical main file.
-- **Cypher 1.0.** `CREATE`, `MATCH` (multi-pattern), `WHERE`, `SET`,
-  `DELETE` / `DETACH DELETE`, `ORDER BY`, `SKIP`, `LIMIT`, aggregates, and
-  variable-length paths.
+  byte-identical main file. A failed write statement leaves nothing behind, and the
+  transaction action queue is bounded (≈502 bytes/node action, 128 bytes/edge action,
+  capped at 4M actions) so memory stays set by configuration rather than by input.
+- **Cypher.** `CREATE`, `MATCH` (multi-pattern), `MERGE` (idempotent write),
+  `UNWIND` (batch ingestion in one statement), `WHERE`, `SET`,
+  `DELETE` / `DETACH DELETE`, `ORDER BY`, `SKIP`, `LIMIT`, aggregates,
+  variable-length paths, and `EXPLAIN`.
+
+  ```cypher
+  UNWIND [1, 2, 3] AS i CREATE (n:Num {v: i})   -- three nodes, one statement
+  MERGE (u:User {name: 'alice'})                -- creates, then reuses
+  ```
+
+- **Self-consistent reads.** `NervusDb::read_snapshot()` holds one state across a
+  multi-step traversal, so reading a node and then its edges cannot observe a
+  concurrent delete in between. Snapshots block writers while they live; more
+  concurrency needs versioned page visibility ([ROADMAP](ROADMAP.md) item 1).
 - **Analytics.** BFS, Dijkstra, cycle detection, PageRank, weakly connected
   components, K-hop subgraphs — all over disk cursors.
 - **Production safety.** An exclusive open lock, a structural integrity check, and
   error-preserving read accessors. See
   [Architecture §11](docs/architecture.md#11-production-safety).
-- **Tooling.** An interactive CLI with `.schema` / `.stats` / `.checkpoint` /
-  `.dump`, plus Python (PyO3) and Node.js (NAPI-RS) SDKs.
+- **SDKs.** Python (PyO3) and Node.js (NAPI-RS), with transactions, batch writes
+  and logical dump. The library is the interface: there is no separate CLI or GUI
+  to keep in sync.
 
 ## Documentation
 
-| Document                                     | Contents                                                        |
+**[docs/index.md](docs/index.md) lists every document and when to read it.** The
+three worth knowing before you start:
+
+| Document                                     | Read it when                                                    |
 | -------------------------------------------- | --------------------------------------------------------------- |
-| [docs/architecture.md](docs/architecture.md) | How it works: paging, WAL, slotted pages, weave, Cypher, safety |
-| [docs/benchmarks.md](docs/benchmarks.md)     | Measured throughput, with conditions and a correction notice    |
-| [docs/testing.md](docs/testing.md)           | The suite, and the adversarial style it follows                 |
-| [CHANGELOG.md](CHANGELOG.md)                 | Version history — read before upgrading                         |
-| [ROADMAP.md](ROADMAP.md)                     | Done, planned, and explicitly out of scope                      |
-| [AGENTS.md](AGENTS.md)                       | Architecture invariants; read before changing code              |
-| [CONTRIBUTING.md](CONTRIBUTING.md)           | Contribution policy: **issues only, no external code**          |
-| [SECURITY.md](SECURITY.md)                   | Private vulnerability reporting                                 |
-| [LICENSING.md](LICENSING.md)                 | Dual licensing (AGPL-3.0 + commercial)                          |
+| [FORMAT.md](FORMAT.md)                       | You need the exact bytes, or the frozen-format contract.        |
+| [docs/architecture.md](docs/architecture.md) | You want to know _why_ it works.                                |
+| [AGENTS.md](AGENTS.md)                       | **Before changing code.** Invariants and verification workflow. |
 
 ## Install
 
 ```toml
 [dependencies]
-graphlite-rs = "1.0.0-rc.3"
+nervusdb = "0.1.0"
 ```
 
 The Python and Node.js SDKs are **not published to PyPI or npm yet**. Build them
@@ -89,40 +102,47 @@ from source (see [bindings/](bindings/)).
 
 ## Quick start
 
-### CLI
+### Python
 
-```bash
-cargo run --bin graphlite-cli -- mydb.db
+```python
+import nervusdb
+
+db = nervusdb.NervusDb.open("novel.db")
+with db.begin_transaction() as tx:
+    lin = tx.add_node(["Character"], {"name": "林渊"})
+    su = tx.add_node(["Character"], {"name": "苏晴"})
+    tx.add_edge(lin, su, "KNOWS", {"since": 2020}, 1.0)
+
+rows = db.query_cypher(
+    "MATCH (a:Character)-[:KNOWS]->(b) RETURN a.name AS a, b.name AS b"
+)
+print(rows)
+
+db.dump_cypher("backup.cypher")   # logical export; replayable into a fresh file
+db.backup("snapshot.db")          # consistent online copy
 ```
 
-Multi-line input, semicolon-terminated, with aligned ASCII tables:
+### Node.js
 
-```text
-graphlite> CREATE (a:Person {name: 'Alice', age: 28})-[:KNOWS]->(b:Person {name: 'Bob', age: 32});
-Query OK, Created 2 nodes, 1 relationships.
+```javascript
+import { NervusDb } from "nervusdb-node";
 
-graphlite> MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name;
-+---------+--------+-------+
-| a.name  | b.name | b.age |
-+---------+--------+-------+
-| 'Alice' | 'Bob'  | 32    |
-+---------+--------+-------+
-1 row(s) in set
-
-graphlite> .schema
-graphlite> .stats
-graphlite> .dump backup.cypher
-graphlite> .quit
+const db = NervusDb.open("novel.db");
+const tx = db.beginTransaction();
+const lin = tx.addNode(["Character"], { name: "林渊" });
+const su = tx.addNode(["Character"], { name: "苏晴" });
+tx.addEdge(lin, su, "KNOWS", { since: 2020 }, 1.0);
+tx.commit();
 ```
 
 ### Choosing a memory budget
 
 ```rust
-use graphlite::{GraphLite, SMALL_POOL_FRAMES, DEFAULT_BUFFER_POOL_FRAMES, LARGE_POOL_FRAMES};
+use nervusdb::{NervusDb, SMALL_POOL_FRAMES, DEFAULT_BUFFER_POOL_FRAMES, LARGE_POOL_FRAMES};
 
-let db = GraphLite::open_with_pool_mb("mydb.db", 16)?;            // 16 MB
-let db = GraphLite::open_with_pool_size("mydb.db", SMALL_POOL_FRAMES)?;   // 1 MB
-let db = GraphLite::open("mydb.db")?;  // 4 MB default (DEFAULT_BUFFER_POOL_FRAMES)
+let db = NervusDb::open_with_pool_mb("mydb.db", 16)?;            // 16 MB
+let db = NervusDb::open_with_pool_size("mydb.db", SMALL_POOL_FRAMES)?;   // 1 MB
+let db = NervusDb::open("mydb.db")?;  // 4 MB default (DEFAULT_BUFFER_POOL_FRAMES)
 ```
 
 ### Bulk writes
@@ -150,7 +170,7 @@ competes with. See [docs/benchmarks.md](docs/benchmarks.md) for the measurement.
 ### Integrity and error handling
 
 ```rust
-let db = GraphLite::open("mydb.db")?;   // exclusive lock; a second handle gets DatabaseLocked
+let db = NervusDb::open("mydb.db")?;   // exclusive lock; a second handle gets DatabaseLocked
 db.verify()?;                           // structural self-check (read-only, never repairs)
 
 // get_node folds storage errors into None (documented as lossy);
@@ -162,9 +182,9 @@ let node = db.try_get_node(42)?;
 
 ```text
 src/
-  lib.rs            Public facade: GraphLite, Transaction, ACID coordination
+  lib.rs            Public facade: NervusDb, Transaction, ACID coordination
   page.rs           4KB pages, NodeRecord, EdgeRecord, SlottedPropPage, PropCodec
-  buffer.rs         DiskManager and the LRU buffer pool (page latches, STEAL spill)
+  buffer.rs         DiskManager and the LRU buffer pool (STEAL spill)
   disk_graph.rs     Direct addressing, disk adjacency, freelists, page iterators
   storage.rs        Page-level WAL, CRC verification, checkpoint, recovery
   index.rs          Label and property secondary indexes
@@ -175,7 +195,6 @@ src/
   cypher/           Lexer, recursive-descent parser, executor
   query.rs          Chainable typed query DSL
   graph.rs          Domain models: Node, Edge, Value, Direction, GraphError
-  bin/cli.rs        Interactive REPL
 bindings/
   python/           PyO3 SDK          nodejs/   NAPI-RS SDK
 tests/              13 suites, 123 cases

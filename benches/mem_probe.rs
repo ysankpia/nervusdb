@@ -4,7 +4,7 @@
 //! Prints RSS before/after one 4M-edge transaction so the planner's footprint is
 //! visible independently of the buffer pool.
 
-use graphlite::GraphLite;
+use nervusdb::NervusDb;
 use std::collections::{HashMap, HashSet};
 
 /// Resident set size in KB, read from the OS (macOS `ps`, Linux `/proc`).
@@ -57,14 +57,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("nodes={} edges={} frames={}", nodes, edges, frames);
 
     let dir = tempfile::tempdir()?;
-    let db = GraphLite::open_with_pool_size(dir.path().join("mem.db"), frames)?;
+    let db = NervusDb::open_with_pool_size(dir.path().join("mem.db"), frames)?;
 
     println!("RSS at start          : {:>8.1} MB", mb(rss_kb()));
 
     db.with_transaction(|tx| {
         for i in 1..=nodes {
             let mut m = HashMap::new();
-            m.insert("idx".to_string(), graphlite::Value::from(i as i64));
+            m.insert("idx".to_string(), nervusdb::Value::from(i as i64));
             tx.add_node(HashSet::from(["N".to_string()]), m)?;
         }
         Ok(())

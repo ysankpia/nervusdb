@@ -48,6 +48,12 @@ pub enum Expr {
         var: String,
         label: String,
     },
+    /// 列表字面量：`[1, 2, 3]`、`['a', 'b']`。
+    ///
+    /// 只作为**求值期的中间值**存在（`UNWIND [1,2,3] AS x`）。列表不能被写入属性
+    /// ——见 `Value::List` 的说明——因此这个变体不需要落盘支持。
+    ListLiteral(Vec<Expr>),
+
     /// 函数调用：`id(n)`、`labels(n)`、`type(r)` 等。
     ///
     /// 在 AST 中显式表示，而不是让解析器把 `id` 当作裸变量再丢弃参数：
@@ -105,7 +111,14 @@ pub struct NodePattern {
     pub variable: Option<String>,
     /// 节点标签集合（Cypher 允许 `(n:A:B)` 多标签）
     pub labels: Vec<String>,
-    pub properties: HashMap<String, Value>,
+    /// 属性约束/赋值。
+    ///
+    /// 值是**表达式**而非字面量：`CREATE (n {name: x})` 里的 `x` 可以来自
+    /// `UNWIND ... AS x`。这是批量入库的前提——没有它，`UNWIND` 只能用来产生行，
+    /// 无法把行写进图里。
+    ///
+    /// 匹配场景（`MATCH (n {k: v})`）要求这些表达式求值为字面量，由执行器判定。
+    pub properties: HashMap<String, Expr>,
 }
 
 /// 关系边模式描述
@@ -113,7 +126,8 @@ pub struct NodePattern {
 pub struct RelPattern {
     pub variable: Option<String>,
     pub rel_type: Option<String>,
-    pub properties: HashMap<String, Value>,
+    /// 同 `NodePattern::properties`：表达式，以支持 `UNWIND` 变量
+    pub properties: HashMap<String, Expr>,
     pub weight: Option<f64>,
     pub hops: Option<(usize, usize)>, // (min_hops, max_hops) 如 *1..3
     pub direction: Direction,
@@ -239,6 +253,45 @@ pub enum CypherStatement {
         pattern: PathPattern,
     },
     Match(Box<MatchClause>),
+    /// `UNWIND <expr> AS <var>`，后面可选跟 `CREATE` / `MATCH` 子句。
+    ///
+    /// 语义：把 `<expr>` 求值为列表，为**每个元素**产生一行、把元素绑定到 `<var>`，
+    /// 再把后续子句施加到这些行上。这是把「批量数据」表达进查询的唯一方式，
+    /// 也是 `MERGE` 得以便捷的前提。
+    Unwind {
+        /// 求值为列表的表达式（通常是列表字面量或变量）
+        expr: Expr,
+        /// 每个元素绑定的变量名
+        variable: String,
+        /// 后续子句（可为空：`UNWIND [1,2,3] AS x RETURN x` 里的 RETURN）
+        return_clause: Option<Vec<ReturnItem>>,
+        order_by: Vec<OrderItem>,
+        skip: Option<usize>,
+        limit: Option<usize>,
+        /// `UNWIND ... AS x CREATE ...`
+        create_clause: Option<PathPattern>,
+    },
+
+    /// `MERGE <pattern>`：匹配则复用，不匹配则创建。
+    ///
+    /// 这是幂等写：同一个模式重复执行不会产生重复数据，这使得「先查再写」这一
+    /// 常见模式不必由调用方自己实现——调用方实现时会出现「检查与写入之间有空隙」
+    /// 的竞态，而那条路径的失败是静默的重复数据。
+    ///
+    /// 语义要点：模式**整体**匹配。`MERGE (a)-[:R]->(b)` 若整体不存在，则整个模式
+    /// 连同两端节点一起创建（与 Cypher 一致，而不是复用部分匹配的节点）。
+    Merge {
+        pattern: PathPattern,
+        /// `ON CREATE SET ...`：本次创建时额外施加的写操作
+        on_create: Vec<SetItem>,
+        /// `ON MATCH SET ...`：命中既有数据时额外施加的写操作
+        on_match: Vec<SetItem>,
+        return_clause: Option<Vec<ReturnItem>>,
+        order_by: Vec<OrderItem>,
+        skip: Option<usize>,
+        limit: Option<usize>,
+    },
+
     /// `EXPLAIN <query>`：只输出执行计划，**不执行**查询。
     ///
     /// 计划由 `Image` 的静态结构推导，不需要触碰磁盘——因此 EXPLAIN 在空库上
@@ -251,6 +304,9 @@ impl CypherStatement {
     pub fn is_mutating(&self) -> bool {
         match self {
             CypherStatement::Create { .. } => true,
+            // MERGE 命中时虽不写数据，但它**可能**写，因此必须走排他写锁：
+            // 用读锁执行会让「检查—创建」之间的空隙变成重复数据的来源。
+            CypherStatement::Merge { .. } => true,
             // EXPLAIN 只描述计划，从不写入
             CypherStatement::Explain(_) => false,
             CypherStatement::Match(clause) => {
@@ -258,6 +314,10 @@ impl CypherStatement {
                     || clause.delete_clause.is_some()
                     || clause.create_clause.is_some()
             }
+            // `UNWIND [..] AS x RETURN x` 是只读的；只有带 `CREATE` 才写入。
+            // 这条判定决定走共享读锁还是排他写锁，判错会让读查询被写锁串行化，
+            // 或者更糟——让写操作走只读路径并被拒绝。
+            CypherStatement::Unwind { create_clause, .. } => create_clause.is_some(),
         }
     }
 }

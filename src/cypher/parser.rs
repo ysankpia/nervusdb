@@ -42,6 +42,22 @@ impl Parser {
                     patterns.push(self.parse_path_pattern()?);
                 }
 
+                // MATCH 的模式属性必须是**字面量**。
+                //
+                // 这不是实现限制，而是 Cypher 语义：`MATCH (a {k: x})` 里的 `x`
+                // 无法在 a 被绑定之前求值（Cypher 只允许常量与查询参数）。
+                // 若放行，匹配阶段只能把求不出来的条件当作「不匹配」，而
+                // 「静默不匹配」正是 §12 禁止的那类故障——调用方看到 0 行，
+                // 却不知道条件根本没被求值。
+                for pat in &patterns {
+                    for node in &pat.nodes {
+                        reject_non_literal_properties(&node.properties, "MATCH (node)")?;
+                    }
+                    for edge in &pat.edges {
+                        reject_non_literal_properties(&edge.properties, "MATCH (relationship)")?;
+                    }
+                }
+
                 let mut where_clause = None;
                 if self.peek() == Some(&Token::Where) {
                     self.consume();
@@ -117,9 +133,136 @@ impl Parser {
                     limit,
                 }))
             }
+            Some(Token::Merge) => {
+                self.consume();
+                let pattern = self.parse_path_pattern()?;
+
+                // MATCH 同样的字面量规则适用于 MERGE：模式在创建/匹配前无行上下文
+                for node in &pattern.nodes {
+                    reject_non_literal_properties(&node.properties, "MERGE (node)")?;
+                }
+                for edge in &pattern.edges {
+                    reject_non_literal_properties(&edge.properties, "MERGE (relationship)")?;
+                }
+
+                // ON CREATE SET ... / ON MATCH SET ...（顺序任意，可只给其中一个）
+                let mut on_create = Vec::new();
+                let mut on_match = Vec::new();
+                while self.peek() == Some(&Token::On) {
+                    self.consume();
+                    let is_create = match self.peek() {
+                        Some(Token::Create) => true,
+                        Some(Token::Match) => false,
+                        _ => {
+                            return Err(GraphError::General(
+                                "ON must be followed by CREATE or MATCH".into(),
+                            ))
+                        }
+                    };
+                    self.consume();
+                    self.expect(&Token::Set)?;
+                    let items = self.parse_set_items()?;
+                    if is_create {
+                        on_create.extend(items);
+                    } else {
+                        on_match.extend(items);
+                    }
+                }
+
+                let mut return_clause = None;
+                if self.peek() == Some(&Token::Return) {
+                    self.consume();
+                    return_clause = Some(self.parse_return_items()?);
+                }
+
+                let mut order_by = Vec::new();
+                if self.peek() == Some(&Token::Order) {
+                    self.consume();
+                    self.expect(&Token::By)?;
+                    order_by = self.parse_order_items()?;
+                }
+                let mut skip = None;
+                if self.peek() == Some(&Token::Skip) {
+                    self.consume();
+                    skip = Some(self.parse_usize_literal("SKIP")?);
+                }
+                let mut limit = None;
+                if self.peek() == Some(&Token::Limit) {
+                    self.consume();
+                    limit = Some(self.parse_usize_literal("LIMIT")?);
+                }
+
+                CypherStatement::Merge {
+                    pattern,
+                    on_create,
+                    on_match,
+                    return_clause,
+                    order_by,
+                    skip,
+                    limit,
+                }
+            }
+            Some(Token::Unwind) => {
+                self.consume();
+                let expr = self.parse_expr()?;
+                self.expect(&Token::As)?;
+                let variable = match self.peek() {
+                    Some(Token::Ident(v)) => {
+                        let name = v.clone();
+                        self.consume();
+                        name
+                    }
+                    _ => {
+                        return Err(GraphError::General(
+                            "UNWIND requires `AS <variable>`".into(),
+                        ))
+                    }
+                };
+
+                // 后续子句：可选 CREATE，可选 RETURN（含 ORDER BY / SKIP / LIMIT）
+                let mut create_clause = None;
+                if self.peek() == Some(&Token::Create) {
+                    self.consume();
+                    create_clause = Some(self.parse_path_pattern()?);
+                }
+
+                let mut return_clause = None;
+                if self.peek() == Some(&Token::Return) {
+                    self.consume();
+                    return_clause = Some(self.parse_return_items()?);
+                }
+
+                let mut order_by = Vec::new();
+                if self.peek() == Some(&Token::Order) {
+                    self.consume();
+                    self.expect(&Token::By)?;
+                    order_by = self.parse_order_items()?;
+                }
+                let mut skip = None;
+                if self.peek() == Some(&Token::Skip) {
+                    self.consume();
+                    skip = Some(self.parse_usize_literal("SKIP")?);
+                }
+                let mut limit = None;
+                if self.peek() == Some(&Token::Limit) {
+                    self.consume();
+                    limit = Some(self.parse_usize_literal("LIMIT")?);
+                }
+
+                CypherStatement::Unwind {
+                    expr,
+                    variable,
+                    return_clause,
+                    order_by,
+                    skip,
+                    limit,
+                    create_clause,
+                }
+            }
             _ => {
                 return Err(GraphError::General(
-                    "Unsupported Cypher query: must start with CREATE or MATCH".into(),
+                    "Unsupported Cypher query: must start with CREATE, MATCH, MERGE or UNWIND"
+                        .into(),
                 ))
             }
         };
@@ -280,7 +423,13 @@ impl Parser {
 
         let target_node = self.parse_node_pattern()?;
 
-        let weight = properties.get("weight").and_then(|v| v.as_f64());
+        // `weight` 是对 `properties["weight"]` 的语法糖。只有字面量能在解析期确定，
+        // 表达式形式（如来自 UNWIND 的变量）留到执行期再由 `edge_weight_from_props` 求值。
+        let weight = match properties.get("weight") {
+            Some(Expr::Literal(Value::Int(i))) => Some(*i as f64),
+            Some(Expr::Literal(Value::Float(f))) => Some(*f),
+            _ => None,
+        };
 
         let rel = RelPattern {
             variable,
@@ -295,7 +444,11 @@ impl Parser {
     }
 
     /// 解析属性字面量映射：{name: "Alice", age: 28}
-    fn parse_properties_map(&mut self) -> Result<HashMap<String, Value>, GraphError> {
+    /// 解析 `{k: expr, ...}`。
+    ///
+    /// 值用**完整表达式语法**解析，而不是只认字面量：`CREATE (n {name: x})` 里的
+    /// `x` 可以来自 `UNWIND ... AS x`，这是批量入库的前提。
+    fn parse_properties_map(&mut self) -> Result<HashMap<String, Expr>, GraphError> {
         self.expect(&Token::LBrace)?;
         let mut map = HashMap::new();
 
@@ -308,16 +461,8 @@ impl Parser {
 
             self.expect(&Token::Colon)?;
 
-            let val = match self.peek() {
-                Some(Token::Literal(v)) => v.clone(),
-                _ => {
-                    return Err(GraphError::General(
-                        "Expected property value literal".into(),
-                    ))
-                }
-            };
-            self.consume();
-
+            // 完整表达式：字面量、变量、属性访问、列表字面量都合法
+            let val = self.parse_expr()?;
             map.insert(key, val);
 
             if self.peek() == Some(&Token::Comma) {
@@ -705,6 +850,25 @@ impl Parser {
                 self.expect(&Token::RParen)?;
                 Ok(expr)
             }
+            // 列表字面量：`[1, 2, 3]`、`['a', 'b']`、`[]`
+            //
+            // 空列表也要能解析：`UNWIND [] AS x` 是合法的（产生 0 行）。
+            Some(Token::LBracket) => {
+                self.consume();
+                let mut items = Vec::new();
+                if self.peek() != Some(&Token::RBracket) {
+                    loop {
+                        items.push(self.parse_expr()?);
+                        if self.peek() == Some(&Token::Comma) {
+                            self.consume();
+                            continue;
+                        }
+                        break;
+                    }
+                }
+                self.expect(&Token::RBracket)?;
+                Ok(Expr::ListLiteral(items))
+            }
             _ => Err(GraphError::General(format!(
                 "Unexpected expression token: {:?}",
                 self.peek()
@@ -753,3 +917,19 @@ impl Parser {
 
 /// 无显式上限的变长匹配默认最大跳数（配合环检测守卫防爆）
 const DEFAULT_MAX_HOPS: usize = 64;
+
+/// 校验模式属性全是字面量（见 MATCH 分支里的说明）。
+fn reject_non_literal_properties(
+    props: &std::collections::HashMap<String, Expr>,
+    context: &str,
+) -> Result<(), GraphError> {
+    for (key, expr) in props {
+        if !matches!(expr, Expr::Literal(_)) {
+            return Err(GraphError::General(format!(
+                "{context} property `{key}` must be a literal: patterns are matched before \
+                 any variable is bound, so an expression here can never be evaluated"
+            )));
+        }
+    }
+    Ok(())
+}

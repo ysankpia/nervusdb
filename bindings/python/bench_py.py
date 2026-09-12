@@ -1,6 +1,6 @@
 import time
 import os
-import graphlite
+import nervusdb
 
 # 输出路径取自 DB_PATH，默认当前目录；刻意不硬编码作者本机的绝对路径。
 db_path = os.environ.get("DB_PATH", "bench_py.db")
@@ -9,7 +9,7 @@ for p in [db_path, db_path + ".wal"]:
     if os.path.exists(p):
         os.remove(p)
 
-db = graphlite.GraphLite.open(db_path, pool_size=pool_frames)
+db = nervusdb.NervusDb.open(db_path, pool_size=pool_frames)
 NODES = 50000
 EDGES = 100000
 
@@ -18,7 +18,7 @@ EDGES = 100000
 import sys
 _build = os.environ.get("BUILD_PROFILE", "unknown")
 if _build != "release":
-    print(f"!! BUILD_PROFILE={_build}: 先用 `cargo build --release -p graphlite-python` 重建，")
+    print(f"!! BUILD_PROFILE={_build}: 先用 `cargo build --release -p nervusdb-python` 重建，")
     print( "   否则测得的数字不可与文档中的 release 数据比较。")
 
 # 预热：首次运行包含 JIT/页缓存冷启动，实测首次比稳态低 3-4 倍。

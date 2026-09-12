@@ -1,4 +1,4 @@
-# Contributing to GraphLite-RS
+# Contributing to NervusDB
 
 **This project does not accept external code contributions.** It is
 source-available and open for inspection, use and bug reports, but only the
@@ -12,7 +12,7 @@ spending more time on it.
 
 ## Why code contributions are not accepted
 
-GraphLite-RS is **dual-licensed**: AGPL-3.0 for open use, plus a commercial
+NervusDB is **dual-licensed**: AGPL-3.0 for open use, plus a commercial
 licence for cases AGPL does not permit (see [LICENSING.md](LICENSING.md)). That
 model only holds together while a **single party owns the rights to the whole
 work**.

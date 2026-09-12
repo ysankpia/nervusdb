@@ -66,6 +66,61 @@ jobs:
           cargo test --release --test batch_tx_tests
           cargo test --release --test edge_locality_tests
 
+  # The SDKs are `cdylib` crates: `cargo test --workspace` compiles them but has no
+  # test target to run, so their end-to-end suites were never exercised in CI. They
+  # are the most likely thing to break from a rename or an FFI change, and they did
+  # break locally during the rename — caught by hand, which is the wrong safety net.
+  sdk:
+    name: SDK (${{ matrix.sdk }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk: node
+            build: -p nervusdb-node
+          - sdk: python
+            build: -p nervusdb-python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            target
+          key: ${{ runner.os }}-sdk-${{ matrix.sdk }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-sdk-${{ matrix.sdk }}-
+
+      - name: Build the binding
+        run: cargo build ${{ matrix.build }}
+
+      # Both bindings need the built artifact renamed to the name the runtime
+      # looks for. Node's `require` only loads a `.node` file — pointing it at a
+      # `.so`/`.dylib` fails with "Invalid or unexpected token", not a helpful
+      # message — so the copy is mandatory, not a convenience. Verified locally by
+      # removing the copy and watching the suite fail.
+      - name: Run the Node.js end-to-end suite
+        if: matrix.sdk == 'node'
+        run: |
+          cp target/debug/libnervusdb_node.so bindings/nodejs/nervusdb.node 2>/dev/null \
+            || cp target/debug/libnervusdb_node.dylib bindings/nodejs/nervusdb.node
+          node bindings/nodejs/test.mjs
+
+      - uses: actions/setup-python@v5
+        if: matrix.sdk == 'python'
+        with:
+          python-version: "3.12"
+
+      - name: Run the Python end-to-end suite
+        if: matrix.sdk == 'python'
+        run: |
+          cp target/debug/libnervusdb_python.so bindings/python/nervusdb.so 2>/dev/null \
+            || cp target/debug/libnervusdb_python.dylib bindings/python/nervusdb.so
+          PYTHONPATH=bindings/python python3 bindings/python/tests/test_nervusdb.py
+
   docs:
     name: Docs build
     runs-on: ubuntu-latest

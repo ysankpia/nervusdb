@@ -3,7 +3,7 @@
 This is the detailed design reference. The [README](../README.md) covers what the
 project is and how to use it; this document covers how it works.
 
-The short version: GraphLite-RS is an embedded property graph database that keeps
+The short version: NervusDB is an embedded property graph database that keeps
 **all graph topology on disk** and bounds resident memory by a configurable buffer
 pool. It stores two files — `{path}` and `{path}.wal` — and is built around
 fixed-size records with direct physical addressing, the same way SQLite is built
@@ -163,9 +163,10 @@ results are identical.
 ## 7. Cypher execution
 
 Lexer → recursive-descent parser → executor, over contexts that bind
-`Binding::Node(u64) | Binding::Edge(u64)`. Binding entity kind explicitly is what
-prevents node ids and edge ids — which share a numbering space — from being
-confused.
+`Binding::Node(u64) | Binding::Edge(u64) | Binding::Value(Value)`. Binding entity
+kind explicitly is what prevents node ids and edge ids — which share a numbering
+space — from being confused, and the `Value` variant carries `UNWIND` elements,
+which are values rather than entities.
 
 Pipeline:
 
@@ -175,11 +176,31 @@ MATCH  →  find_matches (per-pattern resolution + shared-variable join)
        →  SET  →  CREATE  →  DELETE
        →  projection (grouped aggregation)
        →  ORDER BY  →  SKIP  →  LIMIT
+
+UNWIND  →  one row per list element  →  [CREATE]  →  projection (same pipeline)
+MERGE   →  match the whole pattern  →  create it only if nothing matched
+                                      →  ON CREATE / ON MATCH SET
 ```
+
+`UNWIND` is why pattern property values are **expressions** rather than literals:
+`CREATE (n {v: x})` has to read the variable `x` bound per row. `MATCH` and `MERGE`
+pattern properties are therefore validated as literals at parse time — a pattern is
+matched before any variable is bound, so an expression there could never be
+evaluated, and silently matching nothing is indistinguishable from an empty graph.
+
+`MERGE` matches or creates the pattern **as a whole**, using MATCH filter semantics
+(named properties must be equal; extra properties on an existing node do not break
+the match).
 
 A statement that mutates takes the exclusive write lock and commits through the
 WAL; a read-only one takes the shared lock, allowing concurrent readers.
-`CypherStatement::is_mutating()` is the single source of truth for that routing.
+`CypherStatement::is_mutating()` is the single source of truth for that routing —
+and `MERGE` is unconditionally mutating, because whether it writes is only known
+after matching.
+
+A failed write statement is rolled back at statement granularity
+(`rollback_failed_statement`), so a multi-record `UNWIND ... CREATE` that fails on
+record 500 leaves none of the first 499 behind.
 
 `RETURN *` expands from the variables actually present in the result bindings,
 `count(*)` counts rows while `count(x)` counts non-null bindings, `sum` returns an
@@ -216,13 +237,37 @@ or concurrently-mutated chain cannot spin forever.
 
 ## 10. Concurrency model
 
-- Read queries and graph algorithms clone the lightweight `DiskGraph` handle,
-  release the global read lock immediately, and run concurrently under page-level
-  latches.
+- Read queries and graph algorithms clone the lightweight `DiskGraph` handle and
+  release the global read lock immediately, so a long traversal does not block
+  writers for its whole duration.
+- **Reads are serialized, not parallel, and this is measured.** The buffer pool is
+  reached through a single `Arc<Mutex<BufferPoolManager>>`, so every page touch
+  acquires one global mutex — a `get_node` at least three times, plus once per
+  incident edge (degree 343 ⇒ ≈345 acquisitions). On com-DBLP, 16 threads doing
+  plain point reads achieved **0.6×–1.4% of single-thread throughput**: adding
+  threads made reads *slower*. Control runs in the same process (pure CPU spin, and
+  a loop taking only the outer read lock) both scaled to ≈40% at 16 threads, so the
+  collapse is attributable to the buffer-pool mutex rather than to the machine.
+  Numbers and method: [benchmarks.md](benchmarks.md#concurrency-scaling).
+- `BufferPoolManager::latch` is dead code (declared, never used); there is no
+  page-level latching. See ROADMAP item 1.
 - Exactly **one handle per database file**, process-wide and across processes.
   See §11 for why.
 - `Transaction` is a write-side object: it buffers actions, resolves edge chains
   in memory at commit, and issues a single `fsync` for the whole batch.
+- **`NervusDb::read_snapshot()`** pins one consistent state for the lifetime of the
+  returned guard. It exists because single calls are not enough: `get_node` and
+  `get_edge` each take and release the read lock, so a traversal that reads an
+  adjacency list and then fetches each named edge can stitch together two states and
+  observe an edge that a concurrent delete removed in between. The snapshot closes
+  that correctness gap — it does **not** add parallelism.
+- A snapshot **blocks writers** while it lives, so keep it short, and never call a
+  write entry point while holding one (it would wait on the lock the snapshot itself
+  holds).
+- The transaction action queue is **bounded** (`DEFAULT_MAX_TRANSACTION_ACTIONS`), since
+  a transaction holds every action in memory until commit at ≈502 bytes per node action
+  and 128 bytes per edge action. Overflow is an error, never an automatic flush:
+  flushing mid-transaction would commit part of it and destroy the rollback guarantee.
 
 ## 11. Production safety
 
@@ -258,7 +303,7 @@ process abort.
 
 ## 12. Storage format versioning
 
-`DB_PAGE_VERSION` is currently `4`, and **this is the frozen format** — see
+`DB_PAGE_VERSION` is currently `5`, and **this is the frozen format** — see
 `FORMAT.md` for the byte-level specification and the stability promise. Versions 1,
 2 and 3 are **not readable**: `open` returns an explicit error directing you to
 export with `.dump` and re-import. It never silently reinterprets an old file, and
@@ -268,7 +313,7 @@ The logical dump (`dump_cypher`) emits `CREATE` plus `SET`, so replaying into an
 existing node **replaces** properties rather than appending, which makes it
 idempotent and doubles as the migration path.
 
-## 13. Page CRCs (introduced in version 3, current at version 4)
+## 13. Page CRCs (introduced in version 3, current at version 5)
 
 Version 2 checksummed WAL frames but not the pages already in `{path}`, so a bit
 flip or a half-written page was read back as "not found" and the graph quietly

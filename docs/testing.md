@@ -24,26 +24,47 @@ cargo test --release --test batch_tx_tests
 cargo test --release --test edge_locality_tests
 ```
 
+Target-specific suites:
+
+```bash
+cargo test --test unwind_tests            # UNWIND and batch ingestion
+cargo test --test merge_tests             # MERGE idempotence
+cargo test --test concurrency_isolation_tests  # snapshot consistency under load
+cargo test --test production_safety_tests # exclusive lock, read-only writes, rollback
+cargo test --test robustness_tests        # page CRC at scale, WAL replay, chunking
+```
+
 ## Current state
 
-**151 test cases across 13 suites — 150 pass, 1 intentionally `#[ignore]`d** (a
-child-process lock probe launched by its parent test).
+**198 test cases — 197 pass, 1 intentionally `#[ignore]`d** (a child-process lock
+probe launched by its parent test).
+
+Run as 15 integration suites (176 cases, of which 1 is `#[ignore]`d) plus 20 inline
+unit tests in the hand-written codecs (`src/codec.rs`, `src/json.rs`, `src/crc32.rs`),
+which are what the on-disk format is made of, plus 2 doc-tests: 176 + 20 + 2 = 198.
+
+The table below is checked against the files by
+`zero_dependency_tests::documented_suite_table_matches_the_files`, so a case added or
+removed without updating this table fails the build rather than drifting:
 
 | Suite                        | Cases | Covers                                                             |
 | ---------------------------- | ----- | ------------------------------------------------------------------ |
 | `integration_tests.rs`       | 26    | CRUD, ACID, concurrency, indexing, out-of-core stress              |
-| `production_safety_tests.rs` | 25    | Exclusive lock, integrity, constraints, read-only writes, backup   |
-| `cypher_advanced_tests.rs`   | 16    | Cypher 1.0 syntax closure, EXPLAIN                                 |
-| `edge_locality_tests.rs`     | 9     | Weave equivalence, self-loops, false-spill elimination             |
+| `production_safety_tests.rs` | 32    | Exclusive lock, integrity, constraints, read-only writes, queue cap |
+| `cypher_advanced_tests.rs`   | 17    | Cypher 1.0 syntax closure, EXPLAIN, aggregate semantics            |
+| `unwind_tests.rs`            | 16    | `UNWIND`, batch ingestion, statement atomicity                     |
+| `merge_tests.rs`             | 14    | `MERGE` idempotence, ON CREATE / ON MATCH                           |
+| `concurrency_isolation_tests.rs` | 9 | Snapshot consistency, atomic visibility, no lost writes             |
+| `concurrency_stress_tests.rs` | 3   | Core-count-adaptive mixed read/write stress                         |
+| `edge_locality_tests.rs`     | 13    | Weave equivalence, self-loops, false spill, chain-walk equivalence |
 | `robustness_tests.rs`        | 8     | File lock, auto-checkpoint, page CRC at scale, WAL replay, chunking |
 | `batch_tx_tests.rs`          | 7     | Batch commits, single-fsync contract, throughput                   |
 | `slotted_property_tests.rs`  | 7     | Page packing, slot reuse, compaction, density                      |
-| `cli_tests.rs`               | 7     | REPL end-to-end, multi-line input, strict parsing                  |
 | `analytics_tests.rs`         | 7     | PageRank, WCC, K-hop                                               |
 | `steal_spill_tests.rs`       | 5     | Spilling, rollback pollution, checkpoint                           |
 | `equivalence_tests.rs`       | 4     | v1.0.0 behaviour guardrails: query, transaction, API, format       |
-| `studio_tests.rs`            | 4     | Browser workbench: endpoints, read-only, writer interleaving       |
-| `zero_dependency_tests.rs`   | 3     | Enforces the empty dependency tree (with a negative control)       |
+| `zero_dependency_tests.rs`   | 8     | Empty deps, version + name agreement, §13 and doc-count guards      |
+| inline (in `src/`)           | 20    | `codec` / `json` / `crc32` round-trips, truncation, vectors         |
 
 Run one suite:
 

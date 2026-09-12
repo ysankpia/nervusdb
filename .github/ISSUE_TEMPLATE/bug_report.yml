@@ -42,7 +42,7 @@ body:
         file, say how it was produced.
       placeholder: |
         ```rust
-        let db = GraphLite::open(":memory:")?;
+        let db = NervusDb::open(":memory:")?;
         // ...
         ```
     validations:

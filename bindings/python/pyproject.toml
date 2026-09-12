@@ -3,11 +3,17 @@ requires = ["maturin>=1.5,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "graphlite"
-version = "1.0.0"
-description = "Python bindings for GraphLite-RS, an embedded single-file property graph database"
+# 分发名（PyPI）与导入模块名刻意分开，各自遵守所在生态的惯例：
+#   - `nervusdb` 是本项目在 crates.io 上的名字（旧版已全部 yank）。
+#     这里用同一个名字，让三个生态下的产物可对应。
+#   - 导入名同样是 `nervusdb`（见下方 `[tool.maturin] module-name`）。
+#   - 若将来发现 PyPI 上 `nervusdb` 不可用，改这一行即可，导入名不必跟着改
+#     ——这正是 `beautifulsoup4` → `import bs4` 的做法。
+name = "nervusdb"
+version = "0.1.0"
+description = "Python bindings for NervusDB, an embedded single-file property graph database"
 readme = "README.md"
-authors = [{ name = "GraphLite-RS Contributors" }]
+authors = [{ name = "NervusDB Contributors" }]
 license = { text = "AGPL-3.0-only" }
 requires-python = ">=3.8"
 keywords = ["graph", "database", "sqlite", "cypher", "embedded"]
@@ -19,5 +25,5 @@ classifiers = [
 ]
 
 [tool.maturin]
-module-name = "graphlite"
+module-name = "nervusdb"
 features = ["pyo3/extension-module"]

@@ -76,33 +76,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "graphlite-node"
-version = "1.0.0"
-dependencies = [
- "graphlite-rs",
- "napi",
- "napi-build",
- "napi-derive",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "graphlite-python"
-version = "1.0.0"
-dependencies = [
- "graphlite-rs",
- "pyo3",
-]
-
-[[package]]
-name = "graphlite-rs"
-version = "1.0.0"
-dependencies = [
- "tempfile",
-]
-
-[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -217,6 +190,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "427802e8ec3a734331fec1035594a210ce1ff4dc5bc1950530920ab717964ea3"
 dependencies = [
  "libloading",
+]
+
+[[package]]
+name = "nervusdb"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
+name = "nervusdb-node"
+version = "0.1.0"
+dependencies = [
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "nervusdb",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "nervusdb-python"
+version = "0.1.0"
+dependencies = [
+ "nervusdb",
+ "pyo3",
 ]
 
 [[package]]

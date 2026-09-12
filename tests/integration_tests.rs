@@ -1,4 +1,4 @@
-use graphlite::{Direction, GraphError, GraphLite, Value};
+use nervusdb::{Direction, GraphError, NervusDb, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -14,7 +14,7 @@ use tempfile::tempdir;
 fn test_01_crud_and_properties() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("crud_test.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 1. 添加带有不同类型属性的节点
     let mut props_n1 = HashMap::new();
@@ -125,7 +125,7 @@ fn test_01_crud_and_properties() -> Result<(), GraphError> {
 fn test_02_social_network_multi_hop_traversal() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("social_test.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 构建社交图谱:
     // Alice(1) -> Bob(2), Charlie(3)
@@ -239,7 +239,7 @@ fn test_02_social_network_multi_hop_traversal() -> Result<(), GraphError> {
 fn test_03_dijkstra_and_cycle_detection() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("algo_test.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 构造经典 Dijkstra 测试图：
     // A(1) -> B(2) [weight: 4]
@@ -302,7 +302,7 @@ fn test_03_dijkstra_and_cycle_detection() -> Result<(), GraphError> {
 fn test_04_transaction_atomicity_and_rollback() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("tx_test.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 初始状态：插入一个基准节点
     let base_node = db.add_node(HashSet::new(), HashMap::new())?;
@@ -315,7 +315,7 @@ fn test_04_transaction_atomicity_and_rollback() -> Result<(), GraphError> {
     let n3 = tx.add_node(HashSet::new(), HashMap::new())?;
     tx.add_edge(base_node, n2, "REL", HashMap::new(), 1.0)?;
     tx.add_edge(n2, n3, "REL", HashMap::new(), 2.0)?;
-    tx.update_node_property(base_node, "temp_prop", "temporary_val");
+    tx.update_node_property(base_node, "temp_prop", "temporary_val")?;
 
     // 主动回滚
     tx.rollback()?;
@@ -364,7 +364,7 @@ fn test_05_crash_recovery_from_wal() -> Result<(), GraphError> {
 
     // 作用域 1：创建数据库，写入关键业务数据，不调用优雅退出或 checkpoint，模拟突发断电
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
 
         let mut a_props = HashMap::new();
         a_props.insert("name".to_string(), Value::from("ServerNodeA"));
@@ -411,7 +411,7 @@ fn test_05_crash_recovery_from_wal() -> Result<(), GraphError> {
 
     // 作用域 2：重启系统，由新实例从 WAL 自动自愈回放恢复
     {
-        let recovered_db = GraphLite::open(&db_path)?;
+        let recovered_db = NervusDb::open(&db_path)?;
 
         // 验证全部 3 个节点和 2 条边 100% 完整复原，垃圾帧被安全丢弃
         assert_eq!(recovered_db.node_count(), 3);
@@ -468,7 +468,7 @@ fn test_05_crash_recovery_from_wal() -> Result<(), GraphError> {
 fn test_06_concurrent_read_write_stress_test() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("concurrent_stress.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 预热图数据：创建中心枢纽节点
     let hub_node = db.add_node(HashSet::new(), HashMap::new())?;
@@ -570,7 +570,7 @@ fn test_07_buffer_pool_eviction_large_graph_stress() -> Result<(), GraphError> {
     let db_path = dir.path().join("large_graph.db");
 
     // 严格限制 Buffer Pool 为 512 帧 (512 * 4KB = 2MB 内存硬约束)
-    let db = GraphLite::open_with_pool_size(&db_path, 512)?;
+    let db = NervusDb::open_with_pool_size(&db_path, 512)?;
 
     let num_nodes: u64 = 20_000;
     let num_edges: usize = 50_000;
@@ -655,7 +655,7 @@ fn test_07_buffer_pool_eviction_large_graph_stress() -> Result<(), GraphError> {
 fn test_08_cypher_engine_end_to_end() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("cypher_test.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 1. CREATE 复杂路径模式
     let create_sql = "CREATE (a:Person {name: 'Alice', age: 28})-[:KNOWS {weight: 1.5}]->(b:Person {name: 'Bob', age: 32})";
@@ -696,7 +696,7 @@ fn test_08_cypher_engine_end_to_end() -> Result<(), GraphError> {
 fn test_09_secondary_index_acceleration() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("index_test.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 插入 500 个带索引节点
     for i in 1..=500 {
@@ -747,7 +747,7 @@ fn test_10_pure_out_of_core_stress() -> Result<(), GraphError> {
     let db_path = dir.path().join("pure_out_of_core.db");
 
     // 严苛限制：仅允许 256 个 4KB 页帧（总驻留内存硬约束为 1MB）
-    let db = GraphLite::open_with_pool_size(&db_path, 256)?;
+    let db = NervusDb::open_with_pool_size(&db_path, 256)?;
 
     let total_nodes: u64 = 10_000;
 
@@ -811,7 +811,7 @@ fn test_sqlite_compact_file_size() -> Result<(), GraphError> {
 
     // 1. 初始化仅含 1 个节点 1 条边的全新数据库
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         let mut props = HashMap::new();
         props.insert("name".to_string(), Value::from("Alice"));
         let mut labels = HashSet::new();
@@ -842,7 +842,7 @@ fn test_12_transaction_rollback_and_crash_consistency() -> Result<(), GraphError
     // 1. 打开数据库并记录初始状态
     let initial_node_count;
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         let mut p = HashMap::new();
         p.insert("init".to_string(), Value::from(1));
         let mut l = HashSet::new();
@@ -868,7 +868,7 @@ fn test_12_transaction_rollback_and_crash_consistency() -> Result<(), GraphError
 
     // 2. 冷重启重新打开数据库，验证物理磁盘零污染
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         assert_eq!(db.node_count(), initial_node_count);
 
         // 再次添加节点，其 ID 单调递增分配，未提交事务分配的临时 ID 作废不回拨
@@ -891,7 +891,7 @@ fn test_12_transaction_rollback_and_crash_consistency() -> Result<(), GraphError
 fn test_13_secondary_index_stale_read_and_start_pattern_filtering() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("index_filtering.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 1. 创建节点 (n:User {account: "old_val", role: "admin"})
     let mut props = HashMap::new();
@@ -935,10 +935,10 @@ fn test_13_secondary_index_stale_read_and_start_pattern_filtering() -> Result<()
 fn test_14_chained_overflow_pages_and_generic_projection() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("chained_overflow.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 1. 构造一个超过 10KB 的超长字符串属性 (单页 4096 字节，至少占用 3 个溢出物理页)
-    let large_text = "GraphLiteEngineRobustMultiPagePayload".repeat(300); // ~11KB
+    let large_text = "NervusDbEngineRobustMultiPagePayload".repeat(300); // ~11KB
     assert!(large_text.len() > 10_000);
 
     let mut props = HashMap::new();
@@ -992,7 +992,7 @@ fn test_14_chained_overflow_pages_and_generic_projection() -> Result<(), GraphEr
 
 #[test]
 fn test_in_memory_mode() -> Result<(), GraphError> {
-    let db = GraphLite::open(":memory:")?;
+    let db = NervusDb::open(":memory:")?;
 
     // 1. 基础 CRUD
     let mut p = HashMap::new();
@@ -1034,7 +1034,7 @@ fn test_in_memory_mode() -> Result<(), GraphError> {
 fn test_mrsw_concurrency() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("mrsw.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 初始数据
     for i in 1..=20 {
@@ -1104,7 +1104,7 @@ fn test_mrsw_concurrency() -> Result<(), GraphError> {
 
 #[test]
 fn test_cypher_variable_hops() -> Result<(), GraphError> {
-    let db = GraphLite::open(":memory:")?;
+    let db = NervusDb::open(":memory:")?;
 
     // 建立链路: (a:Person {name: 'A'}) -> (b:Person {name: 'B'}) -> (c:Person {name: 'C'}) -> (d:Person {name: 'D'}) -> (e:Person {name: 'E'})
     db.execute(
@@ -1135,7 +1135,7 @@ fn test_cypher_variable_hops() -> Result<(), GraphError> {
 
 #[test]
 fn test_no_stale_age_name_hardcode() -> Result<(), GraphError> {
-    let db = GraphLite::open(":memory:")?;
+    let db = NervusDb::open(":memory:")?;
 
     // 插入无 name 属性（只有 title, price）的商品实体
     db.execute("CREATE (p:Product {title: 'RustInAction', price: 59.9})")?;
@@ -1172,35 +1172,35 @@ fn test_no_stale_age_name_hardcode() -> Result<(), GraphError> {
 
 #[test]
 fn test_c_abi_interface() {
-    use graphlite::{graphlite_close, graphlite_execute, graphlite_free_string, graphlite_open};
+    use nervusdb::{nervusdb_close, nervusdb_execute, nervusdb_free_string, nervusdb_open};
     use std::ffi::{CStr, CString};
     use std::ptr;
 
     unsafe {
         let mut db_ptr = ptr::null_mut();
         let path = CString::new(":memory:").unwrap();
-        let rc = graphlite_open(path.as_ptr(), &mut db_ptr);
+        let rc = nervusdb_open(path.as_ptr(), &mut db_ptr);
         assert_eq!(rc, 0);
         assert!(!db_ptr.is_null());
 
         let cypher_create = CString::new("CREATE (u:User {nickname: 'Ferris'})").unwrap();
         let mut result_json = ptr::null_mut();
-        let rc_create = graphlite_execute(db_ptr, cypher_create.as_ptr(), &mut result_json);
+        let rc_create = nervusdb_execute(db_ptr, cypher_create.as_ptr(), &mut result_json);
         assert_eq!(rc_create, 0);
         assert!(!result_json.is_null());
-        graphlite_free_string(result_json);
+        nervusdb_free_string(result_json);
 
         let cypher_query = CString::new("MATCH (u:User) RETURN u.nickname").unwrap();
         let mut query_json = ptr::null_mut();
-        let rc_query = graphlite_execute(db_ptr, cypher_query.as_ptr(), &mut query_json);
+        let rc_query = nervusdb_execute(db_ptr, cypher_query.as_ptr(), &mut query_json);
         assert_eq!(rc_query, 0);
         assert!(!query_json.is_null());
 
         let res_str = CStr::from_ptr(query_json).to_str().unwrap();
         assert!(res_str.contains("Ferris"));
-        graphlite_free_string(query_json);
+        nervusdb_free_string(query_json);
 
-        let rc_close = graphlite_close(db_ptr);
+        let rc_close = nervusdb_close(db_ptr);
         assert_eq!(rc_close, 0);
     }
 }
@@ -1212,7 +1212,7 @@ fn test_true_no_steal_enforcement() -> Result<(), GraphError> {
 
     // 1. 初始化数据库，预写入基准节点并落盘
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         let mut p = HashMap::new();
         p.insert("base".to_string(), Value::from("v1"));
         let mut l = HashSet::new();
@@ -1226,7 +1226,7 @@ fn test_true_no_steal_enforcement() -> Result<(), GraphError> {
     assert!(!original_bytes.is_empty());
 
     // 2. 以极小缓冲池 (4 帧 = 16KB) 打开数据库
-    let db = GraphLite::open_with_pool_size(&db_path, 4)?;
+    let db = NervusDb::open_with_pool_size(&db_path, 4)?;
 
     // 3. 开启事务，构造修改 5 个不同物理页的动作（远超 4 帧容量且全为未提交脏页）
     let mut tx = db.begin_transaction()?;
@@ -1267,7 +1267,7 @@ fn test_true_no_steal_enforcement() -> Result<(), GraphError> {
 fn test_tx_rollback_concurrency_isolation() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("tx_isolation.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 初始节点 ID = 1
     let n1 = db.add_node(HashSet::new(), HashMap::new())?;
@@ -1318,7 +1318,7 @@ fn test_tx_rollback_concurrency_isolation() -> Result<(), GraphError> {
 
 #[test]
 fn test_cypher_edge_variable_and_loop_traversal() -> Result<(), GraphError> {
-    let db = GraphLite::open(":memory:")?;
+    let db = NervusDb::open(":memory:")?;
 
     // 1. 建立带有权重与属性的关系边: (a)-[r:KNOWS {weight: 9.9, note: 'bff'}]->(b)
     let n1 = db.add_node(HashSet::from(["Person".to_string()]), HashMap::new())?;
@@ -1341,7 +1341,7 @@ fn test_cypher_edge_variable_and_loop_traversal() -> Result<(), GraphError> {
     assert_eq!(row.values[2], Value::from("bff"));
 
     // 2. 环路闭环遍历: A -> B -> A
-    let db_loop = GraphLite::open(":memory:")?;
+    let db_loop = NervusDb::open(":memory:")?;
     let mut p_a = HashMap::new();
     p_a.insert("name".to_string(), Value::from("A"));
     let a_id = db_loop.add_node(HashSet::from(["Node".to_string()]), p_a)?;
@@ -1368,25 +1368,25 @@ fn test_cypher_edge_variable_and_loop_traversal() -> Result<(), GraphError> {
 
 #[test]
 fn test_c_api_errmsg() {
-    use graphlite::{graphlite_close, graphlite_errmsg, graphlite_execute, graphlite_open};
+    use nervusdb::{nervusdb_close, nervusdb_errmsg, nervusdb_execute, nervusdb_open};
     use std::ffi::{CStr, CString};
     use std::ptr;
 
     unsafe {
         let mut db_ptr = ptr::null_mut();
         let path = CString::new(":memory:").unwrap();
-        let rc = graphlite_open(path.as_ptr(), &mut db_ptr);
+        let rc = nervusdb_open(path.as_ptr(), &mut db_ptr);
         assert_eq!(rc, 0);
 
         // 传入非法 Cypher 语句触发错误
         let cypher_bad = CString::new("INVALID CYPHER QUERY SYNTAX !!!").unwrap();
         let mut result_json = ptr::null_mut();
-        let rc_err = graphlite_execute(db_ptr, cypher_bad.as_ptr(), &mut result_json);
+        let rc_err = nervusdb_execute(db_ptr, cypher_bad.as_ptr(), &mut result_json);
         assert_eq!(rc_err, -1);
         assert!(result_json.is_null());
 
         // 读取错误详细信息
-        let err_ptr = graphlite_errmsg(db_ptr);
+        let err_ptr = nervusdb_errmsg(db_ptr);
         assert!(!err_ptr.is_null());
         let err_msg = CStr::from_ptr(err_ptr).to_str().unwrap();
         assert!(
@@ -1398,7 +1398,7 @@ fn test_c_api_errmsg() {
             err_msg
         );
 
-        graphlite_close(db_ptr);
+        nervusdb_close(db_ptr);
     }
 }
 
@@ -1409,7 +1409,7 @@ fn test_cold_reboot_index_consistency() -> Result<(), GraphError> {
 
     // Session 1: 插入 5 个 User {account: "admin"}，正常关闭数据库
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         for i in 1..=5 {
             let mut props = HashMap::new();
             props.insert("account".to_string(), Value::from("admin"));
@@ -1423,7 +1423,7 @@ fn test_cold_reboot_index_consistency() -> Result<(), GraphError> {
 
     // Session 2: 重新打开数据库，插入第 6 个 User {account: "admin"}
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         let mut props = HashMap::new();
         props.insert("account".to_string(), Value::from("admin"));
         props.insert("uid".to_string(), Value::from(6i64));
@@ -1445,7 +1445,7 @@ fn test_cold_reboot_index_consistency() -> Result<(), GraphError> {
 
 #[test]
 fn test_cypher_delete_edge_safe_isolation() -> Result<(), GraphError> {
-    let db = GraphLite::open(":memory:")?;
+    let db = NervusDb::open(":memory:")?;
 
     // 节点 A (ID=1) 与节点 B (ID=2)，创建一条边连接它们（边 ID 恰好为 1）
     let a = db.add_node(HashSet::from(["Node".to_string()]), HashMap::new())?;
@@ -1475,7 +1475,7 @@ fn test_cypher_delete_edge_safe_isolation() -> Result<(), GraphError> {
 fn test_tx_commit_failure_memory_cleanup() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("commit_fail.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 先正常写入 1 个基准节点落盘
     let n1 = db.add_node(HashSet::from(["Base".to_string()]), HashMap::new())?;
@@ -1515,7 +1515,7 @@ fn test_tx_commit_failure_memory_cleanup() -> Result<(), GraphError> {
 
     // 重启数据库验证冷重启一致性
     drop(db);
-    let db_reopened = GraphLite::open(&db_path)?;
+    let db_reopened = NervusDb::open(&db_path)?;
     assert_eq!(db_reopened.node_count(), 2);
     let taint_search_reopened = db_reopened.query_cypher("MATCH (t:TaintNode) RETURN t")?;
     assert_eq!(taint_search_reopened.row_count(), 0);

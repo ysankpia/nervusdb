@@ -4,19 +4,17 @@
 // 这是宏生成代码而非手写逻辑，无法在源码层面消除，故在此 crate 内定点豁免。
 #![allow(clippy::useless_conversion)]
 
-use graphlite_core::{
-    GraphError, GraphLite as CoreGraphLite, Transaction as CoreTransaction, Value,
-};
+use nervusdb_core::{GraphError, NervusDb as CoreNervusDb, Transaction as CoreTransaction, Value};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::collections::{HashMap, HashSet};
 
-create_exception!(graphlite, GraphLiteError, PyException);
+create_exception!(nervusdb, NervusDbError, PyException);
 
 fn to_py_err(err: GraphError) -> PyErr {
-    GraphLiteError::new_err(err.to_string())
+    NervusDbError::new_err(err.to_string())
 }
 
 fn pyany_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
@@ -35,10 +33,20 @@ fn pyany_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
 
 fn value_to_py(py: Python<'_>, val: &Value) -> PyResult<PyObject> {
     match val {
+        // Python 侧用 None 表示 null，与 `python_to_value` 的映射对称
+        Value::Null => Ok(py.None()),
         Value::Int(i) => Ok(i.into_py(py)),
         Value::Float(f) => Ok(f.into_py(py)),
         Value::String(s) => Ok(s.clone().into_py(py)),
         Value::Bool(b) => Ok(b.into_py(py)),
+        Value::List(items) => {
+            // 递归映射为 Python list，顺序保持一致
+            let list = PyList::empty_bound(py);
+            for item in items {
+                list.append(value_to_py(py, item)?)?;
+            }
+            Ok(list.into_py(py))
+        }
     }
 }
 
@@ -73,7 +81,7 @@ fn parse_node_item(item: &Bound<'_, PyAny>) -> PyResult<(HashSet<String>, HashMa
         Ok(p) if !p.is_none() => {
             let d = p
                 .downcast::<PyDict>()
-                .map_err(|_| GraphLiteError::new_err("node properties must be a dict or None"))?;
+                .map_err(|_| NervusDbError::new_err("node properties must be a dict or None"))?;
             extract_properties(Some(d))?
         }
         _ => HashMap::new(),
@@ -90,7 +98,7 @@ fn parse_node_batch(nodes: &Bound<'_, PyAny>) -> PyResult<Vec<NodeItem>> {
     for (idx, item) in nodes.iter()?.enumerate() {
         let item = item?;
         out.push(parse_node_item(&item).map_err(|e| {
-            GraphLiteError::new_err(format!("nodes[{}]: {}", idx, e.value_bound(item.py())))
+            NervusDbError::new_err(format!("nodes[{}]: {}", idx, e.value_bound(item.py())))
         })?);
     }
     Ok(out)
@@ -107,7 +115,7 @@ fn parse_edge_item(item: &Bound<'_, PyAny>) -> PyResult<EdgeItem> {
         Ok(p) if !p.is_none() => {
             let d = p
                 .downcast::<PyDict>()
-                .map_err(|_| GraphLiteError::new_err("edge properties must be a dict or None"))?;
+                .map_err(|_| NervusDbError::new_err("edge properties must be a dict or None"))?;
             extract_properties(Some(d))?
         }
         _ => HashMap::new(),
@@ -126,21 +134,21 @@ fn parse_edge_batch(edges: &Bound<'_, PyAny>) -> PyResult<Vec<EdgeItem>> {
     for (idx, item) in edges.iter()?.enumerate() {
         let item = item?;
         out.push(parse_edge_item(&item).map_err(|e| {
-            GraphLiteError::new_err(format!("edges[{}]: {}", idx, e.value_bound(item.py())))
+            NervusDbError::new_err(format!("edges[{}]: {}", idx, e.value_bound(item.py())))
         })?);
     }
     Ok(out)
 }
 
 /// 解析方向参数："out"/"outgoing"、"in"/"incoming"，缺省为双向
-fn parse_direction(direction: Option<&str>) -> PyResult<graphlite_core::Direction> {
+fn parse_direction(direction: Option<&str>) -> PyResult<nervusdb_core::Direction> {
     match direction.map(|d| d.to_ascii_lowercase()) {
-        None => Ok(graphlite_core::Direction::Both),
+        None => Ok(nervusdb_core::Direction::Both),
         Some(d) => match d.as_str() {
-            "out" | "outgoing" => Ok(graphlite_core::Direction::Outgoing),
-            "in" | "incoming" => Ok(graphlite_core::Direction::Incoming),
-            "both" | "any" => Ok(graphlite_core::Direction::Both),
-            other => Err(GraphLiteError::new_err(format!(
+            "out" | "outgoing" => Ok(nervusdb_core::Direction::Outgoing),
+            "in" | "incoming" => Ok(nervusdb_core::Direction::Incoming),
+            "both" | "any" => Ok(nervusdb_core::Direction::Both),
+            other => Err(NervusDbError::new_err(format!(
                 "invalid direction '{}': expected outgoing/incoming/both",
                 other
             ))),
@@ -148,17 +156,17 @@ fn parse_direction(direction: Option<&str>) -> PyResult<graphlite_core::Directio
     }
 }
 
-#[pyclass(name = "GraphLite")]
-pub struct PyGraphLite {
-    inner: CoreGraphLite,
+#[pyclass(name = "NervusDb")]
+pub struct PyNervusDb {
+    inner: CoreNervusDb,
 }
 
 #[pymethods]
-impl PyGraphLite {
+impl PyNervusDb {
     #[staticmethod]
     #[pyo3(signature = (path, pool_size = 1024))]
     pub fn open(path: &str, pool_size: usize) -> PyResult<Self> {
-        let db = CoreGraphLite::open_with_pool_size(path, pool_size).map_err(to_py_err)?;
+        let db = CoreNervusDb::open_with_pool_size(path, pool_size).map_err(to_py_err)?;
         Ok(Self { inner: db })
     }
 
@@ -327,7 +335,7 @@ impl PyGraphLite {
         let mut buffer: Vec<u8> = Vec::new();
         self.inner.dump_cypher(&mut buffer).map_err(to_py_err)?;
         String::from_utf8(buffer)
-            .map_err(|e| GraphLiteError::new_err(format!("dump is not valid UTF-8: {}", e)))
+            .map_err(|e| NervusDbError::new_err(format!("dump is not valid UTF-8: {}", e)))
     }
 
     pub fn stats(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -381,7 +389,7 @@ impl PyTransaction {
         self.inner
             .as_ref()
             .map(|tx| tx.tx_id())
-            .ok_or_else(|| GraphLiteError::new_err("transaction already finished"))
+            .ok_or_else(|| NervusDbError::new_err("transaction already finished"))
     }
 
     #[pyo3(signature = (labels, properties = None))]
@@ -394,7 +402,7 @@ impl PyTransaction {
         let props = extract_properties(properties)?;
         self.inner
             .as_mut()
-            .ok_or_else(|| GraphLiteError::new_err("transaction already finished"))?
+            .ok_or_else(|| NervusDbError::new_err("transaction already finished"))?
             .add_node(labels_set, props)
             .map_err(to_py_err)
     }
@@ -411,7 +419,7 @@ impl PyTransaction {
         let props = extract_properties(properties)?;
         self.inner
             .as_mut()
-            .ok_or_else(|| GraphLiteError::new_err("transaction already finished"))?
+            .ok_or_else(|| NervusDbError::new_err("transaction already finished"))?
             .add_edge(src, dst, edge_type, props, weight)
             .map_err(to_py_err)
     }
@@ -444,7 +452,7 @@ impl PyTransaction {
         let tx = self
             .inner
             .as_mut()
-            .ok_or_else(|| GraphLiteError::new_err("transaction already finished"))?;
+            .ok_or_else(|| NervusDbError::new_err("transaction already finished"))?;
 
         // 走核心的批量路径：一次性预留全部 ID，避免每条记录取一次全局写锁
         tx.add_nodes(parsed).map_err(to_py_err)
@@ -468,13 +476,13 @@ impl PyTransaction {
         let tx = self
             .inner
             .as_mut()
-            .ok_or_else(|| GraphLiteError::new_err("transaction already finished"))?;
+            .ok_or_else(|| NervusDbError::new_err("transaction already finished"))?;
 
         // 与 add_nodes 同理：一次性预留全部 ID
         let inserts = parsed
             .into_iter()
             .map(
-                |(src, dst, ty, props, weight)| graphlite_core::disk_graph::EdgeInsert {
+                |(src, dst, ty, props, weight)| nervusdb_core::disk_graph::EdgeInsert {
                     edge_id: 0, // 由核心在批量预留时填充
                     src_id: src,
                     dst_id: dst,
@@ -497,8 +505,9 @@ impl PyTransaction {
         let val = pyany_to_value(value)?;
         self.inner
             .as_mut()
-            .ok_or_else(|| GraphLiteError::new_err("transaction already finished"))?
-            .update_node_property(node_id, key, val);
+            .ok_or_else(|| NervusDbError::new_err("transaction already finished"))?
+            .update_node_property(node_id, key, val)
+            .map_err(|e| NervusDbError::new_err(e.to_string()))?;
         Ok(())
     }
 
@@ -512,31 +521,34 @@ impl PyTransaction {
         let val = pyany_to_value(value)?;
         self.inner
             .as_mut()
-            .ok_or_else(|| GraphLiteError::new_err("transaction already finished"))?
-            .update_edge_property(edge_id, key, val);
+            .ok_or_else(|| NervusDbError::new_err("transaction already finished"))?
+            .update_edge_property(edge_id, key, val)
+            .map_err(|e| NervusDbError::new_err(e.to_string()))?;
         Ok(())
     }
 
     pub fn remove_node(&mut self, node_id: u64) -> PyResult<()> {
         self.inner
             .as_mut()
-            .ok_or_else(|| GraphLiteError::new_err("transaction already finished"))?
-            .remove_node(node_id);
+            .ok_or_else(|| NervusDbError::new_err("transaction already finished"))?
+            .remove_node(node_id)
+            .map_err(|e| NervusDbError::new_err(e.to_string()))?;
         Ok(())
     }
 
     pub fn remove_edge(&mut self, edge_id: u64) -> PyResult<()> {
         self.inner
             .as_mut()
-            .ok_or_else(|| GraphLiteError::new_err("transaction already finished"))?
-            .remove_edge(edge_id);
+            .ok_or_else(|| NervusDbError::new_err("transaction already finished"))?
+            .remove_edge(edge_id)
+            .map_err(|e| NervusDbError::new_err(e.to_string()))?;
         Ok(())
     }
 
     /// 提交事务：所有变更原子应用，仅触发一次 WAL fsync
     pub fn commit(&mut self) -> PyResult<()> {
         let tx = self.inner.take().ok_or_else(|| {
-            GraphLiteError::new_err("transaction already committed or rolled back")
+            NervusDbError::new_err("transaction already committed or rolled back")
         })?;
         tx.commit().map_err(to_py_err)
     }
@@ -544,7 +556,7 @@ impl PyTransaction {
     /// 回滚事务：丢弃全部未提交变更，主库零污染
     pub fn rollback(&mut self) -> PyResult<()> {
         let tx = self.inner.take().ok_or_else(|| {
-            GraphLiteError::new_err("transaction already committed or rolled back")
+            NervusDbError::new_err("transaction already committed or rolled back")
         })?;
         tx.rollback().map_err(to_py_err)
     }
@@ -574,9 +586,9 @@ impl PyTransaction {
 }
 
 #[pymodule]
-fn graphlite(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyGraphLite>()?;
+fn nervusdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyNervusDb>()?;
     m.add_class::<PyTransaction>()?;
-    m.add("GraphLiteError", m.py().get_type_bound::<GraphLiteError>())?;
+    m.add("NervusDbError", m.py().get_type_bound::<NervusDbError>())?;
     Ok(())
 }

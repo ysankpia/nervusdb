@@ -1,6 +1,6 @@
-# GraphLite Python SDK
+# NervusDb Python SDK
 
-Official Python bindings for **GraphLite-RS**, the SQLite of Graph Databases.
+Official Python bindings for **NervusDB**, the SQLite of Graph Databases.
 
 ## Features
 
@@ -26,10 +26,10 @@ Requires [maturin](https://www.maturin.rs/) and the Rust toolchain.
 ## Quick Start
 
 ```python
-import graphlite
+import nervusdb
 
 # 1. Open or create database (pool_size in frames, default 1024 = 4MB)
-db = graphlite.GraphLite.open("mydb.db", pool_size=1024)
+db = nervusdb.NervusDb.open("mydb.db", pool_size=1024)
 
 # 2. Execute Cypher CREATE statements
 db.execute("CREATE (a:Person {name: 'Alice', age: 28})-[:KNOWS {weight: 1.5}]->(b:Person {name: 'Bob', age: 32});")

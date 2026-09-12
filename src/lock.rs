@@ -90,7 +90,7 @@ impl DbLock {
             Ok(()) => Ok(Self { file, path, mode }),
             Err(TryLockError::WouldBlock) => Err(GraphError::DatabaseLocked(format!(
                 "Database '{}' is already open {} this handle. \
-                 A GraphLite database allows one writer and any number of readers; \
+                 A NervusDb database allows one writer and any number of readers; \
                  a write handle excludes readers and vice versa.",
                 path.display(),
                 match mode {

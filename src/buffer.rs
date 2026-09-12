@@ -83,6 +83,27 @@ impl DiskManager {
         self.is_memory
     }
 
+    /// 取出文件句柄，**不 panic**。
+    ///
+    /// `file` 是 `Option<File>`：`:memory:` 模式构造为 `None`，其它模式构造为
+    /// `Some`。所有调用点都在 `if self.is_memory { return ... }` 之后，因此这里
+    /// 逻辑上不会拿到 `None`——但那条保证跨越函数体，是编译器看不到的不变量。
+    ///
+    /// 原先四处写的是 `file_guard.as_ref().unwrap()`：一旦有人改动构造顺序或
+    /// 新增调用点，就会在运行时 panic。嵌入式库里「一次局部疏忽变成进程终止」
+    /// 的代价很高（AGENTS.md §13 的同一理由），因此改为显式映射到 `GraphError`。
+    fn file_handle<'a>(
+        guard: &'a std::sync::MutexGuard<'_, Option<File>>,
+    ) -> Result<&'a File, GraphError> {
+        guard.as_ref().ok_or_else(|| {
+            GraphError::StorageError(
+                "file-backed DiskManager has no open file handle; \
+                 this is a bug: `file` is Some whenever `is_memory` is false"
+                    .to_string(),
+            )
+        })
+    }
+
     pub fn read_page(
         &self,
         page_id: PageId,
@@ -101,7 +122,7 @@ impl DiskManager {
         }
 
         let file_guard = self.file.lock_recover();
-        let mut file = file_guard.as_ref().unwrap();
+        let mut file = Self::file_handle(&file_guard)?;
         let offset = (page_id as u64) * (PAGE_SIZE as u64);
         let file_len = file.metadata()?.len();
 
@@ -129,7 +150,7 @@ impl DiskManager {
         }
 
         let file_guard = self.file.lock_recover();
-        let mut file = file_guard.as_ref().unwrap();
+        let mut file = Self::file_handle(&file_guard)?;
         let offset = (page_id as u64) * (PAGE_SIZE as u64);
         file.seek(SeekFrom::Start(offset))?;
         file.write_all(buffer)?;
@@ -491,7 +512,7 @@ impl BufferPoolManager {
         })
     }
 
-    /// 取出 CRC 存储句柄（提交/检查点路径需要它，见 `GraphLite::checkpoint`）
+    /// 取出 CRC 存储句柄（提交/检查点路径需要它，见 `NervusDb::checkpoint`）
     pub fn take_crc(&mut self) -> Option<crate::crc::CrcStore> {
         self.crc.take()
     }

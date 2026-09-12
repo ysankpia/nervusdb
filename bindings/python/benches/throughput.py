@@ -12,7 +12,7 @@ import os
 import sys
 import time
 
-import graphlite
+import nervusdb
 
 SCALE = os.environ.get("GL_SCALE", "full")
 QUICK = SCALE == "small"
@@ -63,7 +63,7 @@ def scenario(label, nodes, edges, pool_frames, path):
         % (nodes, edges, pool_frames, pool_frames * 4 // 1024)
     )
 
-    db = graphlite.GraphLite.open(path, pool_frames)
+    db = nervusdb.NervusDb.open(path, pool_frames)
     bench_nodes(db, nodes, "nodes")
     if edges:
         bench_edges(db, nodes, edges, "edges")
@@ -84,11 +84,11 @@ def scenario(label, nodes, edges, pool_frames, path):
 
 
 def main():
-    print("GraphLite Python SDK throughput benchmark (scale = %s)" % SCALE)
+    print("NervusDb Python SDK throughput benchmark (scale = %s)" % SCALE)
     if QUICK:
         print("NOTE: smoke scale, not the documented figures.")
 
-    tmp = "/tmp/graphlite-py-bench.db"
+    tmp = "/tmp/nervusdb-py-bench.db"
     n = 100_000 if QUICK else 1_000_000
     e = 400_000 if QUICK else 4_000_000
     scenario("1M nodes + 4M edges, file-backed, 64MB pool", n, e, 16384, tmp)

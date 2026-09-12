@@ -11,7 +11,7 @@
 //! configuration alongside the result, so numbers can never be quoted without
 //! their measurement conditions.
 
-use graphlite::{GraphLite, Value};
+use nervusdb::{NervusDb, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -48,7 +48,7 @@ fn run(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
         dir.path().join("bench.db")
     };
 
-    let db = GraphLite::open_with_pool_size(&path, cfg.pool_frames)?;
+    let db = NervusDb::open_with_pool_size(&path, cfg.pool_frames)?;
 
     // ---------- nodes ----------
     let node_start = Instant::now();
@@ -171,7 +171,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scale = std::env::var("GL_SCALE").unwrap_or_else(|_| "full".to_string());
     let quick = scale == "small";
 
-    println!("GraphLite throughput benchmark (scale = {})", scale);
+    println!("NervusDb throughput benchmark (scale = {})", scale);
     println!("host: {}", std::env::consts::OS);
     if quick {
         println!("NOTE: smoke scale, not the documented figures.");

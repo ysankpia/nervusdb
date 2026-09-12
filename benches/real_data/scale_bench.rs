@@ -1,4 +1,4 @@
-use graphlite::{GraphLite, GraphLiteOptions, Value};
+use nervusdb::{NervusDb, NervusDbOptions, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -62,12 +62,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("============================================================");
 
-    let db = GraphLite::open_with_options(
+    let db = NervusDb::open_with_options(
         &db_path,
-        GraphLiteOptions {
-            buffer_pool_frames: pool_mb * graphlite::FRAMES_PER_MB,
+        NervusDbOptions {
+            buffer_pool_frames: pool_mb * nervusdb::FRAMES_PER_MB,
             wal_auto_checkpoint_bytes: auto_checkpoint_bytes(),
-            ..GraphLiteOptions::default()
+            ..NervusDbOptions::default()
         },
     )?;
 

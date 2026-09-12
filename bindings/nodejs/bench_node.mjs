@@ -2,13 +2,13 @@ import pkg from "./index.js";
 import { performance } from "perf_hooks";
 import fs from "fs";
 
-const { GraphLite } = pkg;
+const { NervusDb } = pkg;
 // 输出路径取自 DB_PATH，默认当前目录；刻意不硬编码作者本机的绝对路径。
 const dbPath = process.env.DB_PATH || "bench_node.db";
 const poolFrames = Number(process.env.POOL_FRAMES || 4096);
 try { fs.unlinkSync(dbPath); fs.unlinkSync(dbPath + ".wal"); } catch (e) {}
 
-const db = GraphLite.open(dbPath, poolFrames);
+const db = NervusDb.open(dbPath, poolFrames);
 const NODES = 50000;
 const EDGES = 100000;
 
@@ -16,7 +16,7 @@ const EDGES = 100000;
 // 历史上正是把 debug 数字与 release 核心对比，得出了错误的「SDK 慢 9 倍」结论。
 const buildProfile = process.env.BUILD_PROFILE || "unknown";
 if (buildProfile !== "release") {
-  console.warn(`!! BUILD_PROFILE=${buildProfile}: rebuild with \`cargo build --release -p graphlite-node\` first,`);
+  console.warn(`!! BUILD_PROFILE=${buildProfile}: rebuild with \`cargo build --release -p nervusdb-node\` first,`);
   console.warn("   otherwise these numbers are not comparable with the release figures in the docs.");
 }
 

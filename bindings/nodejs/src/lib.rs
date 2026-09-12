@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate napi_derive;
 
-use graphlite_core::{GraphLite as CoreGraphLite, Transaction as CoreTransaction, Value};
+use nervusdb_core::{NervusDb as CoreNervusDb, Transaction as CoreTransaction, Value};
 use std::collections::{HashMap, HashSet};
 
 /// 把任意 JSON 标量转为图属性值
@@ -50,12 +50,18 @@ fn json_to_properties(
 
 fn graph_value_to_json(v: &Value) -> serde_json::Value {
     match v {
+        // null 直接映射为 JSON null；此前 null 用字符串 "null" 冒充，JS 侧
+        // 拿到的会是字符串而不是 null
+        Value::Null => serde_json::Value::Null,
         Value::Int(i) => serde_json::Value::from(*i),
         Value::Float(f) => serde_json::Number::from_f64(*f)
             .map(serde_json::Value::Number)
             .unwrap_or(serde_json::Value::Null),
         Value::String(s) => serde_json::Value::from(s.clone()),
         Value::Bool(b) => serde_json::Value::from(*b),
+        Value::List(items) => {
+            serde_json::Value::Array(items.iter().map(graph_value_to_json).collect())
+        }
     }
 }
 
@@ -80,13 +86,13 @@ pub struct KHopSubgraph {
     pub edges: Vec<SubgraphEdge>,
 }
 
-fn parse_direction(direction: Option<&str>) -> Result<graphlite_core::Direction, napi::Error> {
+fn parse_direction(direction: Option<&str>) -> Result<nervusdb_core::Direction, napi::Error> {
     match direction.map(|d| d.to_ascii_lowercase()) {
-        None => Ok(graphlite_core::Direction::Both),
+        None => Ok(nervusdb_core::Direction::Both),
         Some(d) => match d.as_str() {
-            "out" | "outgoing" => Ok(graphlite_core::Direction::Outgoing),
-            "in" | "incoming" => Ok(graphlite_core::Direction::Incoming),
-            "both" | "any" => Ok(graphlite_core::Direction::Both),
+            "out" | "outgoing" => Ok(nervusdb_core::Direction::Outgoing),
+            "in" | "incoming" => Ok(nervusdb_core::Direction::Incoming),
+            "both" | "any" => Ok(nervusdb_core::Direction::Both),
             other => Err(napi::Error::from_reason(format!(
                 "invalid direction '{}': expected outgoing/incoming/both",
                 other
@@ -95,17 +101,17 @@ fn parse_direction(direction: Option<&str>) -> Result<graphlite_core::Direction,
     }
 }
 
-#[napi(js_name = "GraphLite")]
-pub struct JsGraphLite {
-    inner: CoreGraphLite,
+#[napi(js_name = "NervusDb")]
+pub struct JsNervusDb {
+    inner: CoreNervusDb,
 }
 
 #[napi]
-impl JsGraphLite {
+impl JsNervusDb {
     #[napi(factory)]
     pub fn open(path: String, pool_size: Option<u32>) -> Result<Self, napi::Error> {
         let frames = pool_size.unwrap_or(1024) as usize;
-        let db = CoreGraphLite::open_with_pool_size(path, frames)
+        let db = CoreNervusDb::open_with_pool_size(path, frames)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(Self { inner: db })
     }
@@ -406,7 +412,8 @@ impl Transaction {
         self.inner
             .as_mut()
             .ok_or_else(|| napi::Error::from_reason("transaction already finished"))?
-            .update_node_property(node_id as u64, key, val);
+            .update_node_property(node_id as u64, key, val)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(())
     }
 
@@ -421,7 +428,8 @@ impl Transaction {
         self.inner
             .as_mut()
             .ok_or_else(|| napi::Error::from_reason("transaction already finished"))?
-            .update_edge_property(edge_id as u64, key, val);
+            .update_edge_property(edge_id as u64, key, val)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(())
     }
 
@@ -430,7 +438,8 @@ impl Transaction {
         self.inner
             .as_mut()
             .ok_or_else(|| napi::Error::from_reason("transaction already finished"))?
-            .remove_node(node_id as u64);
+            .remove_node(node_id as u64)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(())
     }
 
@@ -439,7 +448,8 @@ impl Transaction {
         self.inner
             .as_mut()
             .ok_or_else(|| napi::Error::from_reason("transaction already finished"))?
-            .remove_edge(edge_id as u64);
+            .remove_edge(edge_id as u64)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(())
     }
 

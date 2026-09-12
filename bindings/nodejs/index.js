@@ -4,13 +4,13 @@ const { join } = require("path");
 let nativeBinding = null;
 
 const possiblePaths = [
-  join(__dirname, "graphlite.node"),
-  join(__dirname, "..", "..", "target", "release", "libgraphlite_node.dylib"),
-  join(__dirname, "..", "..", "target", "debug", "libgraphlite_node.dylib"),
-  join(__dirname, "..", "..", "target", "release", "libgraphlite_node.so"),
-  join(__dirname, "..", "..", "target", "debug", "libgraphlite_node.so"),
-  join(__dirname, "..", "..", "target", "release", "graphlite_node.dll"),
-  join(__dirname, "..", "..", "target", "debug", "graphlite_node.dll"),
+  join(__dirname, "nervusdb.node"),
+  join(__dirname, "..", "..", "target", "release", "libnervusdb_node.dylib"),
+  join(__dirname, "..", "..", "target", "debug", "libnervusdb_node.dylib"),
+  join(__dirname, "..", "..", "target", "release", "libnervusdb_node.so"),
+  join(__dirname, "..", "..", "target", "debug", "libnervusdb_node.so"),
+  join(__dirname, "..", "..", "target", "release", "nervusdb_node.dll"),
+  join(__dirname, "..", "..", "target", "debug", "nervusdb_node.dll"),
 ];
 
 for (const p of possiblePaths) {
@@ -26,15 +26,15 @@ for (const p of possiblePaths) {
 
 if (!nativeBinding) {
   try {
-    nativeBinding = require("./graphlite.node");
+    nativeBinding = require("./nervusdb.node");
   } catch (err) {
     throw new Error(
-      `Failed to load native binding for GraphLite: ${err.message}`,
+      `Failed to load native binding for NervusDb: ${err.message}`,
     );
   }
 }
 
 module.exports = nativeBinding;
-module.exports.GraphLite = nativeBinding.GraphLite;
+module.exports.NervusDb = nativeBinding.NervusDb;
 // 事务句柄别名（napi 依据 Rust 类型名注册为 `Transaction`）
 module.exports.Transaction = nativeBinding.Transaction;

@@ -1,6 +1,6 @@
-# GraphLite-RS Agent Development Guidelines
+# NervusDB Agent Development Guidelines
 
-This document defines the architectural invariants, mental models, code contracts, and engineering workflows for AI agents and human contributors working on GraphLite-RS.
+This document defines the architectural invariants, mental models, code contracts, and engineering workflows for AI agents and human contributors working on NervusDB.
 
 ---
 
@@ -33,22 +33,30 @@ Any modification that violates these rules must be rejected immediately:
    - Adjacency traversal follows double-cyclic edge pointer chains across disk pages via `BufferPoolManager`. Never perform full table scans to find neighbors.
 
 4. **Slotted Property Pages & Packed Property Pointers**
-   - Variable-length property payloads must be packed into shared **Slotted Property Pages** (`SlottedPropPage`, magic `GLSP`): `Header(24B) | Slot Array (grows down) | free | Payload (grows up)`. Multiple records share one 4KB page; never allocate a whole page per entity.
+   - Variable-length property payloads must be packed into shared **Slotted Property Pages** (`SlottedPropPage`, magic `NVSP`): `Header(24B) | Slot Array (grows down) | free | Payload (grows up)`. Multiple records share one 4KB page; never allocate a whole page per entity.
    - `NodeRecord.prop_page_id` / `EdgeRecord.prop_page_id` are **packed property pointers**: high 24 bits = `PageId`, low 8 bits = `SlotId`. `0` means "no properties"; slot `0xFF` (`SLOT_OVERFLOW`) means "record lives in a `PropertyPage` overflow chain".
    - Records strictly larger than `INLINE_RECORD_MAX` (1KB) go to the overflow chain; records at or below it must be inlined into a slot.
    - Property payloads use the compact `PropCodec`/`PropReader` encoding (varint framing, ZigZag integers). Do **not** reintroduce `bincode(HashMap)` framing (~28 bytes/entity of pure overhead), and never intern property keys into `StringDict` (it would grow the header dictionary and risk overflow-page churn).
    - Deleting a record marks the slot dead; space is reclaimed by in-page `compact` when the page fills, and a fully drained page is chained into `first_free_prop_page`. Slot lookup hints live in a bounded `prop_page_hint` ring (`PROP_PAGE_HINT_CAPACITY`), which holds page numbers only, never graph topology.
 
 5. **Explicit Batched Transactions & Memory Budgets**
-   - Autocommitted single writes each cost one WAL append plus one fsync. Bulk ingestion must use `GraphLite::with_transaction` (Rust), `db.begin_transaction()` (Python/Node), and commit once so the whole batch shares **exactly one fsync**.
+   - Autocommitted single writes each cost one WAL append plus one fsync. Bulk ingestion must use `NervusDb::with_transaction` (Rust), `db.begin_transaction()` (Python/Node), and commit once so the whole batch shares **exactly one fsync**.
    - `BufferStats::wal_fsync_count` / `wal_frames_written` are the observable contract for this: a test asserting bulk-commit semantics asserts the fsync delta is exactly 1.
    - Standard buffer pool constants are exposed in public API:
      - `SMALL_POOL_FRAMES` (256 frames = 1MB)
      - `DEFAULT_BUFFER_POOL_FRAMES` (1024 frames = 4MB)
      - `MEDIUM_POOL_FRAMES` (4096 frames = 16MB)
      - `LARGE_POOL_FRAMES` (16384 frames = 64MB)
-   - Convenience constructor: `GraphLite::open_with_pool_mb(path, mb)` sets frames to `(mb * 256).max(2)`.
+   - Convenience constructor: `NervusDb::open_with_pool_mb(path, mb)` sets frames to `(mb * 256).max(2)`.
    - Test switch `Transaction::commit_unclustered()`: Forces per-edge sequential insertion to benchmark and assert mathematical/algorithmic equivalence against `commit()` two-phase batch weaving.
+   - **The action queue is bounded.** `DEFAULT_MAX_TRANSACTION_ACTIONS` caps it
+     (configurable via `NervusDbOptions::max_transaction_actions`; `0` = unlimited)
+     because a transaction holds every action in memory until commit.
+     **Every** enqueue goes through `Transaction::push_op` — a second path that pushes
+     to `ops` directly escapes the cap silently. Overflow is a hard error, never an
+     automatic flush: flushing mid-transaction commits part of it, which destroys the
+     rollback guarantee that is the reason to use a transaction. Sizes and rationale:
+     [`docs/architecture.md`](docs/architecture.md).
 
 6. **Two-Phase Batch Edge Weaving**
    - Edge batches with `EDGE_BATCH_WEAVE_MIN` or more consecutive `AddEdge` actions in one commit must go through `DiskGraph::insert_edges_batch`, never per-edge head insertion. Per-edge weaving touches the source node page, the target node page and the old head page for every edge; on a graph whose pages far exceed the pool the same page is evicted and re-read many times per batch, and each miss spills a full 4KB page to the WAL ("false spill").
@@ -62,61 +70,31 @@ Any modification that violates these rules must be rejected immediately:
    - `restore_meta` must call `sync_protected_pages()` so a rolled-back transaction cannot leave stale or missing directory protection.
 
 8. **Storage Format Versioning & Zero Dependencies**
-   - `DB_PAGE_VERSION` is `4`, and **this is the frozen format**. `FORMAT.md` is the
-     authoritative byte-level specification; any change to the bytes on disk must
-     update it in the same commit.
-   - Version history: v2 added slotted property pages; v3 added full page-CRC coverage
-     (`CrcDirPage` chain plus the inline CRC array in Page 0); v4 replaced the
-     `bincode`-encoded WAL frames and Page 0 metadata with this repository's own
-     encoders, and turned the 24-bit property-pointer overflow from a silent
-     truncation into a hard error. Versions 1–3 are **not readable**: `open` returns an
-     explicit error directing the user to export with the matching older build via
-     `.dump` and re-import. Never silently reinterpret an old file.
-   - **The version and size gates run before any write, including WAL replay.** Both
-     live at the top of `open_with_options`, ahead of `StorageEngine::open`. Replay
-     writes the main data file, so a check placed after it would already have
-     reinterpreted an old file under current-version semantics. A rejected file must
-     come out byte-identical to how it went in — `test_version_guard_rejects_v1_v2`
-     asserts exactly that.
-   - **The core library has zero runtime dependencies, and this is load-bearing.**
-     `src/codec.rs`, `src/json.rs`, and `src/crc32.rs` define the format's bytes.
-     The reason is concrete: `bincode` used to encode both the WAL frames and the
-     Page 0 metadata, and it ceased maintenance in December 2025 — its final release
-     contains only a compiler error and a notice. Had the format been frozen first,
-     the database's lifetime would have been tied to an abandoned crate with no
-     security updates. `tests/zero_dependency_tests.rs` enforces the invariant, and
-     adding a dependency must be treated as a format change, not a convenience.
-   - Page CRC32 coverage: pages `1..255` are covered by the inline array in Page 0
-     (`INLINE_CRC_OFFSET`, 4 bytes per page); pages `>= 256` by the two-level
-     `CrcDirPage` radix directory. A stored checksum of `0` means "not recorded" and the
-     page is **skipped**, never reported as corrupt ("rather miss than falsely alarm").
-     `CrcStore` deliberately bypasses `BufferPoolManager` to avoid the
-     `fetch_page -> evict -> record CRC -> fetch_page` recursion, and is the **last
-     writer of Page 0** — it owns both the inline CRC array and `crc_dir_root`, so
-     `sync_header()` must run _before_ `flush_crc()` in the checkpoint sequence.
-   - Directory pages carry a `self_crc` (sealed on every write, verified on every load).
-     A silently corrupted L2 page would otherwise misreport every data page it covers as
-     a mismatch — thousands of false positives blaming innocent pages.
-     **Every** write path must seal first: both `flush()` and cache eviction
-     (`evict_if_needed`). An unsealed evict leaves new contents with an old checksum.
-   - `CrcStore::flush()` must re-pin Page 0 whenever a directory exists, not only when
-     something changed this round. `sync_header()` writes other Page 0 fields, so
-     "nothing changed" does not imply "Page 0 on disk is current"; gating on change
-     leaves `crc_dir_root` at `0` and makes the whole chain unreadable.
-   - **WAL replay must refresh checksums.** `StorageEngine::open` replays before
-     `DiskManager::open` (replay extends the file, and the page high-water mark comes
-     from its length), so no `CrcStore` exists yet and the pages it writes would keep
-     their _previous_ checksums. `open_with_options` therefore calls
-     `storage::for_each_committed_page` right after attaching the CRC store and
-     re-records those pages. Skipping this does not lose data, but it makes every
-     replayed page unreadable — and because `get_node` is lossy, it presents as
-     **committed data vanishing after a crash**.
-   - These three defects are only reachable at scale: the first two need more directory
-     pages than `CRC_CACHE_CAPACITY` (64) holds, i.e. ≈65k data pages, and the third
-     needs a real `SIGKILL` (a clean `drop` flushes pages and checksums together and
-     hides it). Fixtures that stay small will pass while the engine is broken —
-     `test_crc_directory_survives_churn_beyond_cache` and
-     `test_wal_replay_refreshes_page_checksums` exist for exactly this reason.
+   - `DB_PAGE_VERSION` is `4` and **this is the frozen format**. `FORMAT.md` is the
+     authoritative byte-level spec (version history, limits, CRC layout, why zero
+     dependencies). Any change to the bytes on disk updates `FORMAT.md` **in the same
+     commit**. Never silently reinterpret an older file.
+   - **The version and size gates run before any write, including WAL replay** — they
+     sit at the top of `open_with_options`, ahead of `StorageEngine::open`, because
+     replay writes the main file. A rejected file comes out byte-identical
+     (`test_version_guard_rejects_v1_v2`).
+   - **The core library has zero runtime dependencies, and this is load-bearing**:
+     `codec.rs` / `json.rs` / `crc32.rs` produce the format's bytes. Adding a
+     dependency is a format change, not a convenience. Enforced by
+     `tests/zero_dependency_tests.rs`.
+   - CRC ordering constraints — each one is load-bearing and each has a test:
+     - `CrcStore` is the **last writer of Page 0** (it owns the inline CRC array and
+       `crc_dir_root`), so checkpoints run `sync_header()` **before** `flush_crc()`.
+     - `CrcStore::flush()` re-pins Page 0 **whenever a directory exists**, not only
+       when something changed: `sync_header()` writes other Page 0 fields, so
+       "unchanged" does not mean "on disk is current".
+     - **Every** write path seals a directory page first — both `flush()` and cache
+       eviction. An unsealed evict leaves new contents with a stale checksum.
+     - WAL replay **refreshes checksums** (`for_each_committed_page` after attaching
+       the store); replay runs before `DiskManager::open`, so replayed pages would
+       otherwise keep their previous checksums and read as unreadable.
+   - A stored checksum of `0` means "not recorded" → the page is **skipped**, never
+     reported corrupt. Rather miss than falsely alarm.
 
 9. **Freelist Slot Reclamation**
    - Page 0 (Header Page) stores `first_free_node_id` and `first_free_edge_id`.
@@ -125,19 +103,21 @@ Any modification that violates these rules must be rejected immediately:
 
 10. **Lock De-escalation & Concurrency Safety**
 
-- Avoid holding global write locks during long traversals. Read queries and graph algorithms (`dijkstra`, `bfs`, `has_cycle`, `query()`) must clone the lightweight `DiskGraph` handle, release the global read lock immediately, and execute concurrently under page-level latches.
+- Avoid holding global write locks during long traversals. Read queries and graph algorithms (`dijkstra`, `bfs`, `has_cycle`, `query()`) must clone the lightweight `DiskGraph` handle and release the global read lock immediately, so they do not block writers for the duration of a traversal.
+- **Reads are serialized by the buffer pool, and this is a known, measured limitation — do not describe it as parallel.** `BufferPoolManager` is reached through a single `Arc<Mutex<BufferPoolManager>>`, so every page touch takes one global mutex. A read of one node takes at least three acquisitions, plus one per incident edge: a hub of degree 343 costs ≈345 acquisitions. Measured on the com-DBLP database (16 threads vs 1, same total work): plain point reads ran at **0.6×–1.4% scaling efficiency**, i.e. _slower_ than single-threaded. Control runs in the same process confirmed the environment is not the cause — pure CPU spins and read-lock-only loops both scaled to ≈40% at 16 threads.
+- `BufferPoolManager::latch` (`Arc<RwLock<()>>`) is **dead code**: declared and initialized, never read or written anywhere. Page-level latches therefore do not exist. Either implement per-frame latching (which is what would make readers genuinely parallel) or delete the field — do not leave it implying otherwise.
 - All pointer traversal loops (`while curr != 0`) must enforce cycle-detection guards (`seen: HashSet<u64>`) to guarantee zero infinite loops under concurrent pointer updates.
 
 11. **Exclusive Single-Writer Open (No Silent Multi-Writer Corruption)**
 
-- A database file may have **exactly one open handle** at a time, across processes and within one process. `GraphLite::open` must take an exclusive lock on `{path}` itself (`std::fs::File::try_lock`, stable since Rust 1.89 — never add a third-party dependency or a sidecar `.lock` file, which would break the two-file invariant). A contended open returns `GraphError::DatabaseLocked`.
+- A database file may have **exactly one open handle** at a time, across processes and within one process. `NervusDb::open` must take an exclusive lock on `{path}` itself (`std::fs::File::try_lock`, stable since Rust 1.89 — never add a third-party dependency or a sidecar `.lock` file, which would break the two-file invariant). A contended open returns `GraphError::DatabaseLocked`.
 - The lock MUST be acquired **before** `StorageEngine::open`, because WAL replay writes the main data file; locking afterwards already permits a racing replay.
 - `:memory:` mode takes no lock.
 - Rationale: without this, two writers each report success and the second write is silently lost.
 
 12. **Integrity Checking & No Silent Read Errors**
 
-- `GraphLite::integrity_check()` must remain read-only and must never auto-repair: repair strategies require separate design and explicit authorization.
+- `NervusDb::integrity_check()` must remain read-only and must never auto-repair: repair strategies require separate design and explicit authorization.
 - Validation must include a **degree-conservation oracle**: chain degree measured by walking on-disk chain pointers must equal expected degree measured by independently scanning the edge id space. Do not re-derive both sides from the same traversal — that is self-confirmation, not a check. Keep the oracle's result wired into the report; a computed-but-discarded accumulator is a defect.
 - `get_node` / `get_edge` are **lossy** (they fold storage errors into `None`) and must stay documented as such. Production code uses `try_get_node` / `try_get_edge`, which return `Result` and reserve `Ok(None)` for genuine absence.
 - Any new public read accessor must decide explicitly between lossy and error-preserving semantics.
@@ -148,51 +128,37 @@ Any modification that violates these rules must be rejected immediately:
 - Rationale: these locks guard rebuildable derived state (frame tables, allocator metadata, handle wrappers), not business invariants, so recovering beats converting a local failure into an unrecoverable process abort — especially for embedded callers.
 - `unwrap`/`expect` remain forbidden in library code per §4.1; fixed-offset slice conversions in `page.rs` must carry a comment stating why they cannot fail by construction.
 
+14. **Statement-Level Atomicity**
+
+- **Any Cypher write entry point must undo a partially applied statement before returning its error.** Use `NervusDb::rollback_failed_statement`; do not reimplement the sequence, because a second implementation will drift from the first.
+- Rationale, measured: with no rollback, `UNWIND [2, 1, 3] AS v CREATE (n:Num {v: v})` failed on the duplicate `1` and left `{v: 2}` in the buffer pool. A later, unrelated `CREATE (:Other {x: 99})` committed it, so after reopening, `MATCH (n:Num)` returned the row the constraint had rejected. Partial writes are invisible until something else commits them, which is why this survived as long as statements only wrote a handful of records.
+- The sequence is: drain the modified-page set, restore each page from its transaction baseline (`BufferPoolManager::rollback_uncommitted_pages`), restore the allocator metadata snapshot, and `IndexManager::invalidate_all`. It mirrors `Transaction::commit`'s failure path on purpose — one semantics for both.
+- This is not a substitute for explicit transactions. A single statement is the unit of atomicity here; `NervusDb::with_transaction` remains the way to group several statements.
+
 ---
 
 ## 2. Codebase Map & Module Responsibilities
 
-```text
-graphlite-rs/
-├── Cargo.toml                  # Workspace root manifest (core, python, nodejs)
-├── README.md                   # User documentation & architecture guide
-├── AGENTS.md                   # This developer & agent standard specification
-├── src/
-│   ├── lib.rs                  # Public facade (GraphLite, Transaction), ACID coordinator
-│   ├── main.rs                 # Standalone demo binary
-│   ├── bin/cli.rs              # Interactive REPL tool (graphlite-cli) with ASCII table
-│   ├── page.rs                 # 4KB page layout, NodeRecord (32B), EdgeRecord (64B), SlottedPropPage, PropCodec
-│   ├── buffer.rs               # DiskManager (paged I/O) and LRU BufferPoolManager (page latches, STEAL spill)
-│   ├── disk_graph.rs           # O(1) direct addressing, disk adjacency, Freelist, page iterators
-│   ├── storage.rs              # Page-level WAL engine (WalWriter), CRC32 verification, checkpointing, recovery
-│   ├── index.rs                # Secondary indexing (Label inverted index & Property BTreeMap index)
-│   ├── integrity.rs            # Read-only structural integrity check (degree-conservation oracle)
-│   ├── lock.rs                 # Process-level exclusive open lock on the main data file
-│   ├── sync_ext.rs             # Poison-recovering lock accessors (never panic on a poisoned lock)
-│   ├── query.rs                # Chainable strongly-typed QueryBuilder & GraphQuery DSL
-│   ├── algo.rs                 # Pure-disk graph algorithms (BFS, Dijkstra, Cycle, PageRank, WCC, K-Hop)
-│   ├── cypher/
-│   │   ├── ast.rs              # AST statements, expressions, and pattern nodes
-│   │   ├── lexer.rs            # Cypher tokenizer (comments, aggregate keywords)
-│   │   ├── parser.rs           # Recursive-descent Cypher parser (SET/ORDER BY/SKIP/aggregates)
-│   │   ├── executor.rs         # Execution engine leveraging disk cursors and secondary indexes
-│   │   └── mod.rs              # Cypher module exports
-│   └── graph.rs                # Domain models (Node, Edge, Value, Direction, GraphError)
-├── bindings/
-│   ├── python/                 # Official Python SDK (PyO3 0.22 + Maturin, abi3)
-│   └── nodejs/                 # Official Node.js / TypeScript SDK (NAPI-RS 2.16)
-└── tests/
-    ├── integration_tests.rs    # Core CRUD/ACID/concurrency/index/stress regression suites
-    ├── cypher_advanced_tests.rs# Cypher 1.0 syntax closure (SET/DETACH DELETE/ORDER BY/aggregates/paging)
-    ├── analytics_tests.rs      # PageRank / WCC / K-Hop subgraph analytics
-    ├── steal_spill_tests.rs    # STEAL spilling, rollback zero-pollution, checkpoint semantics
-    ├── slotted_property_tests.rs # Slotted page packing, slot reuse, compaction, density target
-    ├── batch_tx_tests.rs       # Batched transactions, single-fsync contract, bulk throughput
-    ├── edge_locality_tests.rs  # Batch-weave equivalence, self-loops, false-spill elimination
-    ├── production_safety_tests.rs # Exclusive lock, integrity check, no silent errors, poison recovery
-    ├── robustness_tests.rs     # File lock, auto-checkpoint, page CRC at scale, WAL replay CRC, chunking
-    └── cli_tests.rs            # Interactive REPL end-to-end (multi-line, dot commands, dump round trip)
-```
+Workspace: `src/` (core, zero deps), `bindings/python`, `bindings/nodejs`, `tests/`,
+`benches/` (includes `real_data/` acceptance instruments). Layout is discoverable with
+`ls`; what follows is **which module owns which concern**, which is not.
+
+| Concern                                                                | Owner                                       |
+| ---------------------------------------------------------------------- | ------------------------------------------- |
+| Public facade, ACID coordination, locking entry points                 | `src/lib.rs` (`NervusDb`, `Transaction`)   |
+| Page layout, records, property codec, property pointers                | `src/page.rs`                               |
+| Page I/O and the buffer pool (eviction, STEAL spill, CRC mount points) | `src/buffer.rs`                             |
+| Addressing, disk adjacency, freelists, batch weave                     | `src/disk_graph.rs`                         |
+| WAL framing, checkpoint, recovery                                      | `src/storage.rs`                            |
+| Secondary indexes (label inverted, property BTreeMap) and constraints  | `src/index.rs`                              |
+| Structural verification (degree-conservation oracle)                   | `src/integrity.rs`                          |
+| Cypher: tokenize → parse → execute                                     | `src/cypher/{lexer,parser,executor,ast}.rs` |
+| Graph algorithms over disk cursors                                     | `src/algo.rs`                               |
+| Domain models and `GraphError`                                         | `src/graph.rs`                              |
+| Byte-level format contract (**authoritative**)                         | `FORMAT.md`                                 |
+
+Every document, and when to read it: [`docs/index.md`](docs/index.md). Consult that
+rather than this table when you are looking for _where something is written down_.
 
 ---
 
@@ -256,88 +222,50 @@ Two traps made those first attempts useless, and both recur:
 
 ### 3.4 Target-Specific Verification
 
-- **Run Out-of-Core Stress Test Only**:
-  ```bash
-  cargo test test_10_pure_out_of_core_stress -- --nocapture
-  ```
-- **Run Concurrency Stress Test Only**:
-  ```bash
-  cargo test test_06_concurrent_read_write_stress_test -- --nocapture
-  ```
-- **Run STEAL Spill & Rollback Suite Only**:
-  ```bash
-  cargo test --test steal_spill_tests
-  ```
-- **Run Slotted Property & Density Suite Only**:
-  ```bash
-  cargo test --test slotted_property_tests
-  ```
-- **Run Batched Transaction Suite Only** (use `--release` for the 20,000+ ops/s target):
-  ```bash
-  cargo test --release --test batch_tx_tests -- --nocapture
-  ```
-- **Run Edge Locality Suite Only**:
-  ```bash
-  cargo test --test edge_locality_tests
-  ```
-- **Run Production Safety Suite Only** (includes a real child-process lock probe):
-  ```bash
-  cargo test --test production_safety_tests
-  ```
-- **Run Robustness Suite Only** (page CRC at scale, WAL replay checksums, chunking):
-  ```bash
-  cargo test --test robustness_tests
-  ```
+Any single suite: `cargo test --test <name>` (`ls tests/` lists them). The two that
+carry throughput assertions need `--release`. Suites whose scope is not obvious from
+the name are described in [`docs/testing.md`](docs/testing.md).
+
 - **Run the benchmarks**:
   ```bash
   cargo bench --bench throughput      # full; GL_SCALE=small for a smoke run
   cargo bench --bench pool_probe
   cargo bench --bench mem_probe
   ```
-- **Run a Real Dataset (do this for page, checksum, or replay changes)**:
+- **Run a real dataset — the only end-to-end check at realistic scale.** Do this for
+  any page, checksum, or replay change:
 
   ```bash
   DATASET_PATH=/data/com-dblp.ungraph.txt DB_DIR=/data/bench POOL_MB=256 \
-    cargo run --release --example snap_dblp_bench
+    cargo bench --bench snap_dblp_bench
   DATASET_PATH=/data/soc-LiveJournal1.txt DB_DIR=/data/bench POOL_MB=1024 \
-    cargo run --release --example snap_livejournal_bench
+    cargo bench --bench snap_livejournal_bench
   ```
 
-  The SNAP benchmarks are the only end-to-end check at realistic scale. They take
-  `DATASET_PATH`/`DATASET_DIR`, `DB_DIR`, `POOL_MB`, `MAX_EDGES` and
-  `AUTO_CHECKPOINT_MB`, and print the configuration they ran with.
+  They take `DATASET_PATH`/`DATASET_DIR`, `DB_DIR`, `POOL_MB`, `MAX_EDGES`,
+  `AUTO_CHECKPOINT_MB` and print the configuration they ran with. Leave
+  `AUTO_CHECKPOINT_MB=0`: the engine's 64 MB default roughly halves bulk ingest
+  throughput and these benchmarks checkpoint explicitly.
 
-  `AUTO_CHECKPOINT_MB` defaults to `0` (off) here: the benchmarks checkpoint
-  explicitly, and the engine's 64 MB default roughly halves bulk ingest
-  throughput (LiveJournal: 447k ops/s off vs 232k on). Leave it off when
-  measuring write throughput; turn it on only when testing that path itself.
-
-  Red lines from the last accepted run — a change here is a correctness
-  regression, not noise:
-  - LiveJournal edge ingestion **≥150,000 ops/s** (measured 200,618 on rc.2, 201,823 on rc.3 — see `docs/benchmarks.md`)
+  **Red lines — a change here is a correctness regression, not noise:**
+  - LiveJournal edge ingestion **≥150,000 ops/s**
   - LiveJournal hub 1-hop / 2-hop **exactly** 335,194 / 10,027,730
   - com-DBLP hub 1-hop / 2-hop **exactly** 10,080 / 161,877
 
-  Hub selection is an explicit total order (degree descending, then raw id
-  ascending). It must stay that way: com-DBLP has three nodes tied at degree 164
-  _exactly at rank 50_, so a partial order makes the 2-hop total depend on sort
-  internals and produced three different "correct" numbers across runs.
+  Hub selection must stay a **total order** (degree descending, then raw id
+  ascending): com-DBLP has three nodes tied at degree 164 _exactly at rank 50_, so a
+  partial order makes the 2-hop total depend on sort internals. Rates vary by run;
+  the exact totals are what detect a regression. Method and conditions:
+  [`docs/benchmarks.md`](docs/benchmarks.md).
 
-- **Verify Interactive CLI**:
+- **Verify an SDK** (the dylib/so copy is required — the bindings do not load from
+  `target/`):
   ```bash
-  cargo run --bin graphlite-cli -- /tmp/test.db
-  ```
-- **Verify Node.js SDK**:
-  ```bash
-  cargo build -p graphlite-node
-  cp target/debug/libgraphlite_node.dylib bindings/nodejs/graphlite.node
+  cargo build -p nervusdb-node && cp target/debug/libnervusdb_node.dylib bindings/nodejs/nervusdb.node
   cd bindings/nodejs && node test.mjs
-  ```
-- **Verify Python SDK**:
-  ```bash
-  cargo build -p graphlite-python
-  cp target/debug/libgraphlite_python.dylib bindings/python/graphlite.so
-  cd bindings/python && PYTHONPATH=. python3 tests/test_graphlite.py
+
+  cargo build -p nervusdb-python && cp target/debug/libnervusdb_python.dylib bindings/python/nervusdb.so
+  cd bindings/python && PYTHONPATH=. python3 tests/test_nervusdb.py
   ```
 
 ---
@@ -365,10 +293,15 @@ Two traps made those first attempts useless, and both recur:
 - **Fast Path Node Iteration**: When no deletion holes exist (`first_free_node_id == 0 && node_count == next_node_id - 1`), `DiskGraph::all_node_ids()` returns `(1..next_node_id).collect()` in $O(1)$ without reading disk pages.
 - **Node Caching in Path Match**: Cache repeated hub node resolutions in a local query hashmap to avoid duplicate overflow page deserializations.
 
-### 4.4 Cypher 1.0 Surface (Supported Grammar)
+### 4.4 Cypher Surface (Supported Grammar)
 
 ```text
 CREATE pat
+MERGE pat [ON CREATE SET item [, item ...]] [ON MATCH SET item [, item ...]]
+          [RETURN item [, item ...]]
+          [ORDER BY expr [ASC|DESC], ...] [SKIP n] [LIMIT n]
+UNWIND expr AS var [CREATE pat] [RETURN item [, item ...]]
+                        [ORDER BY expr [ASC|DESC], ...] [SKIP n] [LIMIT n]
 MATCH pat [, pat ...] [WHERE expr]
       [SET item [, item ...]]
       [DELETE var... | DETACH DELETE var...]
@@ -379,25 +312,34 @@ MATCH pat [, pat ...] [WHERE expr]
 item   := * | var | var.key [AS alias] | FUNC(*) | FUNC(var[.key]) [AS alias]
 FUNC   := count | sum | avg | min | max
 SET    := var.key = <literal|var.key|var> | var:Label
-pat    := (var:Label1:Label2 {k: v}) -[r:TYPE*min..max {k: v}]-> (var)
+pat    := (var:Label1:Label2 {k: expr}) -[r:TYPE*min..max {k: expr}]-> (var)
+expr   := literal | var | var.key | [expr, ...] | FUNC(...)
 ```
 
-Execution pipeline: `find_matches` (per-pattern resolution + shared-variable join) → `WHERE` →
-`SET` → `CREATE` → `DELETE` → projection (grouped aggregation) → `ORDER BY` → `SKIP` → `LIMIT`.
+Constraints the executor relies on (mechanism and rationale:
+[`docs/architecture.md`](docs/architecture.md) §7):
 
-- **Variable binding discipline**: contexts bind `Binding::Node(u64) | Binding::Edge(u64)`. Never key a
-  context by a raw `u64` alone; node IDs and edge IDs share a numbering space and must stay distinguishable.
-- **Aggregation semantics**: `count(*)` counts rows, `count(x)` counts non-null bindings; `sum` returns
-  `Int` when every input is integral; `avg` always returns `Float`; `min`/`max` preserve input type.
-  An empty group yields `count = 0`, `sum = 0`, and null for `avg`/`min`/`max`.
-- **Delete semantics**: `DELETE` on a node that still has relationships is a hard error advising
-  `DETACH DELETE`; `DETACH DELETE` cascades to all incident edges and chains the freed node/edge slots
-  into the Freelist.
-- **In-place node rewrites** (e.g. `SET n:Label`) must use `DiskGraph::update_node_payload`, never
-  `insert_node_with_id_exact`, to avoid inflating `node_count`.
-- **Mutation visibility**: any statement that mutates (`SET` / `DELETE` / `CREATE` sub-clauses) must take
-  the exclusive write lock and commit through the page-level WAL; `CypherStatement::is_mutating()` is the
-  single source of truth for that routing decision.
+- **Pattern property values are expressions, not literals** — `UNWIND ... AS x
+CREATE (n {v: x})` must read `x`. But `MATCH` / `MERGE` pattern properties are
+  **validated as literals at parse time**: a pattern is matched before any variable is
+  bound, so an expression there could never be evaluated, and matching nothing
+  silently looks like an empty graph.
+- **`is_mutating()` is the single source of truth** for read-lock vs write-lock
+  routing. `MERGE` is unconditionally mutating (whether it writes is only known after
+  matching); `UNWIND` is mutating only when it carries `CREATE`.
+- **`SET` / `DELETE` on a scalar binding is an error**, never a silent no-op.
+- **Statements are atomic**: a failed write statement is undone through
+  `NervusDb::rollback_failed_statement` before the error returns. Do not add a write
+  entry point that skips it.
+- **Variable binding discipline**: contexts bind `Binding::Node(u64) | Binding::Edge(u64) | Binding::Value(Value)`.
+  Never key a context by a raw `u64` alone; node and edge ids share a numbering space.
+- **Aggregation**: `count(*)` counts rows, `count(x)` non-null bindings; `sum` returns
+  `Int` when every input is integral, `avg` always `Float`, `min`/`max` preserve type.
+  An empty group yields `count = 0`, `sum = 0`, null for `avg`/`min`/`max`.
+- **Delete**: `DELETE` on a node with relationships is a hard error advising
+  `DETACH DELETE`; `DETACH DELETE` cascades and chains freed slots into the Freelist.
+- **In-place node rewrites** (`SET n:Label`) use `DiskGraph::update_node_payload`,
+  never `insert_node_with_id_exact`, which would inflate `node_count`.
 
 ### 4.5 Graph Analytics Contracts
 

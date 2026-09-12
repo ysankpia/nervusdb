@@ -15,25 +15,32 @@ pub const NODE_RECORDS_PER_PAGE: usize = PAGE_SIZE / NodeRecord::RECORD_SIZE;
 /// 每个页面中容纳的 EdgeRecord 数量 (4096 / 64 = 64)
 pub const EDGE_RECORDS_PER_PAGE: usize = PAGE_SIZE / EdgeRecord::RECORD_SIZE;
 
-/// 数据库物理文件头魔数 "GLDB" (GraphLite Database)
-pub const DB_PAGE_MAGIC: &[u8; 4] = b"GLDB";
-pub const DB_PAGE_MAGIC_LEGACY: &[u8; 4] = b"GLP4";
+/// 数据库物理文件头魔数 "NVDB" (NervusDB)
+pub const DB_PAGE_MAGIC: &[u8; 4] = b"NVDB";
+/// 历史魔数。**必须继续被识别**，否则旧库会被当成「不是本项目的文件」而拒绝：
+/// 那条错误说的是「你给错文件了」，而真相是「这是旧版本格式，需要迁移」。
+/// 识别出来之后交由版本闸门给出正确的迁移指引。
+/// - `GLDB`：1.0.0–1.1.0 的魔数（当时项目名为 GraphLite）
+/// - `GLP4`：更早的原型魔数
+pub const DB_PAGE_MAGIC_LEGACY: [&[u8; 4]; 2] = [b"GLDB", b"GLP4"];
 /// 物理存储格式版本。
 /// - 1：每实体独占一整张 4KB 属性页（早期原型，已不兼容）
 /// - 2：开槽属性页（`SlottedPropPage`）
 /// - 3：在 2 之上增加主数据文件的**页级 CRC32**（Page 0 内联 + 两级目录页）
 /// - 4：WAL 帧与 Page 0 元数据改为**本仓库自定义的编码**（`codec.rs`），
 ///   不再依赖 `bincode`。同时把属性指针的 24 位越界从静默截断改为硬错误。
+/// - 5：Page 0 魔数由 `GLDB` 改为 `NVDB`（项目改名为 NervusDB）。
+///   页布局本身未变，因此 4 与 5 的差异只有首 4 个字节。
 ///
-/// **这是格式冻结前的最后一个版本。** 自 1.0.0 起不再做不兼容变更，
-/// 详见 `FORMAT.md`。
-pub const DB_PAGE_VERSION: u32 = 4;
+/// **格式自 1.0.0 起不做不兼容变更**——版本 5 是唯一一次例外，且只改了识别魔数，
+/// 未改任何页内布局。详见 `FORMAT.md`。
+pub const DB_PAGE_VERSION: u32 = 5;
 
 /// Page 0 Header 物理页规范与偏移常量定义
 pub struct HeaderPage;
 
 impl HeaderPage {
-    pub const MAGIC_OFFSET: usize = 0; // 4 bytes: b"GLDB"
+    pub const MAGIC_OFFSET: usize = 0; // 4 bytes: b"NVDB"
     pub const VERSION_OFFSET: usize = 4; // 4 bytes: u32 (1)
     pub const PAGE_SIZE_OFFSET: usize = 8; // 4 bytes: u32 (4096)
     pub const TOTAL_PAGES_OFFSET: usize = 12; // 4 bytes: u32
@@ -109,6 +116,15 @@ impl NodeRecord {
         bytes
     }
 
+    /// 从 32 字节定长记录解析。
+    ///
+    /// 下面每个 `try_into().unwrap()` 都作用于**编译期已知长度的子切片**，其来源
+    /// 是 `&[u8; RECORD_SIZE]`（32 字节数组），且目标类型宽度与切片长度逐一对齐
+    /// （`4..8` → `[u8; 4]`，`8..16` → `[u8; 8]`）。数组的总长是类型的一部分，
+    /// 因此这些转换**不可能失败**；写 `unwrap` 而不是 `?` 是刻意的，它把
+    /// 「长度不匹配」变成编译期/测试期立刻可见的错误，而不是运行期的静默降级。
+    ///
+    /// 这是 AGENTS.md §13 要求的说明：定长切片转换必须写明为何无法失败。
     pub fn from_bytes(bytes: &[u8; Self::RECORD_SIZE]) -> Self {
         Self {
             in_use: bytes[0],
@@ -175,6 +191,11 @@ impl EdgeRecord {
         bytes
     }
 
+    /// 从 64 字节定长记录解析。
+    ///
+    /// 同 `NodeRecord::from_bytes`：源为 `&[u8; 64]`，每段切片与目标宽度一一对应
+    /// （`4..8`→4、`8..12`→4、`16..24`→8、`24..32`→8、`32..40`→8、`56..64`→8），
+    /// 数组长度由类型保证，故 `try_into()` 不可能失败（AGENTS.md §13）。
     pub fn from_bytes(bytes: &[u8; Self::RECORD_SIZE]) -> Self {
         Self {
             in_use: bytes[0],
@@ -210,6 +231,11 @@ impl PropertyPage {
         page
     }
 
+    /// 解析一页载荷。
+    ///
+    /// 两处 `try_into().unwrap()` 的源都是 `&[u8; PAGE_SIZE]`（4096 字节数组），
+    /// 切片 `0..4` / `4..8` 恰好 4 字节，与 `u32` 对齐；数组长度由类型保证，
+    /// 因此不可能失败（§13）。
     pub fn decode(page: &[u8; PAGE_SIZE]) -> (PageId, Vec<u8>) {
         let next_page = u32::from_le_bytes(page[0..4].try_into().unwrap());
         let len = u32::from_le_bytes(page[4..8].try_into().unwrap()) as usize;
@@ -225,6 +251,12 @@ pub const DIR_ENTRIES_PER_PAGE: usize = (PAGE_SIZE - 8) / 4;
 pub struct DirectoryPage;
 
 impl DirectoryPage {
+    /// 目录页中的全部转换都作用于 `&[u8; PAGE_SIZE]`。
+    ///
+    /// `get_next_dir` 读固定偏移 `0..4`；`get_entry` 先由
+    /// `assert!(index < DIR_ENTRIES_PER_PAGE)` 界定索引，而
+    /// `DIR_ENTRIES_PER_PAGE = (PAGE_SIZE - 8) / 4`，故最大末端偏移
+    /// `8 + (n-1)*4 + 4` 恰好等于 `PAGE_SIZE`，不越界。两者都不可能失败（§13）。
     pub fn get_next_dir(page: &[u8; PAGE_SIZE]) -> PageId {
         u32::from_le_bytes(page[0..4].try_into().unwrap())
     }
@@ -233,6 +265,12 @@ impl DirectoryPage {
         page[0..4].copy_from_slice(&next_page.to_le_bytes());
     }
 
+    /// 读取第 `index` 个目录条目。
+    ///
+    /// `assert!(index < DIR_ENTRIES_PER_PAGE)` 界定索引，且
+    /// `DIR_ENTRIES_PER_PAGE = (PAGE_SIZE - 8) / 4`，因此
+    /// `offset + 4 = 8 + index*4 + 4 <= PAGE_SIZE`。`page` 是定长
+    /// `&[u8; PAGE_SIZE]`，转换不可能失败（AGENTS.md §13）。
     pub fn get_entry(page: &[u8; PAGE_SIZE], index: usize) -> PageId {
         assert!(index < DIR_ENTRIES_PER_PAGE);
         let offset = 8 + index * 4;
@@ -291,7 +329,7 @@ pub const MAX_PROP_PAGE_ID: PageId = 0x00FF_FFFF;
 /// 变成一次明确的写入失败，而不是一次静默的数据错乱。
 ///
 /// 越界的实际触发条件是文件超过 64 GiB 且属性落在第 16,777,216 页之后；
-/// `GraphLite::open` 也会在打开时提前拒绝这种文件（见 `check_file_size_limit`）。
+/// `NervusDb::open` 也会在打开时提前拒绝这种文件（见 `check_file_size_limit`）。
 pub fn pack_prop_ptr(page_id: PageId, slot: u8) -> Result<u32, crate::graph::GraphError> {
     if page_id > MAX_PROP_PAGE_ID {
         return Err(crate::graph::GraphError::StorageError(format!(
@@ -331,9 +369,13 @@ pub fn is_none_ptr(ptr: u32) -> bool {
 pub struct SlottedPropPage;
 
 impl SlottedPropPage {
-    /// 页魔数 "GLSP"。与 NodeRecord/EdgeRecord（首字节 in_use ∈ {0,1}）、
+    /// 页魔数 "NVSP"（NervusDB Slotted Property）。
+    /// 与 NodeRecord/EdgeRecord（首字节 in_use ∈ {0,1}）、
     /// PropertyPage（首 4 字节为 < 2^24 的页号）均不可能碰撞。
-    pub const MAGIC: [u8; 4] = *b"GLSP";
+    ///
+    /// 旧魔数是格式版本 4 的 `GLSP`。它**不需要**被接受：slotted 页只存在于主数据
+    /// 文件内部，而版本 4 的文件在 `check_format_version` 就被拒绝了，走不到这里。
+    pub const MAGIC: [u8; 4] = *b"NVSP";
     pub const VERSION: u16 = 1;
 
     /// magic(4) + version(2) + rec_count(2) + live_count(2) + slot_count(2) + free_start(2) + free_end(2) + reserved(8)
@@ -613,9 +655,17 @@ impl PropCodec {
         self.buf.extend_from_slice(bytes);
     }
 
-    /// 按类型标签推入属性值
-    pub fn push_value(&mut self, value: &crate::graph::Value) {
-        use crate::graph::Value;
+    /// 按类型标签推入属性值。
+    ///
+    /// 返回 `Result` 而不是静默忽略：`Null` 与 `List` **不可落盘**（原因见
+    /// `graph.rs` 对 `Value` 的说明）。若在这里静默跳过，`SET n.k = [1,2]` 会看起来
+    /// 成功而属性其实没变——静默丢弃写入是本项目一直在消除的失败模式。
+    /// `Null` 的正确处理在调用方（删除该属性），因此这里明确报错而不是替它决定。
+    pub fn push_value(
+        &mut self,
+        value: &crate::graph::Value,
+    ) -> Result<(), crate::graph::GraphError> {
+        use crate::graph::{GraphError, Value};
         match value {
             Value::Int(v) => {
                 self.buf.push(VTAG_INT);
@@ -632,7 +682,22 @@ impl PropCodec {
                 self.buf
                     .push(if *b { VTAG_BOOL_TRUE } else { VTAG_BOOL_FALSE });
             }
+            Value::Null => {
+                return Err(GraphError::General(
+                    "cannot store null as a property value; in Cypher, setting a \
+                     property to null removes it"
+                        .into(),
+                ))
+            }
+            Value::List(_) => {
+                return Err(GraphError::General(
+                    "property values cannot be lists: nested value encoding is not \
+                     implemented in this format version"
+                        .into(),
+                ))
+            }
         }
+        Ok(())
     }
 }
 
@@ -716,14 +781,22 @@ impl<'a> PropReader<'a> {
 }
 
 /// 编码属性字典为紧凑字节流
-pub fn encode_props(props: &std::collections::HashMap<String, crate::graph::Value>) -> Vec<u8> {
+///
+/// 返回 `Result`：含 `Null`/`List` 的字典不可落盘，必须让调用方看到而不是静默
+/// 丢掉那个键。
+pub fn encode_props(
+    props: &std::collections::HashMap<String, crate::graph::Value>,
+) -> Result<Vec<u8>, crate::graph::GraphError> {
     let mut codec = PropCodec::new();
     codec.push_varint(props.len() as u64);
-    for (key, value) in props {
+    // 键按字典序排列：保证同一份数据每次编码得到相同字节，便于比对与调试
+    let mut keys: Vec<&String> = props.keys().collect();
+    keys.sort_unstable();
+    for key in keys {
         codec.push_key(key);
-        codec.push_value(value);
+        codec.push_value(&props[key])?;
     }
-    codec.into_bytes()
+    Ok(codec.into_bytes())
 }
 
 /// 解码紧凑字节流为属性字典
@@ -775,6 +848,11 @@ impl CrcDirPage {
     pub const ENTRIES_OFFSET: usize = 16;
     pub const ENTRIES_PER_PAGE: usize = (PAGE_SIZE - Self::ENTRIES_OFFSET) / 4; // 1020
 
+    /// 读取页内 u32。
+    ///
+    /// 调用方传入的 `off` 都是 `ENTRIES_OFFSET + i * 4`（`i < ENTRIES_PER_PAGE`）
+    /// 或固定字段偏移，均满足 `off + 4 <= PAGE_SIZE`；`page` 是定长
+    /// `&[u8; PAGE_SIZE]`，因此 `try_into()` 不可能失败（AGENTS.md §13）。
     fn read_u32(page: &[u8; PAGE_SIZE], off: usize) -> u32 {
         u32::from_le_bytes(page[off..off + 4].try_into().unwrap())
     }

@@ -39,7 +39,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
 
 /// 微型缓冲池：1MB（256 帧），用于极低内存环境与受限内存回归测试
 pub const SMALL_POOL_FRAMES: usize = 256;
@@ -53,13 +53,36 @@ pub const LARGE_POOL_FRAMES: usize = 16384;
 /// 每 MB 对应的 4KB 页帧数
 pub const FRAMES_PER_MB: usize = 256;
 
+/// 单个显式事务可排队的动作数上限（默认 400 万）。
+///
+/// ## 为什么需要上限
+///
+/// 事务在提交前把动作**全部**留在内存里（`Transaction::ops`）。实测每动作的
+/// 常驻成本：带一个属性的节点动作 502 字节、无属性边动作 128 字节。于是一个
+/// 100 万节点的事务就要 479 MB，1000 万节点会到 4.8 GB——远超「内存占用由缓冲池
+/// 决定」的架构承诺（AGENTS.md §1 有界内存）。
+///
+/// 400 万动作按最坏情况（全为节点动作）约 2 GB，是「单进程嵌入式数据库」能接受
+/// 的峰值；也远高于现有基准里最大的单事务（4M 边 ≈ 512 MB）。
+///
+/// ## 触顶时为什么报错而不是自动分块
+///
+/// 自动分块会改变事务语义：中途提交意味着失败时无法整体回滚，而「事务要么全做
+/// 要么全不做」正是调用方使用它的原因。一个悄悄变成「多个小事务」的大事务，会在
+/// 出错时留下写了一半的数据。因此触顶时明确报错，并告诉调用方两条正确路径：
+/// 自己分批提交，或改用 `Transaction::add_nodes` / `add_edges` 以外的方式。
+///
+/// 需要更大的事务可以用 [`NervusDbOptions::max_transaction_actions`] 显式放宽；
+/// 但那会把内存承诺交给调用方判断，因此必须是有意的决定。
+pub const DEFAULT_MAX_TRANSACTION_ACTIONS: usize = 4_000_000;
+
 /// 默认的 WAL 自动 Checkpoint 阈值：64MB。
 ///
 /// 越过该值后在**写锁之外**触发一次 Checkpoint，避免长时间批量导入把 WAL
-/// 撑爆磁盘。设为 `0` 可关闭（见 [`GraphLiteOptions`]）。
+/// 撑爆磁盘。设为 `0` 可关闭（见 [`NervusDbOptions`]）。
 pub const DEFAULT_WAL_AUTO_CHECKPOINT_BYTES: u64 = 64 * 1024 * 1024;
 
-/// [`GraphLite::vacuum`] 的结果报告。
+/// [`NervusDb::vacuum`] 的结果报告。
 ///
 /// 它是**只读诊断**，不是「已压缩 N 字节」的承诺：本引擎不截断数据文件
 /// （页号是逻辑到物理的映射，截断会破坏映射），因此 `file_bytes` 在调用前后
@@ -112,7 +135,7 @@ pub struct ExportEdge {
     pub edge_type: String,
 }
 
-/// [`GraphLite::export_subgraph`] 的结果。
+/// [`NervusDb::export_subgraph`] 的结果。
 ///
 /// `truncated` 与总数一起给出，是为了让可视化界面能明确告诉用户「这只是前 N 个
 /// 节点」，而不是让人误以为看到了全图——一个静默截断的图会误导判断。
@@ -182,9 +205,9 @@ impl GraphExport {
 /// 打开数据库时的可调参数。
 ///
 /// 既有构造器（`open` / `open_with_pool_size` / `open_with_pool_mb`）都使用
-/// [`GraphLiteOptions::default`]，因此默认启用 64MB 自动 Checkpoint，对调用方透明。
+/// [`NervusDbOptions::default`]，因此默认启用 64MB 自动 Checkpoint，对调用方透明。
 #[derive(Debug, Clone)]
-pub struct GraphLiteOptions {
+pub struct NervusDbOptions {
     /// 缓冲池帧数上限（每帧 4KB）
     pub buffer_pool_frames: usize,
     /// WAL 体积达到该阈值后自动 Checkpoint；`0` 表示关闭
@@ -195,14 +218,20 @@ pub struct GraphLiteOptions {
     /// 但未回放的页，打开会失败并提示先用读写句柄打开一次——静默忽略那些页会
     /// 让读者看到过期数据。
     pub read_only: bool,
+    /// 单个显式事务可排队的动作数上限；`0` 表示不限制。
+    ///
+    /// 见 [`DEFAULT_MAX_TRANSACTION_ACTIONS`]：默认 400 万，触顶时报错而不是
+    /// 静默分块（分块会破坏事务的原子性）。
+    pub max_transaction_actions: usize,
 }
 
-impl Default for GraphLiteOptions {
+impl Default for NervusDbOptions {
     fn default() -> Self {
         Self {
             buffer_pool_frames: DEFAULT_BUFFER_POOL_FRAMES,
             wal_auto_checkpoint_bytes: DEFAULT_WAL_AUTO_CHECKPOINT_BYTES,
             read_only: false,
+            max_transaction_actions: DEFAULT_MAX_TRANSACTION_ACTIONS,
         }
     }
 }
@@ -217,11 +246,13 @@ pub struct GraphInner {
     pub wal_checkpoint_pending: Arc<AtomicBool>,
     /// 自动 Checkpoint 阈值快照
     pub wal_auto_checkpoint_bytes: u64,
+    /// 事务动作数上限（见 `DEFAULT_MAX_TRANSACTION_ACTIONS`；0 = 不限制）
+    pub max_transaction_actions: usize,
 }
 
-/// GraphLite: 生产级纯磁盘嵌入式属性图数据库引擎 (SQLite 3.0 标准)
+/// NervusDb: 生产级纯磁盘嵌入式属性图数据库引擎 (SQLite 3.0 标准)
 #[derive(Clone)]
-pub struct GraphLite {
+pub struct NervusDb {
     inner: Arc<RwLock<GraphInner>>,
     db_path: PathBuf,
     /// 进程级锁守卫：写句柄取排他锁，只读句柄取共享锁。
@@ -231,7 +262,91 @@ pub struct GraphLite {
     read_only: bool,
 }
 
-impl GraphLite {
+/// 一个自洽的只读视图，由 [`NervusDb::read_snapshot`] 创建。
+///
+/// 它在存活期间持有共享读锁，因此**同一快照内的多次读取一定看到同一个状态**：
+/// 遍历邻接表时按边 ID 读边记录不会再撞上「这条边刚好被并发删掉了」。
+///
+/// 代价是写者会被快照阻塞到它释放为止（见 [`NervusDb::read_snapshot`] 的说明）。
+/// 因此快照应当**短命**：用于完成一次遍历或一次导出，而不是长时间持有。
+///
+/// # 不要在持有快照时调用 `NervusDb`
+///
+/// 快照已经持有共享读锁，而 `NervusDb::add_node` 等写入口要拿排他写锁。
+/// 同一个句柄上「持有快照的同时发起写入」会自锁等待：
+///
+/// ```no_run
+/// # use nervusdb::{NervusDb, GraphError};
+/// # use std::collections::{HashMap, HashSet};
+/// # fn main() -> Result<(), GraphError> {
+/// # let db = NervusDb::open(":memory:")?;
+/// let snapshot = db.read_snapshot();
+/// let node = snapshot.get_node(1)?;      // 可以：走快照
+/// // let id = db.add_node(HashSet::new(), HashMap::new())?;  // 死锁：等自己释放
+/// drop(snapshot);                        // 先释放
+/// let id = db.add_node(HashSet::new(), HashMap::new())?;     // 现在可以写
+/// # let _ = (node, id);
+/// # Ok(())
+/// # }
+/// ```
+///
+/// 快照只提供读操作；需要读写的组合请用 [`NervusDb::with_transaction`]，
+/// 它按顺序持锁而不是嵌套持锁。
+pub struct ReadSnapshot<'a> {
+    guard: RwLockReadGuard<'a, GraphInner>,
+    /// 让 `'a` 只体现在 guard 上：快照本身不复制任何图状态
+    _marker: std::marker::PhantomData<&'a NervusDb>,
+}
+
+impl ReadSnapshot<'_> {
+    /// 读取节点（保留存储错误，`Ok(None)` 表示确实不存在）
+    pub fn get_node(&self, id: u64) -> Result<Option<Node>, GraphError> {
+        self.guard.disk_graph.get_node(id)
+    }
+
+    /// 读取边（保留存储错误，`Ok(None)` 表示确实不存在）
+    pub fn get_edge(&self, id: u64) -> Result<Option<Edge>, GraphError> {
+        self.guard.disk_graph.get_edge(id)
+    }
+    /// 快照内的节点总数
+    pub fn node_count(&self) -> usize {
+        self.guard.disk_graph.node_count
+    }
+
+    /// 快照内的边总数
+    pub fn edge_count(&self) -> usize {
+        self.guard.disk_graph.edge_count
+    }
+
+    /// 在快照内执行一条**只读** Cypher 查询。
+    ///
+    /// 写语句被拒绝：快照持有的是读锁，执行写操作会破坏它存在的意义
+    /// （一份自洽的只读视图）。要写请用 `NervusDb` 自身的写入口。
+    pub fn query(&self, cypher_str: &str) -> Result<CypherResultSet, GraphError> {
+        let statement = crate::cypher::parser::Parser::new(
+            crate::cypher::lexer::Lexer::new(cypher_str).tokenize()?,
+        )
+        .parse()?;
+
+        if statement.is_mutating() {
+            return Err(GraphError::General(
+                "Read snapshot cannot execute a mutating Cypher statement: it is a read-only view"
+                    .into(),
+            ));
+        }
+        cypher::execute_query(cypher_str, &self.guard.disk_graph, &self.guard.index_mgr)
+    }
+
+    /// 全图结构完整性检查，**在同一个读锁内完成**。
+    ///
+    /// 与 `NervusDb::integrity_check` 的区别只在于：这里保证整个检查过程中
+    /// 没有写者插入，因此报告描述的是一个真实存在过的状态。
+    pub fn integrity_check(&self) -> Result<IntegrityReport, GraphError> {
+        check_integrity(&self.guard.disk_graph)
+    }
+}
+
+impl NervusDb {
     /// 打开或创建指定路径的图数据库 (默认 4MB Buffer Pool)
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, GraphError> {
         Self::open_with_pool_size(path, DEFAULT_BUFFER_POOL_FRAMES)
@@ -255,9 +370,9 @@ impl GraphLite {
     pub fn open_read_only<P: AsRef<Path>>(path: P) -> Result<Self, GraphError> {
         Self::open_with_options(
             path,
-            GraphLiteOptions {
+            NervusDbOptions {
                 read_only: true,
-                ..GraphLiteOptions::default()
+                ..NervusDbOptions::default()
             },
         )
     }
@@ -269,9 +384,9 @@ impl GraphLite {
     ) -> Result<Self, GraphError> {
         Self::open_with_options(
             path,
-            GraphLiteOptions {
+            NervusDbOptions {
                 buffer_pool_frames: pool_size,
-                ..GraphLiteOptions::default()
+                ..NervusDbOptions::default()
             },
         )
     }
@@ -279,7 +394,7 @@ impl GraphLite {
     /// 打开图数据库并完全自定义参数（缓冲池帧数与 WAL 自动 Checkpoint 阈值）。
     pub fn open_with_options<P: AsRef<Path>>(
         path: P,
-        options: GraphLiteOptions,
+        options: NervusDbOptions,
     ) -> Result<Self, GraphError> {
         let pool_size = options.buffer_pool_frames;
         let db_path = path.as_ref().to_path_buf();
@@ -380,6 +495,7 @@ impl GraphLite {
             next_tx_id: 1,
             wal_checkpoint_pending: Arc::new(AtomicBool::new(false)),
             wal_auto_checkpoint_bytes: options.wal_auto_checkpoint_bytes,
+            max_transaction_actions: options.max_transaction_actions,
         };
 
         Ok(Self {
@@ -399,9 +515,9 @@ impl GraphLite {
     fn reject_write(&self, what: &str) -> Result<(), GraphError> {
         if self.read_only {
             return Err(GraphError::General(format!(
-                "Cannot {}: this handle was opened read-only (`GraphLite::open_read_only`).\n\
+                "Cannot {}: this handle was opened read-only (`NervusDb::open_read_only`).\n\
                  Read-only handles hold a shared lock and never write the data file.\n\
-                 Open the database with `GraphLite::open` to modify it.",
+                 Open the database with `NervusDb::open` to modify it.",
                 what
             )));
         }
@@ -436,8 +552,8 @@ impl GraphLite {
         let mut header = [0u8; crate::page::PAGE_SIZE];
         if std::io::Read::read(&mut file, &mut header).unwrap_or(0) < crate::page::PAGE_SIZE {
             return Err(GraphError::StorageError(format!(
-                "'{}' is {} bytes and does not start with a GraphLite header.\n\
-                 It is too small to be a GraphLite database and is not empty, so \
+                "'{}' is {} bytes and does not start with a NervusDb header.\n\
+                 It is too small to be a NervusDb database and is not empty, so \
                  opening it would risk overwriting whatever it actually contains.\n\
                  Refusing to touch it. Move the file aside if you meant to create a \
                  new database at this path.",
@@ -447,14 +563,17 @@ impl GraphLite {
         }
 
         let magic = &header[0..4];
-        if magic != crate::page::DB_PAGE_MAGIC && magic != crate::page::DB_PAGE_MAGIC_LEGACY {
+        let magic_is_legacy = crate::page::DB_PAGE_MAGIC_LEGACY
+            .iter()
+            .any(|m| m.as_slice() == magic);
+        if magic != crate::page::DB_PAGE_MAGIC && !magic_is_legacy {
             // 非本项目的文件。**必须拒绝**：下面会走到「初始化新库」的路径并把
             // Page 0 写掉，从而毁掉原文件。
             //
             // 修复前的行为正是直接放行（注释写着「交由后续路径处理」），实测结果是
             // 一个 8 KB 的任意文件被打开、写入后前 8 KB 内容全部被覆盖。
             return Err(GraphError::StorageError(format!(
-                "'{}' exists but is not a GraphLite database (its header does not \
+                "'{}' exists but is not a NervusDB database (its header does not \
                  begin with the '{}' magic).\n\
                  Refusing to open it: doing so would initialize the file and \
                  overwrite its current contents.\n\
@@ -473,13 +592,24 @@ impl GraphLite {
         );
 
         if file_version < crate::page::DB_PAGE_VERSION {
+            // 版本 5 唯一的变更是 Page 0 魔数 `GLDB` → `NVDB`（项目改名），
+            // 页内布局一字未改。给出这个具体原因，比笼统的「不支持旧版本」有用：
+            // 用户手上多半是 1.1.0 建的库，而那条路是可解释、可操作的。
+            let cause = if magic_is_legacy && file_version == 4 {
+                "Version 4 used the magic `GLDB`; version 5 renamed it to `NVDB` when \
+                 the project became NervusDB. The page layout is otherwise unchanged, \
+                 but the magic is part of the format, so this build will not \
+                 reinterpret the file."
+            } else {
+                "Older format versions are not readable by this build."
+            };
             return Err(GraphError::StorageError(format!(
                 "Database file format version {} is not readable by this build \
                  (current format version {}).\n\
-                 GraphLite 1.0 froze the on-disk format and does not silently \
-                 reinterpret older files.\n\
-                 To migrate: export the graph with the matching older GraphLite \
-                 build via `.dump`, then re-import that script into a fresh database.",
+                 {cause}\n\
+                 To migrate: open the file with the matching older build and dump it \
+                 via `NervusDb::dump_cypher`, then re-import that script into a fresh \
+                 database. There is no CLI — use the library.",
                 file_version,
                 crate::page::DB_PAGE_VERSION
             )));
@@ -488,7 +618,7 @@ impl GraphLite {
             return Err(GraphError::StorageError(format!(
                 "Database file format version {} is newer than this build supports \
                  (current format version {}).\n\
-                 Upgrade GraphLite to open this file; do not open it with an older \
+                 Upgrade NervusDb to open this file; do not open it with an older \
                  version, as that risks writing an incompatible format.",
                 file_version,
                 crate::page::DB_PAGE_VERSION
@@ -547,13 +677,26 @@ impl GraphLite {
         let tx_id = inner.next_tx_id;
         inner.next_tx_id += 1;
 
+        // 语句级原子性，与 `run_cypher` 同源（两条写入口必须给出相同保证）
+        let snapshot = inner.disk_graph.snapshot_meta();
+        {
+            let mut bpm = inner.disk_graph.bpm.lock_recover();
+            bpm.begin_tx(tx_id);
+        }
+
         let result = {
             let GraphInner {
                 disk_graph,
                 index_mgr,
                 ..
             } = &mut *inner;
-            cypher::execute_mutate(cypher_str, disk_graph, index_mgr)?
+            match cypher::execute_mutate(cypher_str, disk_graph, index_mgr) {
+                Ok(r) => r,
+                Err(e) => {
+                    Self::rollback_failed_statement(&mut inner, &snapshot);
+                    return Err(e);
+                }
+            }
         };
 
         // 若产生了物理修改，生成页级 WAL 记录并持久化
@@ -606,12 +749,40 @@ impl GraphLite {
         let tx_id = inner.next_tx_id;
         inner.next_tx_id += 1;
 
+        // 语句级原子性：执行前采集元数据快照并开启事务上下文。
+        //
+        // 没有这一步，一条失败的写语句会留下**部分写入**：已创建的节点留在缓冲池里，
+        // 随后任何一次成功的提交都会把它们一起刷进主文件。实测（本仓库 rc.1 行为）：
+        //
+        // ```text
+        // CREATE (:Num {v: 1}); declare UNIQUE (:Num.v)
+        // UNWIND [2, 1, 3] AS v CREATE (n:Num {v: v})   -- 因重复值失败
+        // CREATE (:Other {x: 99})                        -- 一次无关的成功写入
+        // ```
+        //
+        // 之后重开数据库，`MATCH (n:Num)` 会看到 `{v: 1}` **和** 那个本该被拒绝的
+        // `{v: 2}`。UNWIND 让这条路径变得常见——一条语句本来就可能写上千条记录，
+        // 中途失败是最可能的失败形态，所以必须在提交前把失败语句的写入整体撤掉。
+        let snapshot = inner.disk_graph.snapshot_meta();
+        {
+            let mut bpm = inner.disk_graph.bpm.lock_recover();
+            bpm.begin_tx(tx_id);
+        }
+
         let GraphInner {
             disk_graph,
             index_mgr,
             ..
         } = &mut *inner;
-        let result = cypher::execute_mutate(cypher_str, disk_graph, index_mgr)?;
+
+        let result = match cypher::execute_mutate(cypher_str, disk_graph, index_mgr) {
+            Ok(r) => r,
+            Err(e) => {
+                Self::rollback_failed_statement(&mut inner, &snapshot);
+                return Err(e);
+            }
+        };
+
         Self::commit_dirty_pages_to_wal(&mut inner, tx_id)?;
         drop(inner);
         // 写锁已释放，此时才能安全做 Checkpoint
@@ -674,7 +845,7 @@ impl GraphLite {
     ///
     /// 置位与执行分离是刻意的：`checkpoint` 需要写锁，而调用点位于写锁之内，
     /// 直接调用会在 `RwLock` 上自锁死。真正的刷盘由
-    /// [`GraphLite::maybe_auto_checkpoint`] 在写锁释放后完成。
+    /// [`NervusDb::maybe_auto_checkpoint`] 在写锁释放后完成。
     fn note_wal_size(inner: &GraphInner) {
         let limit = inner.wal_auto_checkpoint_bytes;
         if limit > 0 && inner.storage.wal_size() >= limit {
@@ -766,7 +937,15 @@ impl GraphLite {
             ..
         } = &mut *inner;
         index_mgr.declare_unique(label, prop);
-        // 持久化到 Page 0 目录；与其它元数据一样随 checkpoint 落盘
+        // 持久化到 Page 0 目录。
+        //
+        // **必须显式 `sync_header`**：改 `index_catalog` 只是改了内存里的一个字段，
+        // 而 `commit_dirty_pages_to_wal` 提交的是「已标记为修改的页」。这里没有标记，
+        // 也没有写 Page 0，于是约束只活在当前句柄的内存中。
+        //
+        // 修复前的实测后果：声明约束后重开数据库，`unique_constraints()` 返回空，
+        // 重复值被静默接受——约束形同虚设，而调用方以为它在生效。
+        // `DiskGraph::add_node` 正是靠结尾的 `sync_header()` 才让标签落盘。
         disk_graph
             .index_catalog
             .unique_constraints
@@ -774,6 +953,7 @@ impl GraphLite {
                 label: label.to_string(),
                 prop: prop.to_string(),
             });
+        disk_graph.sync_header()?;
 
         let tx_id = inner.next_tx_id;
         inner.next_tx_id += 1;
@@ -947,10 +1127,58 @@ impl GraphLite {
 
     /// 该句柄是否持有了进程级排他锁（`:memory:` 模式下为 `false`）。
     ///
-    /// 锁由 `GraphLite` 持有并在其 Drop 时释放；此访问器同时让编译器确认
+    /// 锁由 `NervusDb` 持有并在其 Drop 时释放；此访问器同时让编译器确认
     /// 锁字段被真实读取，而非仅在构造时赋值。
     pub fn is_locked(&self) -> bool {
         self.lock.is_some()
+    }
+
+    /// 取得一个**读快照**：在它存活期间，看到的图是同一个状态。
+    ///
+    /// ## 为什么需要它
+    ///
+    /// 单个 `get_node` / `get_edge` 各自持锁、各自释放，因此一次多步遍历
+    /// （读邻接表 → 按边 ID 读边记录）在两次调用之间可能被写者插入。中间发生的
+    /// 删除会让遍历看到「邻接表引用的边已经不存在」——不是引擎内部撕裂，而是
+    /// **读者自己把两个不同时刻的状态拼在了一起**。
+    ///
+    /// 这不是理论问题：`tests/concurrency_isolation_tests.rs` 里
+    /// `test_reader_never_observes_torn_adjacency_under_writes` 在读线程一边用
+    /// API 遍历、写线程一边增删边时，稳定复现该现象（首个复现即
+    /// 「节点 2 的邻接表引用了不存在的边 1」）。同期用 `integrity_check`
+    /// （它在**一次**读锁内完成整个检查）跑了 22,540 轮，零不一致——这正好界定了
+    /// 问题边界：引擎的检查是自洽的，缺的是暴露给调用方的一致性窗口。
+    ///
+    /// ## 用法
+    ///
+    /// ```no_run
+    /// # use nervusdb::{NervusDb, GraphError};
+    /// # fn main() -> Result<(), GraphError> {
+    /// # let db = NervusDb::open(":memory:")?;
+    /// let snapshot = db.read_snapshot();
+    /// if let Some(node) = snapshot.get_node(1)? {
+    ///     for eid in &node.outgoing {
+    ///         let edge = snapshot.get_edge(*eid)?; // 与上面那次读同处一个状态
+    ///         assert!(edge.is_some(), "快照内不应出现悬空邻接项");
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// ## 代价与语义
+    ///
+    /// 快照持有共享读锁，因此**写者会被阻塞**直到快照释放。这是当前架构的
+    /// 直接后果：缓冲区池与页表是共享可变状态，让读者与写者真正并行需要版本化
+    /// 的页可见性（见 `ROADMAP.md` 第 1 项）。提供快照是为了让「需要自洽读」的
+    /// 调用方有正确选项，而不是宣称已经实现了无阻塞的 MVCC。
+    ///
+    /// 长事务式的「边读边写」仍应使用 [`NervusDb::with_transaction`]；快照是只读的。
+    pub fn read_snapshot(&self) -> ReadSnapshot<'_> {
+        ReadSnapshot {
+            guard: self.inner.read_recover(),
+            _marker: std::marker::PhantomData,
+        }
     }
 
     /// 获取当前节点总数（纯磁盘定长元数据头统计）
@@ -1048,7 +1276,7 @@ impl GraphLite {
     /// 获取指定节点（按需通过 Buffer Pool 调入）。
     ///
     /// **有损 API**：存储层的 I/O 或损坏错误会被折叠为 `None`，因此无法区分
-    /// 「节点不存在」与「页读不出来」。生产代码应改用 [`GraphLite::try_get_node`]。
+    /// 「节点不存在」与「页读不出来」。生产代码应改用 [`NervusDb::try_get_node`]。
     pub fn get_node(&self, id: u64) -> Option<Node> {
         let inner = self.inner.read_recover();
         inner.disk_graph.get_node(id).ok().flatten()
@@ -1056,8 +1284,8 @@ impl GraphLite {
 
     /// 获取指定边（按需通过 Buffer Pool 调入）。
     ///
-    /// **有损 API**：同 [`GraphLite::get_node`]，错误被折叠为 `None`。
-    /// 生产代码应改用 [`GraphLite::try_get_edge`]。
+    /// **有损 API**：同 [`NervusDb::get_node`]，错误被折叠为 `None`。
+    /// 生产代码应改用 [`NervusDb::try_get_edge`]。
     pub fn get_edge(&self, id: u64) -> Option<Edge> {
         let inner = self.inner.read_recover();
         inner.disk_graph.get_edge(id).ok().flatten()
@@ -1301,6 +1529,35 @@ impl GraphLite {
         Ok(())
     }
 
+    /// 内部辅助：撤掉一个失败写语句的全部物理影响。
+    ///
+    /// 没有这一步，失败的写语句会留下**部分写入**：已创建/修改的页留在缓冲池里，
+    /// 随后任何一次成功的提交都会把它们一起刷进主文件。实测（修复前）：
+    ///
+    /// ```text
+    /// CREATE (:Num {v: 1}); declare UNIQUE (:Num.v)
+    /// UNWIND [2, 1, 3] AS v CREATE (n:Num {v: v})   -- 因重复值失败
+    /// CREATE (:Other {x: 99})                        -- 一次无关的成功写入
+    /// ```
+    ///
+    /// 之后重开数据库，`MATCH (n:Num)` 会看到 `{v: 1}` **和**那个本该被拒绝的
+    /// `{v: 2}`。`UNWIND` 让这条路径变得常见——一条语句本来就可能写上千条记录。
+    ///
+    /// 三个动作与 `Transaction::commit` 的失败清理完全一致，避免两套回滚语义：
+    /// 按事务基线还原未提交页、回拨内存元数据、使二级索引整体失效。
+    fn rollback_failed_statement(
+        inner: &mut GraphInner,
+        snapshot: &crate::disk_graph::GraphMetaSnapshot,
+    ) {
+        let failed_pages = inner.disk_graph.drain_modified_pages();
+        {
+            let mut bpm = inner.disk_graph.bpm.lock_recover();
+            let _ = bpm.rollback_uncommitted_pages(&failed_pages);
+        }
+        inner.disk_graph.restore_meta(snapshot);
+        inner.index_mgr.invalidate_all();
+    }
+
     /// 内部辅助：把当前事务修改的物理页原子提交到页级 WAL。
     ///
     /// 只有常驻缓冲池的脏页需要追加 redo 帧；早先因缓冲池耗尽而被 STEAL 溢出到 WAL 的
@@ -1392,7 +1649,7 @@ impl GraphLite {
         self.try_has_cycle().unwrap_or(false)
     }
 
-    /// 同 [`GraphLite::has_cycle`]，但**保留读错误**：`Ok(false)` 仅表示确实无环。
+    /// 同 [`NervusDb::has_cycle`]，但**保留读错误**：`Ok(false)` 仅表示确实无环。
     ///
     /// 有损版本在损坏的库上会回答「没有环」——而它其实什么都没读到。需要区分
     /// 「无环」与「读不出来」时用本函数。
@@ -1409,7 +1666,7 @@ impl GraphLite {
         self.try_find_cycles().unwrap_or_default()
     }
 
-    /// 同 [`GraphLite::find_cycles`]，但**保留读错误**。
+    /// 同 [`NervusDb::find_cycles`]，但**保留读错误**。
     pub fn try_find_cycles(&self) -> Result<Vec<Vec<u64>>, GraphError> {
         let graph = {
             let inner = self.inner.read_recover();
@@ -1496,7 +1753,7 @@ impl GraphLite {
             .map_err(|e| GraphError::General(e.to_string()))?;
         let graph = &inner.disk_graph;
 
-        writeln!(out, "-- GraphLite-RS logical dump")?;
+        writeln!(out, "-- NervusDB logical dump")?;
         writeln!(
             out,
             "-- nodes: {}, edges: {}",
@@ -1578,12 +1835,25 @@ fn format_props(props: &[(String, Value)]) -> String {
 }
 
 /// 将属性值渲染为 Cypher 字面量
+///
+/// 必须覆盖全部变体：`dump_cypher` 的输出要能被重新读回，因此渲染出的字面量
+/// 必须与解析器接受的语法一致。`Null` 与 `List` 虽不可作为属性落盘，但求值期
+/// 的值会出现在查询结果里，所以这里也给它们正确的字面量形式。
 fn format_literal(value: &Value) -> String {
     match value {
+        Value::Null => "null".to_string(),
         Value::Int(v) => v.to_string(),
         Value::Float(v) => v.to_string(),
         Value::Bool(v) => v.to_string(),
         Value::String(s) => format!("'{}'", s.replace('\'', "\\'")),
+        Value::List(items) => format!(
+            "[{}]",
+            items
+                .iter()
+                .map(format_literal)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
@@ -1623,7 +1893,7 @@ pub enum TxAction {
 
 /// 显式事务上下文结构体（严格遵循 ACID，回滚彻底复原）
 pub struct Transaction {
-    db: GraphLite,
+    db: NervusDb,
     tx_id: u64,
     ops: Vec<TxAction>,
     committed: bool,
@@ -1632,6 +1902,29 @@ pub struct Transaction {
 impl Transaction {
     pub fn tx_id(&self) -> u64 {
         self.tx_id
+    }
+
+    /// 动作入队的**唯一**通道：在此统一执行上限检查。
+    ///
+    /// 所有入队都必须经过它。分散到六个方法里各写一次边界判断，迟早会有一个
+    /// 漏掉——那样上限就只在某些路径上有效，而调用方无从知道是哪一些。
+    fn push_op(&mut self, op: TxAction) -> Result<(), GraphError> {
+        let limit = self.db.inner.read_recover().max_transaction_actions;
+        if limit > 0 && self.ops.len() >= limit {
+            return Err(GraphError::General(format!(
+                "Transaction action queue is full ({limit} actions). \
+                 A transaction holds every action in memory until commit, so the queue \
+                 is capped to keep the footprint bounded (AGENTS.md section 1): measured \
+                 at about 502 bytes per node action and 128 bytes per edge action. \
+                 Commit in batches instead, or raise the limit deliberately with \
+                 NervusDbOptions::max_transaction_actions. \
+                 The queue is not split automatically because doing so would mean \
+                 committing part of the transaction, and a partially applied \
+                 transaction is exactly what an atomic transaction must not do."
+            )));
+        }
+        self.ops.push(op);
+        Ok(())
     }
 
     /// 事务内**批量**添加节点，返回按输入顺序排列的 ID 列表。
@@ -1667,6 +1960,17 @@ impl Transaction {
             inner.disk_graph.allocate_next_node_ids(nodes.len())?
         };
 
+        let limit = self.db.inner.read_recover().max_transaction_actions;
+        if limit > 0 && self.ops.len() + nodes.len() > limit {
+            return Err(GraphError::General(format!(
+                "Batch of {} node actions would exceed the transaction action limit ({limit}); \
+                 {} queued so far. Commit in batches, or raise the limit with \
+                 NervusDbOptions::max_transaction_actions.",
+                nodes.len(),
+                self.ops.len()
+            )));
+        }
+
         self.ops.reserve(nodes.len());
         for (id, (labels, properties)) in ids.iter().copied().zip(nodes) {
             self.ops.push(TxAction::AddNode {
@@ -1697,6 +2001,17 @@ impl Transaction {
             inner.disk_graph.allocate_next_edge_ids(edges.len())?
         };
 
+        let limit = self.db.inner.read_recover().max_transaction_actions;
+        if limit > 0 && self.ops.len() + edges.len() > limit {
+            return Err(GraphError::General(format!(
+                "Batch of {} edge actions would exceed the transaction action limit ({limit}); \
+                 {} queued so far. Commit in batches, or raise the limit with \
+                 NervusDbOptions::max_transaction_actions.",
+                edges.len(),
+                self.ops.len()
+            )));
+        }
+
         self.ops.reserve(edges.len());
         for (id, e) in ids.iter().copied().zip(edges) {
             self.ops.push(TxAction::AddEdge {
@@ -1726,11 +2041,11 @@ impl Transaction {
             inner.disk_graph.allocate_next_node_id()?
         };
 
-        self.ops.push(TxAction::AddNode {
+        self.push_op(TxAction::AddNode {
             id,
             labels,
             properties,
-        });
+        })?;
 
         Ok(id)
     }
@@ -1756,54 +2071,57 @@ impl Transaction {
             inner.disk_graph.allocate_next_edge_id()?
         };
 
-        self.ops.push(TxAction::AddEdge {
+        self.push_op(TxAction::AddEdge {
             id,
             src_id,
             dst_id,
             edge_type: edge_type.into(),
             properties,
             weight,
-        });
+        })?;
 
         Ok(id)
     }
 
-    /// 事务内更新节点属性
+    /// 事务内更新节点属性。
+    ///
+    /// 返回 `Result` 而不是 `()`：动作队列有上限（见
+    /// [`DEFAULT_MAX_TRANSACTION_ACTIONS`]），触顶时必须能报告出来。
     pub fn update_node_property<V: Into<Value>>(
         &mut self,
         id: u64,
         key: impl Into<String>,
         value: V,
-    ) {
-        self.ops.push(TxAction::UpdateNodeProp {
+    ) -> Result<(), GraphError> {
+        self.push_op(TxAction::UpdateNodeProp {
             id,
             key: key.into(),
             value: value.into(),
-        });
+        })
     }
 
-    /// 事务内更新边属性
+    /// 事务内更新边属性（队列上限语义同 [`Transaction::update_node_property`]）
     pub fn update_edge_property<V: Into<Value>>(
         &mut self,
         id: u64,
         key: impl Into<String>,
         value: V,
-    ) {
-        self.ops.push(TxAction::UpdateEdgeProp {
+    ) -> Result<(), GraphError> {
+        self.push_op(TxAction::UpdateEdgeProp {
             id,
             key: key.into(),
             value: value.into(),
-        });
+        })
     }
 
-    /// 事务内删除节点
-    pub fn remove_node(&mut self, id: u64) {
-        self.ops.push(TxAction::RemoveNode { id });
+    /// 事务内删除节点（队列上限语义同 [`Transaction::update_node_property`]）
+    pub fn remove_node(&mut self, id: u64) -> Result<(), GraphError> {
+        self.push_op(TxAction::RemoveNode { id })
     }
 
-    /// 事务内删除边
-    pub fn remove_edge(&mut self, id: u64) {
-        self.ops.push(TxAction::RemoveEdge { id });
+    /// 事务内删除边（队列上限语义同 [`Transaction::update_node_property`]）
+    pub fn remove_edge(&mut self, id: u64) -> Result<(), GraphError> {
+        self.push_op(TxAction::RemoveEdge { id })
     }
 
     /// 提交事务：将修改原子应用至 DiskGraph，批量刷出 PageWrite 帧并提交。
@@ -2032,7 +2350,7 @@ impl Transaction {
         }
 
         inner.disk_graph.sync_header()?;
-        GraphLite::commit_dirty_pages_to_wal(&mut inner, self.tx_id)?;
+        NervusDb::commit_dirty_pages_to_wal(&mut inner, self.tx_id)?;
         drop(inner);
 
         self.committed = true;

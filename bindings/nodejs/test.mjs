@@ -3,15 +3,15 @@ import os from "os";
 import path from "path";
 import fs from "fs";
 
-const { GraphLite } = pkg;
+const { NervusDb } = pkg;
 
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graphlite-node-"));
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nervusdb-node-"));
 const dbPath = path.join(tmpDir, "node_test.db");
 
-console.log(`Testing GraphLite Node.js SDK at ${dbPath}...`);
+console.log(`Testing NervusDb Node.js SDK at ${dbPath}...`);
 
 // 1. Open database
-const db = GraphLite.open(dbPath, 512);
+const db = NervusDb.open(dbPath, 512);
 
 // 2. Add nodes & edge directly
 const n1 = db.addNode(["Person"], { name: "Alice", age: 28 });
