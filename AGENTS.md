@@ -160,7 +160,6 @@ graphlite-rs/
 ├── src/
 │   ├── lib.rs                  # Public facade (GraphLite, Transaction), ACID coordinator
 │   ├── main.rs                 # Standalone demo binary
-│   ├── bin/cli.rs              # Interactive REPL tool (graphlite-cli) with ASCII table
 │   ├── page.rs                 # 4KB page layout, NodeRecord (32B), EdgeRecord (64B), SlottedPropPage, PropCodec
 │   ├── buffer.rs               # DiskManager (paged I/O) and LRU BufferPoolManager (page latches, STEAL spill)
 │   ├── disk_graph.rs           # O(1) direct addressing, disk adjacency, Freelist, page iterators
@@ -191,7 +190,7 @@ graphlite-rs/
     ├── edge_locality_tests.rs  # Batch-weave equivalence, self-loops, false-spill elimination
     ├── production_safety_tests.rs # Exclusive lock, integrity check, no silent errors, poison recovery
     ├── robustness_tests.rs     # File lock, auto-checkpoint, page CRC at scale, WAL replay CRC, chunking
-    └── cli_tests.rs            # Interactive REPL end-to-end (multi-line, dot commands, dump round trip)
+    └── equivalence_tests.rs    # v1.0.0 behaviour guardrails (query, transaction, API, format)
 ```
 
 ---
@@ -298,9 +297,9 @@ Two traps made those first attempts useless, and both recur:
 
   ```bash
   DATASET_PATH=/data/com-dblp.ungraph.txt DB_DIR=/data/bench POOL_MB=256 \
-    cargo run --release --example snap_dblp_bench
+    cargo bench --bench snap_dblp_bench
   DATASET_PATH=/data/soc-LiveJournal1.txt DB_DIR=/data/bench POOL_MB=1024 \
-    cargo run --release --example snap_livejournal_bench
+    cargo bench --bench snap_livejournal_bench
   ```
 
   The SNAP benchmarks are the only end-to-end check at realistic scale. They take
@@ -323,10 +322,6 @@ Two traps made those first attempts useless, and both recur:
   _exactly at rank 50_, so a partial order makes the 2-hop total depend on sort
   internals and produced three different "correct" numbers across runs.
 
-- **Verify Interactive CLI**:
-  ```bash
-  cargo run --bin graphlite-cli -- /tmp/test.db
-  ```
 - **Verify Node.js SDK**:
   ```bash
   cargo build -p graphlite-node

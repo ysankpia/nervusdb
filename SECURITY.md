@@ -54,8 +54,8 @@ reporting:
 
 - A reader and a writer cannot hold the database **simultaneously**: read-only
   handles take a shared lock and coexist with each other, but a write handle
-  excludes them and vice versa. (A tool that only holds its lock per request, like
-  `graphlite-studio`, can interleave with a writer between requests.)
+  excludes them and vice versa. Interleaving reads with a writer requires
+  snapshot isolation, which is not implemented yet.
 - Every data page carries a **CRC32**, verified on read, with a directory chain
   that is itself checksummed. Bit rot is detected rather than silently returned as
   missing data. This landed in format version 3 and is documented in `FORMAT.md`.

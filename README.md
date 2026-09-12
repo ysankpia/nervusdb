@@ -60,8 +60,9 @@ are implemented and covered by 151 tests. The on-disk format is frozen; see
 - **Production safety.** An exclusive open lock, a structural integrity check, and
   error-preserving read accessors. See
   [Architecture §11](docs/architecture.md#11-production-safety).
-- **Tooling.** An interactive CLI with `.schema` / `.stats` / `.checkpoint` /
-  `.dump`, plus Python (PyO3) and Node.js (NAPI-RS) SDKs.
+- **SDKs.** Python (PyO3) and Node.js (NAPI-RS), with transactions, batch writes
+  and logical dump. The library is the interface: there is no separate CLI or GUI
+  to keep in sync.
 
 ## Documentation
 
@@ -89,30 +90,37 @@ from source (see [bindings/](bindings/)).
 
 ## Quick start
 
-### CLI
+### Python
 
-```bash
-cargo run --bin graphlite-cli -- mydb.db
+```python
+import graphlite
+
+db = graphlite.GraphLite.open("novel.db")
+with db.begin_transaction() as tx:
+    lin = tx.add_node(["Character"], {"name": "林渊"})
+    su = tx.add_node(["Character"], {"name": "苏晴"})
+    tx.add_edge(lin, su, "KNOWS", {"since": 2020}, 1.0)
+
+rows = db.query_cypher(
+    "MATCH (a:Character)-[:KNOWS]->(b) RETURN a.name AS a, b.name AS b"
+)
+print(rows)
+
+db.dump_cypher("backup.cypher")   # logical export; replayable into a fresh file
+db.backup("snapshot.db")          # consistent online copy
 ```
 
-Multi-line input, semicolon-terminated, with aligned ASCII tables:
+### Node.js
 
-```text
-graphlite> CREATE (a:Person {name: 'Alice', age: 28})-[:KNOWS]->(b:Person {name: 'Bob', age: 32});
-Query OK, Created 2 nodes, 1 relationships.
+```javascript
+import { GraphLite } from "graphlite-node";
 
-graphlite> MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name;
-+---------+--------+-------+
-| a.name  | b.name | b.age |
-+---------+--------+-------+
-| 'Alice' | 'Bob'  | 32    |
-+---------+--------+-------+
-1 row(s) in set
-
-graphlite> .schema
-graphlite> .stats
-graphlite> .dump backup.cypher
-graphlite> .quit
+const db = GraphLite.open("novel.db");
+const tx = db.beginTransaction();
+const lin = tx.addNode(["Character"], { name: "林渊" });
+const su = tx.addNode(["Character"], { name: "苏晴" });
+tx.addEdge(lin, su, "KNOWS", { since: 2020 }, 1.0);
+tx.commit();
 ```
 
 ### Choosing a memory budget
@@ -175,7 +183,6 @@ src/
   cypher/           Lexer, recursive-descent parser, executor
   query.rs          Chainable typed query DSL
   graph.rs          Domain models: Node, Edge, Value, Direction, GraphError
-  bin/cli.rs        Interactive REPL
 bindings/
   python/           PyO3 SDK          nodejs/   NAPI-RS SDK
 tests/              13 suites, 123 cases

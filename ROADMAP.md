@@ -50,10 +50,10 @@ Working and covered by tests:
   that names corrupt pages, error-preserving read accessors, poison-recovering
   locks, WAL auto-checkpoint.
 - Operations: `backup()` for a consistent online copy, `vacuum()` for a space
-  report, and `graphlite-studio` for browser-based inspection.
+  report. Inspection is through the library API — there is no separate CLI or GUI.
 - Tooling: interactive CLI with dot commands and logical dump; Python and Node.js
   SDKs with transaction and batch-write support.
-- 146 test cases across 13 suites (145 run, 1 intentionally `#[ignore]`d for a
+- 152 test cases across 13 suites (151 run, 1 intentionally `#[ignore]`d for a
   child-process lock probe); `cargo fmt`, `cargo clippy -D warnings` and
   `rustdoc -D warnings` all clean.
 

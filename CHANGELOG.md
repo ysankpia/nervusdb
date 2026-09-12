@@ -16,6 +16,32 @@ user has to act on them:
 
 ## [Unreleased]
 
+### Removed
+
+- **The CLI (`graphlite-cli`) and the browser workbench (`graphlite-studio`), plus
+  the demo binary (`graphlite`).** All three were separate binaries that
+  duplicated capability the library and the SDKs already provide: dump, checkpoint,
+  schema inspection and query execution are all available through `GraphLite`, and
+  the Python and Node.js SDKs expose them too.
+
+  The trigger was concrete: a tool that must be kept in sync with the engine is a
+  place for the two to drift, and the engine is the product. Inspection and
+  scripting now go through the library, which cannot drift from itself.
+
+  Net effect: ~1,900 lines and 11 tests removed, 13 suites → 11. The engine is
+  unchanged — verified by re-running the real-data acceptance afterwards, with the
+  DBLP red lines matching bit for bit (hub 1-hop 10,080 / 2-hop 161,877) and the
+  file size identical at 81.26 MB.
+
+- The real-dataset benchmarks and end-to-end verification tools moved from
+  `examples/` to `benches/real_data/`, which is what they are: acceptance
+  instruments rather than user-facing examples. They now run through
+  `cargo bench --bench snap_dblp_bench` and friends, and remain separately
+  declared because `cargo bench` does not discover subdirectories.
+
+- `PLAN-1.0.md` moved to `docs/history/` — it records the decisions taken while
+  building 1.0 and no longer describes pending work.
+
 ### Fixed
 
 - **`sum()` lost precision on integers above 2^53.** The aggregate computed its

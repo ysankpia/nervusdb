@@ -44,19 +44,40 @@ harness = false
 name = "mem_probe"
 harness = false
 
-[[bin]]
-name = "graphlite"
-path = "src/main.rs"
+# 真实数据基准（SNAP DBLP / Pokec / LiveJournal）与端到端验证工具。
+#
+# 放在 `benches/real_data/` 而非 `examples/`：它们不是给用户的示例，而是**性能与
+# 正确性的验收手段**——只有它们能在真实规模上证明引擎没有退化。标准 `cargo bench`
+# 不会自动发现子目录，因此需要逐个声明；也用它们自己的 main 驱动（`harness = false`）。
+[[bench]]
+name = "snap_dblp_bench"
+path = "benches/real_data/snap_dblp_bench.rs"
+harness = false
 
-[[bin]]
-name = "graphlite-cli"
-path = "src/bin/cli.rs"
+[[bench]]
+name = "snap_pokec_bench"
+path = "benches/real_data/snap_pokec_bench.rs"
+harness = false
 
-# 可视化工作台。**刻意独立于核心库**：它要开网络端口、要嵌入一个 HTML 页面，
-# 而这些都不该进入数据库的核心路径。核心库保持零依赖，Studio 只是它的消费者。
-[[bin]]
-name = "graphlite-studio"
-path = "src/bin/studio.rs"
+[[bench]]
+name = "snap_livejournal_bench"
+path = "benches/real_data/snap_livejournal_bench.rs"
+harness = false
+
+[[bench]]
+name = "differential_test"
+path = "benches/real_data/differential_test.rs"
+harness = false
+
+[[bench]]
+name = "crash_recovery_test"
+path = "benches/real_data/crash_recovery_test.rs"
+harness = false
+
+[[bench]]
+name = "scale_bench"
+path = "benches/real_data/scale_bench.rs"
+harness = false
 
 [lib]
 name = "graphlite"

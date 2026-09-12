@@ -26,7 +26,7 @@ cargo test --release --test edge_locality_tests
 
 ## Current state
 
-**151 test cases across 13 suites — 150 pass, 1 intentionally `#[ignore]`d** (a
+**137 test cases across 11 suites — 136 pass, 1 intentionally `#[ignore]`d** (a
 child-process lock probe launched by its parent test).
 
 | Suite                        | Cases | Covers                                                             |
@@ -38,11 +38,9 @@ child-process lock probe launched by its parent test).
 | `robustness_tests.rs`        | 8     | File lock, auto-checkpoint, page CRC at scale, WAL replay, chunking |
 | `batch_tx_tests.rs`          | 7     | Batch commits, single-fsync contract, throughput                   |
 | `slotted_property_tests.rs`  | 7     | Page packing, slot reuse, compaction, density                      |
-| `cli_tests.rs`               | 7     | REPL end-to-end, multi-line input, strict parsing                  |
 | `analytics_tests.rs`         | 7     | PageRank, WCC, K-hop                                               |
 | `steal_spill_tests.rs`       | 5     | Spilling, rollback pollution, checkpoint                           |
 | `equivalence_tests.rs`       | 4     | v1.0.0 behaviour guardrails: query, transaction, API, format       |
-| `studio_tests.rs`            | 4     | Browser workbench: endpoints, read-only, writer interleaving       |
 | `zero_dependency_tests.rs`   | 3     | Enforces the empty dependency tree (with a negative control)       |
 
 Run one suite:
