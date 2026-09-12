@@ -1941,10 +1941,23 @@ impl DiskGraph {
 
         // 1. 头插法插入源节点出边链
         let old_src_first = src_node.first_outgoing_edge_id;
+        // 无属性的边必须写 `PROP_PTR_NONE`（0），**不能写 `INVALID_PAGE_ID`**。
+        //
+        // 两者数值相同（都是 `u32::MAX`），而 `u32::MAX` 正是
+        // `PROP_PTR_OVERFLOW` 哨兵——含义是「属性位于根页 0x00FFFFFF 的溢出链」。
+        // 于是删除这样一条边时，`free_edge_properties` 会把一个**并不存在的页
+        // 16777215** 当作溢出链回收：它进入溢出空闲链并被标记为脏，随之写进 WAL、
+        // 在 checkpoint 时落到主文件的 68,719,472,640 偏移处。
+        //
+        // 实测后果：删掉一条无属性边，数据库文件从 12KB 变成 **64 GiB**（正好顶到
+        // 格式上限），而 `backup()` / `vacuum()` 会把这个体积一并复制出去。
+        //
+        // 批量织网路径（`insert_edges_batch`）一直用的是正确的 `PROP_PTR_NONE`，
+        // 只有这里写错，因此这是单条插入路径独有的缺陷。
         let prop_page_id = if !properties.is_empty() {
             self.write_edge_properties(&properties)?
         } else {
-            INVALID_PAGE_ID
+            crate::page::PROP_PTR_NONE
         };
 
         let new_edge = EdgeRecord {

@@ -407,6 +407,25 @@ _No unreleased changes yet._
 
 ### Fixed
 
+- **Deleting a property-less edge inflated the database file to 64 GiB.** The
+  single-edge insert path used `INVALID_PAGE_ID` to mean "no properties", but that
+  constant is `u32::MAX` — numerically identical to the `PROP_PTR_OVERFLOW`
+  sentinel, which means "properties live in the overflow chain rooted at page
+  `0x00FFFFFF`".
+
+  `remove_edge` therefore treated a **nonexistent page 16,777,215** as an overflow
+  chain: it pushed it onto the overflow freelist, marked it dirty, wrote it to the
+  WAL, and on checkpoint materialised it at file offset 68,719,472,640.
+
+  Measured: after deleting one property-less edge, the file went from 12 KB to
+  **68,719,476,736 bytes** — exactly the format limit documented in `FORMAT.md`.
+  `backup()` and `vacuum()` would carry that size along.
+
+  The batch weaving path always used the correct `PROP_PTR_NONE` (0), so only
+  single-edge insertion was affected. That is also why the extensive edge test
+  suites never caught it: they exercise the batch path.
+
+
 - **`LIMIT` push-down silently discarded `WHERE`, returning wrong rows.** The
   fast path added for `LIMIT` used the predicate only to narrow the *candidate
   start nodes* via the index; it never applied the row filter, which the normal

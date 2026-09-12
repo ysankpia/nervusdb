@@ -1346,3 +1346,81 @@ fn test_unique_constraint_applies_to_every_write_path() -> Result<(), GraphError
 
     Ok(())
 }
+
+/// **删除一条无属性的边不得让文件膨胀到格式上限。**
+///
+/// 这是为一个真实的严重缺陷写的：单条边插入路径用 `INVALID_PAGE_ID` 表示「无属性」，
+/// 而它的数值（`u32::MAX`）恰好等于 `PROP_PTR_OVERFLOW` 哨兵——后者的含义是
+/// 「属性位于根页 0x00FFFFFF 的溢出链」。
+///
+/// 于是 `remove_edge` 把一个**并不存在的页 16777215** 当作溢出链回收：它进入溢出
+/// 空闲链并被标记为脏，随 WAL 写盘，在 checkpoint 时落到主文件偏移
+/// 68,719,472,640 处。
+///
+/// 实测后果：删掉一条无属性边，数据库文件从 12 KB 变成 **64 GiB**（正好顶到
+/// FORMAT.md 声明的格式上限），而 `backup()` 与 `vacuum()` 会把这个体积一并复制。
+///
+/// 批量织网路径一直用正确的 `PROP_PTR_NONE`，所以只有单条插入受影响——这也是这个
+/// 缺陷能在大量边测试中存活的原因：那些测试走的是批量路径。
+#[test]
+fn test_deleting_propertyless_edge_does_not_inflate_the_file() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("sentinel.db");
+    let db = GraphLite::open(&db_path)?;
+
+    let a = db.add_node(HashSet::from(["N".to_string()]), HashMap::new())?;
+    let b = db.add_node(HashSet::from(["N".to_string()]), HashMap::new())?;
+
+    // 单条插入 + 无属性：正是触发路径
+    let e = db.add_edge(a, b, "R", HashMap::new(), 1.0)?;
+    db.remove_edge(e)?;
+    db.checkpoint()?;
+
+    let size = std::fs::metadata(&db_path)?.len();
+    assert!(
+        size < 1024 * 1024,
+        "deleting a property-less edge inflated the file to {} bytes; \
+         the 'no properties' sentinel must not collide with the overflow sentinel",
+        size
+    );
+
+    // 重复增删不得累积膨胀
+    for _ in 0..50 {
+        let e = db.add_edge(a, b, "R", HashMap::new(), 1.0)?;
+        db.remove_edge(e)?;
+    }
+    db.checkpoint()?;
+    let size = std::fs::metadata(&db_path)?.len();
+    assert!(
+        size < 1024 * 1024,
+        "repeated add/delete of property-less edges accumulated {} bytes",
+        size
+    );
+
+    // 溢出页分配在之后仍然正常（确认修复没有破坏大属性的存储）
+    let mut m = HashMap::new();
+    m.insert("big".to_string(), Value::from("X".repeat(9000)));
+    let n = db.add_node(HashSet::from(["N".to_string()]), m)?;
+    let len = db.try_get_node(n)?.and_then(|node| {
+        node.get_prop("big")
+            .and_then(|v| v.as_str())
+            .map(|s| s.len())
+    });
+    assert_eq!(len, Some(9000), "multi-page properties must still work");
+
+    // 带属性的边删除也应当正常回收（对照：确认修复没有把回收关掉）
+    let mut props = HashMap::new();
+    props.insert("w".to_string(), Value::from(1.5));
+    let e2 = db.add_edge(a, b, "R", props, 1.0)?;
+    db.remove_edge(e2)?;
+    db.checkpoint()?;
+
+    drop(db);
+    let reopened = GraphLite::open(&db_path)?;
+    assert!(
+        reopened.integrity_check()?.is_ok(),
+        "the database must stay sound after these operations"
+    );
+
+    Ok(())
+}
