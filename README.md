@@ -33,7 +33,7 @@ fn main() -> Result<(), GraphError> {
 ## Status
 
 **`v1.1.0` — stable.** The engine, Cypher surface, analytics and safety guarantees
-are implemented and covered by 187 tests. The on-disk format is frozen at version 4
+are implemented and covered by 192 tests. The on-disk format is frozen at version 4
 and unchanged by 1.1.0; see `FORMAT.md`. Several known gaps remain — read
 [Known limitations](ROADMAP.md#next-planned) before considering production use.
 

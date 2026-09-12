@@ -287,6 +287,12 @@ impl DiskGraph {
             // 若在此处再检查一次，就太晚了——回放已经用当前版本的语义解释并写回
             // 了旧格式的文件，此时报错只会留下一个被污染的库。
             // 这里保留一处断言，防止有人绕过 `open` 直接构造 `DiskGraph`。
+            //
+            // 本块内（含下面的断言）每一处 `try_into().unwrap()` 都从**定长**
+            // `frame.data` (`[u8; PAGE_SIZE]`) 上取固定字段，切片的起止都由
+            // `HeaderPage::*_OFFSET` 常量决定、与目标整数宽度对齐，因此
+            // `try_into()` 不可能失败（AGENTS.md §13）。写 `unwrap` 而非 `?` 是
+            // 刻意的：它让「偏移常量与字段宽度不一致」在编译期/测试期立刻暴露。
             debug_assert!(
                 {
                     let v = u32::from_le_bytes(
@@ -398,12 +404,20 @@ impl DiskGraph {
             let mut direct_node_pages = [0; HeaderPage::DIRECT_NODE_PAGES_COUNT];
             for (i, p) in direct_node_pages.iter_mut().enumerate() {
                 let off = HeaderPage::DIRECT_NODE_PAGES_OFFSET + i * 4;
+                // `frame.data` 是 `[u8; PAGE_SIZE]`，`off` 由槽位下标（上界见
+                // `DIRECT_*_PAGES_COUNT` 与 `HeaderPage::DIRECT_*_PAGES_OFFSET`）
+                // 算出，始终满足 `off + 4 <= PAGE_SIZE`。定长数组，转换不可能
+                // 失败（AGENTS.md §13）。
                 *p = u32::from_le_bytes(frame.data[off..off + 4].try_into().unwrap());
             }
 
             let mut direct_edge_pages = [0; HeaderPage::DIRECT_EDGE_PAGES_COUNT];
             for (i, p) in direct_edge_pages.iter_mut().enumerate() {
                 let off = HeaderPage::DIRECT_EDGE_PAGES_OFFSET + i * 4;
+                // `frame.data` 是 `[u8; PAGE_SIZE]`，`off` 由槽位下标（上界见
+                // `DIRECT_*_PAGES_COUNT` 与 `HeaderPage::DIRECT_*_PAGES_OFFSET`）
+                // 算出，始终满足 `off + 4 <= PAGE_SIZE`。定长数组，转换不可能
+                // 失败（AGENTS.md §13）。
                 *p = u32::from_le_bytes(frame.data[off..off + 4].try_into().unwrap());
             }
 
@@ -498,6 +512,7 @@ impl DiskGraph {
             let pid = alloc.first_free_page_id;
             let fid = bpm.fetch_page(pid)?;
             let frame = bpm.get_frame(fid);
+            // 固定偏移 `0..4`，源为定长 `[u8; PAGE_SIZE]`，不可能失败（§13）。
             let next_free = u32::from_le_bytes(frame.data[0..4].try_into().unwrap());
             bpm.unpin_page(pid, false);
             alloc.first_free_page_id = next_free;
@@ -541,6 +556,7 @@ impl DiskGraph {
             let pid = alloc.first_free_overflow_page;
             let fid = bpm.fetch_page(pid)?;
             let frame = bpm.get_frame(fid);
+            // 固定偏移 `0..4`，源为定长 `[u8; PAGE_SIZE]`，不可能失败（§13）。
             let next_free = u32::from_le_bytes(frame.data[0..4].try_into().unwrap());
             bpm.unpin_page(pid, false);
             alloc.first_free_overflow_page = next_free;
@@ -619,6 +635,7 @@ impl DiskGraph {
                 let fid = bpm.fetch_page(pid)?;
                 let next_free = {
                     let frame = bpm.get_frame(fid);
+                    // 固定偏移 `0..4`，源为定长 `[u8; PAGE_SIZE]`，不可能失败（§13）。
                     u32::from_le_bytes(frame.data[0..4].try_into().unwrap())
                 };
                 bpm.unpin_page(pid, false);

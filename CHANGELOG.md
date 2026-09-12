@@ -35,6 +35,28 @@ accepted constructs are now rejected, both because they were silently wrong:
 `MATCH`/`MERGE` pattern properties written as expressions (they could never be
 evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar binding.
 
+- **Two invariants that were documentation-only are now enforced by tests.**
+  Neither was hypothetical:
+
+  - **§13 slice-conversion comments.** The rule says fixed-offset slice conversions
+    must state why they cannot fail. An audit found **none** of `page.rs`'s 18
+    conversions had such a comment, nor did `disk_graph.rs`'s. All 46 conversions
+    across the format layer now carry one, and
+    `zero_dependency_tests::fixed_offset_slice_conversions_are_documented` fails when
+    a new one appears without it.
+  - **Test counts.** README said 187, ROADMAP and `docs/testing.md` said 190, and the
+    real number was 191 — three different figures for one fact.
+    `documented_suite_table_matches_the_files` now compares the `docs/testing.md`
+    table against the files row by row, so a case added without updating the table
+    fails the build instead of drifting.
+
+  Both guards needed a second attempt to be worth keeping, which is recorded in their
+  comments: the first slice guard matched only single-line conversions (missing 23 of
+  46) and then attributed doc comments to the wrong function (18 false positives);
+  the first count guard derived a total that could not be made to agree with the
+  runner. A guard that is blind or noisy is worse than none, because it trains people
+  to ignore it.
+
 ### Added
 
 - **`UNWIND <list> AS <var>`** — expands a list into rows, the only way to express

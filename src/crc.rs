@@ -81,6 +81,9 @@ impl CrcStore {
         if dm.read_page(0, &mut page0).is_ok() {
             for (pid, slot) in inline.iter_mut().enumerate() {
                 let off = HeaderPage::INLINE_CRC_OFFSET + pid * 4;
+                // `page0` 是 `&[u8; PAGE_SIZE]`，`off = INLINE_CRC_OFFSET + pid*4`
+                // 且 `pid < INLINE_CRC_PAGE_COUNT(256)`，故 `off+4` 不超出内联 CRC 区。
+                // 定长数组 + 边界常量，转换不可能失败（AGENTS.md §13）。
                 *slot = u32::from_le_bytes(page0[off..off + 4].try_into().unwrap());
             }
         }
@@ -127,6 +130,9 @@ impl CrcStore {
 
         let data = self.load_dir_page(l2_pid)?;
         let off = CrcDirPage::ENTRIES_OFFSET + slot * 4;
+        // `slot = (n % per_l2) < ENTRIES_PER_PAGE`，而
+        // `ENTRIES_PER_PAGE = (PAGE_SIZE - ENTRIES_OFFSET) / 4`，故 `off + 4 <= PAGE_SIZE`。
+        // `data` 为定长 `&[u8; PAGE_SIZE]`，转换不可能失败（§13）。
         let v = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
         Ok(if v == 0 { None } else { Some(v) })
     }
@@ -168,6 +174,8 @@ impl CrcStore {
         let l1 = self.load_dir_page(l1_pid)?;
 
         let off = CrcDirPage::ENTRIES_OFFSET + l2_index * 4;
+        // 同 `locate_slot`：`l2_index = (n / per_l2) % per_l2 < ENTRIES_PER_PAGE`，
+        // 定长数组下不可能越界（§13）。
         let l2_pid = u32::from_le_bytes(l1[off..off + 4].try_into().unwrap());
         if l2_pid == 0 || l2_pid == INVALID_PAGE_ID {
             return Ok(None);
@@ -273,6 +281,8 @@ impl CrcStore {
         let (l2_pid, need_new) = {
             let l1 = self.load_dir_page(l1_pid)?;
             let off = CrcDirPage::ENTRIES_OFFSET + l2_index * 4;
+            // 同 `ensure_dir_path`：`l2_index < ENTRIES_PER_PAGE`，定长数组下
+            // 不可能越界（§13）。
             let pid = u32::from_le_bytes(l1[off..off + 4].try_into().unwrap());
             if pid == 0 || pid == INVALID_PAGE_ID {
                 (0, true)

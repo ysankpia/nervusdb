@@ -109,6 +109,15 @@ impl NodeRecord {
         bytes
     }
 
+    /// 从 32 字节定长记录解析。
+    ///
+    /// 下面每个 `try_into().unwrap()` 都作用于**编译期已知长度的子切片**，其来源
+    /// 是 `&[u8; RECORD_SIZE]`（32 字节数组），且目标类型宽度与切片长度逐一对齐
+    /// （`4..8` → `[u8; 4]`，`8..16` → `[u8; 8]`）。数组的总长是类型的一部分，
+    /// 因此这些转换**不可能失败**；写 `unwrap` 而不是 `?` 是刻意的，它把
+    /// 「长度不匹配」变成编译期/测试期立刻可见的错误，而不是运行期的静默降级。
+    ///
+    /// 这是 AGENTS.md §13 要求的说明：定长切片转换必须写明为何无法失败。
     pub fn from_bytes(bytes: &[u8; Self::RECORD_SIZE]) -> Self {
         Self {
             in_use: bytes[0],
@@ -175,6 +184,11 @@ impl EdgeRecord {
         bytes
     }
 
+    /// 从 64 字节定长记录解析。
+    ///
+    /// 同 `NodeRecord::from_bytes`：源为 `&[u8; 64]`，每段切片与目标宽度一一对应
+    /// （`4..8`→4、`8..12`→4、`16..24`→8、`24..32`→8、`32..40`→8、`56..64`→8），
+    /// 数组长度由类型保证，故 `try_into()` 不可能失败（AGENTS.md §13）。
     pub fn from_bytes(bytes: &[u8; Self::RECORD_SIZE]) -> Self {
         Self {
             in_use: bytes[0],
@@ -210,6 +224,11 @@ impl PropertyPage {
         page
     }
 
+    /// 解析一页载荷。
+    ///
+    /// 两处 `try_into().unwrap()` 的源都是 `&[u8; PAGE_SIZE]`（4096 字节数组），
+    /// 切片 `0..4` / `4..8` 恰好 4 字节，与 `u32` 对齐；数组长度由类型保证，
+    /// 因此不可能失败（§13）。
     pub fn decode(page: &[u8; PAGE_SIZE]) -> (PageId, Vec<u8>) {
         let next_page = u32::from_le_bytes(page[0..4].try_into().unwrap());
         let len = u32::from_le_bytes(page[4..8].try_into().unwrap()) as usize;
@@ -225,6 +244,12 @@ pub const DIR_ENTRIES_PER_PAGE: usize = (PAGE_SIZE - 8) / 4;
 pub struct DirectoryPage;
 
 impl DirectoryPage {
+    /// 目录页中的全部转换都作用于 `&[u8; PAGE_SIZE]`。
+    ///
+    /// `get_next_dir` 读固定偏移 `0..4`；`get_entry` 先由
+    /// `assert!(index < DIR_ENTRIES_PER_PAGE)` 界定索引，而
+    /// `DIR_ENTRIES_PER_PAGE = (PAGE_SIZE - 8) / 4`，故最大末端偏移
+    /// `8 + (n-1)*4 + 4` 恰好等于 `PAGE_SIZE`，不越界。两者都不可能失败（§13）。
     pub fn get_next_dir(page: &[u8; PAGE_SIZE]) -> PageId {
         u32::from_le_bytes(page[0..4].try_into().unwrap())
     }
@@ -233,6 +258,12 @@ impl DirectoryPage {
         page[0..4].copy_from_slice(&next_page.to_le_bytes());
     }
 
+    /// 读取第 `index` 个目录条目。
+    ///
+    /// `assert!(index < DIR_ENTRIES_PER_PAGE)` 界定索引，且
+    /// `DIR_ENTRIES_PER_PAGE = (PAGE_SIZE - 8) / 4`，因此
+    /// `offset + 4 = 8 + index*4 + 4 <= PAGE_SIZE`。`page` 是定长
+    /// `&[u8; PAGE_SIZE]`，转换不可能失败（AGENTS.md §13）。
     pub fn get_entry(page: &[u8; PAGE_SIZE], index: usize) -> PageId {
         assert!(index < DIR_ENTRIES_PER_PAGE);
         let offset = 8 + index * 4;
@@ -806,6 +837,11 @@ impl CrcDirPage {
     pub const ENTRIES_OFFSET: usize = 16;
     pub const ENTRIES_PER_PAGE: usize = (PAGE_SIZE - Self::ENTRIES_OFFSET) / 4; // 1020
 
+    /// 读取页内 u32。
+    ///
+    /// 调用方传入的 `off` 都是 `ENTRIES_OFFSET + i * 4`（`i < ENTRIES_PER_PAGE`）
+    /// 或固定字段偏移，均满足 `off + 4 <= PAGE_SIZE`；`page` 是定长
+    /// `&[u8; PAGE_SIZE]`，因此 `try_into()` 不可能失败（AGENTS.md §13）。
     fn read_u32(page: &[u8; PAGE_SIZE], off: usize) -> u32 {
         u32::from_le_bytes(page[off..off + 4].try_into().unwrap())
     }

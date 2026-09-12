@@ -36,12 +36,16 @@ cargo test --test robustness_tests        # page CRC at scale, WAL replay, chunk
 
 ## Current state
 
-**190 test cases — 189 pass, 1 intentionally `#[ignore]`d** (a child-process lock
+**193 test cases — 192 pass, 1 intentionally `#[ignore]`d** (a child-process lock
 probe launched by its parent test).
 
-Run as 15 integration suites plus 20 inline unit tests in the hand-written codecs
-(`src/codec.rs`, `src/json.rs`, `src/crc32.rs`), which are what the on-disk format
-is made of:
+Run as 15 integration suites (171 cases, of which 1 is `#[ignore]`d) plus 20 inline
+unit tests in the hand-written codecs (`src/codec.rs`, `src/json.rs`, `src/crc32.rs`),
+which are what the on-disk format is made of, plus 2 doc-tests: 171 + 20 + 2 = 193.
+
+The table below is checked against the files by
+`zero_dependency_tests::documented_suite_table_matches_the_files`, so a case added or
+removed without updating this table fails the build rather than drifting:
 
 | Suite                        | Cases | Covers                                                             |
 | ---------------------------- | ----- | ------------------------------------------------------------------ |
@@ -59,7 +63,7 @@ is made of:
 | `analytics_tests.rs`         | 7     | PageRank, WCC, K-hop                                               |
 | `steal_spill_tests.rs`       | 5     | Spilling, rollback pollution, checkpoint                           |
 | `equivalence_tests.rs`       | 4     | v1.0.0 behaviour guardrails: query, transaction, API, format       |
-| `zero_dependency_tests.rs`   | 5     | Empty dependency tree, version agreement (with negative controls)   |
+| `zero_dependency_tests.rs`   | 7     | Empty deps, version agreement, §13 + doc-count guards               |
 | inline (in `src/`)           | 20    | `codec` / `json` / `crc32` round-trips, truncation, vectors         |
 
 Run one suite:

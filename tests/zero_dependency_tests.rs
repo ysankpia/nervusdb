@@ -254,3 +254,186 @@ fn version_parser_handles_both_formats() {
     );
     assert_eq!(extract_version("version-id = \"9\"\n", "version"), None);
 }
+
+// =========================================================================
+// §13 守卫：定长切片转换必须带「为何不可能失败」的说明
+// =========================================================================
+//
+// AGENTS.md §13 要求：`page.rs` 等处的定长切片转换必须写明为何由构造保证
+// 不可能失败。这条约定原先只靠人工检查——而我实测发现 `page.rs` 的 18 处、
+// `disk_graph.rs` 的 5 处**全部没有**说明，说明人工检查没有生效。
+//
+// 因此把它变成可验证的不变量：每处 `try_into().unwrap()` 的前 40 行内必须
+// 存在提到 `§13`（或 `section 13`）的注释。用固定窗口而不是「向上找最近注释」，
+// 是为了强制说明写在**该块内部**：散落在文件别处的注释无法为这里背书。
+//
+// 为什么值得为注释写测试：这类转换一旦真的失败就是 panic（进程终止），而
+// 它们分布在格式解析最底层，改一个偏移常量就可能越界。注释在这里是**唯一**
+// 能让下一位读者确认「安全」的成本极低的证据。
+
+#[test]
+fn fixed_offset_slice_conversions_are_documented() {
+    let mut undocumented: Vec<String> = Vec::new();
+    let mut total = 0usize;
+
+    collect_source_files(Path::new("src"), &mut |path, contents| {
+        let lines: Vec<&str> = contents.lines().collect();
+
+        // 归属规则（三者都必须满足其一）：
+        //   1. 说明在该转换**所属函数体内**，且在它上方；或
+        //   2. 说明是紧邻该函数、且与函数之间没有其它 `fn` 的文档注释块中的一行。
+        //
+        // 关键：进入新函数时必须**重置**这个状态，否则文件开头的一处 §13 注释会
+        // 为后面所有转换背书——那是一条永远为真的守卫，比没有守卫更糟。
+        // 同时不能像更早的版本那样简单清空：Rust 的 `///` 文档注释写在 `fn` 行
+        // **之前**，简单清空会把函数自己的文档注释判成「不属于本函数」。
+        let mut s13_pos: Option<usize> = None;
+
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim_start();
+
+            if trimmed.starts_with("//") && (line.contains("§13") || line.contains("section 13")) {
+                s13_pos = Some(i);
+            }
+
+            let is_fn_head = trimmed.starts_with("fn ")
+                || trimmed.starts_with("pub fn ")
+                || trimmed.starts_with("pub(crate) fn ")
+                || trimmed.starts_with("pub(super) fn ")
+                || trimmed.starts_with("pub(in ");
+
+            if is_fn_head {
+                // 保留紧邻上方、连续的 `///` 文档注释块中的 §13 说明；
+                // 其余情况一律重置。
+                let mut keep = None;
+                let mut j = i;
+                while j > 0 {
+                    let prev = lines[j - 1].trim_start();
+                    if prev.starts_with("///") {
+                        j -= 1;
+                        if lines[j].contains("§13") || lines[j].contains("section 13") {
+                            keep = Some(j);
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                s13_pos = keep;
+                continue;
+            }
+
+            let code = strip_comment(line);
+            if !code.contains("try_into()") {
+                continue;
+            }
+            let follows = lines[i..(i + 3).min(lines.len())]
+                .iter()
+                .map(|l| strip_comment(l))
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !(follows.contains(".unwrap()") || follows.contains(".expect(")) {
+                continue;
+            }
+
+            total += 1;
+            if !matches!(s13_pos, Some(j) if j < i) {
+                undocumented.push(format!("{}:{}", path, i + 1));
+            }
+        }
+    });
+
+    assert!(
+        total > 0,
+        "no fixed-offset slice conversions found — the scanner matches nothing, so this \
+         guard would pass vacuously"
+    );
+    assert!(
+        undocumented.is_empty(),
+        "{} of {total} fixed-offset slice conversions lack a §13 justification comment \
+         in their own function body or its doc comment:\n{}",
+        undocumented.len(),
+        undocumented.join("\n")
+    );
+}
+
+// =========================================================================
+// 文档计数守卫
+// =========================================================================
+//
+// 这一条来自两次真实事故：1.1.0 开发期间，README 写 187、ROADMAP 与
+// docs/testing.md 写 190，而实测是 191。数字漂移不是笔误——它让读者无法判断
+// 「文档说的覆盖范围」是否可信，而「文档不得夸大、不得陈旧」是本项目的硬要求。
+//
+// 守卫的做法：统计各 `tests/*.rs` 里的 `#[test]` 数量，与 `docs/testing.md`
+// 表格末尾声明的总数比对。只比对**总数**，因为逐套件的精确数字随重构变化太快；
+// 总数能捕捉「加了测试但没更新文档」这一最常见的漂移。
+//
+// 刻意不比对 README/ROADMAP：那两处的措辞形式随版本变化，强行解析会让守卫变脆，
+// 而脆弱的守卫最终会被禁用——不如让它稳定地守住最有结构的那一处。
+
+#[test]
+fn documented_suite_table_matches_the_files() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    // 逐套件比对 `docs/testing.md` 的表格与各测试文件里 `#[test]` 的实际数量。
+    //
+    // 为什么是逐套件而不是只比总数：总数要正确就得同时算准 doc-test 与 `#[ignore]`，
+    // 而这两项都无法从文件内容可靠推出（doc-test 由 rustdoc 收集，`#[ignore]` 仍
+    // 计入数量）。首版守卫正是按「tests/ + src/ 内联」推总数，算出的 191 与实测的
+    // 192 差一个，于是守卫本身变成噪声来源——比没有守卫更糟。
+    //
+    // 表格与文件是同一份事实的两种陈述，逐行比对既不依赖任何外部计数，也能指出
+    // **是哪一行**漂移了。
+    let doc = fs::read_to_string(root.join("docs/testing.md")).expect("docs/testing.md must exist");
+
+    let mut checked = 0usize;
+    let mut problems: Vec<String> = Vec::new();
+
+    for line in doc.lines() {
+        // 形如：| `integration_tests.rs`       | 26    | ... |
+        let cells: Vec<&str> = line.split('|').map(|c| c.trim()).collect();
+        if cells.len() < 4 {
+            continue;
+        }
+        let name = cells[1].trim_matches('`');
+        if !name.ends_with(".rs") {
+            continue; // 跳过 `inline (in src/)` 之类的非文件行
+        }
+        let Some(declared) = cells[2].parse::<usize>().ok() else {
+            continue;
+        };
+
+        let path = root.join("tests").join(name);
+        let contents = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => {
+                problems.push(format!(
+                    "docs/testing.md lists `{name}` but tests/{name} does not exist"
+                ));
+                continue;
+            }
+        };
+        let actual = contents
+            .lines()
+            .filter(|l| l.trim_start().starts_with("#[test]"))
+            .count();
+
+        checked += 1;
+        if actual != declared {
+            problems.push(format!(
+                "tests/{name}: documented {declared} case(s), file has {actual}"
+            ));
+        }
+    }
+
+    assert!(
+        checked >= 10,
+        "only {checked} suite rows were matched — the table format changed and this guard \
+         is no longer checking anything meaningful"
+    );
+    assert!(
+        problems.is_empty(),
+        "docs/testing.md disagrees with the test files:\n{}",
+        problems.join("\n")
+    );
+}

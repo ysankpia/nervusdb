@@ -4,6 +4,12 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 
 thread_local! {
+    /// 线程内的最近一次错误消息。
+    ///
+    /// `CString::new("")` 作用于**空字符串字面量**：空字符串不含 NUL 字节，
+    /// 因此 `CString::new` 不可能返回 `Err`（该错误的唯一成因是输入含 NUL）。
+    /// 这是 `thread_local!` 的初始化表达式，无法返回 `Result`，故这里保留
+    /// `unwrap`；它由字面量保证，不依赖任何运行时输入（AGENTS.md §13）。
     static LAST_ERROR: RefCell<CString> = RefCell::new(CString::new("").unwrap());
 }
 
