@@ -69,6 +69,12 @@ pub struct GraphLiteOptions {
     pub buffer_pool_frames: usize,
     /// WAL 体积达到该阈值后自动 Checkpoint；`0` 表示关闭
     pub wal_auto_checkpoint_bytes: u64,
+    /// 以只读模式打开：取共享锁，可与其它读者共存，但与任何写者互斥。
+    ///
+    /// 只读句柄**绝不写主数据文件**，因此不触发 WAL 回放。若 WAL 中确有已提交
+    /// 但未回放的页，打开会失败并提示先用读写句柄打开一次——静默忽略那些页会
+    /// 让读者看到过期数据。
+    pub read_only: bool,
 }
 
 impl Default for GraphLiteOptions {
@@ -76,6 +82,7 @@ impl Default for GraphLiteOptions {
         Self {
             buffer_pool_frames: DEFAULT_BUFFER_POOL_FRAMES,
             wal_auto_checkpoint_bytes: DEFAULT_WAL_AUTO_CHECKPOINT_BYTES,
+            read_only: false,
         }
     }
 }
@@ -97,9 +104,11 @@ pub struct GraphInner {
 pub struct GraphLite {
     inner: Arc<RwLock<GraphInner>>,
     db_path: PathBuf,
-    /// 进程级排他锁守卫：保证同一数据库同时只有一个打开的句柄（跨进程与同进程）。
+    /// 进程级锁守卫：写句柄取排他锁，只读句柄取共享锁。
     /// 锁随句柄 Drop 自动释放；`:memory:` 模式为 `None`。
     lock: Arc<Option<DbLock>>,
+    /// 本句柄是否以只读方式打开（决定写入口是否拒绝）
+    read_only: bool,
 }
 
 impl GraphLite {
@@ -114,6 +123,23 @@ impl GraphLite {
     /// `open_with_pool_mb(path, 16)` 等价于 4096 帧（16MB）。
     pub fn open_with_pool_mb<P: AsRef<Path>>(path: P, mb: usize) -> Result<Self, GraphError> {
         Self::open_with_pool_size(path, (mb * FRAMES_PER_MB).max(2))
+    }
+
+    /// 以**只读**模式打开图数据库：取共享锁，可与其它读者共存。
+    ///
+    /// 适合「一个进程写入、多个进程观察」的场景（例如后台 Agent 写、前台界面读）。
+    /// 写入口在只读句柄上会返回明确错误，而不是静默尝试。
+    ///
+    /// 若 WAL 中还有未回放的已提交页，打开会失败并提示先用读写句柄打开一次——
+    /// 读者不能回放（那会写主数据文件），静默跳过会让它看到过期数据。
+    pub fn open_read_only<P: AsRef<Path>>(path: P) -> Result<Self, GraphError> {
+        Self::open_with_options(
+            path,
+            GraphLiteOptions {
+                read_only: true,
+                ..GraphLiteOptions::default()
+            },
+        )
     }
 
     /// 打开图数据库并自定义 Buffer Pool 帧数上限（纯磁盘受控，无内存泄露）
@@ -139,14 +165,38 @@ impl GraphLite {
         let db_path = path.as_ref().to_path_buf();
         let is_memory = db_path.to_str() == Some(":memory:") || db_path.as_os_str().is_empty();
 
-        // 0. 先获取进程级排他锁，再执行任何读写。
+        // 0. 先获取进程级锁，再执行任何读写。
         //    顺序至关重要：`StorageEngine::open` 会回放 WAL 并**写主数据文件**，
         //    若在其之后才加锁，并发回放本身就已经破坏了数据。
+        //
+        //    只读模式取**共享**锁：多个读者可以共存，但与写者互斥。
         let lock = if is_memory {
             None
+        } else if options.read_only {
+            Some(DbLock::acquire_shared(&db_path)?)
         } else {
             Some(DbLock::acquire(&db_path)?)
         };
+
+        // 0a. 只读模式不得回放 WAL：那会写主数据文件。
+        //     因此必须先确认没有待回放内容，否则读者会看到过期数据。
+        //     这一步必须在 `StorageEngine::open` 之前——顺序反了就已经写了。
+        if options.read_only && !is_memory {
+            let engine = StorageEngine::open_readonly(&db_path)?;
+            let pending = engine.pending_replay_pages()?;
+            if pending > 0 {
+                return Err(GraphError::StorageError(format!(
+                    "Cannot open '{}' read-only: its WAL holds {} committed page(s) \
+                     not yet replayed into the data file.\n\
+                     A read-only handle never writes, so it cannot apply them and would \
+                     return stale data.\n\
+                     Open the database once with a read-write handle to replay the WAL, \
+                     then open it read-only.",
+                    db_path.display(),
+                    pending
+                )));
+            }
+        }
 
         // 0b. 格式与尺寸闸门：**必须在任何写入之前**。
         //
@@ -216,7 +266,26 @@ impl GraphLite {
             inner: Arc::new(RwLock::new(inner)),
             db_path,
             lock: Arc::new(lock),
+            read_only: options.read_only,
         })
+    }
+
+    /// 本句柄是否为只读（共享锁）。
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    /// 只读句柄上的写操作统一入口：给出可操作的错误，而不是让写入静默失败。
+    fn reject_write(&self, what: &str) -> Result<(), GraphError> {
+        if self.read_only {
+            return Err(GraphError::General(format!(
+                "Cannot {}: this handle was opened read-only (`GraphLite::open_read_only`).\n\
+                 Read-only handles hold a shared lock and never write the data file.\n\
+                 Open the database with `GraphLite::open` to modify it.",
+                what
+            )));
+        }
+        Ok(())
     }
 
     /// 打开前校验磁盘格式版本，**早于任何写入**（含 WAL 回放）。
@@ -309,6 +378,17 @@ impl GraphLite {
 
     /// 执行 Cypher 变更语句 (如 CREATE / DETACH DELETE)
     pub fn execute(&self, cypher_str: &str) -> Result<ExecuteResult, GraphError> {
+        // 变更语句在只读句柄上明确拒绝（读查询仍走 `run_cypher`）
+        if self.read_only
+            && crate::cypher::parser::Parser::new(
+                crate::cypher::lexer::Lexer::new(cypher_str).tokenize()?,
+            )
+            .parse()
+            .map(|st| st.is_mutating())
+            .unwrap_or(false)
+        {
+            self.reject_write("execute a mutating Cypher statement")?;
+        }
         let mut inner = self
             .inner
             .write()
@@ -384,6 +464,7 @@ impl GraphLite {
     ///
     /// 未提交事务的溢出帧不会被重放，因此检查点绝不会把任何未提交数据写入主库。
     pub fn checkpoint(&self) -> Result<(), GraphError> {
+        self.reject_write("run a checkpoint")?;
         let mut inner = self.inner.write_recover();
 
         // 1. 把 WAL 中已提交的页按序重放到主数据文件，同时为每页记录校验和。
@@ -577,6 +658,7 @@ impl GraphLite {
         labels: HashSet<String>,
         properties: HashMap<String, Value>,
     ) -> Result<u64, GraphError> {
+        self.reject_write("add a node")?;
         let mut inner = self
             .inner
             .write()
@@ -618,6 +700,7 @@ impl GraphLite {
         properties: HashMap<String, Value>,
         weight: f64,
     ) -> Result<u64, GraphError> {
+        self.reject_write("add an edge")?;
         let edge_type_str = edge_type.into();
         let mut inner = self
             .inner
@@ -640,6 +723,7 @@ impl GraphLite {
 
     /// 删除节点（级联删除关联边，槽位回收至 Freelist）
     pub fn remove_node(&self, id: u64) -> Result<Node, GraphError> {
+        self.reject_write("remove a node")?;
         let mut inner = self
             .inner
             .write()
@@ -664,6 +748,7 @@ impl GraphLite {
 
     /// 删除边（从双向双环磁盘链表中脱链，槽位回收至 Freelist）
     pub fn remove_edge(&self, id: u64) -> Result<Edge, GraphError> {
+        self.reject_write("remove an edge")?;
         let mut inner = self
             .inner
             .write()
@@ -687,6 +772,7 @@ impl GraphLite {
         key: impl Into<String>,
         value: V,
     ) -> Result<(), GraphError> {
+        self.reject_write("update a node property")?;
         let key_str = key.into();
         let val = value.into();
 
@@ -739,6 +825,7 @@ impl GraphLite {
         key: impl Into<String>,
         value: V,
     ) -> Result<(), GraphError> {
+        self.reject_write("update an edge property")?;
         let key_str = key.into();
         let val = value.into();
 

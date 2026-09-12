@@ -558,6 +558,70 @@ impl StorageEngine {
         &self.wal
     }
 
+    /// 回放到主数据文件的**待办量**：WAL 中已提交但尚未写回主文件的页数。
+    ///
+    /// ## 为什么需要它
+    ///
+    /// 只读打开不能碰主数据文件，但 [`StorageEngine::open`] 的回放**会写**。
+    /// 因此只读者必须先确认「没有待回放内容」，否则它无法保证自己看到的
+    /// 是与主文件一致的状态。
+    ///
+    /// 判定与回放本身共用同一套事务状态推导（`collect_committed_txs`），
+    /// 避免出现「这里说没有、回放时却有」的不一致。
+    ///
+    /// 返回 `Ok(0)` 表示可以安全地只读打开。
+    pub fn pending_replay_pages(&self) -> Result<usize, GraphError> {
+        if self.is_memory {
+            return Ok(0);
+        }
+        let (committed, aborted) = collect_committed_txs(&self.wal)?;
+        if committed.is_empty() {
+            return Ok(0);
+        }
+        let mut pending = 0usize;
+        let mut cursor = self.wal.cursor()?;
+        while let Some((_, record)) = cursor.next_frame()? {
+            if let WalRecord::PageWrite { tx_id, .. } = record {
+                if committed.contains(&tx_id) && !aborted.contains(&tx_id) {
+                    pending += 1;
+                }
+            }
+        }
+        Ok(pending)
+    }
+
+    /// 打开存储引擎但**不回放** WAL。
+    ///
+    /// 供只读打开前的预检使用：它只读 WAL 与主文件，不写任何字节。
+    /// 调用方随后用 [`StorageEngine::pending_replay_pages`] 判断能否安全地
+    /// 以只读方式打开。
+    pub fn open_readonly<P: AsRef<Path>>(path: P) -> Result<Self, GraphError> {
+        let path_ref = path.as_ref();
+        let is_memory = path_ref.to_str() == Some(":memory:") || path_ref.as_os_str().is_empty();
+
+        if is_memory {
+            return Ok(Self {
+                db_path: PathBuf::from(":memory:"),
+                wal: WalWriter::open(":memory:.wal", true)?,
+                is_memory: true,
+            });
+        }
+
+        let db_path = path_ref.to_path_buf();
+        let mut wal_path_str = db_path.as_os_str().to_os_string();
+        wal_path_str.push(".wal");
+        let wal_path = PathBuf::from(wal_path_str);
+
+        // 主文件不存在时**不创建**：只读打开不应产生副作用
+        let wal = WalWriter::open(&wal_path, false)?;
+
+        Ok(Self {
+            db_path,
+            wal,
+            is_memory: false,
+        })
+    }
+
     /// 打开存储引擎：如果存在 WAL 则回放已提交的页到主数据文件
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, GraphError> {
         let path_ref = path.as_ref();

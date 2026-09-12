@@ -44,6 +44,7 @@ fn test_wal_auto_checkpoint_triggers() -> Result<(), GraphError> {
     let opts = GraphLiteOptions {
         buffer_pool_frames: 256,
         wal_auto_checkpoint_bytes: 64 * 1024,
+        ..GraphLiteOptions::default()
     };
     let db = GraphLite::open_with_options(&db_path, opts)?;
 

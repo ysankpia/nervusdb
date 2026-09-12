@@ -18,6 +18,29 @@ user has to act on them:
 
 ### Added
 
+- **Multiple readers can now share a database while a single writer holds it.**
+  Previously exactly one handle could open a file, so a background process writing
+  and a foreground process observing were mutually exclusive — the most common
+  shape of an agent-plus-UI workload.
+
+  Read-only handles take a **shared** lock and coexist; a write handle takes the
+  exclusive lock and excludes everyone. The kernel enforces it (`try_lock_shared`),
+  so there is no spinning or retry loop. `GraphLite::open_read_only(path)` is the
+  entry point, and `GraphLiteOptions::read_only` covers the options-based path.
+
+  The subtlety is that **a reader must not trigger WAL replay**, since replay
+  writes the data file. So a read-only open first checks
+  `StorageEngine::pending_replay_pages()`: if the WAL still holds committed pages
+  that have not reached the data file, the open fails and says to open once with a
+  read-write handle. Silently skipping those pages would return stale data — the
+  failure a reader is least equipped to notice.
+
+  Write entry points on a read-only handle return a clear error naming the cause
+  rather than attempting the write. Covered by two tests: reader/writer mutual
+  exclusion in both directions including lock release on drop, and the pending-WAL
+  refusal followed by a successful read-only open after one replay.
+
+
 - **`LIMIT` is pushed down into matching when it is safe to do so.** The engine
   used to expand every match and truncate at the very end, so `LIMIT 1` cost as
   much as the full query. It now stops as soon as enough rows are collected.

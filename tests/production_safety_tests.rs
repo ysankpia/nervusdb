@@ -672,3 +672,124 @@ fn test_page_checksum_covers_pages_beyond_256() -> Result<(), GraphError> {
 
     Ok(())
 }
+
+// =========================================================================
+// 8. 多读单写并发：共享读锁
+// =========================================================================
+/// 只读句柄取共享锁：多个读者共存，但与写者双向互斥。
+///
+/// 这是「后台写入、前台观察」场景的基础。SQLite 的 WAL 模式即此模型。
+#[test]
+fn test_multiple_readers_coexist_with_one_writer_excluded() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("shared_lock.db");
+
+    // 建库并 checkpoint，使 WAL 为空（只读打开要求无可回放内容）
+    {
+        let db = GraphLite::open(&db_path)?;
+        db.with_transaction(|tx| {
+            for i in 1..=5 {
+                tx.add_node(HashSet::from(["N".to_string()]), props(i))?;
+            }
+            Ok(())
+        })?;
+        db.checkpoint()?;
+    }
+
+    // 多个读者共存
+    let r1 = GraphLite::open_read_only(&db_path)?;
+    let r2 = GraphLite::open_read_only(&db_path)?;
+    let r3 = GraphLite::open_read_only(&db_path)?;
+    assert!(r1.is_read_only() && r2.is_read_only() && r3.is_read_only());
+    assert_eq!(r1.node_count(), 5, "reader must see the committed data");
+
+    // 有读者时写者被拒绝
+    let writer = GraphLite::open(&db_path);
+    assert!(
+        writer.is_err(),
+        "a writer must be refused while readers hold shared locks"
+    );
+
+    // 写入口在只读句柄上必须明确报错，而不是静默失败
+    let write_err = r1
+        .add_node(HashSet::new(), HashMap::new())
+        .expect_err("read-only handle must refuse writes");
+    assert!(
+        write_err.to_string().contains("read-only"),
+        "error must explain that the handle is read-only, got: {}",
+        write_err
+    );
+    assert!(
+        r1.checkpoint().is_err(),
+        "read-only handle must refuse checkpoint (it writes)"
+    );
+
+    // 释放读者后写者可用；此时读者反过来被拒绝
+    drop(r1);
+    drop(r2);
+    drop(r3);
+    let w = GraphLite::open(&db_path)?;
+    assert!(
+        GraphLite::open_read_only(&db_path).is_err(),
+        "a reader must be refused while a writer holds the exclusive lock"
+    );
+    drop(w);
+
+    // 写者退出后读者再次可用 —— 证明锁确实随 Drop 释放，没有泄漏
+    let again = GraphLite::open_read_only(&db_path)?;
+    assert_eq!(again.node_count(), 5);
+
+    Ok(())
+}
+
+/// 只读打开不得在 WAL 还有待回放内容时成功。
+///
+/// 读者不能回放（回放会写主数据文件），若静默跳过那些页，它会看到过期数据。
+/// 因此必须明确失败并指出怎么处理。
+#[test]
+fn test_read_only_open_refuses_pending_wal_replay() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("ro_pending_wal.db");
+
+    // 写入但**不** checkpoint：WAL 中留有已提交页
+    {
+        let db = GraphLite::open(&db_path)?;
+        db.with_transaction(|tx| {
+            for i in 1..=5 {
+                tx.add_node(HashSet::from(["N".to_string()]), props(i))?;
+            }
+            Ok(())
+        })?;
+    }
+
+    let err = match GraphLite::open_read_only(&db_path) {
+        Ok(_) => panic!("read-only open must fail while the WAL has committed pages"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("read-only") && msg.contains("not yet replayed"),
+        "error must explain the WAL situation, got: {}",
+        msg
+    );
+    assert!(
+        msg.contains("read-write handle"),
+        "error must say how to resolve it, got: {}",
+        msg
+    );
+
+    // 用读写句柄打开一次即可回放；此后只读可用且能看到全部数据
+    {
+        let db = GraphLite::open(&db_path)?;
+        assert_eq!(db.node_count(), 5);
+        db.checkpoint()?;
+    }
+    let ro = GraphLite::open_read_only(&db_path)?;
+    assert_eq!(
+        ro.node_count(),
+        5,
+        "after replay the reader must see every committed node"
+    );
+
+    Ok(())
+}
