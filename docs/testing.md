@@ -36,7 +36,7 @@ cargo test --test robustness_tests        # page CRC at scale, WAL replay, chunk
 
 ## Current state
 
-**187 test cases — 186 pass, 1 intentionally `#[ignore]`d** (a child-process lock
+**190 test cases — 189 pass, 1 intentionally `#[ignore]`d** (a child-process lock
 probe launched by its parent test).
 
 Run as 15 integration suites plus 20 inline unit tests in the hand-written codecs
@@ -46,7 +46,7 @@ is made of:
 | Suite                        | Cases | Covers                                                             |
 | ---------------------------- | ----- | ------------------------------------------------------------------ |
 | `integration_tests.rs`       | 26    | CRUD, ACID, concurrency, indexing, out-of-core stress              |
-| `production_safety_tests.rs` | 29    | Exclusive lock, integrity, constraints, read-only writes, queue cap |
+| `production_safety_tests.rs` | 32    | Exclusive lock, integrity, constraints, read-only writes, queue cap |
 | `cypher_advanced_tests.rs`   | 17    | Cypher 1.0 syntax closure, EXPLAIN, aggregate semantics            |
 | `unwind_tests.rs`            | 16    | `UNWIND`, batch ingestion, statement atomicity                     |
 | `merge_tests.rs`             | 14    | `MERGE` idempotence, ON CREATE / ON MATCH                           |

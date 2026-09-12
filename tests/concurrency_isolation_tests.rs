@@ -414,26 +414,32 @@ fn test_index_and_scan_agree_under_concurrent_writes() -> Result<(), GraphError>
         let checks = Arc::clone(&checks);
         thread::spawn(move || {
             while !stop.load(Ordering::Relaxed) {
-                // 索引路径
-                let idx = match db.run_cypher("MATCH (n:Idx) RETURN count(*)") {
-                    Ok(r) => r.rows[0].values[0].clone(),
-                    Err(_) => continue,
-                };
-                // 全表路径（不走标签索引）
-                let scan = match db.run_cypher("MATCH (n) WHERE n.v >= 0 RETURN count(*)") {
-                    Ok(r) => r.rows[0].values[0].clone(),
-                    Err(_) => continue,
+                // 两条查询必须在**同一个快照**内执行。
+                //
+                // 否则「索引读在前、扫描读在后」会横跨两个时刻：抽取到的
+                // `(0, N)` 只是「读索引时还没人写、读扫描时已经写了」，
+                // 属于读者自己拼接出的状态，不是索引缺陷。这条测试最初正是
+                // 这样偶发失败的（约每几十次一轮），而偶发失败的断言没有价值。
+                let (idx, scan) = {
+                    let snapshot = db.read_snapshot();
+                    let idx = match snapshot.query("MATCH (n:Idx) RETURN count(*)") {
+                        Ok(r) => r.rows[0].values[0].clone(),
+                        Err(_) => continue,
+                    };
+                    let scan = match snapshot.query("MATCH (n) WHERE n.v >= 0 RETURN count(*)") {
+                        Ok(r) => r.rows[0].values[0].clone(),
+                        Err(_) => continue,
+                    };
+                    (idx, scan)
                 };
                 if let (Value::Int(a), Value::Int(b)) = (idx, scan) {
-                    // 扫描路径可能包含稍后写入的节点，因此只要求单调可比：
-                    // 索引计数绝不能**大于**扫描计数之外的合理范围。
-                    // 这里断言的是索引不会比它对应的标签集合更小——那意味着
-                    // 索引丢了已提交的行。
-                    if b > 0 && a == 0 {
-                        mismatches
-                            .lock()
-                            .unwrap()
-                            .push(format!("索引报告 0 行，但扫描报告 {b} 行"));
+                    // 同一快照内，索引计数不得小于它对应的标签集合中的行数：
+                    // 那意味着索引丢了已提交的行。反过来（索引多于扫描）不会发生，
+                    // 因为两者统计的是同一批节点。
+                    if a < b {
+                        mismatches.lock().unwrap().push(format!(
+                            "同一快照内索引报告 {a} 行，少于扫描的 {b} 行（索引丢行）"
+                        ));
                     }
                 }
                 checks.fetch_add(1, Ordering::Relaxed);

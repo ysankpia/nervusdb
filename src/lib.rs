@@ -923,7 +923,15 @@ impl GraphLite {
             ..
         } = &mut *inner;
         index_mgr.declare_unique(label, prop);
-        // 持久化到 Page 0 目录；与其它元数据一样随 checkpoint 落盘
+        // 持久化到 Page 0 目录。
+        //
+        // **必须显式 `sync_header`**：改 `index_catalog` 只是改了内存里的一个字段，
+        // 而 `commit_dirty_pages_to_wal` 提交的是「已标记为修改的页」。这里没有标记，
+        // 也没有写 Page 0，于是约束只活在当前句柄的内存中。
+        //
+        // 修复前的实测后果：声明约束后重开数据库，`unique_constraints()` 返回空，
+        // 重复值被静默接受——约束形同虚设，而调用方以为它在生效。
+        // `DiskGraph::add_node` 正是靠结尾的 `sync_header()` 才让标签落盘。
         disk_graph
             .index_catalog
             .unique_constraints
@@ -931,6 +939,7 @@ impl GraphLite {
                 label: label.to_string(),
                 prop: prop.to_string(),
             });
+        disk_graph.sync_header()?;
 
         let tx_id = inner.next_tx_id;
         inner.next_tx_id += 1;

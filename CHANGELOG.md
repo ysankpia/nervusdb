@@ -53,6 +53,29 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
 ### Fixed
 
+- **Unique constraints did not survive closing and reopening the database.**
+  `create_unique_constraint` mutated the in-memory `index_catalog` but never called
+  `sync_header()`, so the change never reached Page 0 or the WAL —
+  `commit_dirty_pages_to_wal` only commits pages marked modified, and none were.
+  Measured before the fix:
+
+  ```text
+  db.create_unique_constraint("P", "k")
+  [reopen]
+  db.unique_constraints()      -> []       (the constraint is gone)
+  CREATE (:P {k: 1})           -> succeeds (the duplicate is silently accepted)
+  ```
+
+  Labels in the same catalog always persisted, because `DiskGraph::add_node` ends
+  with `sync_header()`; the constraint path simply omitted it.
+
+  This is worse than a constraint that errors, because the caller stops doing its own
+  duplicate checking on the belief that the engine is doing it. Found while checking
+  a different claim — that a 1.0.0 database opens unchanged in 1.1.0 — and it turned
+  out the format was fine and the constraint handling was not. Three tests now cover
+  reopen, explicit checkpoint, and joint persistence with labels; removing the
+  `sync_header()` call fails all three.
+
 - **A property whose value is the string `"null"` was treated as an absent value.**
   `null` was represented internally as the _string_ `"null"`, so the two were
   indistinguishable:

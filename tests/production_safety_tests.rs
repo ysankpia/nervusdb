@@ -1653,3 +1653,124 @@ fn test_update_and_remove_also_respect_the_limit() -> Result<(), GraphError> {
 
     Ok(())
 }
+
+// =========================================================================
+// 11. 唯一约束必须跨重开存活
+// =========================================================================
+//
+// 修复前的实测行为：
+//
+// ```text
+// db.create_unique_constraint("P", "k");
+// drop(db);                              // 或 checkpoint 后重开
+// GraphLite::open(path).unique_constraints()   -> []      <- 约束消失
+// CREATE (:P {k: 1})                     -> 成功            <- 重复值被静默接受
+// ```
+//
+// 根因：`create_unique_constraint` 修改的是内存中的 `index_catalog`，但没有调用
+// `sync_header()`，因此改动从未进入 Page 0，也从未进入 WAL。
+// `commit_dirty_pages_to_wal` 只提交**已被标记为修改**的页，而这里没有任何页被标记。
+// `DiskGraph::add_node` 正是靠结尾的 `sync_header()` 才让标签落盘。
+//
+// 「约束悄悄失效」比「约束报错」危险得多：调用方以为重复数据会被挡住，于是不再
+// 自己校验，最终库里出现它明确想要避免的重复。
+
+#[test]
+fn test_unique_constraint_survives_reopen() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let path = dir.path().join("uc_reopen.db");
+
+    {
+        let db = GraphLite::open(&path)?;
+        db.run_cypher("CREATE (:P {k: 1})")?;
+        db.create_unique_constraint("P", "k")?;
+        assert_eq!(
+            db.unique_constraints(),
+            vec![("P".to_string(), "k".to_string())],
+            "同句柄内约束必须可见"
+        );
+    }
+
+    // 重开：约束必须还在
+    let db = GraphLite::open(&path)?;
+    assert_eq!(
+        db.unique_constraints(),
+        vec![("P".to_string(), "k".to_string())],
+        "约束必须跨重开存活（修复前此处返回空）"
+    );
+
+    // 而且必须真的挡住重复值
+    let err = db
+        .run_cypher("CREATE (:P {k: 1})")
+        .expect_err("重开后重复值必须被拒绝");
+    assert!(
+        err.to_string().contains("Unique constraint"),
+        "应报告唯一约束冲突，实际: {err}"
+    );
+
+    // 新值仍然可以写入
+    db.run_cypher("CREATE (:P {k: 2})")?;
+    let res = db.run_cypher("MATCH (n:P) RETURN count(*)")?;
+    assert_eq!(res.rows[0].values[0], Value::from(2));
+
+    Ok(())
+}
+
+/// 显式 checkpoint 之后同样必须存活。
+///
+/// checkpoint 会重写 Page 0；如果约束只存在于内存的 catalog 字段里，checkpoint
+/// 反而会把它抹掉。两个路径都测，避免只修好其中一个。
+#[test]
+fn test_unique_constraint_survives_checkpoint() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let path = dir.path().join("uc_ckpt.db");
+
+    {
+        let db = GraphLite::open(&path)?;
+        db.run_cypher("CREATE (:Q {v: 'a'})")?;
+        db.create_unique_constraint("Q", "v")?;
+        db.checkpoint()?;
+    }
+
+    let db = GraphLite::open(&path)?;
+    assert_eq!(
+        db.unique_constraints(),
+        vec![("Q".to_string(), "v".to_string())],
+        "checkpoint 后约束必须存活"
+    );
+    assert!(
+        db.run_cypher("CREATE (:Q {v: 'a'})").is_err(),
+        "checkpoint 后约束必须仍然生效"
+    );
+
+    Ok(())
+}
+
+/// 约束与索引元数据必须**一起**持久化。
+///
+/// 同一个 `index_catalog` 里既有标签/边类型，也有唯一约束。标签一直能存活，
+/// 约束不能——说明持久化路径对二者处理不同，这正是缺陷所在。
+#[test]
+fn test_constraint_and_schema_persist_together() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let path = dir.path().join("uc_schema.db");
+
+    {
+        let db = GraphLite::open(&path)?;
+        db.run_cypher("CREATE (a:Lbl {k: 1})-[:ETYPE]->(b:Lbl {k: 2})")?;
+        db.create_unique_constraint("Lbl", "k")?;
+    }
+
+    let db = GraphLite::open(&path)?;
+    assert!(
+        db.index_labels().contains(&"Lbl".to_string()),
+        "标签必须存活"
+    );
+    assert_eq!(
+        db.unique_constraints().len(),
+        1,
+        "约束必须与标签一同存活；只有标签存活说明持久化路径不一致"
+    );
+
+    Ok(())
+}
