@@ -25,13 +25,19 @@ cp ../../target/debug/libnervusdb_node.dylib nervusdb.node   # libnervusdb_node.
 node test.mjs
 ```
 
-The `index.js` glue layer also picks up the library straight from `target/` if
-you prefer not to copy it.
+The published package contains a prebuilt `.node` for each supported platform
+(macOS and Linux, x86_64 and arm64). `index.js` selects the one matching the running
+process from `nervusdb.<target-triple>.node`.
+
+For local development, `napi build --platform` writes that same name, so the loader
+finds it without a copy step. Note that `require` cannot load a `.dylib` or `.so` at
+all — it fails with "Invalid or unexpected token" — so the `.node` rename is required,
+not cosmetic.
 
 ## Quick Start
 
 ```typescript
-import { NervusDb } from "nervusdb-node";
+import { NervusDb } from "nervusdb";
 
 // 1. Open or create database (poolSize in frames: 1024 = 4MB)
 const db = NervusDb.open("mydb.db", 1024);

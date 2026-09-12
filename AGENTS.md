@@ -70,10 +70,13 @@ Any modification that violates these rules must be rejected immediately:
    - `restore_meta` must call `sync_protected_pages()` so a rolled-back transaction cannot leave stale or missing directory protection.
 
 8. **Storage Format Versioning & Zero Dependencies**
-   - `DB_PAGE_VERSION` is `4` and **this is the frozen format**. `FORMAT.md` is the
-     authoritative byte-level spec (version history, limits, CRC layout, why zero
-     dependencies). Any change to the bytes on disk updates `FORMAT.md` **in the same
-     commit**. Never silently reinterpret an older file.
+   - `DB_PAGE_VERSION` is `5` and **this is the frozen format** — the number is
+     asserted against the code by
+     `zero_dependency_tests::documented_format_version_matches_the_code`, because
+     this line said `4` for a release after the constant moved to `5`. `FORMAT.md`
+     is the authoritative byte-level spec (version history, limits, CRC layout, why
+     zero dependencies). Any change to the bytes on disk updates `FORMAT.md` **in
+     the same commit**. Never silently reinterpret an older file.
    - **The version and size gates run before any write, including WAL replay** — they
      sit at the top of `open_with_options`, ahead of `StorageEngine::open`, because
      replay writes the main file. A rejected file comes out byte-identical

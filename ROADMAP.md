@@ -19,10 +19,11 @@ Working and covered by tests:
   on-disk format's bytes are defined and implemented in this repository
   (`src/codec.rs`, `src/json.rs`, `src/crc32.rs`) and specified byte by byte in
   `FORMAT.md`.
-- **Frozen format (version 4).** The stability promise and the two permanent
+- **Frozen format (version 5).** The stability promise and the two permanent
   limits (64 GiB file, 24-bit property pointers) are documented with the reasoning;
   both limits are enforced rather than assumed. Older versions are refused before
-  any write, including WAL replay.
+  any write, including WAL replay. Version 5 changed only the Page 0 magic
+  (`GLDB` → `NVDB`) when the project was renamed — no page layout moved.
 - Pure disk-backed storage: one data file plus one page-level WAL, fixed-size
   records (32B nodes, 64B edges), O(1) physical addressing, disk-native
   index-free adjacency.
@@ -54,7 +55,7 @@ Working and covered by tests:
 - Tooling: Python and Node.js SDKs with transaction and batch-write support.
   Inspection and dump go through the library API — the CLI and the browser
   workbench were removed before 0.1.0.
-- 198 test cases across 16 suites (197 run, 1 intentionally `#[ignore]`d for a
+- 199 test cases across 16 suites (198 run, 1 intentionally `#[ignore]`d for a
   child-process lock probe); `cargo fmt`, `cargo clippy -D warnings` and
   `rustdoc -D warnings` all clean.
 

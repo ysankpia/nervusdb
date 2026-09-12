@@ -1,5 +1,5 @@
 {
-  "name": "nervusdb-node",
+  "name": "nervusdb",
   "version": "0.1.0",
   "description": "Node.js and TypeScript bindings for NervusDB, an embedded single-file property graph database",
   "engines": {
@@ -10,9 +10,21 @@
   "napi": {
     "name": "nervusdb",
     "triples": {
-      "default": true
+      "defaults": false,
+      "additional": [
+        "aarch64-apple-darwin",
+        "x86_64-apple-darwin",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu"
+      ]
     }
   },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "*.node"
+  ],
   "scripts": {
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
@@ -29,5 +41,10 @@
     "embedded",
     "napi"
   ],
-  "license": "AGPL-3.0-only"
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ysankpia/nervusdb.git",
+    "directory": "bindings/nodejs"
+  }
 }
