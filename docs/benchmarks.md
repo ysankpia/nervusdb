@@ -92,7 +92,7 @@ com-DBLP (317,080 nodes / 1,049,866 edges, 256MB pool):
 | Metric             | Value                             |
 | ------------------ | --------------------------------- |
 | Node ingestion     | 892,000 ops/s                     |
-| Edge ingestion     | **598,902 ops/s**                 |
+| Edge ingestion     | **777,257 ops/s**                 |
 | Hub 1-hop (top 50) | 40.7 µs avg, **10,080** neighbors |
 | Hub 2-hop (top 50) | 1.63 ms avg, **161,877** reached  |
 
@@ -101,7 +101,7 @@ LiveJournal (4,847,571 nodes / 68,993,773 edges, 1GiB pool, auto-checkpoint off)
 | Metric             | Value                             |
 | ------------------ | --------------------------------- |
 | Node ingestion     | 713,000 ops/s                     |
-| Edge ingestion     | **200,618 ops/s**                 |
+| Edge ingestion     | **201,823 ops/s**                 |
 | Hub 1-hop (top 50) | 0.35 s avg, **335,194** neighbors |
 | Hub 2-hop (top 50) | 8.1 s avg, **10,027,730** reached |
 | On-disk size       | 4.34 GB                           |
@@ -113,6 +113,14 @@ top-50 hub set is selected by degree, and in com-DBLP three nodes tie at degree
 depended on sort internals. Runs produced 161,789 / 161,877 / 162,158, all
 "correct" for their own hub set. The sort is now a total order (degree
 descending, then raw id ascending).
+
+**Note on the CRC32 cost.** The zero-dependency build was briefly 1.8x slower at
+bulk ingest than the release before it, because the hand-written byte-at-a-time
+CRC32 cost 7,028 ns per 4 KiB page against `crc32fast`'s 323 ns. Every WAL frame
+computes two checksums, so this was the bottleneck. Slicing-by-8 brought the page
+down to 1,750 ns and the throughput back to the figures above. The residual ~6% is
+the measured price of having no runtime dependencies, and it is recorded here
+rather than left implicit.
 
 **Auto-checkpoint roughly halves bulk edge throughput** and the benchmarks
 therefore turn it off:
