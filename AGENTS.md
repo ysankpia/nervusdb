@@ -282,10 +282,22 @@ cannot be deleted — so the two jobs are separated:
 - `publish` runs **only** on `workflow_dispatch` with `confirm: publish`, behind the
   `release` GitHub Environment. A tag alone never publishes.
 
-Required secrets (only referenced in the `publish` job): `CARGO_REGISTRY_TOKEN`,
-`PYPI_API_TOKEN`, `NPM_TOKEN`. Before the first release, create the `release`
-environment and set these. The registry name and version become permanent at that
-point, which is what the version check above exists to protect.
+Required secrets, all referenced **only** in the `publish` job:
+
+| Secret                 | For                        |
+| ---------------------- | -------------------------- |
+| `CARGO_REGISTRY_TOKEN` | crates.io                  |
+| `PYPI_API_TOKEN`       | PyPI (the wheel build)     |
+| `NPM_TOKEN`            | npm (the platform package) |
+
+The `release` environment exists (created 2026-09-13; check with
+`gh api repos/ysankpia/nervusdb/environments`). The three secrets do **not** exist yet
+and must be added before the first publish — the workflow will fail without them, and
+adding required reviewers to the environment is what turns its gate into a human
+approval rather than just a label.
+
+The registry name and version become permanent at that point, which is what the tag/
+manifest check above exists to protect.
 
 ---
 
