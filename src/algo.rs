@@ -200,11 +200,22 @@ enum Color {
 }
 
 /// 检测全图是否存在有向环路
+/// 检测全图是否存在有向环路。
+///
+/// **有损 API**：节点枚举失败时返回 `false`，与「确实无环」不可区分。
+/// 需要区分二者请用 [`try_has_cycle`]。
 pub fn has_cycle(graph: &DiskGraph) -> bool {
-    let node_ids = match graph.all_node_ids() {
-        Ok(ids) => ids,
-        Err(_) => return false,
-    };
+    try_has_cycle(graph).unwrap_or(false)
+}
+
+/// 同 [`has_cycle`]，但**保留读错误**：`Ok(false)` 仅表示确实无环。
+///
+/// 这修复了一类静默错误：`has_cycle` 原来把 `all_node_ids()` 的错误折叠成
+/// `false`，于是在一个损坏的库上它会回答「没有环」——而它其实什么都没读到。
+/// 库内部的其它读取（`try_get_node` 等）早已遵循「有损/保留错误」分工，
+/// 这里是同一原则在算法层的落实。
+pub fn try_has_cycle(graph: &DiskGraph) -> Result<bool, GraphError> {
+    let node_ids = graph.all_node_ids()?;
 
     let mut color_map: HashMap<u64, Color> = HashMap::new();
     for &node_id in &node_ids {
@@ -215,11 +226,11 @@ pub fn has_cycle(graph: &DiskGraph) -> bool {
         if color_map.get(&node_id) == Some(&Color::White)
             && dfs_has_cycle_iterative(graph, node_id, &mut color_map)
         {
-            return true;
+            return Ok(true);
         }
     }
 
-    false
+    Ok(false)
 }
 
 /// 迭代式深度优先环检测（显式栈）。
@@ -274,11 +285,17 @@ fn dfs_has_cycle_iterative(
 }
 
 /// 查找全图所有有向环路
+/// 查找全图所有有向环路。
+///
+/// **有损 API**：节点枚举失败时返回空列表，与「确实无环」不可区分。
+/// 需要区分二者请用 [`try_find_cycles`]。
 pub fn find_cycles(graph: &DiskGraph) -> Vec<Vec<u64>> {
-    let node_ids = match graph.all_node_ids() {
-        Ok(ids) => ids,
-        Err(_) => return Vec::new(),
-    };
+    try_find_cycles(graph).unwrap_or_default()
+}
+
+/// 同 [`find_cycles`]，但**保留读错误**：`Ok(vec![])` 仅表示确实无环。
+pub fn try_find_cycles(graph: &DiskGraph) -> Result<Vec<Vec<u64>>, GraphError> {
+    let node_ids = graph.all_node_ids()?;
 
     let mut color_map: HashMap<u64, Color> = HashMap::new();
     for &node_id in &node_ids {
@@ -293,7 +310,7 @@ pub fn find_cycles(graph: &DiskGraph) -> Vec<Vec<u64>> {
         }
     }
 
-    cycles
+    Ok(cycles)
 }
 
 /// 迭代式环查找（显式栈），与 `has_cycle` 同理：递归深度等于路径长度，

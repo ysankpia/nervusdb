@@ -1389,20 +1389,33 @@ impl GraphLite {
 
     /// 检测全图是否存在有向环路（纯磁盘按页扫描，脱离全局锁并发执行）
     pub fn has_cycle(&self) -> bool {
+        self.try_has_cycle().unwrap_or(false)
+    }
+
+    /// 同 [`GraphLite::has_cycle`]，但**保留读错误**：`Ok(false)` 仅表示确实无环。
+    ///
+    /// 有损版本在损坏的库上会回答「没有环」——而它其实什么都没读到。需要区分
+    /// 「无环」与「读不出来」时用本函数。
+    pub fn try_has_cycle(&self) -> Result<bool, GraphError> {
         let graph = {
             let inner = self.inner.read_recover();
             inner.disk_graph.clone()
         };
-        algo::has_cycle(&graph)
+        algo::try_has_cycle(&graph)
     }
 
     /// 查找全图所有有向环路（脱离全局锁并发执行）
     pub fn find_cycles(&self) -> Vec<Vec<u64>> {
+        self.try_find_cycles().unwrap_or_default()
+    }
+
+    /// 同 [`GraphLite::find_cycles`]，但**保留读错误**。
+    pub fn try_find_cycles(&self) -> Result<Vec<Vec<u64>>, GraphError> {
         let graph = {
             let inner = self.inner.read_recover();
             inner.disk_graph.clone()
         };
-        algo::find_cycles(&graph)
+        algo::try_find_cycles(&graph)
     }
 
     /// PageRank 阻尼迭代：评估全图节点影响力（默认阻尼 0.85、最长 100 轮、容差 1e-6）

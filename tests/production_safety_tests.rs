@@ -1424,3 +1424,80 @@ fn test_deleting_propertyless_edge_does_not_inflate_the_file() -> Result<(), Gra
 
     Ok(())
 }
+
+/// **读错误不得伪装成「空结果」。**
+///
+/// 两处静默吞错：
+/// 1. `find_initial_candidates` 用 `all_node_ids().unwrap_or_default()` 兜底，
+///    于是读错误变成**空候选集**——查询静默返回 0 行。
+/// 2. `algo::has_cycle` / `find_cycles` 把 `all_node_ids()` 的错误折叠成
+///    `false` / 空列表，于是损坏的库会回答「没有环」。
+///
+/// 实测：把数据库截断到 1/3 后，`MATCH (n:T) RETURN count(*)` 返回 **0**
+/// （原 3000 节点）且不报任何错；调用方看到的是「这张表是空的」，而真相是
+/// 「有一页读不出来」。这类降级正是 AGENTS.md §12 禁止的。
+///
+/// 修复后：查询路径**报错**；算法路径新增 `try_*` 变体保留错误，有损变体保持
+/// 原有签名（避免破坏公开 API），但文档写明其有损性。
+#[test]
+fn test_read_errors_do_not_masquerade_as_empty_results() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("truncated.db");
+
+    {
+        let db = GraphLite::open(&db_path)?;
+        db.with_transaction(|tx| {
+            for i in 0..3000i64 {
+                let mut m = HashMap::new();
+                m.insert("i".to_string(), Value::from(i));
+                tx.add_node(HashSet::from(["T".to_string()]), m)?;
+            }
+            Ok(())
+        })?;
+        db.checkpoint()?;
+    }
+
+    // 截断到 1/3：尾部若干页直接不存在
+    let full = std::fs::metadata(&db_path)?.len();
+    {
+        let f = std::fs::OpenOptions::new().write(true).open(&db_path)?;
+        f.set_len(full / 3)?;
+    }
+
+    let db = GraphLite::open(&db_path)?;
+
+    // 1) 查询必须报错，而不是静默返回 0 行
+    let scanned = db.run_cypher("MATCH (n:T) RETURN count(*) AS n");
+    assert!(
+        scanned.is_err(),
+        "a truncated database must not answer a scan with a silent 0; got {:?}",
+        scanned.map(|r| r.rows[0].values[0].clone())
+    );
+
+    // 2) 算法层的 try_* 变体必须把错误报出来
+    let cycle = db.try_has_cycle();
+    assert!(
+        cycle.is_err(),
+        "try_has_cycle must report the read error instead of answering `no cycles`"
+    );
+    assert!(
+        db.try_find_cycles().is_err(),
+        "try_find_cycles must report the read error"
+    );
+
+    // 3) 有损变体保持原签名（公开 API 不破坏），且其有损性已在文档写明
+    let lossy = db.has_cycle();
+    assert!(
+        !lossy,
+        "the lossy variant keeps its signature and folds the error to `false`"
+    );
+
+    // 4) 完整性检查仍应指出问题所在
+    let report = db.integrity_check()?;
+    assert!(
+        !report.is_ok(),
+        "integrity_check must report the truncated pages"
+    );
+
+    Ok(())
+}

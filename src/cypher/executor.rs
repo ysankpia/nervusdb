@@ -197,7 +197,7 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         }
 
         let start_pat = &pattern.nodes[0];
-        let candidate_start_nodes = self.find_initial_candidates(start_pat, where_clause);
+        let candidate_start_nodes = self.find_initial_candidates(start_pat, where_clause)?;
 
         let mut matched = Vec::new();
         for start_id in candidate_start_nodes {
@@ -239,7 +239,7 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         }
 
         let start_pat = &pattern.nodes[0];
-        let candidate_start_nodes = self.find_initial_candidates(start_pat, where_clause);
+        let candidate_start_nodes = self.find_initial_candidates(start_pat, where_clause)?;
 
         let mut matched = Vec::new();
         for start_id in candidate_start_nodes {
@@ -722,32 +722,39 @@ impl<'a> CypherReadOnlyExecutor<'a> {
     }
 
     /// 起始候选集检索：智能命中属性索引或标签索引，回退走流式磁盘页扫描
+    /// 推导起点候选节点。
+    ///
+    /// 返回 `Result` 而非 `Vec`：全表扫描路径原来是
+    /// `all_node_ids().unwrap_or_default()`，于是**读错误会变成空候选集**，
+    /// 查询静默返回 0 行。实测把数据库截断到 1/3 后，`MATCH (n:T) RETURN count(*)`
+    /// 返回 0（原 3000 节点）且不报任何错——调用方看到的是「这张表是空的」，
+    /// 而真相是「有一页读不出来」。这正是 AGENTS.md §12 禁止的静默读错误。
     fn find_initial_candidates(
         &self,
         node_pat: &NodePattern,
         where_clause: &Option<Expr>,
-    ) -> Vec<u64> {
+    ) -> Result<Vec<u64>, GraphError> {
         if let Some(lbl) = node_pat.labels.first() {
             if self.index_mgr.is_label_complete(lbl) {
                 for (key, val) in &node_pat.properties {
                     if let Some(set) = self.index_mgr.find_by_property_exact(lbl, key, val) {
-                        return set.iter().copied().collect();
+                        return Ok(set.iter().copied().collect());
                     }
                 }
 
                 if let (Some(ref w_expr), Some(ref v_name)) = (where_clause, &node_pat.variable) {
                     if let Some(candidates) = self.try_find_from_where_expr(lbl, w_expr, v_name) {
-                        return candidates;
+                        return Ok(candidates);
                     }
                 }
 
                 if let Some(set) = self.index_mgr.find_by_label(lbl) {
-                    return set.iter().copied().collect();
+                    return Ok(set.iter().copied().collect());
                 }
             }
         }
 
-        self.graph.all_node_ids().unwrap_or_default()
+        self.graph.all_node_ids()
     }
 
     fn try_find_from_where_expr(

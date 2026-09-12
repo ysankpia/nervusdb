@@ -407,6 +407,27 @@ _No unreleased changes yet._
 
 ### Fixed
 
+- **Read errors were reported as empty results.** Two paths folded a storage
+  failure into a "nothing here" answer:
+
+  - `find_initial_candidates` used `all_node_ids().unwrap_or_default()`, so a read
+    error became an **empty candidate set** and the query returned 0 rows.
+  - `algo::has_cycle` / `find_cycles` folded the same error into `false` / an empty
+    list, so a damaged database would answer "no cycles" without having read
+    anything.
+
+  Measured: truncating a database to one third of its size made
+  `MATCH (n:T) RETURN count(*)` return **0** where 3,000 nodes had been — with no
+  error at all. The caller sees "this graph is empty"; the truth is "a page could
+  not be read".
+
+  The query path now propagates the error. For the algorithm path, the existing
+  signatures are part of the public API, so instead of changing them,
+  `try_has_cycle` and `try_find_cycles` were added alongside — matching the
+  `get_node` / `try_get_node` split the project already uses — and the lossy
+  variants are documented as such.
+
+
 - **`has_cycle()` and `find_cycles()` aborted the process on long chains.** Both
   used recursive DFS, so recursion depth equalled path length. A 60,000-node chain
   — legitimate data, and the natural shape of a citation or chapter chain — blew
