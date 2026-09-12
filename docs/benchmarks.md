@@ -230,11 +230,40 @@ rather than ≈40%. Reducing acquisitions shortens each critical section; it doe
 let two readers proceed at once. Genuine read parallelism needs per-frame latching,
 which is a redesign of the buffer pool's concurrency model rather than a patch.
 
+**Writes were profiled separately, and the bottleneck is different.** Continuing the
+same com-DBLP setup, write workloads were measured at three granularities:
+
+| Workload                                          | 1 thread | 2 | 4 | 8 |
+| ------------------------------------------------- | -------- | --- | --- | --- |
+| one commit per node (`add_node`)                  | 249 ops/s | — | — | — |
+| one transaction per node (`with_transaction`)     | 251 ops/s | 249 | 253 | 249 |
+| one transaction per 20,000 nodes (`add_nodes`)    | 451,576 ops/s | 823,948 | 1,053,810 | — |
+
+The middle row does not scale **at all** — 8 threads equal 1 thread — but the cause is
+not the mutex. Holding the per-transaction cost fixed while varying the number of
+nodes per transaction isolates it:
+
+| Nodes per transaction | Transactions | ops/s | Time per transaction |
+| --------------------- | ------------ | ----- | -------------------- |
+| 1                     | 2,000        | 255   | 3.92 ms |
+| 10                    | 200          | 2,747 | 3.64 ms |
+| 200                   | 10           | 55,971 | 3.57 ms |
+| 2,000                 | 1            | 397,927 | 5.03 ms |
+
+Time per transaction is ≈3.5 ms **regardless of how many nodes it writes**. That is
+the `fsync`, and it is serialized by definition. So the 250 ops/s ceiling for
+one-node transactions is the durability guarantee working as designed, not a defect:
+the fix is batching, which is exactly what `with_transaction` / `add_nodes` are for,
+and the bottom row shows that batched writes do scale (1.83× at 2 threads, 2.33× at 4).
+
+The read-side collapse above is therefore not a general "everything is slow" story —
+reads are serialized by the buffer-pool mutex at any transaction size, while writes
+are limited by one fsync per commit and scale once batching removes that.
+
 **Scope of the claim.** This is about *read parallelism*, not correctness or
 single-threaded speed: the full suite passes, and the batched walk is
 indistinguishable from the per-edge walk in every existing test (the chain semantics,
-the `in_use` filter and the `seen` cycle guard are all reproduced). Writes were not
-profiled here. See [architecture.md §10](architecture.md#10-concurrency-model) and
+the `in_use` filter and the `seen` cycle guard are all reproduced). See [architecture.md §10](architecture.md#10-concurrency-model) and
 `ROADMAP.md`.
 
 ### SDK throughput
