@@ -82,6 +82,7 @@ and unchanged by 1.1.0; see `FORMAT.md`. Several known gaps remain — read
 | Document                                     | Contents                                                        |
 | -------------------------------------------- | --------------------------------------------------------------- |
 | [docs/architecture.md](docs/architecture.md) | How it works: paging, WAL, slotted pages, weave, Cypher, safety |
+| [FORMAT.md](FORMAT.md)                       | The on-disk format, byte by byte — the frozen-format contract   |
 | [docs/benchmarks.md](docs/benchmarks.md)     | Measured throughput, with conditions and a correction notice    |
 | [docs/testing.md](docs/testing.md)           | The suite, and the adversarial style it follows                 |
 | [CHANGELOG.md](CHANGELOG.md)                 | Version history — read before upgrading                         |
@@ -100,7 +101,7 @@ graphlite-rs = "1.1.0"
 
 The Python and Node.js SDKs are **not published to PyPI or npm yet**. Build them
 from source (see [bindings/](bindings/)). When they are published, the Python
-*distribution* will be `graphlite-rs` on PyPI while the import stays `import
+_distribution_ will be `graphlite-rs` on PyPI while the import stays `import
 graphlite` — the name `graphlite` is already taken on PyPI by an unrelated embedded
 graph database, and shipping under it would install someone else's package. See
 [ROADMAP](ROADMAP.md) for the naming decision.

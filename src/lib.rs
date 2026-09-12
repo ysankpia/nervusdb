@@ -594,8 +594,10 @@ impl GraphLite {
                  (current format version {}).\n\
                  GraphLite 1.0 froze the on-disk format and does not silently \
                  reinterpret older files.\n\
-                 To migrate: export the graph with the matching older GraphLite \
-                 build via `.dump`, then re-import that script into a fresh database.",
+                 To migrate: open the file with the matching older build and dump it \
+                 via `GraphLite::dump_cypher`, then replay that script into a fresh \
+                 database (a re-import through the same API). There is no CLI — use \
+                 the library.",
                 file_version,
                 crate::page::DB_PAGE_VERSION
             )));

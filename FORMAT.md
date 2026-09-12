@@ -325,7 +325,8 @@ A change that alters any byte specified above requires:
 
 1. A `DB_PAGE_VERSION` bump.
 2. An entry in `CHANGELOG.md` under **Storage format**, stating plainly that older
-   databases need a `.dump` / re-import.
+   databases need a logical dump and re-import (`GraphLite::dump_cypher`; there is no
+   CLI).
 3. A migration path — or, for a change that cannot break readers, a
    storage-version selector so both layouts remain readable.
 4. Updating this document **in the same commit**. A format change that leaves this
