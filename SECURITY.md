@@ -64,6 +64,5 @@ reporting:
 
 ## Supported versions
 
-This is a pre-release (`v1.0.0-rc.3`). Security fixes are applied to `main` and
-to the most recent tag; there are no maintained older branches yet. Once 1.0 is
-released, this section will list which series receive fixes.
+`v1.0.0` is the current stable release. Security fixes are applied to `main` and
+backported to the most recent tag; there are no maintained older branches yet.

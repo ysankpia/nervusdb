@@ -32,9 +32,9 @@ fn main() -> Result<(), GraphError> {
 
 ## Status
 
-**`v1.0.0-rc.3` — release candidate.** The engine, Cypher surface, analytics and
-safety guarantees are implemented and covered by 146 tests, but several known
-production gaps remain. Read
+**`v1.0.0` — stable.** The engine, Cypher surface, analytics and safety guarantees
+are implemented and covered by 151 tests. The on-disk format is frozen; see
+`FORMAT.md`. Several known gaps remain — read
 [Known limitations](ROADMAP.md#next-planned) before considering production use.
 
 ## Features

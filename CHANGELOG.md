@@ -18,7 +18,7 @@ user has to act on them:
 
 _No unreleased changes yet._
 
-## [1.0.0-rc.3] — 2026-09-12
+## [1.0.0] — 2026-09-12
 
 ### Added
 
@@ -974,5 +974,6 @@ Every figure now ships with its scenario and conditions — see the README
 benchmark section and `ROADMAP.md`. A number without its conditions is not
 accepted.
 
-[Unreleased]: https://github.com/ysankpia/graphlite/compare/v1.0.0-rc.1...HEAD
+[Unreleased]: https://github.com/ysankpia/graphlite/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/ysankpia/graphlite/releases/tag/v1.0.0
 [1.0.0-rc.1]: https://github.com/ysankpia/graphlite/releases/tag/v1.0.0-rc.1

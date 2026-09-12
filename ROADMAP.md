@@ -10,7 +10,7 @@ conditions are quoted with it.
 
 ---
 
-## Current state (v1.0.0-rc.3)
+## Current state (v1.0.0, stable)
 
 Working and covered by tests:
 
