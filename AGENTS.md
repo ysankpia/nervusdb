@@ -390,22 +390,36 @@ CREATE (n {v: x})` must read `x`. But `MATCH` / `MERGE` pattern properties are
 
 ## 5. Cleanliness, Development Workflow & Commit Standards
 
-### 5.1 Development workflow: PR-based, `main` is protected
+### 5.1 Development workflow: two long-lived branches
 
-`main` has branch protection enabled: force pushes and deletions are refused, `strict`
-is on (a PR must be up to date with `main` before merging), and **all five CI checks**
-must pass: `Test (ubuntu-latest)`, `Test (macos-latest)`, `SDK (node)`, `SDK (python)`,
-`Docs build`. Changes therefore go through a pull request, including the maintainer's
-own work:
+There are exactly **two** branches, and no topic branches:
+
+- **`main`** — the project. What gets released and what a new reader clones.
+- **`develop`** — where work happens. Every change lands here first.
+
+Do the work on `develop`, then merge it into `main`. Merging does not end the branch —
+`develop` keeps going, receives the next change, and merges again. There is no branch
+to create, name, or delete, and so no naming convention to get wrong.
 
 ```bash
-git switch -c fix/short-description
+git switch develop
 # ... make the change, run the full CI gate from §3.1 ...
-git push -u origin fix/short-description
-gh pr create --fill
-# merge once CI is green
-gh pr merge --squash --delete-branch
+git commit
+git push
+# when it should land on main:
+git switch main && git merge --no-ff develop && git push
+git switch develop
 ```
+
+`main` is protected: force pushes and deletions are refused, `strict` is on (a PR must
+be up to date with `main` before merging), and **all five CI checks** must pass:
+`Test (ubuntu-latest)`, `Test (macos-latest)`, `SDK (node)`, `SDK (python)`,
+`Docs build`. Because of that protection the merge into `main` goes through a pull
+request opened from `develop` — the same two branches, one PR per merge.
+
+A topic branch is warranted only when work must be **parked**: an experiment that may
+be abandoned, or a change that must not touch `develop` until it is known good.
+Otherwise it is one more thing to name and clean up.
 
 The two `SDK` checks exist because `cargo test --workspace` compiles the binding
 crates but has no test target to run there, so their end-to-end suites were invisible

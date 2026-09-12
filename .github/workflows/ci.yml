@@ -1,8 +1,11 @@
 name: CI
 
 on:
+  # `develop` is where work happens, so it needs the same gate as `main` — otherwise
+  # a broken change is only discovered at the merge, which is precisely when it is
+  # most expensive to unwind.
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
     branches: [main]
 
