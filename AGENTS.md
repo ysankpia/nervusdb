@@ -156,9 +156,9 @@ Workspace: `src/` (core, zero deps), `bindings/python`, `bindings/nodejs`, `test
 | Graph algorithms over disk cursors                                     | `src/algo.rs`                               |
 | Domain models and `GraphError`                                         | `src/graph.rs`                              |
 | Byte-level format contract (**authoritative**)                         | `FORMAT.md`                                 |
-| Mechanism explanations, with evidence                                  | `docs/architecture.md`                      |
-| Measured numbers and their conditions                                  | `docs/benchmarks.md`                        |
-| Suite inventory and what each covers                                   | `docs/testing.md`                           |
+
+Every document, and when to read it: [`docs/index.md`](docs/index.md). Consult that
+rather than this table when you are looking for _where something is written down_.
 
 ---
 

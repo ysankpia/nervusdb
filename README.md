@@ -79,18 +79,14 @@ and unchanged by 1.1.0; see `FORMAT.md`. Several known gaps remain — read
 
 ## Documentation
 
-| Document                                     | Contents                                                        |
+**[docs/index.md](docs/index.md) lists every document and when to read it.** The
+three worth knowing before you start:
+
+| Document                                     | Read it when                                                    |
 | -------------------------------------------- | --------------------------------------------------------------- |
-| [docs/architecture.md](docs/architecture.md) | How it works: paging, WAL, slotted pages, weave, Cypher, safety |
-| [FORMAT.md](FORMAT.md)                       | The on-disk format, byte by byte — the frozen-format contract   |
-| [docs/benchmarks.md](docs/benchmarks.md)     | Measured throughput, with conditions and a correction notice    |
-| [docs/testing.md](docs/testing.md)           | The suite, and the adversarial style it follows                 |
-| [CHANGELOG.md](CHANGELOG.md)                 | Version history — read before upgrading                         |
-| [ROADMAP.md](ROADMAP.md)                     | Done, planned, and explicitly out of scope                      |
-| [AGENTS.md](AGENTS.md)                       | Architecture invariants; read before changing code              |
-| [CONTRIBUTING.md](CONTRIBUTING.md)           | Contribution policy: **issues only, no external code**          |
-| [SECURITY.md](SECURITY.md)                   | Private vulnerability reporting                                 |
-| [LICENSING.md](LICENSING.md)                 | Dual licensing (AGPL-3.0 + commercial)                          |
+| [FORMAT.md](FORMAT.md)                       | You need the exact bytes, or the frozen-format contract.        |
+| [docs/architecture.md](docs/architecture.md) | You want to know _why_ it works.                                |
+| [AGENTS.md](AGENTS.md)                       | **Before changing code.** Invariants and verification workflow. |
 
 ## Install
 
