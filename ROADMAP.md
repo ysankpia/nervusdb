@@ -54,7 +54,7 @@ Working and covered by tests:
 - Tooling: Python and Node.js SDKs with transaction and batch-write support.
   Inspection and dump go through the library API — the CLI and the browser
   workbench were removed in 1.1.0.
-- 197 test cases across 16 suites (196 run, 1 intentionally `#[ignore]`d for a
+- 198 test cases across 16 suites (197 run, 1 intentionally `#[ignore]`d for a
   child-process lock probe); `cargo fmt`, `cargo clippy -D warnings` and
   `rustdoc -D warnings` all clean.
 
@@ -93,18 +93,37 @@ Start-node selection is rule-based (index when available, otherwise a scan) and
 join reordering and no index-nested-loop selection. Adequate at the current scale;
 a limitation for complex analytical queries.
 
-### 4. SDK publication
+### 4. SDK publication (blocked on a name decision)
 
 The Python and Node.js bindings build and pass their tests but are not published to
-PyPI or npm. Publishing needs packaging polish, versioning policy, and platform
-wheel/prebuild matrices.
+PyPI or npm. Beyond packaging polish, versioning policy and platform
+wheel/prebuild matrices, there is now a **naming problem that must be solved first**.
+
+The public names in use today differ per language, and the Python/Node one is taken:
+
+| Manifest                          | Declares          | Registry status                              |
+| --------------------------------- | ----------------- | -------------------------------------------- |
+| `Cargo.toml`                      | `graphlite-rs`    | available on crates.io                       |
+| `bindings/python/pyproject.toml`  | `graphlite`       | **taken on PyPI** (eugene-eeo/graphlite, an embedded graph datastore) |
+| `bindings/nodejs/package.json`    | `graphlite-node`  | available on npm                             |
+
+`graphlite` is also taken on crates.io by a different project (GraphLite-AI, an ISO
+GQL database), along with `graphlite-cli` and `graphlite-rust-sdk`. Verified
+2026-09-13 against all three registries. `graphlite-rs` is available on **all
+three**, so it is the only candidate that needs no second choice per ecosystem.
+
+This is a product decision, not a technical one: a hyphenated name matching the
+crate has no search presence and cannot be trademarked, whereas an invented name
+does. Whichever is chosen, the three manifests must agree — the version guard in
+`zero_dependency_tests` already enforces that for the version, and the same reasoning
+applies to the name.
 
 **The previously recorded "9x slower than native" figure is retracted** — it came
 from debug builds of the bindings compared against a release core. Measured with
 both sides in release the bindings run at 0.85-0.93x of the native path. See
 `docs/benchmarks.md` for the corrected table and the retraction.
 
-### 5. Latch contention profile on many-core machines
+### 5. Latch contention: measured, only the fix remains
 
 **Measured in 1.1.0, and the answer is worse than "not characterised".**
 `concurrency_stress_tests.rs` covers the correctness guarantees (no deadlock, no lost

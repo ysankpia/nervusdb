@@ -73,6 +73,23 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 - **A high-parallelism concurrency stress suite** that sizes itself to the machine, and
   a **version-consistency guard** over the five manifests that carry the version.
 
+### Changed
+
+- **The Python distribution is renamed to `graphlite-rs`; `import graphlite` is
+  unchanged.** PyPI's `graphlite` belongs to an unrelated embedded graph database
+  (eugene-eeo/graphlite), as does npm's; crates.io's `graphlite` belongs to
+  GraphLite-AI. Publishing under it would have shipped a package that resolves to
+  someone else's project — and a published name cannot be cleanly retracted.
+
+  `graphlite-rs` is available on crates.io, PyPI and npm (checked 2026-09-13), so it
+  is the one candidate needing no per-ecosystem compromise. Distribution name and
+  import name are deliberately allowed to differ, which is the standard arrangement
+  (`beautifulsoup4` → `import bs4`).
+
+  A test now rejects any manifest that would publish under a known-taken name, with
+  the owner in the message, and requires the three manifests to stay traceable to the
+  same stem.
+
 ### Fixed
 
 - **Read concurrency was *negative*: more threads made reads slower.** Measured on

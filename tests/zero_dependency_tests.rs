@@ -437,3 +437,110 @@ fn documented_suite_table_matches_the_files() {
         problems.join("\n")
     );
 }
+
+// =========================================================================
+// 包名一致性守卫
+// =========================================================================
+//
+// 三个清单各自声明了对外包名：
+//   - `Cargo.toml`（crates.io）
+//   - `bindings/python/pyproject.toml`（PyPI，`[project] name`）
+//   - `bindings/nodejs/package.json`（npm，`"name"`）
+//
+// 它们**不必相同**（Rust 惯例是带后缀，Python/npm 惯例是裸名），但必须有明确
+// 的对应关系，且不能出现「一个名字在两个生态里被不同项目占用」这种已知冲突。
+//
+// 这条守卫目前只钉住**已知冲突**：`graphlite` 在 PyPI 上属于另一个嵌入式图数据库
+// （eugene-eeo/graphlite），在 crates.io 上属于 GraphLite-AI。若将来有人把
+// `pyproject.toml` 改回裸 `graphlite` 并发布，用户会装到**别人的包**——那是
+// 无法撤回的事故。因此在这里拒绝它，并指向 ROADMAP 的命名决策。
+
+#[test]
+fn published_package_names_avoid_known_conflicts() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    // 已知被占用的名字 -> 占用者（用于报错时说明原因）
+    const TAKEN: &[(&str, &str)] = &[
+        (
+            "graphlite",
+            "PyPI: eugene-eeo/graphlite; crates.io: GraphLite-AI/GraphLite",
+        ),
+        ("graphlite-cli", "crates.io: GraphLite-AI/GraphLite"),
+        ("graphlite-rust-sdk", "crates.io: GraphLite-AI/GraphLite"),
+    ];
+
+    // PyPI 名：`[project]` 段下的 `name = "..."`
+    let pyproject = fs::read_to_string(root.join("bindings/python/pyproject.toml"))
+        .expect("bindings/python/pyproject.toml must exist");
+    let mut in_project = false;
+    let mut py_name = None;
+    for line in pyproject.lines() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            in_project = t == "[project]";
+            continue;
+        }
+        if in_project {
+            if let Some(rest) = t.strip_prefix("name") {
+                let rest = rest.trim_start();
+                if let Some(rest) = rest.strip_prefix('=') {
+                    py_name = Some(rest.trim().trim_matches('"').to_string());
+                }
+            }
+        }
+    }
+    let py_name = py_name.expect("pyproject.toml [project] must declare a name");
+
+    // npm 名：顶层 `"name": "..."`
+    let pkg = fs::read_to_string(root.join("bindings/nodejs/package.json"))
+        .expect("bindings/nodejs/package.json must exist");
+    let npm_name = extract_version(&pkg, "name").expect("package.json must declare a name");
+
+    // crates.io 名
+    let cargo = fs::read_to_string(root.join("Cargo.toml")).expect("Cargo.toml must exist");
+    let mut crate_name = None;
+    for line in cargo.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("name") {
+            let rest = rest.trim_start();
+            if let Some(rest) = rest.strip_prefix('=') {
+                crate_name = Some(rest.trim().trim_matches('"').to_string());
+                break;
+            }
+        }
+    }
+    let crate_name = crate_name.expect("Cargo.toml must declare a name");
+
+    for (label, name) in [
+        ("bindings/python/pyproject.toml", &py_name),
+        ("bindings/nodejs/package.json", &npm_name),
+        ("Cargo.toml", &crate_name),
+    ] {
+        for (taken, owner) in TAKEN {
+            assert_ne!(
+                name.trim(),
+                *taken,
+                "{label} would publish as `{taken}`, which belongs to another project \
+                 ({owner}). Publishing would ship someone else's name — see ROADMAP \
+                 \"SDK publication\" for the naming decision. \
+                 `graphlite-rs` is available on all three registries."
+            );
+        }
+    }
+
+    // 三个名字必须彼此可对应：都含 `graphlite` 词根或全部一致。
+    // 这条不是硬性生态要求，而是防止出现「Rust 叫 X、Python 叫 Y」而无从追溯。
+    let lower = |s: &String| s.to_lowercase().replace('-', "");
+    let stem = lower(&crate_name);
+    for (label, name) in [
+        ("bindings/python/pyproject.toml", &py_name),
+        ("bindings/nodejs/package.json", &npm_name),
+    ] {
+        assert!(
+            lower(name).starts_with("graphlite") || lower(name) == stem,
+            "{label} declares `{name}`, which is unrelated to the crate name \
+             `{crate_name}`; a reader cannot connect the published artifact to this \
+             repository"
+        );
+    }
+}

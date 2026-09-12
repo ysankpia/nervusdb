@@ -33,7 +33,7 @@ fn main() -> Result<(), GraphError> {
 ## Status
 
 **`v1.1.0` — stable.** The engine, Cypher surface, analytics and safety guarantees
-are implemented and covered by 196 tests. The on-disk format is frozen at version 4
+are implemented and covered by 197 tests. The on-disk format is frozen at version 4
 and unchanged by 1.1.0; see `FORMAT.md`. Several known gaps remain — read
 [Known limitations](ROADMAP.md#next-planned) before considering production use.
 
@@ -95,11 +95,15 @@ and unchanged by 1.1.0; see `FORMAT.md`. Several known gaps remain — read
 
 ```toml
 [dependencies]
-graphlite-rs = "1.0.0-rc.3"
+graphlite-rs = "1.1.0"
 ```
 
 The Python and Node.js SDKs are **not published to PyPI or npm yet**. Build them
-from source (see [bindings/](bindings/)).
+from source (see [bindings/](bindings/)). When they are published, the Python
+*distribution* will be `graphlite-rs` on PyPI while the import stays `import
+graphlite` — the name `graphlite` is already taken on PyPI by an unrelated embedded
+graph database, and shipping under it would install someone else's package. See
+[ROADMAP](ROADMAP.md) for the naming decision.
 
 ## Quick start
 
