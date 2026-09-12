@@ -18,13 +18,40 @@ user has to act on them:
 
 ### Storage format
 
-- **Format version 3 — page-level CRC32 coverage for the whole data file. This
-  is a breaking change: databases written by `v1.0.0-rc.1` (version 2) or the
-  `v1.0.0` line (version 1) will not open.**
+- **Format version 4 — the frozen format, and the core library now has zero
+  runtime dependencies. This is a breaking change: databases written by
+  `v1.0.0-rc.2` (version 3) or any earlier version will not open.**
+
+  WAL frames and Page 0 metadata were encoded by `bincode`. That crate **ceased
+  maintenance in December 2025** — its final release contains only a compiler
+  error and a notice. The bytes on disk must not be owned by someone else's
+  release schedule, so the format is now defined and implemented in this
+  repository (`src/codec.rs`, `src/json.rs`, `src/crc32.rs`), with every byte
+  specified in the new `FORMAT.md`. `serde`, `serde_json`, `crc32fast`, and
+  `thiserror` are gone as well.
+
+  Timing was the whole point: the format was not yet frozen, so the swap cost
+  nothing. Once frozen there is no second free opportunity, and the database's
+  lifetime would have been tied to an abandoned crate with no security updates —
+  the same shape of risk that left Kuzu's users stranded when that project was
+  archived. `tests/zero_dependency_tests.rs` now enforces the invariant, including
+  a negative test confirming that adding a dependency makes the guard fail.
+
+  **To migrate**: export with the older build via `.dump`, then re-import.
+
+- **`FORMAT.md` is new, and it is a commitment.** It specifies every offset, the
+  record layouts, the WAL frame and payload encoding, and the limits — so a future
+  version or a third-party reader can be written without reverse-engineering the
+  code. The stability promise is stated there in the same terms SQLite uses: the
+  format does not change in incompatible ways, and a future change that genuinely
+  cannot be expressed will be opt-in (a DuckDB-style storage-version selector),
+  never a silent reinterpretation.
+
+- **Format version 3 — page-level CRC32 coverage for the whole data file.**
 
   Previously only WAL frames were checksummed; a bit flip or half-written page in
   `{path}` was silently returned as "not found" and the graph quietly came back
-  wrong. Every data page now carries a CRC32: pages `1..256` inline in Page 0,
+  wrong. Every data page now carries a CRC32: pages `1..255` inline in Page 0,
   pages `>= 256` through a two-level `CrcDirPage` radix directory. A directory
   page that covers ~4 GiB of address space costs 4 KiB, so the smallest database
   still fits in 16 KiB (4 pages).
@@ -34,7 +61,24 @@ user has to act on them:
   recorded" and the page is skipped rather than reported — after a crash the
   server must not refuse to start over a page it simply never got to.
 
-  **To migrate**: export with the older build via `.dump`, then re-import.
+- **The 24-bit property-pointer overflow is now a hard error instead of a silent
+  corruption.** `pack_prop_ptr` used `debug_assert!` plus a `& 0x00FFFFFF` mask;
+  `debug_assert!` is compiled out in release builds, so a page number beyond the
+  24-bit limit (a file over 64 GiB) would have been **truncated to a wrong page,
+  returning another entity's data with no error at all** — the worst failure mode
+  a database can have. The packer now returns `Result` and `open` refuses an
+  oversized file up front.
+
+  This is documented as a permanent limit in `FORMAT.md` §6. It is deliberate:
+  widening the pointer would grow `NodeRecord` from 32 to 40 bytes, dropping each
+  page from 128 records to 102 — a 20% capacity loss on the hot path, paid by
+  every deployment, to buy address space the target workload does not use.
+
+- **The format and size gates now run before any write, including WAL replay.**
+  Both live at the top of `open_with_options`. Replay writes the main data file,
+  so a check placed after it would already have reinterpreted an old file under
+  current-version semantics. `test_version_guard_rejects_v1_v2` now asserts the
+  rejected file comes out byte-identical to how it went in.
 
 - Directory pages are self-checksummed (`self_crc`, sealed on write, verified on
   load). Without this, one silently corrupted L2 page would report every data
