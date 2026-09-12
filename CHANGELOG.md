@@ -407,6 +407,32 @@ _No unreleased changes yet._
 
 ### Fixed
 
+- **A graph with roughly 80 or more distinct labels lost its entire schema on
+  reopen.** `sync_header` wrote the label/edge-type dictionary into a **single**
+  page, and `PropertyPage::encode` silently truncates payloads beyond
+  `MAX_PAYLOAD` (4088 bytes, about 140 short labels). The read side then failed to
+  decode the truncated dictionary — and swallowed the error with
+  `if let Ok(..)`, leaving the dictionary empty.
+
+  Measured: 70 labels survived, **80 did not**. On reopen `db.labels()` returned
+  nothing and edge types degraded to the fallback, so the damage presented as "this
+  database simply has no schema" rather than as corruption.
+
+  Two changes, because either alone would have been a partial fix:
+
+  - Metadata (dictionary and index catalog) is now written as a **chain** of
+    overflow pages, chunked at `MAX_PAYLOAD`, removing the one-page ceiling
+    entirely. Verified from 70 to 2000 labels.
+  - All four metadata decode sites now **return an error** instead of ignoring it.
+    A corrupt dictionary must be reported, not silently reinterpreted as an empty
+    schema — the same rule as `AGENTS.md` §12 for reads.
+
+  Found during the v1.0.0 release audit by testing a dimension the suite had never
+  touched: every existing test used a handful of labels. The regression test covers
+  both sides of the old threshold (70 and 200) plus a size far beyond one page
+  (2000), and reverting the fix makes it fail.
+
+
 - **Opening a non-database file silently destroyed it.** `check_format_version`
   passed through any file whose magic did not match — the comment said "let the
   later path handle it", and the later path initialised it as a **new database**,

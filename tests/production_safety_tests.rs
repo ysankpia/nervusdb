@@ -1185,3 +1185,71 @@ fn test_open_refuses_non_database_files_without_modifying_them() -> Result<(), G
 
     Ok(())
 }
+
+/// **图模式元数据（字典与索引目录）必须能超过一页，且重开后完整。**
+///
+/// 这是为一个真实的发布阻断级缺陷写的：`sync_header` 把整个字典塞进**单页**，
+/// 而 `PropertyPage::encode` 对超长载荷是**静默截断**的。读取侧遇到截断数据解码
+/// 失败，又被 `if let Ok(..)` 吞掉，于是 `self.dict` 保持为空——
+///
+/// 实测阈值：**80 个标签（约 2.3KB）就会全部丢失**；重开后 `db.labels()` 返回空，
+/// 边类型退化为默认值，而调用方只看到「这个库本来就没标签」。数据损坏被伪装成
+/// 空模式。
+///
+/// 本测试覆盖阈值两侧与远超单页的规模，确保既修好了截断，也没把边界算错。
+#[test]
+fn test_graph_metadata_survives_beyond_one_page() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+
+    // 70 条在单页内（修复前恰好能过），200 与 2000 条远超单页
+    for count in [70usize, 200, 2000] {
+        let db_path = dir.path().join(format!("meta_{}.db", count));
+
+        {
+            let db = GraphLite::open(&db_path)?;
+            db.with_transaction(|tx| {
+                for i in 0..count {
+                    let mut m = HashMap::new();
+                    m.insert("i".to_string(), Value::from(i as i64));
+                    tx.add_node(HashSet::from([format!("Label{:016}", i)]), m)?;
+                }
+                // 边类型与标签共用同一个字典，一并验证
+                for i in 0..50u64 {
+                    tx.add_edge(
+                        i + 1,
+                        i + 2,
+                        format!("RelType{:010}", i),
+                        HashMap::new(),
+                        1.0,
+                    )?;
+                }
+                Ok(())
+            })?;
+            db.checkpoint()?;
+        }
+
+        let db = GraphLite::open(&db_path)?;
+        assert_eq!(
+            db.labels().len(),
+            count,
+            "all {} labels must survive a reopen",
+            count
+        );
+        assert_eq!(
+            db.edge_types().len(),
+            50,
+            "all 50 edge types must survive a reopen (they share the dictionary)"
+        );
+
+        // 节点本身也必须还在——元数据丢失时节点计数是对的，这个断言区分了两种情况
+        let total = db.run_cypher("MATCH (a) RETURN count(*) AS n")?;
+        assert_eq!(
+            total.rows[0].values[0].as_i64(),
+            Some(count as i64),
+            "node count must match for {} labels",
+            count
+        );
+    }
+
+    Ok(())
+}
