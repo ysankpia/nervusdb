@@ -474,3 +474,34 @@ thing to lose and the hardest to get back. Therefore:
   when a planned item lands or a new limitation is discovered, and **`FORMAT.md`
   in the same commit as any change to the bytes on disk**. A stale format
   specification is worse than none, because the next reader will trust it.
+
+---
+
+## Agent skills
+
+Configuration for the engineering skills (`/triage`, `/to-tickets`, `/to-spec`,
+`/implement`, `/code-review`, `/wayfinder`). Written by
+`/setup-matt-pocock-skills`; edit the files below directly rather than re-running it,
+unless the issue tracker itself changes.
+
+### Issue tracker
+
+GitHub Issues on `ysankpia/nervusdb`, via the `gh` CLI. Issues are the only accepted
+inbound channel — external PRs are closed automatically by policy (§5.2), so the
+"PRs as a request surface" flag is permanently `no`. See
+`docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical roles under their default names (`needs-triage`, `needs-info`,
+`ready-for-agent`, `ready-for-human`, `wontfix`); only `wontfix` already exists. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` at the root plus `docs/adr/`, both created lazily by
+`/domain-modeling` when a term or decision is actually resolved — not scaffolded in
+advance. See `docs/agents/domain.md` for how they relate to `FORMAT.md` and this file,
+which already define much of the domain vocabulary. The same file lists two vocabulary
+traps worth knowing before naming anything: node and edge IDs share a space, and this
+engine has no page latches.

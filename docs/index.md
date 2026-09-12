@@ -24,12 +24,27 @@ which one answers your question is the whole point of an index.
 
 ## Status, policy, licensing
 
-| Document                        | Read it when                                                                           |
-| ------------------------------- | -------------------------------------------------------------------------------------- |
-| [ROADMAP.md](../ROADMAP.md)     | Deciding whether this fits your use case — done, planned, and explicitly out of scope. |
+| Document                        | Read it when                                                                                         |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| [ROADMAP.md](../ROADMAP.md)     | Deciding whether this fits your use case — done, planned, and explicitly out of scope.               |
 | [CHANGELOG.md](../CHANGELOG.md) | Before upgrading. Storage-format and behavioural changes are called out separately. Starts at 0.1.0. |
-| [SECURITY.md](../SECURITY.md)   | Reporting a vulnerability, or checking the threat model and known limits.              |
-| [LICENSING.md](../LICENSING.md) | Choosing between AGPL-3.0 and the commercial licence.                                  |
+| [SECURITY.md](../SECURITY.md)   | Reporting a vulnerability, or checking the threat model and known limits.                            |
+| [LICENSING.md](../LICENSING.md) | Choosing between AGPL-3.0 and the commercial licence.                                                |
+
+## Agent tooling
+
+Read by the engineering skills, not by people — listed so the file set is not a
+mystery when one of them mentions `/triage` or an ADR.
+
+| Document                                                | Contents                                                           |
+| ------------------------------------------------------- | ------------------------------------------------------------------ |
+| [docs/agents/issue-tracker.md](agents/issue-tracker.md) | Where issues live and how to operate on them.                      |
+| [docs/agents/triage-labels.md](agents/triage-labels.md) | The five triage roles, and the label each maps to.                 |
+| [docs/agents/domain.md](agents/domain.md)               | How the skills read `CONTEXT.md` / ADRs, and the vocabulary traps. |
+
+`CONTEXT.md` and `docs/adr/` do not exist yet, on purpose: `/domain-modeling` creates
+them lazily when a term or decision is actually resolved. Scaffolding them empty would
+just be two files nobody reads.
 
 ## Historical
 
