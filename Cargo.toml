@@ -52,6 +52,12 @@ path = "src/main.rs"
 name = "graphlite-cli"
 path = "src/bin/cli.rs"
 
+# 可视化工作台。**刻意独立于核心库**：它要开网络端口、要嵌入一个 HTML 页面，
+# 而这些都不该进入数据库的核心路径。核心库保持零依赖，Studio 只是它的消费者。
+[[bin]]
+name = "graphlite-studio"
+path = "src/bin/studio.rs"
+
 [lib]
 name = "graphlite"
 path = "src/lib.rs"

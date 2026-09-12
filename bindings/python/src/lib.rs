@@ -85,9 +85,7 @@ fn parse_node_item(item: &Bound<'_, PyAny>) -> PyResult<(HashSet<String>, HashMa
 ///
 /// 错误信息带上**元素下标**：批量输入里出现类型错误时，"第几个"是最重要的定位
 /// 信息，没有它用户只能自己二分查找。
-fn parse_node_batch(
-    nodes: &Bound<'_, PyAny>,
-) -> PyResult<Vec<NodeItem>> {
+fn parse_node_batch(nodes: &Bound<'_, PyAny>) -> PyResult<Vec<NodeItem>> {
     let mut out = Vec::new();
     for (idx, item) in nodes.iter()?.enumerate() {
         let item = item?;
@@ -99,9 +97,7 @@ fn parse_node_batch(
 }
 
 /// 把一个 `(src, dst, edge_type[, properties[, weight]])` 元组解析为批量边项。
-fn parse_edge_item(
-    item: &Bound<'_, PyAny>,
-) -> PyResult<EdgeItem> {
+fn parse_edge_item(item: &Bound<'_, PyAny>) -> PyResult<EdgeItem> {
     let src: u64 = item.get_item(0)?.extract()?;
     let dst: u64 = item.get_item(1)?.extract()?;
     let ty: String = item.get_item(2)?.extract()?;
@@ -125,9 +121,7 @@ fn parse_edge_item(
 
 /// 解析边批量参数。接受任意可迭代对象，每项为
 /// `(src, dst, edge_type[, properties[, weight]])`。
-fn parse_edge_batch(
-    edges: &Bound<'_, PyAny>,
-) -> PyResult<Vec<EdgeItem>> {
+fn parse_edge_batch(edges: &Bound<'_, PyAny>) -> PyResult<Vec<EdgeItem>> {
     let mut out = Vec::new();
     for (idx, item) in edges.iter()?.enumerate() {
         let item = item?;

@@ -18,6 +18,40 @@ user has to act on them:
 
 ### Added
 
+- **`graphlite-studio` — a local browser workbench.** `graphlite-studio novel.db`
+  opens the database read-only, serves a force-directed graph on
+  `127.0.0.1:<random port>`, and opens your browser.
+
+  The page is embedded in the binary (`include_str!`) and references **no external
+  resources**, so it works offline — a local database tool that cannot render its
+  own UI on a plane would be absurd. Layout, pan/zoom, drag, label filtering and a
+  read-only Cypher console are all hand-written vanilla JS. The repulsion step uses
+  a spatial grid: the naive O(n²) version is 4 million distance computations per
+  frame at 2,000 nodes, which locks the browser.
+
+  The HTTP server is hand-written over `std::net::TcpListener` — three GET routes
+  did not justify letting a dependency into the tree that `zero_dependency_tests`
+  is guarding. It binds **127.0.0.1 only**: the server has no authentication, so
+  binding elsewhere would publish the database.
+
+  Export is capped at 5,000 nodes and requests above that are **refused with an
+  explanation**, not silently clamped. A silently truncated graph reads as "this is
+  the whole picture", which is the wrong impression to leave.
+
+- **The file lock is now taken per request, not held for the process lifetime.**
+  This is the difference between the studio being usable and not: shared read locks
+  and the write lock are mutually exclusive, so holding a read lock for as long as
+  the UI is open would block the agent that is writing — the exact scenario the
+  tool exists for. Found by end-to-end testing: while the studio ran, a writer in
+  another process was refused.
+
+  A writer can now write between requests, and the studio observes the change on
+  its next request. **This is still not concurrent read-write**: if the writer
+  happens to hold the lock during a request, that request gets a 503 and can be
+  retried. True concurrency needs snapshot isolation, which is a different order of
+  change and is recorded in `ROADMAP.md` rather than pretended here.
+
+
 - **`Transaction::add_nodes` / `Transaction::add_edges`** in the core, exposed as
   `tx.add_nodes(...)` / `tx.add_edges(...)` in both SDKs. One boundary crossing and
   one lock acquisition per batch instead of per record.
@@ -368,6 +402,27 @@ user has to act on them:
   limitations.
 
 ### Fixed
+
+- **A read-only handle could still write, via `run_cypher`.** Every write entry
+  point except this one had the read-only guard: `add_node`, `add_edge`, `execute`
+  and `checkpoint` were covered, but `run_cypher`'s write branch was missed —
+  because `mutating` is only known after parsing, so the guard cannot sit at the
+  top of the function, and it was overlooked.
+
+  Consequence: `GraphLite::open_read_only(...)` would happily execute
+  `run_cypher("CREATE ...")`, `SET`, `DELETE` and `DETACH DELETE`. Anything built
+  on it (the studio's Cypher console, for instance) could modify a database it was
+  supposed to only read.
+
+  Found by the studio's end-to-end test, not by the unit tests, which had no case
+  for "read-only handle runs a write statement through `run_cypher`".
+
+  `test_read_only_handle_rejects_every_write_path` now enumerates **every** write
+  entry point rather than sampling one, because the omission happened while adding
+  guards one by one — so the verification has to be one by one too. Reverting the
+  fix makes it report five leaking paths, which is how the test was confirmed to
+  catch what it claims to.
+
 
 - **`WHERE` conditions containing a function call were silently discarded, so
   the filter became "always true" and the query returned every row.** This is the

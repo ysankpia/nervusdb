@@ -1022,3 +1022,88 @@ fn test_vacuum_reports_reclaimable_pages() -> Result<(), GraphError> {
 
     Ok(())
 }
+
+/// **只读句柄的每一条写入路径都必须被拒绝。**
+///
+/// 这个测试是为一个真实漏洞写的：`add_node` / `add_edge` / `execute` /
+/// `checkpoint` 都加了只读守卫，但 `run_cypher` 的**写分支**漏了——因为
+/// `mutating` 要解析完才知道，守卫不能放在函数开头，于是被遗漏。
+/// 结果只读句柄可以经 `run_cypher("CREATE ...")` 写入。
+///
+/// 逐个覆盖所有写入口，而不是只测一个：遗漏正是发生在「逐个添加守卫」的过程中，
+/// 所以验证也必须逐个做。
+#[test]
+fn test_read_only_handle_rejects_every_write_path() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("ro_writes.db");
+
+    {
+        let db = GraphLite::open(&db_path)?;
+        db.add_node(HashSet::from(["N".to_string()]), props(1))?;
+        db.checkpoint()?;
+    }
+
+    let ro = GraphLite::open_read_only(&db_path)?;
+    assert!(ro.is_read_only());
+
+    // 逐条写路径。任何一条成功都意味着只读语义被破坏。
+    let attempts: Vec<(&str, Result<(), GraphError>)> = vec![
+        (
+            "run_cypher(CREATE)",
+            ro.run_cypher("CREATE (x:ShouldNotExist)").map(|_| ()),
+        ),
+        (
+            "run_cypher(SET)",
+            ro.run_cypher("MATCH (n:N) SET n.pwned = true").map(|_| ()),
+        ),
+        (
+            "run_cypher(DELETE)",
+            ro.run_cypher("MATCH (n:N) DELETE n").map(|_| ()),
+        ),
+        (
+            "run_cypher(DETACH DELETE)",
+            ro.run_cypher("MATCH (n:N) DETACH DELETE n").map(|_| ()),
+        ),
+        (
+            "query_cypher(CREATE)",
+            ro.query_cypher("CREATE (y:AlsoNo)").map(|_| ()),
+        ),
+        ("execute(CREATE)", ro.execute("CREATE (z:No)").map(|_| ())),
+        (
+            "add_node",
+            ro.add_node(HashSet::from(["N".to_string()]), props(2))
+                .map(|_| ()),
+        ),
+        ("checkpoint", ro.checkpoint()),
+    ];
+
+    let mut violations = Vec::new();
+    for (label, result) in &attempts {
+        if result.is_ok() {
+            violations.push(*label);
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "these write paths succeeded on a read-only handle: {:?}",
+        violations
+    );
+
+    // 错误信息要能指导用户怎么办，而不只是「失败了」
+    let err = ro.run_cypher("CREATE (x:Y)").expect_err("must be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("read-only"),
+        "error must name the cause, got: {}",
+        msg
+    );
+
+    // 最关键的断言：库里确实什么都没变
+    drop(ro);
+    let check = GraphLite::open(&db_path)?;
+    assert_eq!(check.node_count(), 1, "no node may have been created");
+    let res = check.run_cypher("MATCH (n) RETURN count(*) AS n")?;
+    assert_eq!(res.rows[0].values[0].as_i64(), Some(1));
+
+    Ok(())
+}

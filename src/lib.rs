@@ -94,6 +94,91 @@ impl VacuumReport {
     }
 }
 
+/// 可视化导出的一个节点。
+#[derive(Debug, Clone)]
+pub struct ExportNode {
+    pub id: u64,
+    /// 标签已排序，保证同一节点每次导出字节一致
+    pub labels: Vec<String>,
+    pub properties: HashMap<String, Value>,
+}
+
+/// 可视化导出的一条边。只包含两端都在导出集合内的边。
+#[derive(Debug, Clone)]
+pub struct ExportEdge {
+    pub id: u64,
+    pub src: u64,
+    pub dst: u64,
+    pub edge_type: String,
+}
+
+/// [`GraphLite::export_subgraph`] 的结果。
+///
+/// `truncated` 与总数一起给出，是为了让可视化界面能明确告诉用户「这只是前 N 个
+/// 节点」，而不是让人误以为看到了全图——一个静默截断的图会误导判断。
+#[derive(Debug, Clone)]
+pub struct GraphExport {
+    pub nodes: Vec<ExportNode>,
+    pub edges: Vec<ExportEdge>,
+    /// 是否因 `limit` 而截断
+    pub truncated: bool,
+    /// 库中的节点总数（不受 `limit` 影响）
+    pub total_nodes: usize,
+    /// 库中的边总数（不受 `limit` 影响）
+    pub total_edges: usize,
+}
+
+impl GraphExport {
+    /// 渲染为可视化工具的 JSON。
+    ///
+    /// 手写而非派生序列化：核心库零依赖，且这是**面向外部工具**的稳定接口，
+    /// 其形状应当由本文件明确规定（见 `FORMAT.md` 的同类理由）。
+    pub fn to_json(&self) -> String {
+        let mut out = String::with_capacity(self.nodes.len() * 96 + self.edges.len() * 64 + 128);
+        out.push_str("{\"nodes\":[");
+        for (i, n) in self.nodes.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str("{\"id\":");
+            out.push_str(&n.id.to_string());
+            out.push_str(",\"labels\":[");
+            for (j, l) in n.labels.iter().enumerate() {
+                if j > 0 {
+                    out.push(',');
+                }
+                crate::json::write_escaped(&mut out, l);
+            }
+            out.push_str("],\"properties\":");
+            crate::json::write_map(&mut out, &n.properties);
+            out.push('}');
+        }
+        out.push_str("],\"edges\":[");
+        for (i, e) in self.edges.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str("{\"id\":");
+            out.push_str(&e.id.to_string());
+            out.push_str(",\"src\":");
+            out.push_str(&e.src.to_string());
+            out.push_str(",\"dst\":");
+            out.push_str(&e.dst.to_string());
+            out.push_str(",\"type\":");
+            crate::json::write_escaped(&mut out, &e.edge_type);
+            out.push('}');
+        }
+        out.push_str("],\"truncated\":");
+        out.push_str(if self.truncated { "true" } else { "false" });
+        out.push_str(",\"total_nodes\":");
+        out.push_str(&self.total_nodes.to_string());
+        out.push_str(",\"total_edges\":");
+        out.push_str(&self.total_edges.to_string());
+        out.push('}');
+        out
+    }
+}
+
 /// 打开数据库时的可调参数。
 ///
 /// 既有构造器（`open` / `open_with_pool_size` / `open_with_pool_mb`）都使用
@@ -507,6 +592,15 @@ impl GraphLite {
             return cypher::execute_query(cypher_str, &inner.disk_graph, &inner.index_mgr);
         }
 
+        // 写语句必须走守卫。位置只能在**解析之后**——`mutating` 要解析完才知道
+        // ——因此不能像其它写入口那样放在函数开头。
+        //
+        // 这个守卫曾经缺失：`add_node` / `add_edge` / `execute` / `checkpoint` 都
+        // 加了，唯独 `run_cypher` 的写分支漏掉，于是只读句柄可以经它写数据。
+        // 由 Studio 的端到端测试发现——已有单元测试没有覆盖「只读句柄用
+        // `run_cypher` 跑写语句」这条路径。
+        self.reject_write("run a mutating Cypher statement")?;
+
         // 写操作：获取 inner.write() 排他锁，记录 WAL 并持久化
         let mut inner = self
             .inner
@@ -872,6 +966,86 @@ impl GraphLite {
     pub fn edge_count(&self) -> usize {
         let inner = self.inner.read_recover();
         inner.disk_graph.edge_count
+    }
+
+    /// 导出一张子图，供可视化工具消费。
+    ///
+    /// ## 为什么有 `limit` 而不是「导出全部」
+    ///
+    /// 可视化页面能有效呈现的规模是有限的（几百到几千个节点，再多就是一团毛线）。
+    /// 让调用方显式给出上限，比提供一个会在大库上把浏览器拖死、还顺带复制出几十
+    /// MB JSON 的接口更诚实。
+    ///
+    /// 边只保留**两端都在导出集合内**的那些，因此结果是自洽的子图，不会出现指向
+    /// 缺失节点的悬空边。
+    ///
+    /// 返回的是纯数据结构（`GraphExport`），序列化交给调用方——核心库不假设
+    /// 传输格式。
+    pub fn export_subgraph(&self, limit: usize) -> Result<GraphExport, GraphError> {
+        // 先取元数据与节点 ID 列表，随后**释放读锁**再逐个物化节点。
+        // 持有全局读锁去遍历整张子图会阻塞写入；这里只把轻量的 ID 列表留在锁内。
+        let (node_ids, total_nodes, total_edges) = {
+            let inner = self.inner.read_recover();
+            let graph = &inner.disk_graph;
+            let ids: Vec<u64> = graph.all_node_ids()?.into_iter().take(limit).collect();
+            (ids, graph.node_count, graph.edge_count)
+        };
+
+        let mut nodes = Vec::with_capacity(node_ids.len());
+        for id in &node_ids {
+            // 用 try_get_node（保留错误）而非 lossy 版本：导出工具应把损坏如实
+            // 报出来，而不是产出一张静默缺数据的图。
+            if let Some(node) = self.try_get_node(*id)? {
+                nodes.push(ExportNode {
+                    id: *id,
+                    labels: {
+                        let mut l: Vec<String> = node.labels.iter().cloned().collect();
+                        l.sort_unstable();
+                        l
+                    },
+                    properties: node.properties.clone(),
+                });
+            }
+        }
+
+        let mut present = std::collections::HashSet::with_capacity(node_ids.len());
+        present.extend(nodes.iter().map(|n| n.id));
+
+        // 边：只保留两端都在集合内的，得到一个自洽子图
+        let mut edges = Vec::new();
+        let mut seen_edges = std::collections::HashSet::new();
+        for id in &node_ids {
+            let node = match self.try_get_node(*id)? {
+                Some(n) => n,
+                None => continue,
+            };
+            for eid in node.outgoing.iter().chain(node.incoming.iter()) {
+                // 用集合去重：`Vec::any` 在高度共享的图上会退化成 O(E²)
+                if !seen_edges.insert(*eid) {
+                    continue;
+                }
+                let edge = match self.try_get_edge(*eid)? {
+                    Some(e) => e,
+                    None => continue,
+                };
+                if present.contains(&edge.src_id) && present.contains(&edge.dst_id) {
+                    edges.push(ExportEdge {
+                        id: edge.id,
+                        src: edge.src_id,
+                        dst: edge.dst_id,
+                        edge_type: edge.edge_type.clone(),
+                    });
+                }
+            }
+        }
+
+        Ok(GraphExport {
+            nodes,
+            edges,
+            truncated: total_nodes > node_ids.len(),
+            total_nodes,
+            total_edges,
+        })
     }
 
     /// 获取指定节点（按需通过 Buffer Pool 调入）。
