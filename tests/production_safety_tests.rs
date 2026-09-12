@@ -793,3 +793,87 @@ fn test_read_only_open_refuses_pending_wal_replay() -> Result<(), GraphError> {
 
     Ok(())
 }
+
+// =========================================================================
+// 9. 唯一约束：数据不脏的最后一道防线
+// =========================================================================
+/// 唯一约束的完整语义：声明、拦截、更新、持久化。
+///
+/// 没有约束时，一个有 bug 的写入方（或重试逻辑出错的 Agent）可以给同一个实体
+/// 建两个节点，而查询只返回其中一半——错误被推迟到很久以后才被发现。
+#[test]
+fn test_unique_constraint_full_semantics() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("unique.db");
+
+    let named = |name: &str| {
+        let mut p = HashMap::new();
+        p.insert("name".to_string(), Value::from(name));
+        (HashSet::from(["Character".to_string()]), p)
+    };
+
+    let db = GraphLite::open(&db_path)?;
+
+    // 无约束时重名是允许的
+    db.add_node(named("林渊").0, named("林渊").1)?;
+    db.add_node(named("林渊").0, named("林渊").1)?;
+
+    // 既有数据已重复 → 声明必须被拒绝，且指出冲突
+    let err = db
+        .create_unique_constraint("Character", "name")
+        .expect_err("declaring a constraint over duplicate data must fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("already shared by 2 nodes"),
+        "error must name the conflicting nodes, got: {}",
+        msg
+    );
+
+    // 干净数据上声明成功
+    let clean_path = dir.path().join("clean.db");
+    let db2 = GraphLite::open(&clean_path)?;
+    db2.add_node(named("林渊").0, named("林渊").1)?;
+    db2.create_unique_constraint("Character", "name")?;
+    assert_eq!(
+        db2.unique_constraints(),
+        vec![("Character".to_string(), "name".to_string())]
+    );
+
+    // 重复插入被拒
+    let dup = db2.add_node(named("林渊").0, named("林渊").1);
+    assert!(
+        matches!(dup, Err(GraphError::UniqueConstraintViolation { .. })),
+        "duplicate insert must fail with a constraint violation, got: {:?}",
+        dup.map(|_| ())
+    );
+
+    // 不同值可插入
+    let other = db2.add_node(named("苏晴").0, named("苏晴").1)?;
+
+    // 更新成已存在的值被拒
+    let upd = db2.update_node_property(other, "name", "林渊");
+    assert!(
+        matches!(upd, Err(GraphError::UniqueConstraintViolation { .. })),
+        "updating to an existing value must fail, got: {:?}",
+        upd
+    );
+
+    // 更新为自身当前值必须允许（不得与自己冲突）
+    db2.update_node_property(other, "name", "苏晴")?;
+
+    // 约束跨重启持久化并继续生效
+    db2.checkpoint()?;
+    drop(db2);
+    let reopened = GraphLite::open(&clean_path)?;
+    assert_eq!(
+        reopened.unique_constraints(),
+        vec![("Character".to_string(), "name".to_string())],
+        "constraints must survive a restart"
+    );
+    assert!(
+        reopened.add_node(named("林渊").0, named("林渊").1).is_err(),
+        "the constraint must still be enforced after a restart"
+    );
+
+    Ok(())
+}

@@ -18,6 +18,31 @@ user has to act on them:
 
 ### Added
 
+- **Unique constraints**: `db.create_unique_constraint("Character", "name")` makes a
+  `(label, property)` pair's values unique across every node carrying that label.
+  Violations raise `GraphError::UniqueConstraintViolation` — a distinct variant so
+  callers can tell an expected data conflict from a general failure.
+
+  This is the last line of defence for data cleanliness. Without it, a buggy writer
+  or a retrying agent can create two nodes for one entity while queries return only
+  half the data, and nothing surfaces the problem until much later.
+
+  Three details that matter:
+
+  - **Declaring a constraint over existing duplicates fails**, naming the nodes that
+    conflict. Discovering the conflict at the next write instead would point the
+    error at the wrong place — the writer rather than the historical data.
+  - **Updating a node to its own current value is allowed**; the check excludes the
+    node being modified, so a no-op update is not mistaken for a self-conflict.
+  - **Constraints persist** in the Page 0 index catalog and still apply after a
+    restart. `db.unique_constraints()` lists them.
+
+  Implementation reuses the existing `(label, property)` index rather than adding a
+  parallel structure, and when that index is not yet built the write is **refused**
+  rather than allowed through — optimistically permitting a write would make the
+  constraint silently meaningless.
+
+
 - **Multiple readers can now share a database while a single writer holds it.**
   Previously exactly one handle could open a file, so a background process writing
   and a foreground process observing were mutually exclusive — the most common

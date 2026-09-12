@@ -288,6 +288,39 @@ impl GraphLite {
         Ok(())
     }
 
+    /// 写入前校验唯一约束；返回 `Err` 时该写入必须整体放弃。
+    ///
+    /// 遍历节点标签与属性的**笛卡尔关系**：约束声明在 `(:Label {prop})` 上，
+    /// 因此只有「节点带该标签 **且** 带该属性」才需要检查。
+    ///
+    /// `exclude` 是正在被更新的节点自身（新建时为 `None`）：更新一个节点的属性
+    /// 不应与它自己的旧值冲突。
+    fn check_unique_constraints(
+        index_mgr: &IndexManager,
+        labels: &HashSet<String>,
+        properties: &HashMap<String, Value>,
+        exclude: Option<u64>,
+    ) -> Result<(), GraphError> {
+        // 无约束时立即返回：这是绝大多数写入的路径，不应有任何额外开销
+        if index_mgr.unique_constraints().is_empty() {
+            return Ok(());
+        }
+        for label in labels {
+            for (prop, value) in properties {
+                if let Some((l, p, detail)) =
+                    index_mgr.check_unique_violation(label, prop, value, exclude)
+                {
+                    return Err(GraphError::UniqueConstraintViolation {
+                        label: l,
+                        prop: p,
+                        detail,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// 打开前校验磁盘格式版本，**早于任何写入**（含 WAL 回放）。
     ///
     /// 只读主文件的前 4096 字节——足够读到 magic 与版本字段，且不需要
@@ -556,6 +589,85 @@ impl GraphLite {
         inner.index_mgr.indexed_properties()
     }
 
+    /// 声明 `(:label {prop})` 上的唯一约束。
+    ///
+    /// ## 为什么先检查再声明
+    ///
+    /// 若**既有数据**已经违反约束，必须立即报错并指出冲突的节点。否则约束会在
+    /// 下一次写入时才炸出来，而那时用户已无从知道是历史数据的问题——错误被推迟
+    /// 且指向了错误的位置。
+    ///
+    /// 声明本身会持久化到 Page 0 的索引目录，冷重启后依然生效。
+    pub fn create_unique_constraint(&self, label: &str, prop: &str) -> Result<(), GraphError> {
+        self.reject_write("create a constraint")?;
+        let mut inner = self
+            .inner
+            .write()
+            .map_err(|e| GraphError::General(e.to_string()))?;
+
+        // 先建/刷新该标签的索引，否则无法判定既有数据是否已违规
+        let GraphInner {
+            disk_graph,
+            index_mgr,
+            ..
+        } = &mut *inner;
+        index_mgr.ensure_label_index(disk_graph, label);
+
+        // 查**候选约束**而非已声明的约束：声明时它还没进 catalog，
+        // 查已声明的集合会永远返回「无重复」，静默接受脏数据。
+        // （这是初版的实际行为，端到端验证时被抓出来。）
+        if let Some((value, nodes)) = index_mgr
+            .find_duplicates_for(label, prop)
+            .into_iter()
+            .next()
+        {
+            return Err(GraphError::UniqueConstraintViolation {
+                label: label.to_string(),
+                prop: prop.to_string(),
+                detail: format!(
+                    "{:?} is already shared by {} nodes ({:?}); \
+                     resolve the duplicates before declaring the constraint",
+                    value,
+                    nodes.len(),
+                    nodes
+                ),
+            });
+        }
+
+        let GraphInner {
+            disk_graph,
+            index_mgr,
+            ..
+        } = &mut *inner;
+        index_mgr.declare_unique(label, prop);
+        // 持久化到 Page 0 目录；与其它元数据一样随 checkpoint 落盘
+        disk_graph
+            .index_catalog
+            .unique_constraints
+            .insert(crate::index::UniqueConstraint {
+                label: label.to_string(),
+                prop: prop.to_string(),
+            });
+
+        let tx_id = inner.next_tx_id;
+        inner.next_tx_id += 1;
+        Self::commit_dirty_pages_to_wal(&mut inner, tx_id)?;
+        drop(inner);
+        self.maybe_auto_checkpoint()?;
+        Ok(())
+    }
+
+    /// 列出已声明的唯一约束，格式为 `(label, prop)`。
+    pub fn unique_constraints(&self) -> Vec<(String, String)> {
+        let inner = self.inner.read_recover();
+        inner
+            .index_mgr
+            .unique_constraints()
+            .iter()
+            .map(|c| (c.label.clone(), c.prop.clone()))
+            .collect()
+    }
+
     /// 获取数据库主文件路径
     pub fn db_path(&self) -> &Path {
         &self.db_path
@@ -663,6 +775,9 @@ impl GraphLite {
             .inner
             .write()
             .map_err(|e| GraphError::General(e.to_string()))?;
+
+        // 唯一约束校验必须在**任何写入之前**：否则失败会留下半个节点。
+        Self::check_unique_constraints(&inner.index_mgr, &labels, &properties, None)?;
 
         let tx_id = inner.next_tx_id;
         inner.next_tx_id += 1;
@@ -789,6 +904,14 @@ impl GraphLite {
         } else {
             None
         };
+
+        // 唯一约束：在写入之前校验，且排除该节点自身的旧值
+        // （更新一个节点不应与它自己冲突）
+        if let Ok(Some(node)) = inner.disk_graph.get_node(id) {
+            let mut props = HashMap::new();
+            props.insert(key_str.clone(), val.clone());
+            Self::check_unique_constraints(&inner.index_mgr, &node.labels, &props, Some(id))?;
+        }
 
         inner
             .disk_graph

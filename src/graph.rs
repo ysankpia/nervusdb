@@ -34,6 +34,16 @@ pub enum GraphError {
         actual: u32,
     },
 
+    /// 违反唯一约束：`(:Label {prop})` 的取值已存在于另一个节点。
+    ///
+    /// 独立变体而非 `General`：调用方需要能程序化区分「数据违反约束」与
+    /// 「其它一般性失败」，前者是可预期的业务结果，后者通常意味着 bug。
+    UniqueConstraintViolation {
+        label: String,
+        prop: String,
+        detail: String,
+    },
+
     General(String),
 }
 
@@ -60,6 +70,16 @@ impl fmt::Display for GraphError {
                 f,
                 "Page checksum mismatch at page {}: expected {:#010x}, actual {:#010x}",
                 page_id, expected, actual
+            ),
+            GraphError::UniqueConstraintViolation {
+                label,
+                prop,
+                detail,
+            } => write!(
+                f,
+                "Unique constraint violated: (:{}.{}) = {}. \
+                 Each value must be unique across all :{} nodes.",
+                label, prop, detail, label
             ),
             GraphError::General(msg) => write!(f, "General database error: {}", msg),
         }
