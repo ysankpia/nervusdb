@@ -8,7 +8,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 /// 启用 STEAL 外存溢出的最小缓冲池帧数（外存最小工作集水位）。
 ///
@@ -360,13 +360,21 @@ impl Default for LRUReplacer {
     }
 }
 
-/// Buffer Pool 中的物理页缓存帧（配备页级读写门闩 Page-Level Latch）
+/// Buffer Pool 中的物理页缓存帧。
+///
+/// 这里**没有**页级门闩（latch）。此结构体曾带一个 `latch: Arc<RwLock<()>>` 字段，
+/// 声明并初始化后**从未被读写**——即死代码，却让读者以为存在页级并发控制。
+/// 实际的并发控制是整个 `BufferPoolManager` 外面那一把 `Arc<Mutex<..>>`，因此
+/// 读会被串行化；这是已测量的限制，代价与修复方向见 AGENTS.md §10 与
+/// `docs/benchmarks.md#concurrency-scaling`。
+///
+/// 真要实现页级并行，需要给帧加真正的 latch 并把缓冲池的并发模型改成分帧锁定
+/// ——那是 ROADMAP 里的一项设计工作，不是在这里补一个没人用的字段。
 pub struct Frame {
     pub page_id: PageId,
     pub pin_count: usize,
     pub is_dirty: bool,
     pub data: [u8; PAGE_SIZE],
-    pub latch: Arc<RwLock<()>>,
 }
 
 impl Default for Frame {
@@ -382,7 +390,6 @@ impl Frame {
             pin_count: 0,
             is_dirty: false,
             data: [0u8; PAGE_SIZE],
-            latch: Arc::new(RwLock::new(())),
         }
     }
 }

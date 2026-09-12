@@ -103,8 +103,12 @@ shipped someone else's name, and a published name cannot be cleanly retracted.
 `nervusdb` is already owned by this project on crates.io, and the old `0.0.x`
 releases there have been yanked, so the name now resolves only to the new line.
 
-Remaining work before publishing is packaging, not naming: versioning policy, and
-platform wheel/prebuild matrices.
+**Packaging is done.** The release workflow builds four native targets
+(macOS arm64/x64, Linux arm64/x64) — the previous configuration published a single
+Linux wheel and an npm tarball with no loadable binary, so neither registry could have
+served a working install. What remains before a first publish is not code: the three
+registry tokens must be set, and required reviewers added to the `release` environment
+(see AGENTS.md §3.5).
 
 **The previously recorded "9x slower than native" figure is retracted** — it came
 from debug builds of the bindings compared against a release core. Measured with
@@ -135,8 +139,10 @@ machine can deliver. Closing that needs per-frame latching, i.e. a redesign of t
 buffer pool's concurrency model, not a patch. It is the largest remaining piece of
 work in this file.
 
-Also found while profiling: `BufferPoolManager::latch` is dead code — declared and
-initialized since the initial commit, never used. Delete it or make it real.
+Also found while profiling: `Frame::latch` was dead code — declared and initialized
+since the initial commit, never read or written. **Deleted**, so the struct no longer
+implies a page-level latching that does not exist. Making it real is this item's work,
+not a field to restore.
 
 ## Explicitly out of scope
 
