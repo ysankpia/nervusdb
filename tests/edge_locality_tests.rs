@@ -8,19 +8,19 @@
 //! - 批量织网失败时的原子回滚与主库零污染；
 //! - 多级页目录页在受限池下的常驻与深度寻址正确性。
 
-use graphlite::{Direction, GraphError, GraphLite, Value};
+use nervusdb::{Direction, GraphError, NervusDb, Value};
 use std::collections::{HashMap, HashSet};
 use tempfile::tempdir;
 
 /// 节点出边集合（公开 API 观测面）
-fn outgoing_set(db: &GraphLite, node_id: u64) -> HashSet<u64> {
+fn outgoing_set(db: &NervusDb, node_id: u64) -> HashSet<u64> {
     db.get_node(node_id)
         .map(|n| n.outgoing.iter().copied().collect())
         .unwrap_or_default()
 }
 
 /// 节点入边集合（公开 API 观测面）
-fn incoming_set(db: &GraphLite, node_id: u64) -> HashSet<u64> {
+fn incoming_set(db: &NervusDb, node_id: u64) -> HashSet<u64> {
     db.get_node(node_id)
         .map(|n| n.incoming.iter().copied().collect())
         .unwrap_or_default()
@@ -51,7 +51,7 @@ fn test_batch_weave_matches_per_edge_insert() -> Result<(), GraphError> {
 
     // A. 批量路径（单个事务内连续 AddEdge，走两阶段批量织网）
     {
-        let db = GraphLite::open(&batch_path)?;
+        let db = NervusDb::open(&batch_path)?;
         db.with_transaction(|tx| {
             for _ in 1..=60u64 {
                 tx.add_node(HashSet::from(["N".to_string()]), HashMap::new())?;
@@ -69,7 +69,7 @@ fn test_batch_weave_matches_per_edge_insert() -> Result<(), GraphError> {
 
     // B. 逐条路径（每条边独立事务，强制走单条插入分支）
     {
-        let db = GraphLite::open(&single_path)?;
+        let db = NervusDb::open(&single_path)?;
         db.with_transaction(|tx| {
             for _ in 1..=60u64 {
                 tx.add_node(HashSet::from(["N".to_string()]), HashMap::new())?;
@@ -84,8 +84,8 @@ fn test_batch_weave_matches_per_edge_insert() -> Result<(), GraphError> {
         db.checkpoint()?;
     }
 
-    let batch_db = GraphLite::open(&batch_path)?;
-    let single_db = GraphLite::open(&single_path)?;
+    let batch_db = NervusDb::open(&batch_path)?;
+    let single_db = NervusDb::open(&single_path)?;
 
     assert_eq!(batch_db.edge_count(), single_db.edge_count());
     assert_eq!(batch_db.node_count(), single_db.node_count());
@@ -125,7 +125,7 @@ fn test_batch_weave_matches_per_edge_insert() -> Result<(), GraphError> {
 fn test_self_loop_preserves_outgoing_chain() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("self_loop.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     let hub = db.add_node(HashSet::from(["Hub".to_string()]), HashMap::new())?;
     let other = db.add_node(HashSet::from(["Hub".to_string()]), HashMap::new())?;
@@ -163,7 +163,7 @@ fn test_self_loop_preserves_outgoing_chain() -> Result<(), GraphError> {
 fn test_batch_append_across_transactions() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("append.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     let src = db.add_node(HashSet::from(["S".to_string()]), HashMap::new())?;
     let mut dsts = Vec::new();
@@ -192,7 +192,7 @@ fn test_batch_append_across_transactions() -> Result<(), GraphError> {
     db.checkpoint()?;
     // 排他锁要求同一数据库同时只有一个句柄：重开前必须释放旧句柄
     drop(db);
-    let reopened = GraphLite::open(&db_path)?;
+    let reopened = NervusDb::open(&db_path)?;
     assert_eq!(
         reopened.get_node(src).unwrap().outgoing.len(),
         210,
@@ -212,7 +212,7 @@ fn test_batch_weave_eliminates_false_spill() -> Result<(), GraphError> {
     let db_path = dir.path().join("no_false_spill.db");
 
     // 极小池：256 帧 = 1MB；节点热集远超池容量
-    let db = GraphLite::open_with_pool_size(&db_path, 256)?;
+    let db = NervusDb::open_with_pool_size(&db_path, 256)?;
 
     let nodes: u64 = 40_000;
     db.with_transaction(|tx| {
@@ -280,7 +280,7 @@ fn test_analytics_identical_after_batch_weave() -> Result<(), GraphError> {
         .collect();
 
     for (path, batched) in [(&batch_path, true), (&single_path, false)] {
-        let db = GraphLite::open(path)?;
+        let db = NervusDb::open(path)?;
         db.with_transaction(|tx| {
             for n in 1..=node_count {
                 let mut m = HashMap::new();
@@ -306,8 +306,8 @@ fn test_analytics_identical_after_batch_weave() -> Result<(), GraphError> {
         db.checkpoint()?;
     }
 
-    let batch_db = GraphLite::open(&batch_path)?;
-    let single_db = GraphLite::open(&single_path)?;
+    let batch_db = NervusDb::open(&batch_path)?;
+    let single_db = NervusDb::open(&single_path)?;
 
     // PageRank 分数必须逐位一致
     let a = batch_db.pagerank_with(0.85, 200, 1e-12);
@@ -354,7 +354,7 @@ fn test_batch_weave_rollback_zero_pollution() -> Result<(), GraphError> {
     let db_path = dir.path().join("weave_rollback.db");
 
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         db.with_transaction(|tx| {
             for _ in 1..=130u64 {
                 tx.add_node(HashSet::from(["N".to_string()]), HashMap::new())?;
@@ -366,7 +366,7 @@ fn test_batch_weave_rollback_zero_pollution() -> Result<(), GraphError> {
     let baseline = std::fs::read(&db_path)?;
 
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         let before_edges = db.edge_count();
 
         // 批量织网中混入非法负权重边 -> 整批必须失败并干净回滚
@@ -388,7 +388,7 @@ fn test_batch_weave_rollback_zero_pollution() -> Result<(), GraphError> {
         );
     }
 
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
     assert_eq!(db.edge_count(), 0);
     assert_eq!(db.node_count(), 130);
 
@@ -404,7 +404,7 @@ fn test_directory_pages_stay_resident() -> Result<(), GraphError> {
     let db_path = dir.path().join("dir_resident.db");
 
     // 极小池 + 超过直接页槽位的节点规模，强制分配间接目录页
-    let db = GraphLite::open_with_pool_size(&db_path, 256)?;
+    let db = NervusDb::open_with_pool_size(&db_path, 256)?;
     let nodes: u64 = 20_000; // 20k/128 = 157 张节点页 > 32 张直接页 -> 需要目录页
 
     db.with_transaction(|tx| {
@@ -429,7 +429,7 @@ fn test_directory_pages_stay_resident() -> Result<(), GraphError> {
     db.checkpoint()?;
     // 排他锁：重开前必须释放旧句柄
     drop(db);
-    let reopened = GraphLite::open_with_pool_size(&db_path, 256)?;
+    let reopened = NervusDb::open_with_pool_size(&db_path, 256)?;
     assert_eq!(reopened.node_count(), nodes as usize);
     assert_eq!(
         reopened
@@ -469,7 +469,7 @@ fn test_weave_paths_algorithmic_mathematical_equality() -> Result<(), GraphError
 
     // A. 批量织网路径（默认 commit）
     {
-        let db = GraphLite::open(&woven_path)?;
+        let db = NervusDb::open(&woven_path)?;
         let mut tx = db.begin_transaction()?;
         for _ in 1..=n {
             tx.add_node(HashSet::from(["Person".to_string()]), HashMap::new())?;
@@ -483,7 +483,7 @@ fn test_weave_paths_algorithmic_mathematical_equality() -> Result<(), GraphError
 
     // B. 逐条原序路径（commit_unclustered）
     {
-        let db = GraphLite::open(&plain_path)?;
+        let db = NervusDb::open(&plain_path)?;
         let mut tx = db.begin_transaction()?;
         for _ in 1..=n {
             tx.add_node(HashSet::from(["Person".to_string()]), HashMap::new())?;
@@ -495,8 +495,8 @@ fn test_weave_paths_algorithmic_mathematical_equality() -> Result<(), GraphError
         db.checkpoint()?;
     }
 
-    let woven = GraphLite::open(&woven_path)?;
-    let plain = GraphLite::open(&plain_path)?;
+    let woven = NervusDb::open(&woven_path)?;
+    let plain = NervusDb::open(&plain_path)?;
 
     assert_eq!(woven.node_count(), plain.node_count());
     assert_eq!(woven.edge_count(), plain.edge_count());
@@ -549,7 +549,7 @@ fn test_weave_paths_algorithmic_mathematical_equality() -> Result<(), GraphError
 // =========================================================================
 #[test]
 fn test_mixed_transaction_never_takes_batch_path() -> Result<(), GraphError> {
-    let db = GraphLite::open(":memory:")?;
+    let db = NervusDb::open(":memory:")?;
 
     // 段内夹杂非边操作，使连续 AddEdge 段始终短于 EDGE_BATCH_WEAVE_MIN，
     // 因此即便边数较多也不会走批量织网路径 —— 无需额外安全性启发式。
@@ -610,7 +610,7 @@ fn test_mixed_transaction_never_takes_batch_path() -> Result<(), GraphError> {
 #[test]
 fn test_batched_chain_walk_matches_per_edge_semantics() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("chain_equiv.db"))?;
+    let db = NervusDb::open(dir.path().join("chain_equiv.db"))?;
 
     // 1) 出边链顺序：链是「插入序的逆序」，批量遍历必须保持同一顺序
     let hub = db.add_node(HashSet::from(["Hub".to_string()]), HashMap::new())?;
@@ -653,7 +653,7 @@ fn test_batched_chain_walk_matches_per_edge_semantics() -> Result<(), GraphError
 #[test]
 fn test_batched_chain_walk_handles_empty_and_single() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("chain_edge.db"))?;
+    let db = NervusDb::open(dir.path().join("chain_edge.db"))?;
 
     // 孤立节点：空链，两个方向都必须返回空
     let lone = db.add_node(HashSet::from(["Lone".to_string()]), HashMap::new())?;
@@ -676,7 +676,7 @@ fn test_batched_chain_walk_handles_empty_and_single() -> Result<(), GraphError> 
 #[test]
 fn test_batched_chain_walk_stops_at_deleted_record() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("chain_deleted.db"))?;
+    let db = NervusDb::open(dir.path().join("chain_deleted.db"))?;
 
     let hub = db.add_node(HashSet::new(), HashMap::new())?;
     let mut edges = Vec::new();
@@ -709,7 +709,7 @@ fn test_batched_chain_walk_stops_at_deleted_record() -> Result<(), GraphError> {
 #[test]
 fn test_batched_chain_walk_on_high_degree_node() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("chain_hub.db"))?;
+    let db = NervusDb::open(dir.path().join("chain_hub.db"))?;
 
     // 高度节点：正是锁流量优化针对的场景，必须完整且不重不漏
     let hub = db.add_node(HashSet::new(), HashMap::new())?;

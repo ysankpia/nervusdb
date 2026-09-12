@@ -512,7 +512,7 @@ impl BufferPoolManager {
         })
     }
 
-    /// 取出 CRC 存储句柄（提交/检查点路径需要它，见 `GraphLite::checkpoint`）
+    /// 取出 CRC 存储句柄（提交/检查点路径需要它，见 `NervusDb::checkpoint`）
     pub fn take_crc(&mut self) -> Option<crate::crc::CrcStore> {
         self.crc.take()
     }

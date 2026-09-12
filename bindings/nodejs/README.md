@@ -1,6 +1,6 @@
-# GraphLite Node.js / TypeScript SDK
+# NervusDb Node.js / TypeScript SDK
 
-Official Node.js and TypeScript bindings for **GraphLite-RS**, the SQLite of Graph Databases.
+Official Node.js and TypeScript bindings for **NervusDB**, the SQLite of Graph Databases.
 
 ## Features
 
@@ -20,8 +20,8 @@ Official Node.js and TypeScript bindings for **GraphLite-RS**, the SQLite of Gra
 
 ```bash
 cd bindings/nodejs
-cargo build -p graphlite-node
-cp ../../target/debug/libgraphlite_node.dylib graphlite.node   # libgraphlite_node.so on Linux
+cargo build -p nervusdb-node
+cp ../../target/debug/libnervusdb_node.dylib nervusdb.node   # libnervusdb_node.so on Linux
 node test.mjs
 ```
 
@@ -31,10 +31,10 @@ you prefer not to copy it.
 ## Quick Start
 
 ```typescript
-import { GraphLite } from "graphlite-node";
+import { NervusDb } from "nervusdb-node";
 
 // 1. Open or create database (poolSize in frames: 1024 = 4MB)
-const db = GraphLite.open("mydb.db", 1024);
+const db = NervusDb.open("mydb.db", 1024);
 
 // 2. Execute Cypher statements
 db.execute(

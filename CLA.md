@@ -1,6 +1,6 @@
 # Contributor License Agreement (CLA)
 
-Thank you for considering a contribution to GraphLite-RS ("the Project"),
+Thank you for considering a contribution to NervusDB ("the Project"),
 maintained by the Project Owner.
 
 > **Note on this document.** This is a plain-language CLA modelled on widely used
@@ -36,7 +36,7 @@ rights in your work, and nothing in it obliges you to anything.
   **after being invited to do so** by the Project Owner.
 - **"Project Owner"** means the copyright holder of the Project, currently the
   maintainer publishing under the repository
-  [github.com/ysankpia/graphlite](https://github.com/ysankpia/graphlite).
+  [github.com/ysankpia/nervusdb](https://github.com/ysankpia/nervusdb).
 
 ## 2. Copyright licence
 

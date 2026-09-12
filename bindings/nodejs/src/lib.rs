@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate napi_derive;
 
-use graphlite_core::{GraphLite as CoreGraphLite, Transaction as CoreTransaction, Value};
+use nervusdb_core::{NervusDb as CoreNervusDb, Transaction as CoreTransaction, Value};
 use std::collections::{HashMap, HashSet};
 
 /// 把任意 JSON 标量转为图属性值
@@ -86,13 +86,13 @@ pub struct KHopSubgraph {
     pub edges: Vec<SubgraphEdge>,
 }
 
-fn parse_direction(direction: Option<&str>) -> Result<graphlite_core::Direction, napi::Error> {
+fn parse_direction(direction: Option<&str>) -> Result<nervusdb_core::Direction, napi::Error> {
     match direction.map(|d| d.to_ascii_lowercase()) {
-        None => Ok(graphlite_core::Direction::Both),
+        None => Ok(nervusdb_core::Direction::Both),
         Some(d) => match d.as_str() {
-            "out" | "outgoing" => Ok(graphlite_core::Direction::Outgoing),
-            "in" | "incoming" => Ok(graphlite_core::Direction::Incoming),
-            "both" | "any" => Ok(graphlite_core::Direction::Both),
+            "out" | "outgoing" => Ok(nervusdb_core::Direction::Outgoing),
+            "in" | "incoming" => Ok(nervusdb_core::Direction::Incoming),
+            "both" | "any" => Ok(nervusdb_core::Direction::Both),
             other => Err(napi::Error::from_reason(format!(
                 "invalid direction '{}': expected outgoing/incoming/both",
                 other
@@ -101,17 +101,17 @@ fn parse_direction(direction: Option<&str>) -> Result<graphlite_core::Direction,
     }
 }
 
-#[napi(js_name = "GraphLite")]
-pub struct JsGraphLite {
-    inner: CoreGraphLite,
+#[napi(js_name = "NervusDb")]
+pub struct JsNervusDb {
+    inner: CoreNervusDb,
 }
 
 #[napi]
-impl JsGraphLite {
+impl JsNervusDb {
     #[napi(factory)]
     pub fn open(path: String, pool_size: Option<u32>) -> Result<Self, napi::Error> {
         let frames = pool_size.unwrap_or(1024) as usize;
-        let db = CoreGraphLite::open_with_pool_size(path, frames)
+        let db = CoreNervusDb::open_with_pool_size(path, frames)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(Self { inner: db })
     }

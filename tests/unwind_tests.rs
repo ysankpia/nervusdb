@@ -12,20 +12,20 @@
 //!
 //! 测试全部走公开 API。
 
-use graphlite::{GraphError, GraphLite, Value};
+use nervusdb::{GraphError, NervusDb, Value};
 use tempfile::tempdir;
 
-fn open_temp(name: &str) -> Result<(tempfile::TempDir, GraphLite), GraphError> {
+fn open_temp(name: &str) -> Result<(tempfile::TempDir, NervusDb), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join(name))?;
+    let db = NervusDb::open(dir.path().join(name))?;
     Ok((dir, db))
 }
 
 /// 取出单列结果的所有值。
 ///
 /// 走 `run_cypher`（按 AST 自动路由读写），因为它返回结果集；
-/// `GraphLite::execute` 只返回统计摘要。
-fn column(db: &GraphLite, cypher: &str) -> Result<Vec<Value>, GraphError> {
+/// `NervusDb::execute` 只返回统计摘要。
+fn column(db: &NervusDb, cypher: &str) -> Result<Vec<Value>, GraphError> {
     let res = db.run_cypher(cypher)?;
     Ok(res.rows.iter().map(|r| r.values[0].clone()).collect())
 }
@@ -341,12 +341,12 @@ fn test_read_only_handle_allows_readonly_unwind() -> Result<(), GraphError> {
     let path = dir.path().join("unwind_ro.db");
 
     {
-        let db = GraphLite::open(&path)?;
+        let db = NervusDb::open(&path)?;
         db.run_cypher("CREATE (:Seed {v: 1})")?;
         db.checkpoint()?;
     }
 
-    let ro = GraphLite::open_read_only(&path)?;
+    let ro = NervusDb::open_read_only(&path)?;
 
     // 纯读 UNWIND 不写任何东西，只读句柄应当接受
     let res = ro.run_cypher("UNWIND [1, 2, 3] AS x RETURN x")?;

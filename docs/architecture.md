@@ -3,7 +3,7 @@
 This is the detailed design reference. The [README](../README.md) covers what the
 project is and how to use it; this document covers how it works.
 
-The short version: GraphLite-RS is an embedded property graph database that keeps
+The short version: NervusDB is an embedded property graph database that keeps
 **all graph topology on disk** and bounds resident memory by a configurable buffer
 pool. It stores two files — `{path}` and `{path}.wal` — and is built around
 fixed-size records with direct physical addressing, the same way SQLite is built
@@ -255,7 +255,7 @@ or concurrently-mutated chain cannot spin forever.
   See §11 for why.
 - `Transaction` is a write-side object: it buffers actions, resolves edge chains
   in memory at commit, and issues a single `fsync` for the whole batch.
-- **`GraphLite::read_snapshot()`** pins one consistent state for the lifetime of the
+- **`NervusDb::read_snapshot()`** pins one consistent state for the lifetime of the
   returned guard. It exists because single calls are not enough: `get_node` and
   `get_edge` each take and release the read lock, so a traversal that reads an
   adjacency list and then fetches each named edge can stitch together two states and
@@ -303,7 +303,7 @@ process abort.
 
 ## 12. Storage format versioning
 
-`DB_PAGE_VERSION` is currently `4`, and **this is the frozen format** — see
+`DB_PAGE_VERSION` is currently `5`, and **this is the frozen format** — see
 `FORMAT.md` for the byte-level specification and the stability promise. Versions 1,
 2 and 3 are **not readable**: `open` returns an explicit error directing you to
 export with `.dump` and re-import. It never silently reinterprets an old file, and
@@ -313,7 +313,7 @@ The logical dump (`dump_cypher`) emits `CREATE` plus `SET`, so replaying into an
 existing node **replaces** properties rather than appending, which makes it
 idempotent and doubles as the migration path.
 
-## 13. Page CRCs (introduced in version 3, current at version 4)
+## 13. Page CRCs (introduced in version 3, current at version 5)
 
 Version 2 checksummed WAL frames but not the pages already in `{path}`, so a bit
 flip or a half-written page was read back as "not found" and the graph quietly

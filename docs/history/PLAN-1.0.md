@@ -1,4 +1,4 @@
-# GraphLite 1.0 路线图（对标成熟图数据库）
+# NervusDb 1.0 路线图（对标成熟图数据库）
 
 > 回答两个问题：
 >
@@ -53,7 +53,7 @@ debug_assert!(page_id <= 0x00FF_FFFF, "PageId exceeds 24-bit address space");
 
 我把 SQLite、DuckDB、Neo4j、Kuzu、CozoDB 的能力拆成七个维度对比。
 
-| 能力                | SQLite    | DuckDB      | Neo4j     | Kuzu      | **GraphLite 现状**   |
+| 能力                | SQLite    | DuckDB      | Neo4j     | Kuzu      | **NervusDb 现状**   |
 | ------------------- | --------- | ----------- | --------- | --------- | -------------------- |
 | **存储**            |           |             |           |           |                      |
 | 单文件              | ✅        | ✅          | ❌ 多文件 | ✅        | ✅ **有**            |
@@ -156,7 +156,7 @@ let cat_bytes = bincode::serialize(&self.index_catalog)?;
 
 **冻结承诺的措辞**（参照 SQLite 原文）：
 
-> 自 1.0.0 起，GraphLite 的磁盘格式不再以不兼容方式变更。未来版本永远能读写
+> 自 1.0.0 起，NervusDb 的磁盘格式不再以不兼容方式变更。未来版本永远能读写
 > 1.0.0 创建的文件。若某项特性必须改变格式，将采用 DuckDB 式的
 > `STORAGE_VERSION` 显式选择，旧格式继续受支持。
 
@@ -233,11 +233,11 @@ tx.add_edges(edges)
 
 ---
 
-### P6 — 工具：`graphlite studio`（可视化）
+### P6 — 工具：`nervusdb studio`（可视化）
 
 **你的判断对**：图数据用字符终端看是逆天而行。关系型输出二维表格很适合终端，图是网状的，看不出来。
 
-**方案**：`graphlite studio novel.db` → 自动开浏览器。
+**方案**：`nervusdb studio novel.db` → 自动开浏览器。
 
 - 力导向图看人物关系网，可拖拽缩放
 - 点节点看属性

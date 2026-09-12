@@ -4,7 +4,7 @@
 //! reports per-pool spill/evict/miss so the cause can be attributed rather than
 //! guessed.
 
-use graphlite::GraphLite;
+use nervusdb::NervusDb;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
@@ -27,12 +27,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for &frames in &[256usize, 1024, 4096, 16384] {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("probe.db");
-        let db = GraphLite::open_with_pool_size(&path, frames)?;
+        let db = NervusDb::open_with_pool_size(&path, frames)?;
 
         db.with_transaction(|tx| {
             for i in 1..=nodes {
                 let mut m = HashMap::new();
-                m.insert("idx".to_string(), graphlite::Value::from(i as i64));
+                m.insert("idx".to_string(), nervusdb::Value::from(i as i64));
                 tx.add_node(HashSet::from(["N".to_string()]), m)?;
             }
             Ok(())

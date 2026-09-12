@@ -10,23 +10,23 @@
 //!
 //! 测试全部走公开 API。
 
-use graphlite::{GraphError, GraphLite, Value};
+use nervusdb::{GraphError, NervusDb, Value};
 use tempfile::tempdir;
 
-fn open_temp(name: &str) -> Result<(tempfile::TempDir, GraphLite), GraphError> {
+fn open_temp(name: &str) -> Result<(tempfile::TempDir, NervusDb), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join(name))?;
+    let db = NervusDb::open(dir.path().join(name))?;
     Ok((dir, db))
 }
 
 /// 执行一个应返回单行单列标量的查询。
-fn scalar(db: &GraphLite, cypher: &str) -> Result<Value, GraphError> {
+fn scalar(db: &NervusDb, cypher: &str) -> Result<Value, GraphError> {
     let res = db.run_cypher(cypher)?;
     assert_eq!(res.row_count(), 1, "expected exactly one row: {cypher}");
     Ok(res.rows[0].values[0].clone())
 }
 
-fn count_nodes(db: &GraphLite, label: &str) -> Result<i64, GraphError> {
+fn count_nodes(db: &NervusDb, label: &str) -> Result<i64, GraphError> {
     match scalar(db, &format!("MATCH (n:{label}) RETURN count(*)"))? {
         Value::Int(v) => Ok(v),
         other => panic!("count 必须是 Int，实际 {other:?}"),
@@ -290,12 +290,12 @@ fn test_read_only_handle_rejects_merge() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let path = dir.path().join("merge_ro.db");
     {
-        let db = GraphLite::open(&path)?;
+        let db = NervusDb::open(&path)?;
         db.run_cypher("CREATE (:Seed {v: 1})")?;
         db.checkpoint()?;
     }
 
-    let ro = GraphLite::open_read_only(&path)?;
+    let ro = NervusDb::open_read_only(&path)?;
     let err = ro
         .run_cypher("MERGE (q:Q {w: 1})")
         .expect_err("只读句柄不得执行 MERGE");

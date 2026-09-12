@@ -280,8 +280,12 @@ impl DiskGraph {
         let frame = bpm.get_frame(frame_id);
 
         let magic = &frame.data[0..4];
-        if magic == crate::page::DB_PAGE_MAGIC || magic == crate::page::DB_PAGE_MAGIC_LEGACY {
-            // 版本守卫**不在这里**：`GraphLite::open` 已在任何写入（含 WAL 回放）
+        let magic_ok = magic == crate::page::DB_PAGE_MAGIC
+            || crate::page::DB_PAGE_MAGIC_LEGACY
+                .iter()
+                .any(|m| m.as_slice() == magic);
+        if magic_ok {
+            // 版本守卫**不在这里**：`NervusDb::open` 已在任何写入（含 WAL 回放）
             // 之前用 `check_format_version` 挡下不匹配的文件（见 lib.rs）。
             //
             // 若在此处再检查一次，就太晚了——回放已经用当前版本的语义解释并写回

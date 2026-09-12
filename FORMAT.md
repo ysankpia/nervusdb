@@ -1,4 +1,4 @@
-# GraphLite On-Disk Format (version 4)
+# NervusDB On-Disk Format (version 5)
 
 > **This document is a commitment, not a description.** It specifies the bytes on
 > disk so that a future version — or a third-party reader — can be written without
@@ -9,7 +9,7 @@
 
 ## 1. Stability promise
 
-**Starting with 1.0.0, the GraphLite on-disk format does not change in
+**Starting with 1.0.0, the NervusDb on-disk format does not change in
 incompatible ways.** Newer versions will always read and write files created by
 1.0.0.
 
@@ -26,21 +26,29 @@ Two consequences, stated plainly:
 - **Changing the format requires an explicit opt-in.** If a future feature
   genuinely cannot be expressed in these bytes, the new version will expose a
   storage-version selector (as DuckDB does with `STORAGE_VERSION`) and keep
-  reading version 4. It will not silently reinterpret existing files.
+  reading version 5. It will not silently reinterpret existing files.
 
 ### What "version" means here
 
-`DB_PAGE_VERSION` occupies bytes 4..8 of Page 0. The current value is **4**.
+`DB_PAGE_VERSION` occupies bytes 4..8 of Page 0. The current value is **5**.
 
-| Version | Meaning                                                    | Readable by 1.0.0?                  |
-| ------- | ---------------------------------------------------------- | ----------------------------------- |
-| 1       | One 4 KiB property page per entity (prototype)             | No                                  |
-| 2       | Slotted property pages                                     | No                                  |
-| 3       | Adds page-level CRC32                                      | No                                  |
-| **4**   | **Owns its own encoding; 24-bit overflow is a hard error** | **Yes — this is the frozen format** |
+| Version | Meaning                                                            | Readable by this build?  |
+| ------- | ------------------------------------------------------------------ | ------------------------ |
+| 1       | One 4 KiB property page per entity (prototype)                     | No                       |
+| 2       | Slotted property pages                                             | No                       |
+| 3       | Adds page-level CRC32                                              | No                       |
+| 4       | Owns its own encoding; 24-bit overflow is a hard error             | No — magic renamed       |
+| **5**   | **Magic `GLDB` → `NVDB` (project renamed). No page layout change** | **Yes — current format** |
+
+Version 5 is the one deviation from "the format never changes", and it is deliberately
+the narrowest possible: the only byte that differs is the 4-byte magic. The page
+layout is byte-identical, which is why the change was judged worth making at 0.1.0
+(before any release) rather than carrying a name the project no longer uses. A
+version-4 file is still **recognised** — the error names the magic change and the
+migration path rather than claiming the file is not a database.
 
 Opening a file whose version differs from the running build's is a hard error
-(`GraphLite::open` returns before writing anything, including WAL replay — see
+(`NervusDb::open` returns before writing anything, including WAL replay — see
 §7). The error names both versions and the migration path.
 
 ---
@@ -67,7 +75,7 @@ Offsets are byte offsets within the first 4096-byte page.
 
 | Offset | Size | Field                                        |
 | ------ | ---- | -------------------------------------------- |
-| 0      | 4    | Magic: `GLDB` (legacy: `GLP4`)               |
+| 0      | 4    | Magic: `NVDB` (legacy: `GLDB`, `GLP4`)       |
 | 4      | 4    | `DB_PAGE_VERSION` (u32)                      |
 | 8      | 4    | Page size (4096)                             |
 | 12     | 4    | Total pages                                  |
@@ -157,7 +165,7 @@ bits  7..0   slot number  (8 bits)
 explicitly. It cannot collide with a real slot because `SlottedPropPage::insert`
 refuses to allocate beyond 254.
 
-### Slotted property page (`GLSP`)
+### Slotted property page (`NVSP`)
 
 ```text
 +--------+------------------+------+------------------+
@@ -227,7 +235,7 @@ Frames are appended to `{path}.wal`. Each frame:
 
 A frame whose CRC does not match is treated as a torn tail and stops replay.
 
-### Payload encoding (version 4)
+### Payload encoding (version 5)
 
 A one-byte tag followed by the fields. **Tag values are part of the format and
 are never reused**; a retired tag must keep its slot rather than be reassigned,
@@ -248,7 +256,7 @@ Recovery is streaming and two-pass: the first pass collects committed and rolled
 back transaction ids, the second applies committed pages. Peak memory is
 `O(transactions)`, not `O(WAL size)`.
 
-### Page 0 metadata encoding (version 4)
+### Page 0 metadata encoding (version 5)
 
 `StringDict`:
 
@@ -325,7 +333,7 @@ A change that alters any byte specified above requires:
 
 1. A `DB_PAGE_VERSION` bump.
 2. An entry in `CHANGELOG.md` under **Storage format**, stating plainly that older
-   databases need a logical dump and re-import (`GraphLite::dump_cypher`; there is no
+   databases need a logical dump and re-import (`NervusDb::dump_cypher`; there is no
    CLI).
 3. A migration path — or, for a change that cannot break readers, a
    storage-version selector so both layouts remain readable.

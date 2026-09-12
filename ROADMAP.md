@@ -1,6 +1,6 @@
 # Roadmap
 
-GraphLite-RS is an embedded, single-file property graph database: the SQLite
+NervusDB is an embedded, single-file property graph database: the SQLite
 model applied to graphs. This document tracks what is done, what is next, and
 what is explicitly out of scope. It is a living plan, not a promise.
 
@@ -64,12 +64,12 @@ Working and covered by tests:
 
 ### 1. Non-blocking readers (versioned page visibility)
 
-**Partially done in 1.1.0.** `GraphLite::read_snapshot()` now gives a caller a
+**Partially done in 1.1.0.** `NervusDb::read_snapshot()` now gives a caller a
 self-consistent view: it holds the shared read lock for its lifetime, so a
 multi-step traversal cannot stitch two states together. That closed the correctness
 gap (see `tests/concurrency_isolation_tests.rs`).
 
-What remains is the *performance* gap: a snapshot blocks writers while it lives,
+What remains is the _performance_ gap: a snapshot blocks writers while it lives,
 because a reader and a writer still exclude each other. Removing that needs
 versioned page visibility — readers pin a snapshot (typically by reading from the WAL
 up to a known commit point) while the writer appends. That is a substantial change to
@@ -80,7 +80,7 @@ recovery and page visibility, and it is the largest remaining gap against the
 
 **Capped in 1.1.0.** The action queue is now bounded by
 `DEFAULT_MAX_TRANSACTION_ACTIONS` and reports an overflow rather than growing without
-limit (see AGENTS.md §5). What remains is *spilling*: a caller that genuinely needs a
+limit (see AGENTS.md §5). What remains is _spilling_: a caller that genuinely needs a
 transaction larger than the cap must currently batch it by hand. Writing queued
 actions to the WAL as they arrive and keeping only a location index — the way STEAL
 spilling already works for pages — would let one transaction exceed the cap without
@@ -93,30 +93,17 @@ Start-node selection is rule-based (index when available, otherwise a scan) and
 join reordering and no index-nested-loop selection. Adequate at the current scale;
 a limitation for complex analytical queries.
 
-### 4. SDK publication (blocked on a name decision)
+### 4. SDK publication
 
-The Python and Node.js bindings build and pass their tests but are not published to
-PyPI or npm. Beyond packaging polish, versioning policy and platform
-wheel/prebuild matrices, there is now a **naming problem that must be solved first**.
+**The name is settled: `nervusdb`.** The earlier `graphlite*` names were unusable —
+`graphlite` belongs to unrelated projects on every registry (`eugene-eeo/graphlite`
+on PyPI, `GraphLite-AI/GraphLite` on crates.io), so publishing under it would have
+shipped someone else's name, and a published name cannot be cleanly retracted.
+`nervusdb` is already owned by this project on crates.io, and the old `0.0.x`
+releases there have been yanked, so the name now resolves only to the new line.
 
-The public names in use today differ per language, and the Python/Node one is taken:
-
-| Manifest                          | Declares          | Registry status                              |
-| --------------------------------- | ----------------- | -------------------------------------------- |
-| `Cargo.toml`                      | `graphlite-rs`    | available on crates.io                       |
-| `bindings/python/pyproject.toml`  | `graphlite`       | **taken on PyPI** (eugene-eeo/graphlite, an embedded graph datastore) |
-| `bindings/nodejs/package.json`    | `graphlite-node`  | available on npm                             |
-
-`graphlite` is also taken on crates.io by a different project (GraphLite-AI, an ISO
-GQL database), along with `graphlite-cli` and `graphlite-rust-sdk`. Verified
-2026-09-13 against all three registries. `graphlite-rs` is available on **all
-three**, so it is the only candidate that needs no second choice per ecosystem.
-
-This is a product decision, not a technical one: a hyphenated name matching the
-crate has no search presence and cannot be trademarked, whereas an invented name
-does. Whichever is chosen, the three manifests must agree — the version guard in
-`zero_dependency_tests` already enforces that for the version, and the same reasoning
-applies to the name.
+Remaining work before publishing is packaging, not naming: versioning policy, and
+platform wheel/prebuild matrices.
 
 **The previously recorded "9x slower than native" figure is retracted** — it came
 from debug builds of the bindings compared against a release core. Measured with

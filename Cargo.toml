@@ -2,18 +2,18 @@
 members = [".", "bindings/python", "bindings/nodejs"]
 
 [package]
-name = "graphlite-rs"
-version = "1.1.0"
+name = "nervusdb"
+version = "0.1.0"
 edition = "2021"
-authors = ["GraphLite-RS Contributors"]
+authors = ["NervusDB Contributors"]
 description = "Embedded, single-file property graph database: the SQLite model applied to graphs"
 # This SPDX field reflects the open-source option only. A commercial licence is
 # also available; see LICENSING.md.
 license = "AGPL-3.0-only"
 readme = "README.md"
-repository = "https://github.com/ysankpia/graphlite"
-homepage = "https://github.com/ysankpia/graphlite"
-documentation = "https://docs.rs/graphlite-rs"
+repository = "https://github.com/ysankpia/nervusdb"
+homepage = "https://github.com/ysankpia/nervusdb"
+documentation = "https://docs.rs/nervusdb"
 keywords = ["graph", "database", "sqlite", "cypher", "embedded"]
 categories = ["database-implementations", "embedded-database"]
 
@@ -80,6 +80,6 @@ path = "benches/real_data/scale_bench.rs"
 harness = false
 
 [lib]
-name = "graphlite"
+name = "nervusdb"
 path = "src/lib.rs"
 crate-type = ["lib", "cdylib", "staticlib"]

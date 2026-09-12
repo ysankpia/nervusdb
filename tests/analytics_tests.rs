@@ -1,12 +1,12 @@
 //! 战役三验证套件：企业级图算法引擎（PageRank / 弱连通分量 / K-Hop 子图）。
 
-use graphlite::{Direction, GraphError, GraphLite, Value};
+use nervusdb::{Direction, GraphError, NervusDb, Value};
 use std::collections::{HashMap, HashSet};
 use tempfile::tempdir;
 
-fn open_temp(name: &str) -> Result<(tempfile::TempDir, GraphLite), GraphError> {
+fn open_temp(name: &str) -> Result<(tempfile::TempDir, NervusDb), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join(name))?;
+    let db = NervusDb::open(dir.path().join(name))?;
     Ok((dir, db))
 }
 
@@ -223,7 +223,7 @@ fn test_algorithms_under_constrained_buffer_pool() -> Result<(), GraphError> {
     let db_path = dir.path().join("algo_constrained.db");
 
     // 256 帧 = 1MB 内存硬约束
-    let db = GraphLite::open_with_pool_size(&db_path, 256)?;
+    let db = NervusDb::open_with_pool_size(&db_path, 256)?;
 
     let total: u64 = 600;
     let mut tx = db.begin_transaction()?;

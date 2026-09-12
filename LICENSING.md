@@ -1,6 +1,6 @@
 # Licensing
 
-GraphLite-RS is **dual-licensed**. You may use it under either of the following,
+NervusDB is **dual-licensed**. You may use it under either of the following,
 at your choice:
 
 1. **GNU Affero General Public License v3.0** (`AGPL-3.0-only`) — see
@@ -37,7 +37,7 @@ modifications, you are outside the licence.
 
 A commercial licence is available if any of the following describes you:
 
-- You want to embed GraphLite-RS in a **closed-source** product that you ship to
+- You want to embed NervusDB in a **closed-source** product that you ship to
   customers.
 - You want to offer a **modified** version as a network service without releasing
   your modifications under AGPL.

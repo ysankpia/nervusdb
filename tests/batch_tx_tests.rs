@@ -6,7 +6,7 @@
 //! - 批量回滚对主库零污染、内存元数据完全复原；
 //! - 1MB 受限缓冲池下超大批量事务依然成功且帧占用受控。
 
-use graphlite::{GraphError, GraphLite, Value};
+use nervusdb::{GraphError, NervusDb, Value};
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 use tempfile::tempdir;
@@ -25,7 +25,7 @@ fn node_props(i: i64) -> HashMap<String, Value> {
 fn test_single_commit_triggers_exactly_one_fsync() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("fsync_count.db");
-    let db = GraphLite::open_with_pool_size(&db_path, 512)?;
+    let db = NervusDb::open_with_pool_size(&db_path, 512)?;
 
     // 基线：统计逐条自动提交的 fsync 次数
     let base_fsync = db.buffer_stats().wal_fsync_count;
@@ -64,7 +64,7 @@ fn test_single_commit_triggers_exactly_one_fsync() -> Result<(), GraphError> {
 
     // 冷重启后仍然一致
     drop(db);
-    let db = GraphLite::open_with_pool_size(&db_path, 512)?;
+    let db = NervusDb::open_with_pool_size(&db_path, 512)?;
     assert_eq!(db.node_count(), 10 + writes as usize);
 
     Ok(())
@@ -92,7 +92,7 @@ fn throughput_floor() -> f64 {
 // =========================================================================
 #[test]
 fn test_batch_throughput_memory_mode() -> Result<(), GraphError> {
-    let db = GraphLite::open(":memory:")?;
+    let db = NervusDb::open(":memory:")?;
     let floor = throughput_floor();
 
     // 预热：让分配器、页表与索引结构进入稳态，避免把一次性开销计入吞吐
@@ -167,7 +167,7 @@ fn test_batch_throughput_memory_mode() -> Result<(), GraphError> {
 fn test_batch_beats_autocommit() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("batch_vs_auto.db");
-    let db = GraphLite::open_with_pool_size(&db_path, 512)?;
+    let db = NervusDb::open_with_pool_size(&db_path, 512)?;
 
     let ops: u64 = 200;
 
@@ -231,14 +231,14 @@ fn test_batch_rollback_zero_pollution() -> Result<(), GraphError> {
 
     // 建立基线并落盘
     {
-        let db = GraphLite::open_with_pool_size(&db_path, 512)?;
+        let db = NervusDb::open_with_pool_size(&db_path, 512)?;
         db.add_node(HashSet::from(["Base".to_string()]), node_props(1))?;
         db.checkpoint()?;
     }
     let baseline_bytes = std::fs::read(&db_path)?;
 
     {
-        let db = GraphLite::open_with_pool_size(&db_path, 512)?;
+        let db = NervusDb::open_with_pool_size(&db_path, 512)?;
         let before = db.node_count();
 
         let mut tx = db.begin_transaction()?;
@@ -267,7 +267,7 @@ fn test_batch_rollback_zero_pollution() -> Result<(), GraphError> {
         assert_eq!(db.node_count(), before + 1);
     }
 
-    let db = GraphLite::open_with_pool_size(&db_path, 512)?;
+    let db = NervusDb::open_with_pool_size(&db_path, 512)?;
     assert_eq!(db.query_cypher("MATCH (t:Taint) RETURN t")?.row_count(), 0);
     assert_eq!(db.node_count(), 2);
 
@@ -281,7 +281,7 @@ fn test_batch_rollback_zero_pollution() -> Result<(), GraphError> {
 fn test_with_transaction_rolls_back_on_error() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("with_tx_err.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     let before = db.node_count();
     let err = db
@@ -318,7 +318,7 @@ fn test_large_batch_under_one_megabyte_pool() -> Result<(), GraphError> {
     let db_path = dir.path().join("batch_small_pool.db");
 
     // 256 帧 = 1MB 硬预算
-    let db = GraphLite::open_with_pool_size(&db_path, 256)?;
+    let db = NervusDb::open_with_pool_size(&db_path, 256)?;
 
     let num_nodes: u64 = 10_000;
     let num_edges: u64 = 20_000;
@@ -365,7 +365,7 @@ fn test_large_batch_under_one_megabyte_pool() -> Result<(), GraphError> {
     db.checkpoint()?;
     drop(db);
 
-    let db = GraphLite::open_with_pool_size(&db_path, 256)?;
+    let db = NervusDb::open_with_pool_size(&db_path, 256)?;
     assert_eq!(db.node_count(), num_nodes as usize);
     assert_eq!(db.edge_count(), num_edges as usize);
     assert_eq!(
@@ -386,7 +386,7 @@ fn test_large_batch_under_one_megabyte_pool() -> Result<(), GraphError> {
 fn test_batch_mixed_operations_atomic_commit() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("batch_mixed.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 预置基准节点
     let seed = db.add_node(HashSet::from(["Seed".to_string()]), node_props(0))?;
@@ -427,7 +427,7 @@ fn test_batch_mixed_operations_atomic_commit() -> Result<(), GraphError> {
 
     // 冷重启一致
     drop(db);
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
     assert_eq!(db.node_count(), 451);
     assert_eq!(
         db.get_node(seed)

@@ -1,5 +1,5 @@
-use graphlite::page::{HeaderPage, DB_PAGE_MAGIC, PAGE_SIZE};
-use graphlite::{GraphError, GraphLite, GraphLiteOptions, Value};
+use nervusdb::page::{HeaderPage, PAGE_SIZE};
+use nervusdb::{GraphError, NervusDb, NervusDbOptions, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom, Write};
 use tempfile::tempdir;
@@ -10,10 +10,10 @@ fn test_file_lock_exclusive() -> Result<(), GraphError> {
     let db_path = dir.path().join("exclusive.db");
 
     // 1. 打开第一个实例，持有排他文件锁
-    let db1 = GraphLite::open(&db_path)?;
+    let db1 = NervusDb::open(&db_path)?;
 
     // 2. 尝试打开第二个实例访问同一物理路径，必须被拒绝并返回 DatabaseLocked
-    let db2_res = GraphLite::open(&db_path);
+    let db2_res = NervusDb::open(&db_path);
     assert!(
         db2_res.is_err(),
         "Second open on the same active file must fail due to exclusive file lock"
@@ -29,7 +29,7 @@ fn test_file_lock_exclusive() -> Result<(), GraphError> {
     drop(db1);
 
     // 4. 第二个实例现在能够正常加锁并打开
-    let db2 = GraphLite::open(&db_path)?;
+    let db2 = NervusDb::open(&db_path)?;
     assert_eq!(db2.node_count(), 0);
 
     Ok(())
@@ -41,12 +41,12 @@ fn test_wal_auto_checkpoint_triggers() -> Result<(), GraphError> {
     let db_path = dir.path().join("auto_chk.db");
 
     // 设定极小的自动 checkpoint 阈值 (64KB)
-    let opts = GraphLiteOptions {
+    let opts = NervusDbOptions {
         buffer_pool_frames: 256,
         wal_auto_checkpoint_bytes: 64 * 1024,
-        ..GraphLiteOptions::default()
+        ..NervusDbOptions::default()
     };
-    let db = GraphLite::open_with_options(&db_path, opts)?;
+    let db = NervusDb::open_with_options(&db_path, opts)?;
 
     // 持续批量写入直到 WAL 体积膨胀超过 64KB
     for batch_i in 0..15 {
@@ -96,7 +96,7 @@ fn test_page_checksum_detects_corruption() -> Result<(), GraphError> {
 
     let node_id;
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         let mut props = HashMap::new();
         props.insert("name".to_string(), Value::from("ProtectedData"));
         props.insert("secret".to_string(), Value::from(999999i64));
@@ -128,7 +128,7 @@ fn test_page_checksum_detects_corruption() -> Result<(), GraphError> {
     // 重新打开数据库并读取被损坏节点，必须被校验和拦截返回 PageChecksumMismatch。
     // 使用既有的 `try_get_node`（错误保留语义）而非另起 `get_node_result`。
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         let n_res = db.try_get_node(node_id);
         assert!(
             n_res.is_err(),
@@ -149,15 +149,19 @@ fn test_page_checksum_detects_corruption() -> Result<(), GraphError> {
 fn test_version_guard_rejects_v1_v2() -> Result<(), GraphError> {
     let dir = tempdir()?;
 
-    // 对 1/2/3 三个历史版本各构造一个假文件：格式冻结后它们都必须被拒绝，
+    // 对历史上的每个版本各构造一个假文件：格式冻结后它们都必须被拒绝，
     // 且错误信息要指出「怎么迁移」而不只是「不支持」。
-    for old_version in [1u32, 2, 3] {
+    //
+    // 版本 4 用旧魔数 `GLDB`，5 之后用 `NVDB`——两者都要继续被**识别**，
+    // 否则旧库会被当成「不是本项目的文件」，那条错误说的是「你给错文件了」，
+    // 而真相是「这是旧版本格式」，会把人引向错误的方向。
+    for (old_version, magic) in [(1u32, b"GLDB"), (2, b"GLDB"), (3, b"GLDB"), (4, b"GLDB")] {
         let db_path = dir.path().join(format!("old_v{}.db", old_version));
 
         {
             let mut f = std::fs::File::create(&db_path)?;
             let mut hdr = [0u8; PAGE_SIZE];
-            hdr[0..4].copy_from_slice(DB_PAGE_MAGIC);
+            hdr[0..4].copy_from_slice(magic);
             hdr[4..8].copy_from_slice(&old_version.to_le_bytes());
             hdr[HeaderPage::PAGE_SIZE_OFFSET..HeaderPage::PAGE_SIZE_OFFSET + 4]
                 .copy_from_slice(&(PAGE_SIZE as u32).to_le_bytes());
@@ -167,7 +171,7 @@ fn test_version_guard_rejects_v1_v2() -> Result<(), GraphError> {
 
         let before = std::fs::read(&db_path)?;
 
-        let open_res = GraphLite::open(&db_path);
+        let open_res = NervusDb::open(&db_path);
         assert!(
             open_res.is_err(),
             "opening a version {} file must be rejected",
@@ -180,7 +184,7 @@ fn test_version_guard_rejects_v1_v2() -> Result<(), GraphError> {
             err_msg
         );
         assert!(
-            err_msg.contains("current format version 4"),
+            err_msg.contains("current format version 5"),
             "error must name the version this build speaks, got: {}",
             err_msg
         );
@@ -205,11 +209,11 @@ fn test_version_guard_rejects_v1_v2() -> Result<(), GraphError> {
     // 反向对照：**当前**版本必须能正常打开，否则上面的拒绝毫无意义。
     let cur_path = dir.path().join("current.db");
     {
-        let db = GraphLite::open(&cur_path)?;
+        let db = NervusDb::open(&cur_path)?;
         db.add_node(HashSet::from(["N".to_string()]), HashMap::new())?;
         db.checkpoint()?;
     }
-    let reopened = GraphLite::open(&cur_path)?;
+    let reopened = NervusDb::open(&cur_path)?;
     assert_eq!(reopened.node_count(), 1, "current version must open fine");
 
     Ok(())
@@ -227,8 +231,8 @@ fn test_version_guard_rejects_v1_v2() -> Result<(), GraphError> {
 /// 小规模用例覆盖不到，因此这里直接驱动 `CrcStore`。
 #[test]
 fn test_crc_directory_survives_churn_beyond_cache() -> Result<(), GraphError> {
-    use graphlite::crc::CrcStore;
-    use graphlite::{DiskManager, PAGE_SIZE};
+    use nervusdb::crc::CrcStore;
+    use nervusdb::{DiskManager, PAGE_SIZE};
     use std::sync::Arc;
 
     let dir = tempdir()?;
@@ -263,8 +267,8 @@ fn test_crc_directory_survives_churn_beyond_cache() -> Result<(), GraphError> {
     let mut page0 = [0u8; PAGE_SIZE];
     dm.read_page(0, &mut page0)?;
     let disk_root = u32::from_le_bytes(
-        page0[graphlite::page::HeaderPage::CRC_DIR_PAGE_OFFSET
-            ..graphlite::page::HeaderPage::CRC_DIR_PAGE_OFFSET + 4]
+        page0[nervusdb::page::HeaderPage::CRC_DIR_PAGE_OFFSET
+            ..nervusdb::page::HeaderPage::CRC_DIR_PAGE_OFFSET + 4]
             .try_into()
             .unwrap(),
     );
@@ -286,9 +290,9 @@ fn test_crc_directory_survives_churn_beyond_cache() -> Result<(), GraphError> {
 
 #[test]
 fn test_batch_memory_cap_chunking() -> Result<(), GraphError> {
-    use graphlite::disk_graph::MAX_BATCH_EDGES_IN_MEMORY;
+    use nervusdb::disk_graph::MAX_BATCH_EDGES_IN_MEMORY;
 
-    let db = GraphLite::open(":memory:")?;
+    let db = NervusDb::open(":memory:")?;
 
     // 真正跨越切分阈值：写入量必须**大于**单次织网上限，否则本用例
     // 只是在验证一次普通批量织网，根本不会进入分块路径。
@@ -384,7 +388,7 @@ fn test_wal_replay_refreshes_page_checksums() -> Result<(), GraphError> {
             let path = std::env::var("GL_REPLAY_DB").expect("child db path");
             let marker_path =
                 std::path::PathBuf::from(std::env::var("GL_REPLAY_MARKER").expect("marker"));
-            let db = GraphLite::open(&path)?;
+            let db = NervusDb::open(&path)?;
             let mut committed: u64 = 0;
             for _ in 0..20 {
                 db.with_transaction(|tx| {
@@ -409,7 +413,7 @@ fn test_wal_replay_refreshes_page_checksums() -> Result<(), GraphError> {
 
     // 1. 先建一个已 checkpoint 的库，使 CRC 目录（页 >= 256）确实存在
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         db.with_transaction(|tx| {
             for i in 1..=1_500u64 {
                 let mut m = HashMap::new();
@@ -450,7 +454,7 @@ fn test_wal_replay_refreshes_page_checksums() -> Result<(), GraphError> {
     );
 
     // 3. 恢复：回放 WAL 写主文件，校验和必须随之刷新
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
     let expected = 1_500 + committed;
     assert_eq!(db.node_count(), expected as usize);
 
@@ -479,7 +483,7 @@ fn test_wal_replay_refreshes_page_checksums() -> Result<(), GraphError> {
 fn test_lock_poisoning_recovery() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("poison_test.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 正常写入节点
     let nid = db.add_node(HashSet::from(["Safe".to_string()]), HashMap::new())?;

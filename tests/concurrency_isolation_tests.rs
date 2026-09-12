@@ -25,7 +25,7 @@
 //! 每个断言都带上具体是哪条边、哪个节点出的问题。并发测试的失败若只说
 //! 「不一致」，排查成本会高到让人放弃这个测试。
 
-use graphlite::{GraphError, GraphLite, Value};
+use nervusdb::{GraphError, NervusDb, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
@@ -41,8 +41,8 @@ use tempfile::tempdir;
 /// 各自取放读锁，一次遍历会横跨多个时刻，从而**把两个不同时刻的状态拼在一起**，
 /// 看到并发删除造成的表面不一致。那不是引擎内部撕裂，而是读者缺少一致性窗口
 /// ——本套件最初正是这样失败的（首个复现是「节点 2 引用了不存在的边 1」），
-/// `GraphLite::read_snapshot` 就是为此提供的。
-fn check_adjacency_integrity(db: &GraphLite) -> Result<usize, String> {
+/// `NervusDb::read_snapshot` 就是为此提供的。
+fn check_adjacency_integrity(db: &NervusDb) -> Result<usize, String> {
     let snapshot = db.read_snapshot();
     let n = snapshot.node_count() as u64;
     let mut checked = 0usize;
@@ -90,7 +90,7 @@ fn check_adjacency_integrity(db: &GraphLite) -> Result<usize, String> {
 #[test]
 fn test_reader_never_observes_torn_adjacency_under_writes() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("torn.db"))?;
+    let db = NervusDb::open(dir.path().join("torn.db"))?;
 
     // 一批稳定存在的节点，供写线程在其间连边
     let mut ids = Vec::new();
@@ -172,7 +172,7 @@ fn test_reader_never_observes_torn_adjacency_under_writes() -> Result<(), GraphE
 #[test]
 fn test_committed_batch_is_visible_atomically() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("atomic_visible.db"))?;
+    let db = NervusDb::open(dir.path().join("atomic_visible.db"))?;
 
     let hub = db.add_node(HashSet::new(), HashMap::new())?;
 
@@ -262,7 +262,7 @@ fn test_committed_batch_is_visible_atomically() -> Result<(), GraphError> {
 #[test]
 fn test_concurrent_writers_do_not_lose_writes() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("no_lost_writes.db"))?;
+    let db = NervusDb::open(dir.path().join("no_lost_writes.db"))?;
 
     const THREADS: usize = 8;
     const PER_THREAD: usize = 60;
@@ -322,7 +322,7 @@ fn test_concurrent_writers_do_not_lose_writes() -> Result<(), GraphError> {
 #[test]
 fn test_readers_and_writers_both_make_progress() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("progress.db"))?;
+    let db = NervusDb::open(dir.path().join("progress.db"))?;
 
     let hub = db.add_node(HashSet::new(), HashMap::new())?;
 
@@ -385,7 +385,7 @@ fn test_readers_and_writers_both_make_progress() -> Result<(), GraphError> {
 #[test]
 fn test_index_and_scan_agree_under_concurrent_writes() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("index_agree.db"))?;
+    let db = NervusDb::open(dir.path().join("index_agree.db"))?;
 
     let stop = Arc::new(AtomicBool::new(false));
     let mismatches = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
@@ -491,7 +491,7 @@ fn test_index_and_scan_agree_under_concurrent_writes() -> Result<(), GraphError>
 #[test]
 fn test_snapshot_prevents_interleaved_deletion() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("snapshot_interleave.db"))?;
+    let db = NervusDb::open(dir.path().join("snapshot_interleave.db"))?;
 
     let a = db.add_node(HashSet::new(), HashMap::new())?;
     let b = db.add_node(HashSet::new(), HashMap::new())?;
@@ -556,7 +556,7 @@ fn test_snapshot_prevents_interleaved_deletion() -> Result<(), GraphError> {
 #[test]
 fn test_snapshot_blocks_writer_until_released() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("snapshot_blocks.db"))?;
+    let db = NervusDb::open(dir.path().join("snapshot_blocks.db"))?;
     db.add_node(HashSet::new(), HashMap::new())?;
 
     let snapshot = db.read_snapshot();
@@ -596,7 +596,7 @@ fn test_snapshot_blocks_writer_until_released() -> Result<(), GraphError> {
 #[test]
 fn test_snapshot_rejects_mutating_cypher() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("snapshot_ro.db"))?;
+    let db = NervusDb::open(dir.path().join("snapshot_ro.db"))?;
     db.add_node(HashSet::new(), HashMap::new())?;
 
     let snapshot = db.read_snapshot();
@@ -634,7 +634,7 @@ fn test_snapshot_rejects_mutating_cypher() -> Result<(), GraphError> {
 #[test]
 fn test_integrity_check_stays_healthy_under_concurrent_writes() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("integrity_load.db"))?;
+    let db = NervusDb::open(dir.path().join("integrity_load.db"))?;
 
     let hub = db.add_node(HashSet::new(), HashMap::new())?;
 

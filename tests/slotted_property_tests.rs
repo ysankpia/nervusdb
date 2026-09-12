@@ -3,7 +3,7 @@
 //! 覆盖单页多槽打包、槽位复用、页内压实、1KB 内联/溢出边界，以及
 //! 「40,000 实体落盘体积相对『每实体整页』压缩 ≥15×」的密度指标。
 
-use graphlite::{GraphError, GraphLite, Value};
+use nervusdb::{GraphError, NervusDb, Value};
 use std::collections::{HashMap, HashSet};
 use tempfile::tempdir;
 
@@ -43,7 +43,7 @@ fn test_many_small_records_share_one_page() -> Result<(), GraphError> {
 
     let record_count: u64 = 400;
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         for i in 0..record_count {
             // 每条属性净含量不足 60 字节：若每实体独占整页将占用 400 * 4KB = 1.6MB
             let mut props = HashMap::new();
@@ -64,7 +64,7 @@ fn test_many_small_records_share_one_page() -> Result<(), GraphError> {
     );
 
     // 数据完整性必须保持
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
     assert_eq!(db.node_count(), record_count as usize);
     for probe in [0u64, 123, 399] {
         let node = db.get_node(probe + 1).expect("node must exist");
@@ -85,7 +85,7 @@ fn test_slot_reuse_after_delete() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("slot_reuse.db");
 
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 1. 建立 200 个实体
     let mut ids = Vec::new();
@@ -141,7 +141,7 @@ fn test_compaction_preserves_content() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("compaction.db");
 
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     let mut ids = Vec::new();
     for i in 0..300i64 {
@@ -167,7 +167,7 @@ fn test_compaction_preserves_content() -> Result<(), GraphError> {
 
     // 冷重启后逐条校验（排他锁：重开前释放旧句柄）
     drop(db);
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
     assert_eq!(db.node_count(), 300);
 
     let res = db.query_cypher("MATCH (c:C) RETURN count(c)")?;
@@ -197,7 +197,7 @@ fn test_inline_vs_overflow_boundary() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("boundary.db");
 
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 净载荷 900 字节（连同框架开销仍 <1KB）→ 走槽位页内联
     let inline_payload = "I".repeat(900);
@@ -222,7 +222,7 @@ fn test_inline_vs_overflow_boundary() -> Result<(), GraphError> {
 
     // 冷重启后三种尺寸都必须无损（排他锁：重开前释放旧句柄）
     drop(db);
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
     assert_eq!(
         db.get_node(n1)
             .unwrap()
@@ -272,7 +272,7 @@ fn test_inline_vs_overflow_boundary() -> Result<(), GraphError> {
 
     // 排他锁：重开前释放旧句柄
     drop(db);
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
     assert_eq!(
         db.get_edge(e1)
             .unwrap()
@@ -308,7 +308,7 @@ fn test_forty_thousand_entity_density() -> Result<(), GraphError> {
     assert_eq!(entities, 40_000);
 
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
 
         // 单事务批量写入 10,000 个节点
         db.with_transaction(|tx| {
@@ -351,7 +351,7 @@ fn test_forty_thousand_entity_density() -> Result<(), GraphError> {
     );
 
     // 数据完整性与内存预算
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
     assert_eq!(db.node_count(), num_nodes as usize);
     assert_eq!(db.edge_count(), num_edges);
 
@@ -381,7 +381,7 @@ fn test_density_under_one_megabyte_pool() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("density_small_pool.db");
 
-    let db = GraphLite::open_with_pool_size(&db_path, 256)?;
+    let db = NervusDb::open_with_pool_size(&db_path, 256)?;
 
     let num_nodes: u64 = 4_000;
     db.with_transaction(|tx| {
@@ -434,7 +434,7 @@ fn test_property_update_and_delete_hygiene() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("hygiene.db");
 
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     let n1 = db.add_node(HashSet::from(["H".to_string()]), {
         let mut m = HashMap::new();
@@ -490,7 +490,7 @@ fn test_property_update_and_delete_hygiene() -> Result<(), GraphError> {
     db.checkpoint()?;
     // 排他锁：重开前释放旧句柄
     drop(db);
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
     assert_eq!(db.node_count(), 2);
     assert_eq!(
         db.get_node(n2)

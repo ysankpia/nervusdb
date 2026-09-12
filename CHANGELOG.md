@@ -14,11 +14,25 @@ user has to act on them:
 
 ---
 
-## [1.1.0] — 2026-09-13
+## [0.1.0] — 2026-09-13
 
-The storage format is **unchanged**: `DB_PAGE_VERSION` stays 4, `FORMAT.md` is
-verbatim as in 1.0.0, and a 1.0.0 database opens directly. Everything here is the
-Cypher surface, concurrency visibility, and resource bounds.
+**First release as `NervusDB`.** The project was called GraphLite through the 1.0.0
+line; this is the same engine and the same author, renamed because `graphlite` was
+already taken on crates.io (GraphLite-AI), PyPI (eugene-eeo) and npm by unrelated
+projects. Shipping under it would have delivered someone else's package, and a
+published name cannot be cleanly retracted.
+
+The version restarts at `0.1.0` rather than continuing from `1.1.0`: under this name
+nothing has ever been released, so claiming `1.x` would assert a history that does not
+exist. `0.x` states plainly that the API can still move.
+
+**Storage format — the one exception to the freeze.** `DB_PAGE_VERSION` is now `5`
+and the Page 0 magic is `NVDB` (was `GLDB`). **No page layout changed**; the 4-byte
+magic is the only difference. Files written by the 1.0.0/1.1.0 line are still
+_recognised_: opening one reports the magic change and the migration path rather than
+claiming the file is not a database. Migrate by dumping with the older build
+(`dump_cypher`) and re-importing; there is no CLI. That dump/re-import is the only
+upgrade action the rename itself requires.
 
 **Upgrade actions required:**
 
@@ -28,9 +42,9 @@ Cypher surface, concurrency visibility, and resource bounds.
 - A transaction is capped at 4,000,000 queued actions by default. A transaction
   larger than that now fails instead of consuming unbounded memory; if you genuinely
   need one, either commit in batches or set
-  `GraphLiteOptions::max_transaction_actions`.
+  `NervusDbOptions::max_transaction_actions`.
 
-No Cypher statement that worked in 1.0.0 behaves differently. Two previously
+No Cypher statement that worked under the old name behaves differently. Two previously
 accepted constructs are now rejected, both because they were silently wrong:
 `MATCH`/`MERGE` pattern properties written as expressions (they could never be
 evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar binding.
@@ -51,8 +65,7 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
     fails the build instead of drifting.
 
   Both guards needed a second attempt to be worth keeping, which is recorded in their
-  comments: the first slice guard matched only single-line conversions (missing 23 of
-  46) and then attributed doc comments to the wrong function (18 false positives);
+  comments: the first slice guard matched only single-line conversions (missing 23 of 46) and then attributed doc comments to the wrong function (18 false positives);
   the first count guard derived a total that could not be made to agree with the
   runner. A guard that is blind or noisy is worse than none, because it trains people
   to ignore it.
@@ -64,10 +77,10 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
 - **`MERGE <pattern>`** — the idempotent write, with `ON CREATE SET` / `ON MATCH SET`.
 
-- **`GraphLite::read_snapshot()`** — a self-consistent read view; pin one state across
+- **`NervusDb::read_snapshot()`** — a self-consistent read view; pin one state across
   a multi-step traversal instead of stitching two together.
 
-- **A bound on the transaction action queue** and the `GraphLiteOptions::max_transaction_actions`
+- **A bound on the transaction action queue** and the `NervusDbOptions::max_transaction_actions`
   setting that controls it.
 
 - **A high-parallelism concurrency stress suite** that sizes itself to the machine, and
@@ -75,13 +88,13 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
 ### Changed
 
-- **The Python distribution is renamed to `graphlite-rs`; `import graphlite` is
-  unchanged.** PyPI's `graphlite` belongs to an unrelated embedded graph database
-  (eugene-eeo/graphlite), as does npm's; crates.io's `graphlite` belongs to
-  GraphLite-AI. Publishing under it would have shipped a package that resolves to
+- **The Python distribution is renamed to `nervusdb`; `import nervusdb` is
+  unchanged.** PyPI's `nervusdb` belongs to an unrelated embedded graph database
+  (eugene-eeo/nervusdb), as does npm's; crates.io's `nervusdb` belongs to
+  NervusDb-AI. Publishing under it would have shipped a package that resolves to
   someone else's project — and a published name cannot be cleanly retracted.
 
-  `graphlite-rs` is available on crates.io, PyPI and npm (checked 2026-09-13), so it
+  `nervusdb` is available on crates.io, PyPI and npm (checked 2026-09-13), so it
   is the one candidate needing no per-ecosystem compromise. Distribution name and
   import name are deliberately allowed to differ, which is the standard arrangement
   (`beautifulsoup4` → `import bs4`).
@@ -92,7 +105,7 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
 ### Fixed
 
-- **Read concurrency was *negative*: more threads made reads slower.** Measured on
+- **Read concurrency was _negative_: more threads made reads slower.** Measured on
   com-DBLP, 16 threads doing plain point reads reached **0.6%–1.4% of single-thread
   throughput**. The cause was lock traffic, not the machine: every page touch goes
   through one `Arc<Mutex<BufferPoolManager>>`, and a `get_node` took it once per
@@ -102,7 +115,7 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
   and the "after" runs varied by under 2% against 60% before.
 
   Control runs ruled out the measuring environment before the cause was accepted:
-  duplicate variants doing a pure CPU spin and taking only the *outer* read lock both
+  duplicate variants doing a pure CPU spin and taking only the _outer_ read lock both
   scaled to ≈40% at 16 threads in the same process, so the collapse is attributable
   to the buffer-pool mutex. Method and both tables: `docs/benchmarks.md`.
 
@@ -188,7 +201,7 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
   ```text
   Transaction action queue is full (4000000 actions). ...
   Commit in batches instead, or raise the limit deliberately with
-  GraphLiteOptions::max_transaction_actions.
+  NervusDbOptions::max_transaction_actions.
   ```
 
   Splitting automatically would be the easy answer and the wrong one: it means
@@ -204,7 +217,7 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
   reported. Callers add `?`. Verified the real-data red lines are unchanged (hub 1-hop
   10,080 / 2-hop 161,877, 81.26 MB, 580k edges/s).
 
-- **`GraphLite::read_snapshot()` — a self-consistent read view.** It holds the shared
+- **`NervusDb::read_snapshot()` — a self-consistent read view.** It holds the shared
   read lock for its lifetime, so a multi-step traversal (read a node's adjacency
   list, then read each of those edges) sees one state instead of stitching together
   two. Without it the second read can miss an edge the first read named:
@@ -222,7 +235,7 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
   The snapshot blocks writers while it lives, because the buffer pool and page table
   are shared mutable state — true reader/writer parallelism needs versioned page
-  visibility, which remains ROADMAP item 1. The snapshot gives callers a *correct*
+  visibility, which remains ROADMAP item 1. The snapshot gives callers a _correct_
   option; it does not claim to be non-blocking MVCC.
 
 - **`MERGE <pattern>` — the idempotent write clause.** It matches the pattern and
@@ -246,11 +259,11 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
   Two semantics are worth stating because they are easy to get subtly wrong:
 
   - **Matching uses MATCH filter semantics.** Properties named in the pattern must
-    be equal, but a node carrying *extra* properties still matches. (Cypher's own
+    be equal, but a node carrying _extra_ properties still matches. (Cypher's own
     `MERGE (person:Person) ON MATCH SET ...` example matches all six `Person`
     nodes.)
   - **The pattern is matched or created as a whole.** If any part is missing, the
-    *entire* pattern is created — including a second `:A {k: 1}` in
+    _entire_ pattern is created — including a second `:A {k: 1}` in
     `MERGE (x:A {k: 1})-[:R]->(y:B {k: 3})`. Cypher's `HAS_CHAUFFEUR` example makes
     the same point: it creates `Chauffeur` nodes even though `Person` nodes with
     those names already exist. Partial reuse would make the result depend on which
@@ -268,7 +281,7 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
   -- reopen: MATCH (n:Num) returns {v: 1} AND {v: 2}
   ```
 
-  `GraphLite::execute` and `run_cypher` now snapshot the allocator metadata, open a
+  `NervusDb::execute` and `run_cypher` now snapshot the allocator metadata, open a
   transaction context, and undo a failed statement the same way `Transaction::commit`
   undoes a failed transaction: restore the uncommitted pages from their baselines,
   roll back the in-memory metadata, and invalidate the secondary indexes.
@@ -286,15 +299,15 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
   number.
 
 - **Nodes created by a statement were invisible to its own `RETURN`.** `UNWIND ['a']
-  AS s CREATE (m:Str {s: s}) RETURN m.s` returned `null` for a value that had just
+AS s CREATE (m:Str {s: s}) RETURN m.s` returned `null` for a value that had just
   been written to disk. `CREATE` now binds the nodes it creates back into the row,
   so `RETURN` reads the data it just stored. (`MATCH ... CREATE ... RETURN b.x` has
   the same gap from before this release; it is not addressed here.)
 
-- **The CLI (`graphlite-cli`) and the browser workbench (`graphlite-studio`), plus
-  the demo binary (`graphlite`).** All three were separate binaries that
+- **The CLI (`nervusdb-cli`) and the browser workbench (`nervusdb-studio`), plus
+  the demo binary (`nervusdb`).** All three were separate binaries that
   duplicated capability the library and the SDKs already provide: dump, checkpoint,
-  schema inspection and query execution are all available through `GraphLite`, and
+  schema inspection and query execution are all available through `NervusDb`, and
   the Python and Node.js SDKs expose them too.
 
   The trigger was concrete: a tool that must be kept in sync with the engine is a
@@ -374,7 +387,7 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
 ### Added
 
-- **`graphlite-studio` — a local browser workbench.** `graphlite-studio novel.db`
+- **`nervusdb-studio` — a local browser workbench.** `nervusdb-studio novel.db`
   opens the database read-only, serves a force-directed graph on
   `127.0.0.1:<random port>`, and opens your browser.
 
@@ -493,8 +506,8 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
   Read-only handles take a **shared** lock and coexist; a write handle takes the
   exclusive lock and excludes everyone. The kernel enforces it (`try_lock_shared`),
-  so there is no spinning or retry loop. `GraphLite::open_read_only(path)` is the
-  entry point, and `GraphLiteOptions::read_only` covers the options-based path.
+  so there is no spinning or retry loop. `NervusDb::open_read_only(path)` is the
+  entry point, and `NervusDbOptions::read_only` covers the options-based path.
 
   The subtlety is that **a reader must not trigger WAL replay**, since replay
   writes the data file. So a read-only open first checks
@@ -628,7 +641,7 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
   edges. A new `PageUnreadable` kind distinguishes an I/O failure from a
   checksum mismatch rather than asserting the latter.
 
-- **`GraphLite::open_with_options` / `GraphLiteOptions`**: `buffer_pool_frames`
+- **`NervusDb::open_with_options` / `NervusDbOptions`**: `buffer_pool_frames`
   and `wal_auto_checkpoint_bytes`. Setting the latter (default 64 MB) makes the
   engine checkpoint automatically once the WAL grows past it, so a long-lived
   writer cannot accumulate an unbounded WAL.
@@ -649,7 +662,7 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
   WAL no longer has to be materialised in memory to recover.
 
 - `CrcStore` and the `crc` module are public, so an embedder can verify a page
-  on disk (`GraphLite::verify_page_on_disk`) without opening the buffer pool.
+  on disk (`NervusDb::verify_page_on_disk`) without opening the buffer pool.
 
 - `docs/` for depth: `architecture.md` (paging, WAL, STEAL, slotted pages, batch
   weave, Cypher, indexing, algorithms, concurrency, production safety, storage
@@ -842,7 +855,7 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
   than exist.
 
 - **Unique constraints were enforced on only two of five write paths.**
-  `GraphLite::add_node` and `update_node_property` checked them; `Cypher CREATE`,
+  `NervusDb::add_node` and `update_node_property` checked them; `Cypher CREATE`,
   `MATCH ... CREATE`, and `Transaction::commit` all call `DiskGraph::add_node`
   directly and bypassed the check entirely.
 
@@ -948,7 +961,7 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
   The criterion is now deliberately narrow: only a **nonexistent** path or a
   **zero-length** file is treated as a new database. Everything else with a
-  non-GraphLite header is refused with an error that says why and what to do.
+  non-NervusDb header is refused with an error that says why and what to do.
 
   A 4 KiB all-zero file is refused too. It is the shape most likely to be mistaken
   for "an empty database", but it is equally likely to be truncated data from
@@ -959,12 +972,12 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
   actually pins the defect. It also checks the two legitimate new-database shapes
   still work, so the check is not merely over-tightened.
 
-- **`graphlite-studio` died when its stdout reader went away.** `println!` panics
+- **`nervusdb-studio` died when its stdout reader went away.** `println!` panics
   if the write fails, and that panic happened on the main thread — so piping the
   output anywhere that stops reading (a test harness, `head`, a log collector)
   killed the whole server, and clients saw `ConnectionReset`.
 
-  Reproduced locally with `graphlite-studio db 300 | head -3`: the server exited.
+  Reproduced locally with `nervusdb-studio db 300 | head -3`: the server exited.
   Startup output now goes through a helper that ignores write errors, and the same
   applies to the stderr paths (a closed stderr pipe panics identically).
 
@@ -1013,7 +1026,7 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
   because `mutating` is only known after parsing, so the guard cannot sit at the
   top of the function, and it was overlooked.
 
-  Consequence: `GraphLite::open_read_only(...)` would happily execute
+  Consequence: `NervusDb::open_read_only(...)` would happily execute
   `run_cypher("CREATE ...")`, `SET`, `DELETE` and `DETACH DELETE`. Anything built
   on it (the studio's Cypher console, for instance) could modify a database it was
   supposed to only read.
@@ -1133,7 +1146,7 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
   media corruption, and asserts as a precondition that the corruption really did
   pass the CRC.
 
-- **`pip install graphlite` and `npm install graphlite-node` were documented but
+- **`pip install nervusdb` and `npm install nervusdb-node` were documented but
   neither package is published.** Both binding READMEs now say so explicitly and
   give the build-from-source steps instead.
 
@@ -1310,6 +1323,6 @@ Every figure now ships with its scenario and conditions — see the README
 benchmark section and `ROADMAP.md`. A number without its conditions is not
 accepted.
 
-[Unreleased]: https://github.com/ysankpia/graphlite/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/ysankpia/graphlite/releases/tag/v1.0.0
-[1.0.0-rc.1]: https://github.com/ysankpia/graphlite/releases/tag/v1.0.0-rc.1
+[Unreleased]: https://github.com/ysankpia/nervusdb/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/ysankpia/nervusdb/releases/tag/v1.0.0
+[1.0.0-rc.1]: https://github.com/ysankpia/nervusdb/releases/tag/v1.0.0-rc.1

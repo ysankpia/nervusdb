@@ -1,4 +1,4 @@
-use graphlite::{GraphLite, Value};
+use nervusdb::{NervusDb, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -121,7 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!("   [RECOVERY] Opening database after abrupt termination...");
         let t_rec = Instant::now();
-        let db = match GraphLite::open(&db_path) {
+        let db = match NervusDb::open(&db_path) {
             Ok(d) => d,
             Err(e) => {
                 panic!(
@@ -216,7 +216,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run_worker(db_path: &Path, round: usize) -> Result<(), Box<dyn std::error::Error>> {
-    let db = GraphLite::open(db_path)?;
+    let db = NervusDb::open(db_path)?;
 
     let mut batch = 1usize;
     loop {

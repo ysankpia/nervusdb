@@ -1,4 +1,4 @@
-use graphlite::{GraphError, GraphLite, Value};
+use nervusdb::{GraphError, NervusDb, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -146,7 +146,7 @@ impl GraphOracle {
 }
 
 fn verify_equivalence(
-    db: &GraphLite,
+    db: &NervusDb,
     oracle: &GraphOracle,
     sample_size: usize,
     rng: &mut SimpleRng,
@@ -284,7 +284,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(" DB    : {}", db_path.display());
     println!("============================================================");
 
-    let mut db = GraphLite::open_with_pool_mb(&db_path, 32)?;
+    let mut db = NervusDb::open_with_pool_mb(&db_path, 32)?;
     let mut oracle = GraphOracle::new();
     let mut rng = SimpleRng::new(42);
 
@@ -449,7 +449,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if step % 2500 == 0 {
             db.checkpoint()?;
             drop(db);
-            db = GraphLite::open_with_pool_mb(&db_path, 32)?;
+            db = NervusDb::open_with_pool_mb(&db_path, 32)?;
             if let Err(e) = verify_equivalence(&db, &oracle, 200, &mut rng) {
                 panic!("\n[REOPEN PERSISTENCE FAILED after Step {}]: {}", step, e);
             }

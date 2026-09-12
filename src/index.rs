@@ -280,7 +280,7 @@ impl IndexManager {
     /// 约束状态（`catalog.unique_constraints`）与判定所需的索引都在这里，因此这是
     /// 唯一一个「三条写入路径都够得着」的位置。
     ///
-    /// 此前这个检查只存在于 `GraphLite::add_node` / `update_node_property` 两个
+    /// 此前这个检查只存在于 `NervusDb::add_node` / `update_node_property` 两个
     /// Rust API 入口上，而 `Cypher CREATE`（`execute_create`、`apply_create_clause`）
     /// 与 `Transaction::commit` 都直接调用 `DiskGraph::add_node`，于是**绕过了约束**：
     /// 实测声明 `(:C {name})` 唯一后，`CREATE (x:C {name:'林渊'})` 会静默插入第二个

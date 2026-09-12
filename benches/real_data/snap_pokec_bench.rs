@@ -1,4 +1,4 @@
-use graphlite::{GraphLite, GraphLiteOptions, Value};
+use nervusdb::{NervusDb, NervusDbOptions, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -83,7 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         " Pool Size: {} MB ({} frames) | Auto-Checkpoint: {}",
         pool_mb,
-        pool_mb * graphlite::FRAMES_PER_MB,
+        pool_mb * nervusdb::FRAMES_PER_MB,
         match auto_checkpoint_bytes() {
             0 => "off (benchmark checkpoints explicitly)".to_string(),
             b => format!("{} MB", b / 1024 / 1024),
@@ -168,12 +168,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Open Engine
     println!("\n-> Step 2: Opening Database with {} MB Pool...", pool_mb);
-    let db = GraphLite::open_with_options(
+    let db = NervusDb::open_with_options(
         &db_path,
-        GraphLiteOptions {
-            buffer_pool_frames: pool_mb * graphlite::FRAMES_PER_MB,
+        NervusDbOptions {
+            buffer_pool_frames: pool_mb * nervusdb::FRAMES_PER_MB,
             wal_auto_checkpoint_bytes: auto_checkpoint_bytes(),
-            ..GraphLiteOptions::default()
+            ..NervusDbOptions::default()
         },
     )?;
 

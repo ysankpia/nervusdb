@@ -1,6 +1,6 @@
-# GraphLite-RS
+# NervusDB
 
-[![CI](https://github.com/ysankpia/graphlite/actions/workflows/ci.yml/badge.svg)](https://github.com/ysankpia/graphlite/actions/workflows/ci.yml)
+[![CI](https://github.com/ysankpia/nervusdb/actions/workflows/ci.yml/badge.svg)](https://github.com/ysankpia/nervusdb/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.98%2B-orange.svg)](https://www.rust-lang.org)
 
@@ -9,10 +9,10 @@ graphs. Two files on disk, no server, no daemon, and resident memory bounded by 
 configurable buffer pool rather than by dataset size.
 
 ```rust
-use graphlite::{GraphLite, GraphError};
+use nervusdb::{NervusDb, GraphError};
 
 fn main() -> Result<(), GraphError> {
-    let db = GraphLite::open("mydb.db")?;
+    let db = NervusDb::open("mydb.db")?;
 
     db.execute(
         "CREATE (a:Person {name: 'Alice', age: 28})-[:KNOWS {weight: 1.5}]->(b:Person {name: 'Bob'})",
@@ -64,7 +64,7 @@ and unchanged by 1.1.0; see `FORMAT.md`. Several known gaps remain — read
   MERGE (u:User {name: 'alice'})                -- creates, then reuses
   ```
 
-- **Self-consistent reads.** `GraphLite::read_snapshot()` holds one state across a
+- **Self-consistent reads.** `NervusDb::read_snapshot()` holds one state across a
   multi-step traversal, so reading a node and then its edges cannot observe a
   concurrent delete in between. Snapshots block writers while they live; more
   concurrency needs versioned page visibility ([ROADMAP](ROADMAP.md) item 1).
@@ -92,13 +92,13 @@ three worth knowing before you start:
 
 ```toml
 [dependencies]
-graphlite-rs = "1.1.0"
+nervusdb = "1.1.0"
 ```
 
 The Python and Node.js SDKs are **not published to PyPI or npm yet**. Build them
 from source (see [bindings/](bindings/)). When they are published, the Python
-_distribution_ will be `graphlite-rs` on PyPI while the import stays `import
-graphlite` — the name `graphlite` is already taken on PyPI by an unrelated embedded
+_distribution_ will be `nervusdb` on PyPI while the import stays `import
+nervusdb` — the name `nervusdb` is already taken on PyPI by an unrelated embedded
 graph database, and shipping under it would install someone else's package. See
 [ROADMAP](ROADMAP.md) for the naming decision.
 
@@ -107,9 +107,9 @@ graph database, and shipping under it would install someone else's package. See
 ### Python
 
 ```python
-import graphlite
+import nervusdb
 
-db = graphlite.GraphLite.open("novel.db")
+db = nervusdb.NervusDb.open("novel.db")
 with db.begin_transaction() as tx:
     lin = tx.add_node(["Character"], {"name": "林渊"})
     su = tx.add_node(["Character"], {"name": "苏晴"})
@@ -127,9 +127,9 @@ db.backup("snapshot.db")          # consistent online copy
 ### Node.js
 
 ```javascript
-import { GraphLite } from "graphlite-node";
+import { NervusDb } from "nervusdb-node";
 
-const db = GraphLite.open("novel.db");
+const db = NervusDb.open("novel.db");
 const tx = db.beginTransaction();
 const lin = tx.addNode(["Character"], { name: "林渊" });
 const su = tx.addNode(["Character"], { name: "苏晴" });
@@ -140,11 +140,11 @@ tx.commit();
 ### Choosing a memory budget
 
 ```rust
-use graphlite::{GraphLite, SMALL_POOL_FRAMES, DEFAULT_BUFFER_POOL_FRAMES, LARGE_POOL_FRAMES};
+use nervusdb::{NervusDb, SMALL_POOL_FRAMES, DEFAULT_BUFFER_POOL_FRAMES, LARGE_POOL_FRAMES};
 
-let db = GraphLite::open_with_pool_mb("mydb.db", 16)?;            // 16 MB
-let db = GraphLite::open_with_pool_size("mydb.db", SMALL_POOL_FRAMES)?;   // 1 MB
-let db = GraphLite::open("mydb.db")?;  // 4 MB default (DEFAULT_BUFFER_POOL_FRAMES)
+let db = NervusDb::open_with_pool_mb("mydb.db", 16)?;            // 16 MB
+let db = NervusDb::open_with_pool_size("mydb.db", SMALL_POOL_FRAMES)?;   // 1 MB
+let db = NervusDb::open("mydb.db")?;  // 4 MB default (DEFAULT_BUFFER_POOL_FRAMES)
 ```
 
 ### Bulk writes
@@ -172,7 +172,7 @@ competes with. See [docs/benchmarks.md](docs/benchmarks.md) for the measurement.
 ### Integrity and error handling
 
 ```rust
-let db = GraphLite::open("mydb.db")?;   // exclusive lock; a second handle gets DatabaseLocked
+let db = NervusDb::open("mydb.db")?;   // exclusive lock; a second handle gets DatabaseLocked
 db.verify()?;                           // structural self-check (read-only, never repairs)
 
 // get_node folds storage errors into None (documented as lossy);
@@ -184,7 +184,7 @@ let node = db.try_get_node(42)?;
 
 ```text
 src/
-  lib.rs            Public facade: GraphLite, Transaction, ACID coordination
+  lib.rs            Public facade: NervusDb, Transaction, ACID coordination
   page.rs           4KB pages, NodeRecord, EdgeRecord, SlottedPropPage, PropCodec
   buffer.rs         DiskManager and the LRU buffer pool (STEAL spill)
   disk_graph.rs     Direct addressing, disk adjacency, freelists, page iterators

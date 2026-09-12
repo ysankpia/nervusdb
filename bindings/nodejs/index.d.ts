@@ -50,8 +50,8 @@ export interface KHopSubgraph {
   edges: Array<SubgraphEdge>;
 }
 
-export class GraphLite {
-  static open(path: string, poolSize?: number): GraphLite;
+export class NervusDb {
+  static open(path: string, poolSize?: number): NervusDb;
 
   /** 执行 Cypher 变更语句，返回执行摘要 */
   execute(cypher: string): ExecuteResult;

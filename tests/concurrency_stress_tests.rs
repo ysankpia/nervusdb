@@ -19,7 +19,7 @@
 //!
 //! 线程数与耗时上限都放宽到「任何合理机器都能过」的程度。
 
-use graphlite::{GraphError, GraphLite, Value};
+use nervusdb::{GraphError, NervusDb, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
@@ -48,7 +48,7 @@ fn parallelism() -> usize {
 fn test_full_parallelism_mixed_read_write() -> Result<(), GraphError> {
     let par = parallelism();
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("stress_mixed.db"))?;
+    let db = NervusDb::open(dir.path().join("stress_mixed.db"))?;
 
     // 每线程写入量随并行度收缩，使总耗时与机器规模基本无关
     let per_thread = 400 / par + 20;
@@ -163,7 +163,7 @@ fn test_full_parallelism_mixed_read_write() -> Result<(), GraphError> {
 fn test_writer_is_not_starved_by_readers() -> Result<(), GraphError> {
     let par = parallelism();
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("starvation.db"))?;
+    let db = NervusDb::open(dir.path().join("starvation.db"))?;
 
     let stop = Arc::new(AtomicBool::new(false));
     let mut readers = Vec::new();
@@ -209,7 +209,7 @@ fn test_writer_is_not_starved_by_readers() -> Result<(), GraphError> {
 fn test_concurrent_readers_are_independent() -> Result<(), GraphError> {
     let par = parallelism();
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("many_readers.db"))?;
+    let db = NervusDb::open(dir.path().join("many_readers.db"))?;
 
     // 建一个够读的图：1 个起点 + 500 个循环节点 = 501 个 :N
     let mut prev = db.add_node(HashSet::from(["N".to_string()]), HashMap::new())?;

@@ -450,16 +450,23 @@ fn documented_suite_table_matches_the_files() {
 // 它们**不必相同**（Rust 惯例是带后缀，Python/npm 惯例是裸名），但必须有明确
 // 的对应关系，且不能出现「一个名字在两个生态里被不同项目占用」这种已知冲突。
 //
-// 这条守卫目前只钉住**已知冲突**：`graphlite` 在 PyPI 上属于另一个嵌入式图数据库
-// （eugene-eeo/graphlite），在 crates.io 上属于 GraphLite-AI。若将来有人把
-// `pyproject.toml` 改回裸 `graphlite` 并发布，用户会装到**别人的包**——那是
-// 无法撤回的事故。因此在这里拒绝它，并指向 ROADMAP 的命名决策。
+// 这条守卫钉住**已知冲突**：`graphlite` 在 crates.io 上属于 GraphLite-AI，在 PyPI
+// 上属于 eugene-eeo。本项目曾用这个前缀（当时叫 GraphLite），改名后不再使用；
+// 若将来有人把任一清单改回去并发布，用户会装到**别人的包**——那是无法撤回的事故。
+// 因此在这里拒绝它，并指向 ROADMAP 的命名记录。
 
 #[test]
 fn published_package_names_avoid_known_conflicts() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
 
-    // 已知被占用的名字 -> 占用者（用于报错时说明原因）
+    // 已知属于**其它项目**的名字 -> 占用者。
+    //
+    // 这张表是「防止误发到别人的名字下」。本项目的名字是 `nervusdb`，它属于本项目
+    // （crates.io 上旧版已全部 yank），因此**不在**表中——把它列进来会让守卫阻止
+    // 自己的正确配置。
+    //
+    // 三个注册表实测于 2026-09-13：`graphlite` 在 crates.io 属 GraphLite-AI，
+    // 在 PyPI 属 eugene-eeo，npm 上也被占用。
     const TAKEN: &[(&str, &str)] = &[
         (
             "graphlite",
@@ -521,14 +528,13 @@ fn published_package_names_avoid_known_conflicts() {
                 name.trim(),
                 *taken,
                 "{label} would publish as `{taken}`, which belongs to another project \
-                 ({owner}). Publishing would ship someone else's name — see ROADMAP \
-                 \"SDK publication\" for the naming decision. \
-                 `graphlite-rs` is available on all three registries."
+                 ({owner}). Publishing would ship someone else's name, and a published \
+                 name cannot be cleanly retracted — see ROADMAP \"SDK publication\"."
             );
         }
     }
 
-    // 三个名字必须彼此可对应：都含 `graphlite` 词根或全部一致。
+    // 三个名字必须彼此可对应：都含 `nervusdb` 词根或全部一致。
     // 这条不是硬性生态要求，而是防止出现「Rust 叫 X、Python 叫 Y」而无从追溯。
     let lower = |s: &String| s.to_lowercase().replace('-', "");
     let stem = lower(&crate_name);
@@ -537,7 +543,7 @@ fn published_package_names_avoid_known_conflicts() {
         ("bindings/nodejs/package.json", &npm_name),
     ] {
         assert!(
-            lower(name).starts_with("graphlite") || lower(name) == stem,
+            lower(name).starts_with("nervusdb") || lower(name) == stem,
             "{label} declares `{name}`, which is unrelated to the crate name \
              `{crate_name}`; a reader cannot connect the published artifact to this \
              repository"

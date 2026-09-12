@@ -7,7 +7,7 @@
 // Every result is printed next to its configuration so a number can never be
 // quoted without its measurement conditions.
 
-import { GraphLite } from "../index.js";
+import { NervusDb } from "../index.js";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -63,7 +63,7 @@ function scenario(label, nodes, edges, poolFrames, dbPath) {
     `config        : ${nodes} nodes, ${edges} edges, pool ${poolFrames} frames (${(poolFrames * 4) / 1024} MB)`,
   );
 
-  const db = GraphLite.open(dbPath, poolFrames);
+  const db = NervusDb.open(dbPath, poolFrames);
   benchNodes(db, nodes, "nodes");
   if (edges > 0) benchEdges(db, nodes, edges, "edges");
 
@@ -81,10 +81,10 @@ function scenario(label, nodes, edges, poolFrames, dbPath) {
 }
 
 function main() {
-  console.log(`GraphLite Node.js SDK throughput benchmark (scale = ${SCALE})`);
+  console.log(`NervusDb Node.js SDK throughput benchmark (scale = ${SCALE})`);
   if (QUICK) console.log("NOTE: smoke scale, not the documented figures.");
 
-  const dbPath = path.join(os.tmpdir(), "graphlite-node-bench.db");
+  const dbPath = path.join(os.tmpdir(), "nervusdb-node-bench.db");
   const n = QUICK ? 100000 : 1000000;
   const e = QUICK ? 400000 : 4000000;
   scenario("1M nodes + 4M edges, file-backed, 64MB pool", n, e, 16384, dbPath);

@@ -3,17 +3,17 @@
 //!
 //! 全部测试通过公开 API（`execute` / `query_cypher`）驱动，不触碰任何内部结构。
 
-use graphlite::{GraphError, GraphLite, Value};
+use nervusdb::{GraphError, NervusDb, Value};
 use std::collections::{HashMap, HashSet};
 use tempfile::tempdir;
 
-fn open_temp(name: &str) -> Result<(tempfile::TempDir, GraphLite), GraphError> {
+fn open_temp(name: &str) -> Result<(tempfile::TempDir, NervusDb), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join(name))?;
+    let db = NervusDb::open(dir.path().join(name))?;
     Ok((dir, db))
 }
 
-fn value_of(db: &GraphLite, cypher: &str) -> Result<Value, GraphError> {
+fn value_of(db: &NervusDb, cypher: &str) -> Result<Value, GraphError> {
     let res = db.query_cypher(cypher)?;
     assert_eq!(
         res.row_count(),
@@ -307,7 +307,7 @@ fn test_aggregate_functions() -> Result<(), GraphError> {
     // 存在，任何聚合都会漏掉这类数据。
     {
         let dir2 = tempdir()?;
-        let db2 = GraphLite::open(dir2.path().join("null_str.db"))?;
+        let db2 = NervusDb::open(dir2.path().join("null_str.db"))?;
         let mut m = HashMap::new();
         m.insert("name".to_string(), Value::from("null"));
         db2.add_node(HashSet::from(["C".to_string()]), m)?;
@@ -511,7 +511,7 @@ fn test_mutation_durability_across_reopen() -> Result<(), GraphError> {
     let db_path = dir.path().join("mutation_durability.db");
 
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         db.execute("CREATE (a:P {name: 'A', age: 10})-[:R]->(b:P {name: 'B', age: 20})")?;
         db.execute("CREATE (c:P {name: 'C', age: 30})")?;
         db.execute("MATCH (a:P {name: 'A'}) SET a.age = 77")?;
@@ -520,7 +520,7 @@ fn test_mutation_durability_across_reopen() -> Result<(), GraphError> {
         db.checkpoint()?;
     }
 
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
     assert_eq!(db.node_count(), 2);
     assert_eq!(db.edge_count(), 1);
     assert_eq!(
@@ -546,7 +546,7 @@ fn test_mutation_durability_across_reopen() -> Result<(), GraphError> {
 // =========================================================================
 #[test]
 fn test_dump_cypher_script_replay() -> Result<(), GraphError> {
-    let source = GraphLite::open(":memory:")?;
+    let source = NervusDb::open(":memory:")?;
     source.execute(
         "CREATE (a:User {name: 'Alice', age: 25})-[:FOLLOWS {weight: 1.5}]->(b:User {name: 'Bob', age: 30})",
     )?;
@@ -571,7 +571,7 @@ fn test_dump_cypher_script_replay() -> Result<(), GraphError> {
         .collect::<Vec<_>>()
         .join("\n");
 
-    let target = GraphLite::open(":memory:")?;
+    let target = NervusDb::open(":memory:")?;
     for stmt in cleaned.split(';') {
         let trimmed = stmt.trim();
         if !trimmed.is_empty() {
@@ -604,7 +604,7 @@ fn test_dump_cypher_script_replay() -> Result<(), GraphError> {
 fn test_explain_reports_plan_without_executing() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("explain.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     db.with_transaction(|tx| {
         let a = tx.add_node(HashSet::from(["City".to_string()]), HashMap::new())?;
@@ -661,7 +661,7 @@ fn test_explain_reports_plan_without_executing() -> Result<(), GraphError> {
 }
 
 /// 把计划结果集拼成一段文本，便于断言。
-fn plan_text(res: &graphlite::CypherResultSet) -> String {
+fn plan_text(res: &nervusdb::CypherResultSet) -> String {
     res.rows
         .iter()
         .filter_map(|r| match &r.values[0] {
@@ -694,7 +694,7 @@ fn plan_text(res: &graphlite::CypherResultSet) -> String {
 #[test]
 fn test_limit_pushdown_does_not_drop_where_clause() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("where_limit.db"))?;
+    let db = NervusDb::open(dir.path().join("where_limit.db"))?;
 
     // 5 个节点，age = 10,20,30,40,50
     db.with_transaction(|tx| {
@@ -770,7 +770,7 @@ fn test_limit_pushdown_does_not_drop_where_clause() -> Result<(), GraphError> {
     // LIMIT 不得让结果**少于**请求数：被过滤掉的行不能计入上限。
     // 20 个节点里只有 3 个满足 age < 30，`LIMIT 10` 必须给出全部 3 个。
     let dir2 = tempdir()?;
-    let db2 = GraphLite::open(dir2.path().join("cap.db"))?;
+    let db2 = NervusDb::open(dir2.path().join("cap.db"))?;
     db2.with_transaction(|tx| {
         for i in 1..=20i64 {
             let mut m = HashMap::new();
@@ -809,7 +809,7 @@ fn test_limit_pushdown_does_not_drop_where_clause() -> Result<(), GraphError> {
 #[test]
 fn test_sum_is_exact_for_integers_and_reports_overflow() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("sum.db"))?;
+    let db = NervusDb::open(dir.path().join("sum.db"))?;
 
     let add = |label: &str, v: Value| -> Result<(), GraphError> {
         let mut m = HashMap::new();
@@ -838,7 +838,7 @@ fn test_sum_is_exact_for_integers_and_reports_overflow() -> Result<(), GraphErro
     );
 
     // 溢出必须报错，不得静默饱和或回绕
-    let db2 = GraphLite::open(dir.path().join("sum_overflow.db"))?;
+    let db2 = NervusDb::open(dir.path().join("sum_overflow.db"))?;
     {
         let mut m = HashMap::new();
         m.insert("v".to_string(), Value::Int(i64::MAX));
@@ -853,7 +853,7 @@ fn test_sum_is_exact_for_integers_and_reports_overflow() -> Result<(), GraphErro
     );
 
     // 混合类型仍返回 Float（既有语义不得回退）
-    let db3 = GraphLite::open(dir.path().join("sum_mixed.db"))?;
+    let db3 = NervusDb::open(dir.path().join("sum_mixed.db"))?;
     {
         let mut m = HashMap::new();
         m.insert("v".to_string(), Value::Int(2));
@@ -878,7 +878,7 @@ fn test_sum_is_exact_for_integers_and_reports_overflow() -> Result<(), GraphErro
     );
 
     // 普通规模仍正确
-    let db4 = GraphLite::open(dir.path().join("sum_small.db"))?;
+    let db4 = NervusDb::open(dir.path().join("sum_small.db"))?;
     for i in 1..=100i64 {
         let mut m = HashMap::new();
         m.insert("v".to_string(), Value::from(i));

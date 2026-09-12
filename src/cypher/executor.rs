@@ -1834,7 +1834,7 @@ impl<'a> CypherExecutor<'a> {
                 let props = self.resolve_storable_properties(&node_pat.properties, ctx)?;
 
                 // 唯一约束必须在这里也过一遍：Cypher 直接调 `DiskGraph::add_node`，
-                // 绕过了 `GraphLite::add_node` 上的检查。
+                // 绕过了 `NervusDb::add_node` 上的检查。
                 self.index_mgr
                     .guard_unique_constraints(self.graph, &labels, &props, None)?;
                 let node_id = self.graph.add_node(labels.clone(), props.clone())?;

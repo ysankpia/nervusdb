@@ -1,4 +1,4 @@
-"""GraphLite-RS Python SDK 端到端测试。
+"""NervusDB Python SDK 端到端测试。
 
 覆盖：基础 CRUD、Cypher 1.0 全语法（SET / DETACH DELETE / ORDER BY / SKIP / LIMIT / 聚合）、
 最短路与环检测、PageRank / 弱连通分量 / K-Hop 子图、Buffer Pool 指标与 Checkpoint。
@@ -7,15 +7,15 @@
 import os
 import tempfile
 
-import graphlite
+import nervusdb
 
 
-def test_graphlite_python():
+def test_nervusdb_python():
     temp_dir = tempfile.mkdtemp()
     db_path = os.path.join(temp_dir, "py_test.db")
 
-    print(f"Testing GraphLite Python SDK at {db_path}...")
-    db = graphlite.GraphLite.open(db_path, 512)
+    print(f"Testing NervusDb Python SDK at {db_path}...")
+    db = nervusdb.NervusDb.open(db_path, 512)
 
     # 1. API: add_node & add_edge
     alice = db.add_node(["Person"], {"name": "Alice", "age": 28})
@@ -167,4 +167,4 @@ def test_graphlite_python():
 
 
 if __name__ == "__main__":
-    test_graphlite_python()
+    test_nervusdb_python()

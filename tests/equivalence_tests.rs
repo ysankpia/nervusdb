@@ -12,7 +12,7 @@
 //! 这些断言刻意写成「用户可观察的行为」，而不是内部实现细节：内部的页布局、
 //! 缓存策略、索引结构都可以变，用户的查询结果与 API 语义不行。
 
-use graphlite::{GraphError, GraphLite, Value};
+use nervusdb::{GraphError, NervusDb, Value};
 use std::collections::{HashMap, HashSet};
 use tempfile::tempdir;
 
@@ -26,7 +26,7 @@ fn props(i: i64) -> HashMap<String, Value> {
 #[test]
 fn test_core_semantics_unchanged() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("core.db"))?;
+    let db = NervusDb::open(dir.path().join("core.db"))?;
 
     let mut ids = Vec::new();
     db.with_transaction(|tx| {
@@ -89,7 +89,7 @@ fn test_core_semantics_unchanged() -> Result<(), GraphError> {
 #[test]
 fn test_transaction_semantics_unchanged() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("tx.db"))?;
+    let db = NervusDb::open(dir.path().join("tx.db"))?;
 
     // 回滚不留痕迹
     let before = db.node_count();
@@ -120,7 +120,7 @@ fn test_public_api_contracts_unchanged() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("api.db");
 
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
     assert!(!db.is_read_only());
 
     let id = db.add_node(HashSet::from(["N".to_string()]), props(1))?;
@@ -141,7 +141,7 @@ fn test_public_api_contracts_unchanged() -> Result<(), GraphError> {
 
     // 只读句柄的语义
     drop(db);
-    let ro = GraphLite::open_read_only(&db_path)?;
+    let ro = NervusDb::open_read_only(&db_path)?;
     assert!(ro.is_read_only());
     assert_eq!(ro.node_count(), 1);
 
@@ -164,18 +164,18 @@ fn test_format_contract_unchanged() -> Result<(), GraphError> {
     let db_path = dir.path().join("fmt.db");
 
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         db.add_node(HashSet::from(["P".to_string()]), props(1))?;
         db.checkpoint()?;
     }
 
-    // 版本落盘为 FORMAT.md 承诺的 4
+    // 魔数与版本落盘为 FORMAT.md 承诺的值
     let raw = std::fs::read(&db_path)?;
-    assert_eq!(&raw[0..4], b"GLDB", "magic must stay GLDB");
+    assert_eq!(&raw[0..4], b"NVDB", "magic must be NVDB");
     let version = u32::from_le_bytes(raw[4..8].try_into().unwrap_or([0; 4]));
     assert_eq!(
-        version, 4,
-        "the frozen format version must not drift without a documented bump"
+        version, 5,
+        "the format version must not drift without a documented bump"
     );
 
     // 最小库不超过 16 KiB（4 页）——这是 FORMAT.md 明确承诺的

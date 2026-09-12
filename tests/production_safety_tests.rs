@@ -4,8 +4,8 @@
 //! 1. 同一数据库被两个句柄同时写入导致静默丢数据；
 //! 2. 数据页损坏后静默返回错误/缺失数据而无人报错。
 
-use graphlite::page::PAGE_SIZE;
-use graphlite::{GraphError, GraphLite, GraphLiteOptions, Value};
+use nervusdb::page::PAGE_SIZE;
+use nervusdb::{GraphError, NervusDb, NervusDbOptions, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use tempfile::tempdir;
@@ -25,11 +25,11 @@ fn test_second_handle_is_rejected() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("locked.db");
 
-    let first = GraphLite::open(&db_path)?;
+    let first = NervusDb::open(&db_path)?;
     assert!(first.is_locked(), "file-backed handle must hold the lock");
 
     // 同进程第二次打开必须被明确拒绝，而不是「打开成功然后互相覆盖」
-    let err = match GraphLite::open(&db_path) {
+    let err = match NervusDb::open(&db_path) {
         Ok(_) => panic!("second handle on the same file must be rejected"),
         Err(e) => e,
     };
@@ -46,7 +46,7 @@ fn test_second_handle_is_rejected() -> Result<(), GraphError> {
 
     // 释放后可正常重开
     drop(first);
-    let reopened = GraphLite::open(&db_path)?;
+    let reopened = NervusDb::open(&db_path)?;
     assert_eq!(reopened.node_count(), 0);
 
     Ok(())
@@ -58,16 +58,16 @@ fn test_lock_released_after_drop_allows_reopen() -> Result<(), GraphError> {
     let db_path = dir.path().join("reopen.db");
 
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         db.add_node(HashSet::from(["N".to_string()]), props(1))?;
         db.checkpoint()?;
     }
     // drop 之后锁必须已释放
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
     assert_eq!(db.node_count(), 1);
     // 连续多次重开也不应残留锁
     drop(db);
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
     assert_eq!(db.node_count(), 1);
 
     Ok(())
@@ -76,8 +76,8 @@ fn test_lock_released_after_drop_allows_reopen() -> Result<(), GraphError> {
 #[test]
 fn test_memory_mode_does_not_lock() -> Result<(), GraphError> {
     // :memory: 无文件，不应加锁，允许多个实例共存
-    let a = GraphLite::open(":memory:")?;
-    let b = GraphLite::open(":memory:")?;
+    let a = NervusDb::open(":memory:")?;
+    let b = NervusDb::open(":memory:")?;
     assert!(!a.is_locked());
     assert!(!b.is_locked());
     a.add_node(HashSet::from(["A".to_string()]), HashMap::new())?;
@@ -96,7 +96,7 @@ fn test_cross_process_lock_excludes() -> Result<(), GraphError> {
     let db_path = dir.path().join("crossproc.db");
 
     // 本进程持有锁
-    let holder = GraphLite::open(&db_path)?;
+    let holder = NervusDb::open(&db_path)?;
     holder.add_node(HashSet::from(["N".to_string()]), props(1))?;
     holder.checkpoint()?;
 
@@ -139,7 +139,7 @@ fn test_cross_process_lock_excludes() -> Result<(), GraphError> {
 #[ignore]
 fn cross_process_child_probe() {
     let path = std::env::var("GL_CHILD_DB").expect("GL_CHILD_DB must be set");
-    match GraphLite::open(&path) {
+    match NervusDb::open(&path) {
         Ok(_) => println!("CHILD_RESULT=opened"),
         Err(GraphError::DatabaseLocked(_)) => println!("CHILD_RESULT=locked"),
         Err(e) => println!("CHILD_RESULT=other:{}", e),
@@ -153,7 +153,7 @@ fn cross_process_child_probe() {
 fn test_integrity_check_passes_on_healthy_db() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("healthy.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 构造含自环、重复边、扇入扇出与长属性链的图
     db.with_transaction(|tx| {
@@ -197,7 +197,7 @@ fn test_integrity_check_detects_corruption() -> Result<(), GraphError> {
     let db_path = dir.path().join("corrupt.db");
 
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         db.with_transaction(|tx| {
             for i in 1..=300u64 {
                 tx.add_node(HashSet::from(["N".to_string()]), props(i as i64))?;
@@ -230,7 +230,7 @@ fn test_integrity_check_detects_corruption() -> Result<(), GraphError> {
         f.flush()?;
     }
 
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
     let report = db.integrity_check()?;
 
     assert!(
@@ -242,12 +242,12 @@ fn test_integrity_check_detects_corruption() -> Result<(), GraphError> {
     // 页级 CRC 体检排在最前，因此在内容检查被读错误中断之前，
     // 坏页已经带着页号进入报告——这是本用例的核心断言。
     assert!(
-        report.count_of(graphlite::IntegrityIssueKind::PageChecksumMismatch) > 0,
+        report.count_of(nervusdb::IntegrityIssueKind::PageChecksumMismatch) > 0,
         "report must name the corrupt page, got {:?}",
         report.issues
     );
     let mentions_victim = report.issues.iter().any(|i| {
-        i.kind == graphlite::IntegrityIssueKind::PageChecksumMismatch
+        i.kind == nervusdb::IntegrityIssueKind::PageChecksumMismatch
             && i.detail.contains(&format!("page {}", victim_page))
     });
     assert!(
@@ -286,7 +286,7 @@ fn test_integrity_catches_chain_only_corruption() -> Result<(), GraphError> {
     let db_path = dir.path().join("chain_corrupt.db");
 
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         db.with_transaction(|tx| {
             for i in 1..=200u64 {
                 tx.add_node(HashSet::from(["N".to_string()]), props(i as i64))?;
@@ -303,7 +303,7 @@ fn test_integrity_catches_chain_only_corruption() -> Result<(), GraphError> {
 
     // 健康时必须通过（阴性对照）
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         assert!(db.integrity_check()?.is_ok(), "sanity: healthy db passes");
     }
 
@@ -346,26 +346,26 @@ fn test_integrity_catches_chain_only_corruption() -> Result<(), GraphError> {
     // 是要害细节，测试自己抄一份必然会在下次改布局时悄悄过期，
     // 那样「损坏已经骗过校验」这个前提就不再成立，而测试仍会假装通过。
     {
-        let dm = std::sync::Arc::new(graphlite::DiskManager::open(&db_path)?);
+        let dm = std::sync::Arc::new(nervusdb::DiskManager::open(&db_path)?);
 
         // 目录根页号是 Page 0 的持久化字段，用库常量读取
-        let mut page0 = [0u8; graphlite::PAGE_SIZE];
+        let mut page0 = [0u8; nervusdb::PAGE_SIZE];
         dm.read_page(0, &mut page0)?;
         let root = u32::from_le_bytes(
-            page0[graphlite::page::HeaderPage::CRC_DIR_PAGE_OFFSET
-                ..graphlite::page::HeaderPage::CRC_DIR_PAGE_OFFSET + 4]
+            page0[nervusdb::page::HeaderPage::CRC_DIR_PAGE_OFFSET
+                ..nervusdb::page::HeaderPage::CRC_DIR_PAGE_OFFSET + 4]
                 .try_into()
                 .unwrap(),
         );
 
-        let mut store = graphlite::crc::CrcStore::new(dm, root);
-        let mut page_arr = [0u8; graphlite::PAGE_SIZE];
+        let mut store = nervusdb::crc::CrcStore::new(dm, root);
+        let mut page_arr = [0u8; nervusdb::PAGE_SIZE];
         page_arr.copy_from_slice(&page);
         store.record(victim as u32, &page_arr)?;
         store.flush()?;
     }
 
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 前提校验：损坏必须已经骗过了页级校验，否则本用例退化成 CRC 用例，
     // 无法证明度数 oracle 本身有效。
@@ -380,8 +380,8 @@ fn test_integrity_catches_chain_only_corruption() -> Result<(), GraphError> {
         !report.is_ok(),
         "chain-only corruption must be detected by the degree conservation oracle"
     );
-    let degree_issues = report.count_of(graphlite::IntegrityIssueKind::OutgoingChainCountMismatch)
-        + report.count_of(graphlite::IntegrityIssueKind::IncomingChainCountMismatch);
+    let degree_issues = report.count_of(nervusdb::IntegrityIssueKind::OutgoingChainCountMismatch)
+        + report.count_of(nervusdb::IntegrityIssueKind::IncomingChainCountMismatch);
     assert!(
         degree_issues > 0,
         "expected a degree-conservation violation, got: {:?}",
@@ -400,7 +400,7 @@ fn test_try_get_preserves_storage_errors() -> Result<(), GraphError> {
     let db_path = dir.path().join("readerr.db");
 
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         for i in 1..=200u64 {
             let mut m = props(i as i64);
             // 多页属性：破坏其溢出链即可让读取失败
@@ -431,7 +431,7 @@ fn test_try_get_preserves_storage_errors() -> Result<(), GraphError> {
         f.flush()?;
     }
 
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 找到那个属性不可读的节点：try_get_node 必须报错
     let mut saw_error = false;
@@ -474,7 +474,7 @@ fn test_lock_held_during_wal_replay() -> Result<(), GraphError> {
 
     // 写入数据但不 checkpoint：WAL 中有待回放的已提交页
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         db.with_transaction(|tx| {
             for i in 1..=500u64 {
                 tx.add_node(HashSet::from(["N".to_string()]), props(i as i64))?;
@@ -485,10 +485,10 @@ fn test_lock_held_during_wal_replay() -> Result<(), GraphError> {
     }
 
     // 重开：这次 open 会回放 WAL。回放期间另一个句柄必须被拒。
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
     assert!(db.is_locked());
     assert!(
-        GraphLite::open(&db_path).is_err(),
+        NervusDb::open(&db_path).is_err(),
         "no second handle may open while another holds the lock"
     );
     // 回放结果正确
@@ -506,7 +506,7 @@ fn test_lock_held_during_wal_replay() -> Result<(), GraphError> {
 // =========================================================================
 #[test]
 fn test_poisoned_lock_recovers_instead_of_panicking() -> Result<(), GraphError> {
-    use graphlite::sync_ext::RwLockRecoverExt;
+    use nervusdb::sync_ext::RwLockRecoverExt;
     use std::sync::{Arc, RwLock};
 
     let lock: Arc<RwLock<u32>> = Arc::new(RwLock::new(7));
@@ -556,7 +556,7 @@ fn test_poisoned_lock_recovers_instead_of_panicking() -> Result<(), GraphError> 
 fn test_engine_usable_after_internal_panic() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("poison_engine.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     db.add_node(HashSet::from(["N".to_string()]), props(1))?;
 
@@ -569,7 +569,7 @@ fn test_engine_usable_after_internal_panic() -> Result<(), GraphError> {
     .join();
 
     // 引擎必须仍然可用：不 panic、能读写、能自检
-    let db2 = GraphLite::open(&db_path);
+    let db2 = NervusDb::open(&db_path);
     assert!(
         db2.is_err(),
         "original handle still holds the lock, so reopen must be refused"
@@ -608,7 +608,7 @@ fn test_page_checksum_covers_pages_beyond_256() -> Result<(), GraphError> {
     // 40k 节点带属性只能铺出约 475 页，因此需要更大的 fixture。
     let node_count: u64 = 90_000;
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         db.with_transaction(|tx| {
             for i in 1..=node_count {
                 let mut p = HashMap::new();
@@ -620,7 +620,7 @@ fn test_page_checksum_covers_pages_beyond_256() -> Result<(), GraphError> {
         db.checkpoint()?;
     }
 
-    let page_size = graphlite::PAGE_SIZE as u64;
+    let page_size = nervusdb::PAGE_SIZE as u64;
     let file_pages = std::fs::metadata(&db_path)?.len() / page_size;
     assert!(
         file_pages > 512,
@@ -654,7 +654,7 @@ fn test_page_checksum_covers_pages_beyond_256() -> Result<(), GraphError> {
     // 从磁盘读取该页并校验：必须报出校验和错误，而不是静默返回坏数据。
     // `verify_page_on_disk` 绕过缓冲池缓存，读的是磁盘上的实际内容。
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         match db.verify_page_on_disk(victim_page) {
             Err(GraphError::PageChecksumMismatch { page_id, .. }) => {
                 assert_eq!(
@@ -687,7 +687,7 @@ fn test_multiple_readers_coexist_with_one_writer_excluded() -> Result<(), GraphE
 
     // 建库并 checkpoint，使 WAL 为空（只读打开要求无可回放内容）
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         db.with_transaction(|tx| {
             for i in 1..=5 {
                 tx.add_node(HashSet::from(["N".to_string()]), props(i))?;
@@ -698,14 +698,14 @@ fn test_multiple_readers_coexist_with_one_writer_excluded() -> Result<(), GraphE
     }
 
     // 多个读者共存
-    let r1 = GraphLite::open_read_only(&db_path)?;
-    let r2 = GraphLite::open_read_only(&db_path)?;
-    let r3 = GraphLite::open_read_only(&db_path)?;
+    let r1 = NervusDb::open_read_only(&db_path)?;
+    let r2 = NervusDb::open_read_only(&db_path)?;
+    let r3 = NervusDb::open_read_only(&db_path)?;
     assert!(r1.is_read_only() && r2.is_read_only() && r3.is_read_only());
     assert_eq!(r1.node_count(), 5, "reader must see the committed data");
 
     // 有读者时写者被拒绝
-    let writer = GraphLite::open(&db_path);
+    let writer = NervusDb::open(&db_path);
     assert!(
         writer.is_err(),
         "a writer must be refused while readers hold shared locks"
@@ -729,15 +729,15 @@ fn test_multiple_readers_coexist_with_one_writer_excluded() -> Result<(), GraphE
     drop(r1);
     drop(r2);
     drop(r3);
-    let w = GraphLite::open(&db_path)?;
+    let w = NervusDb::open(&db_path)?;
     assert!(
-        GraphLite::open_read_only(&db_path).is_err(),
+        NervusDb::open_read_only(&db_path).is_err(),
         "a reader must be refused while a writer holds the exclusive lock"
     );
     drop(w);
 
     // 写者退出后读者再次可用 —— 证明锁确实随 Drop 释放，没有泄漏
-    let again = GraphLite::open_read_only(&db_path)?;
+    let again = NervusDb::open_read_only(&db_path)?;
     assert_eq!(again.node_count(), 5);
 
     Ok(())
@@ -754,7 +754,7 @@ fn test_read_only_open_refuses_pending_wal_replay() -> Result<(), GraphError> {
 
     // 写入但**不** checkpoint：WAL 中留有已提交页
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         db.with_transaction(|tx| {
             for i in 1..=5 {
                 tx.add_node(HashSet::from(["N".to_string()]), props(i))?;
@@ -763,7 +763,7 @@ fn test_read_only_open_refuses_pending_wal_replay() -> Result<(), GraphError> {
         })?;
     }
 
-    let err = match GraphLite::open_read_only(&db_path) {
+    let err = match NervusDb::open_read_only(&db_path) {
         Ok(_) => panic!("read-only open must fail while the WAL has committed pages"),
         Err(e) => e,
     };
@@ -781,11 +781,11 @@ fn test_read_only_open_refuses_pending_wal_replay() -> Result<(), GraphError> {
 
     // 用读写句柄打开一次即可回放；此后只读可用且能看到全部数据
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         assert_eq!(db.node_count(), 5);
         db.checkpoint()?;
     }
-    let ro = GraphLite::open_read_only(&db_path)?;
+    let ro = NervusDb::open_read_only(&db_path)?;
     assert_eq!(
         ro.node_count(),
         5,
@@ -813,7 +813,7 @@ fn test_unique_constraint_full_semantics() -> Result<(), GraphError> {
         (HashSet::from(["Character".to_string()]), p)
     };
 
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 无约束时重名是允许的
     db.add_node(named("林渊").0, named("林渊").1)?;
@@ -832,7 +832,7 @@ fn test_unique_constraint_full_semantics() -> Result<(), GraphError> {
 
     // 干净数据上声明成功
     let clean_path = dir.path().join("clean.db");
-    let db2 = GraphLite::open(&clean_path)?;
+    let db2 = NervusDb::open(&clean_path)?;
     db2.add_node(named("林渊").0, named("林渊").1)?;
     db2.create_unique_constraint("Character", "name")?;
     assert_eq!(
@@ -865,7 +865,7 @@ fn test_unique_constraint_full_semantics() -> Result<(), GraphError> {
     // 约束跨重启持久化并继续生效
     db2.checkpoint()?;
     drop(db2);
-    let reopened = GraphLite::open(&clean_path)?;
+    let reopened = NervusDb::open(&clean_path)?;
     assert_eq!(
         reopened.unique_constraints(),
         vec![("Character".to_string(), "name".to_string())],
@@ -891,7 +891,7 @@ fn test_backup_produces_consistent_independent_copy() -> Result<(), GraphError> 
     let src = dir.path().join("src.db");
     let bak = dir.path().join("bak.db");
 
-    let db = GraphLite::open(&src)?;
+    let db = NervusDb::open(&src)?;
     let mut ids: Vec<u64> = Vec::new();
     db.with_transaction(|tx| {
         for i in 1..=100u64 {
@@ -913,7 +913,7 @@ fn test_backup_produces_consistent_independent_copy() -> Result<(), GraphError> 
 
     // 副本独立可开：释放源句柄（排他锁）后单独打开副本
     drop(db);
-    let restored = GraphLite::open(&bak)?;
+    let restored = NervusDb::open(&bak)?;
     assert_eq!(restored.node_count(), 100);
     assert_eq!(restored.edge_count(), 99);
 
@@ -947,7 +947,7 @@ fn test_backup_refuses_to_overwrite() -> Result<(), GraphError> {
     let src = dir.path().join("s.db");
     let bak = dir.path().join("b.db");
 
-    let db = GraphLite::open(&src)?;
+    let db = NervusDb::open(&src)?;
     db.add_node(HashSet::from(["N".to_string()]), props(1))?;
     db.backup(&bak)?;
 
@@ -975,7 +975,7 @@ fn test_backup_refuses_to_overwrite() -> Result<(), GraphError> {
 fn test_vacuum_reports_reclaimable_pages() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("vac.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     let mut ids = Vec::new();
     db.with_transaction(|tx| {
@@ -1039,12 +1039,12 @@ fn test_read_only_handle_rejects_every_write_path() -> Result<(), GraphError> {
     let db_path = dir.path().join("ro_writes.db");
 
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         db.add_node(HashSet::from(["N".to_string()]), props(1))?;
         db.checkpoint()?;
     }
 
-    let ro = GraphLite::open_read_only(&db_path)?;
+    let ro = NervusDb::open_read_only(&db_path)?;
     assert!(ro.is_read_only());
 
     // 逐条写路径。任何一条成功都意味着只读语义被破坏。
@@ -1101,7 +1101,7 @@ fn test_read_only_handle_rejects_every_write_path() -> Result<(), GraphError> {
 
     // 最关键的断言：库里确实什么都没变
     drop(ro);
-    let check = GraphLite::open(&db_path)?;
+    let check = NervusDb::open(&db_path)?;
     assert_eq!(check.node_count(), 1, "no node may have been created");
     let res = check.run_cypher("MATCH (n) RETURN count(*) AS n")?;
     assert_eq!(res.rows[0].values[0].as_i64(), Some(1));
@@ -1141,10 +1141,10 @@ fn test_open_refuses_non_database_files_without_modifying_them() -> Result<(), G
         std::fs::write(&path, &content)?;
         let before = std::fs::read(&path)?;
 
-        let result = GraphLite::open(&path);
+        let result = NervusDb::open(&path);
         assert!(
             result.is_err(),
-            "'{}' is not a GraphLite database and must be refused",
+            "'{}' is not a NervusDb database and must be refused",
             name
         );
 
@@ -1160,12 +1160,12 @@ fn test_open_refuses_non_database_files_without_modifying_them() -> Result<(), G
     // 反向对照：真正的「新库」两种形态必须仍然可用，否则上面的拒绝就是过度收紧
     let fresh = dir.path().join("fresh.db");
     {
-        let db = GraphLite::open(&fresh)?;
+        let db = NervusDb::open(&fresh)?;
         db.add_node(HashSet::from(["N".to_string()]), props(1))?;
         db.checkpoint()?;
     }
     assert_eq!(
-        GraphLite::open(&fresh)?.node_count(),
+        NervusDb::open(&fresh)?.node_count(),
         1,
         "opening a nonexistent path must still create a new database"
     );
@@ -1173,12 +1173,12 @@ fn test_open_refuses_non_database_files_without_modifying_them() -> Result<(), G
     let empty = dir.path().join("empty.db");
     std::fs::write(&empty, b"")?;
     {
-        let db = GraphLite::open(&empty)?;
+        let db = NervusDb::open(&empty)?;
         db.add_node(HashSet::from(["N".to_string()]), props(2))?;
         db.checkpoint()?;
     }
     assert_eq!(
-        GraphLite::open(&empty)?.node_count(),
+        NervusDb::open(&empty)?.node_count(),
         1,
         "a zero-length file must still be treated as a new database"
     );
@@ -1206,7 +1206,7 @@ fn test_graph_metadata_survives_beyond_one_page() -> Result<(), GraphError> {
         let db_path = dir.path().join(format!("meta_{}.db", count));
 
         {
-            let db = GraphLite::open(&db_path)?;
+            let db = NervusDb::open(&db_path)?;
             db.with_transaction(|tx| {
                 for i in 0..count {
                     let mut m = HashMap::new();
@@ -1228,7 +1228,7 @@ fn test_graph_metadata_survives_beyond_one_page() -> Result<(), GraphError> {
             db.checkpoint()?;
         }
 
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         assert_eq!(
             db.labels().len(),
             count,
@@ -1256,7 +1256,7 @@ fn test_graph_metadata_survives_beyond_one_page() -> Result<(), GraphError> {
 
 /// **唯一约束必须拦住每一条写入路径，而不只是 Rust API 的两个入口。**
 ///
-/// 这是为一个真实的严重缺陷写的：约束检查只挂在 `GraphLite::add_node` 与
+/// 这是为一个真实的严重缺陷写的：约束检查只挂在 `NervusDb::add_node` 与
 /// `update_node_property` 上，而 `Cypher CREATE`（`execute_create`、
 /// `apply_create_clause`）与 `Transaction::commit` 都直接调用 `DiskGraph::add_node`，
 /// 于是**绕过了约束**。
@@ -1273,14 +1273,14 @@ fn test_graph_metadata_survives_beyond_one_page() -> Result<(), GraphError> {
 #[test]
 fn test_unique_constraint_applies_to_every_write_path() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open(dir.path().join("uc_paths.db"))?;
+    let db = NervusDb::open(dir.path().join("uc_paths.db"))?;
 
     let named = |name: &str| {
         let mut p = HashMap::new();
         p.insert("name".to_string(), Value::from(name));
         (HashSet::from(["C".to_string()]), p)
     };
-    let count_of = |db: &GraphLite, name: &str| -> Result<i64, GraphError> {
+    let count_of = |db: &NervusDb, name: &str| -> Result<i64, GraphError> {
         let r = db.run_cypher(&format!(
             "MATCH (c:C) WHERE c.name = '{}' RETURN count(*) AS n",
             name
@@ -1295,7 +1295,7 @@ fn test_unique_constraint_applies_to_every_write_path() -> Result<(), GraphError
     // 1) Rust API
     assert!(
         db.add_node(named("林渊").0, named("林渊").1).is_err(),
-        "GraphLite::add_node must honour the constraint"
+        "NervusDb::add_node must honour the constraint"
     );
 
     // 2) Cypher CREATE —— 修复前这条会成功
@@ -1366,7 +1366,7 @@ fn test_unique_constraint_applies_to_every_write_path() -> Result<(), GraphError
 fn test_deleting_propertyless_edge_does_not_inflate_the_file() -> Result<(), GraphError> {
     let dir = tempdir()?;
     let db_path = dir.path().join("sentinel.db");
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     let a = db.add_node(HashSet::from(["N".to_string()]), HashMap::new())?;
     let b = db.add_node(HashSet::from(["N".to_string()]), HashMap::new())?;
@@ -1416,7 +1416,7 @@ fn test_deleting_propertyless_edge_does_not_inflate_the_file() -> Result<(), Gra
     db.checkpoint()?;
 
     drop(db);
-    let reopened = GraphLite::open(&db_path)?;
+    let reopened = NervusDb::open(&db_path)?;
     assert!(
         reopened.integrity_check()?.is_ok(),
         "the database must stay sound after these operations"
@@ -1445,7 +1445,7 @@ fn test_read_errors_do_not_masquerade_as_empty_results() -> Result<(), GraphErro
     let db_path = dir.path().join("truncated.db");
 
     {
-        let db = GraphLite::open(&db_path)?;
+        let db = NervusDb::open(&db_path)?;
         db.with_transaction(|tx| {
             for i in 0..3000i64 {
                 let mut m = HashMap::new();
@@ -1464,7 +1464,7 @@ fn test_read_errors_do_not_masquerade_as_empty_results() -> Result<(), GraphErro
         f.set_len(full / 3)?;
     }
 
-    let db = GraphLite::open(&db_path)?;
+    let db = NervusDb::open(&db_path)?;
 
     // 1) 查询必须报错，而不是静默返回 0 行
     let scanned = db.run_cypher("MATCH (n:T) RETURN count(*) AS n");
@@ -1517,12 +1517,12 @@ fn test_read_errors_do_not_masquerade_as_empty_results() -> Result<(), GraphErro
 #[test]
 fn test_transaction_queue_limit_reports_instead_of_splitting() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open_with_options(
+    let db = NervusDb::open_with_options(
         dir.path().join("queue_limit.db"),
-        GraphLiteOptions {
+        NervusDbOptions {
             buffer_pool_frames: 256,
             max_transaction_actions: 100,
-            ..GraphLiteOptions::default()
+            ..NervusDbOptions::default()
         },
     )?;
 
@@ -1560,12 +1560,12 @@ fn test_transaction_queue_limit_reports_instead_of_splitting() -> Result<(), Gra
 #[test]
 fn test_batch_enqueue_respects_the_limit() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open_with_options(
+    let db = NervusDb::open_with_options(
         dir.path().join("batch_limit.db"),
-        GraphLiteOptions {
+        NervusDbOptions {
             buffer_pool_frames: 256,
             max_transaction_actions: 50,
-            ..GraphLiteOptions::default()
+            ..NervusDbOptions::default()
         },
     )?;
 
@@ -1595,12 +1595,12 @@ fn test_batch_enqueue_respects_the_limit() -> Result<(), GraphError> {
 #[test]
 fn test_zero_limit_means_unlimited() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open_with_options(
+    let db = NervusDb::open_with_options(
         dir.path().join("no_limit.db"),
-        GraphLiteOptions {
+        NervusDbOptions {
             buffer_pool_frames: 256,
             max_transaction_actions: 0,
-            ..GraphLiteOptions::default()
+            ..NervusDbOptions::default()
         },
     )?;
 
@@ -1621,12 +1621,12 @@ fn test_zero_limit_means_unlimited() -> Result<(), GraphError> {
 #[test]
 fn test_update_and_remove_also_respect_the_limit() -> Result<(), GraphError> {
     let dir = tempdir()?;
-    let db = GraphLite::open_with_options(
+    let db = NervusDb::open_with_options(
         dir.path().join("mixed_limit.db"),
-        GraphLiteOptions {
+        NervusDbOptions {
             buffer_pool_frames: 256,
             max_transaction_actions: 10,
-            ..GraphLiteOptions::default()
+            ..NervusDbOptions::default()
         },
     )?;
 
@@ -1663,7 +1663,7 @@ fn test_update_and_remove_also_respect_the_limit() -> Result<(), GraphError> {
 // ```text
 // db.create_unique_constraint("P", "k");
 // drop(db);                              // 或 checkpoint 后重开
-// GraphLite::open(path).unique_constraints()   -> []      <- 约束消失
+// NervusDb::open(path).unique_constraints()   -> []      <- 约束消失
 // CREATE (:P {k: 1})                     -> 成功            <- 重复值被静默接受
 // ```
 //
@@ -1681,7 +1681,7 @@ fn test_unique_constraint_survives_reopen() -> Result<(), GraphError> {
     let path = dir.path().join("uc_reopen.db");
 
     {
-        let db = GraphLite::open(&path)?;
+        let db = NervusDb::open(&path)?;
         db.run_cypher("CREATE (:P {k: 1})")?;
         db.create_unique_constraint("P", "k")?;
         assert_eq!(
@@ -1692,7 +1692,7 @@ fn test_unique_constraint_survives_reopen() -> Result<(), GraphError> {
     }
 
     // 重开：约束必须还在
-    let db = GraphLite::open(&path)?;
+    let db = NervusDb::open(&path)?;
     assert_eq!(
         db.unique_constraints(),
         vec![("P".to_string(), "k".to_string())],
@@ -1726,13 +1726,13 @@ fn test_unique_constraint_survives_checkpoint() -> Result<(), GraphError> {
     let path = dir.path().join("uc_ckpt.db");
 
     {
-        let db = GraphLite::open(&path)?;
+        let db = NervusDb::open(&path)?;
         db.run_cypher("CREATE (:Q {v: 'a'})")?;
         db.create_unique_constraint("Q", "v")?;
         db.checkpoint()?;
     }
 
-    let db = GraphLite::open(&path)?;
+    let db = NervusDb::open(&path)?;
     assert_eq!(
         db.unique_constraints(),
         vec![("Q".to_string(), "v".to_string())],
@@ -1756,12 +1756,12 @@ fn test_constraint_and_schema_persist_together() -> Result<(), GraphError> {
     let path = dir.path().join("uc_schema.db");
 
     {
-        let db = GraphLite::open(&path)?;
+        let db = NervusDb::open(&path)?;
         db.run_cypher("CREATE (a:Lbl {k: 1})-[:ETYPE]->(b:Lbl {k: 2})")?;
         db.create_unique_constraint("Lbl", "k")?;
     }
 
-    let db = GraphLite::open(&path)?;
+    let db = NervusDb::open(&path)?;
     assert!(
         db.index_labels().contains(&"Lbl".to_string()),
         "标签必须存活"

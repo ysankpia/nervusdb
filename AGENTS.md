@@ -1,6 +1,6 @@
-# GraphLite-RS Agent Development Guidelines
+# NervusDB Agent Development Guidelines
 
-This document defines the architectural invariants, mental models, code contracts, and engineering workflows for AI agents and human contributors working on GraphLite-RS.
+This document defines the architectural invariants, mental models, code contracts, and engineering workflows for AI agents and human contributors working on NervusDB.
 
 ---
 
@@ -33,24 +33,24 @@ Any modification that violates these rules must be rejected immediately:
    - Adjacency traversal follows double-cyclic edge pointer chains across disk pages via `BufferPoolManager`. Never perform full table scans to find neighbors.
 
 4. **Slotted Property Pages & Packed Property Pointers**
-   - Variable-length property payloads must be packed into shared **Slotted Property Pages** (`SlottedPropPage`, magic `GLSP`): `Header(24B) | Slot Array (grows down) | free | Payload (grows up)`. Multiple records share one 4KB page; never allocate a whole page per entity.
+   - Variable-length property payloads must be packed into shared **Slotted Property Pages** (`SlottedPropPage`, magic `NVSP`): `Header(24B) | Slot Array (grows down) | free | Payload (grows up)`. Multiple records share one 4KB page; never allocate a whole page per entity.
    - `NodeRecord.prop_page_id` / `EdgeRecord.prop_page_id` are **packed property pointers**: high 24 bits = `PageId`, low 8 bits = `SlotId`. `0` means "no properties"; slot `0xFF` (`SLOT_OVERFLOW`) means "record lives in a `PropertyPage` overflow chain".
    - Records strictly larger than `INLINE_RECORD_MAX` (1KB) go to the overflow chain; records at or below it must be inlined into a slot.
    - Property payloads use the compact `PropCodec`/`PropReader` encoding (varint framing, ZigZag integers). Do **not** reintroduce `bincode(HashMap)` framing (~28 bytes/entity of pure overhead), and never intern property keys into `StringDict` (it would grow the header dictionary and risk overflow-page churn).
    - Deleting a record marks the slot dead; space is reclaimed by in-page `compact` when the page fills, and a fully drained page is chained into `first_free_prop_page`. Slot lookup hints live in a bounded `prop_page_hint` ring (`PROP_PAGE_HINT_CAPACITY`), which holds page numbers only, never graph topology.
 
 5. **Explicit Batched Transactions & Memory Budgets**
-   - Autocommitted single writes each cost one WAL append plus one fsync. Bulk ingestion must use `GraphLite::with_transaction` (Rust), `db.begin_transaction()` (Python/Node), and commit once so the whole batch shares **exactly one fsync**.
+   - Autocommitted single writes each cost one WAL append plus one fsync. Bulk ingestion must use `NervusDb::with_transaction` (Rust), `db.begin_transaction()` (Python/Node), and commit once so the whole batch shares **exactly one fsync**.
    - `BufferStats::wal_fsync_count` / `wal_frames_written` are the observable contract for this: a test asserting bulk-commit semantics asserts the fsync delta is exactly 1.
    - Standard buffer pool constants are exposed in public API:
      - `SMALL_POOL_FRAMES` (256 frames = 1MB)
      - `DEFAULT_BUFFER_POOL_FRAMES` (1024 frames = 4MB)
      - `MEDIUM_POOL_FRAMES` (4096 frames = 16MB)
      - `LARGE_POOL_FRAMES` (16384 frames = 64MB)
-   - Convenience constructor: `GraphLite::open_with_pool_mb(path, mb)` sets frames to `(mb * 256).max(2)`.
+   - Convenience constructor: `NervusDb::open_with_pool_mb(path, mb)` sets frames to `(mb * 256).max(2)`.
    - Test switch `Transaction::commit_unclustered()`: Forces per-edge sequential insertion to benchmark and assert mathematical/algorithmic equivalence against `commit()` two-phase batch weaving.
    - **The action queue is bounded.** `DEFAULT_MAX_TRANSACTION_ACTIONS` caps it
-     (configurable via `GraphLiteOptions::max_transaction_actions`; `0` = unlimited)
+     (configurable via `NervusDbOptions::max_transaction_actions`; `0` = unlimited)
      because a transaction holds every action in memory until commit.
      **Every** enqueue goes through `Transaction::push_op` — a second path that pushes
      to `ops` directly escapes the cap silently. Overflow is a hard error, never an
@@ -110,14 +110,14 @@ Any modification that violates these rules must be rejected immediately:
 
 11. **Exclusive Single-Writer Open (No Silent Multi-Writer Corruption)**
 
-- A database file may have **exactly one open handle** at a time, across processes and within one process. `GraphLite::open` must take an exclusive lock on `{path}` itself (`std::fs::File::try_lock`, stable since Rust 1.89 — never add a third-party dependency or a sidecar `.lock` file, which would break the two-file invariant). A contended open returns `GraphError::DatabaseLocked`.
+- A database file may have **exactly one open handle** at a time, across processes and within one process. `NervusDb::open` must take an exclusive lock on `{path}` itself (`std::fs::File::try_lock`, stable since Rust 1.89 — never add a third-party dependency or a sidecar `.lock` file, which would break the two-file invariant). A contended open returns `GraphError::DatabaseLocked`.
 - The lock MUST be acquired **before** `StorageEngine::open`, because WAL replay writes the main data file; locking afterwards already permits a racing replay.
 - `:memory:` mode takes no lock.
 - Rationale: without this, two writers each report success and the second write is silently lost.
 
 12. **Integrity Checking & No Silent Read Errors**
 
-- `GraphLite::integrity_check()` must remain read-only and must never auto-repair: repair strategies require separate design and explicit authorization.
+- `NervusDb::integrity_check()` must remain read-only and must never auto-repair: repair strategies require separate design and explicit authorization.
 - Validation must include a **degree-conservation oracle**: chain degree measured by walking on-disk chain pointers must equal expected degree measured by independently scanning the edge id space. Do not re-derive both sides from the same traversal — that is self-confirmation, not a check. Keep the oracle's result wired into the report; a computed-but-discarded accumulator is a defect.
 - `get_node` / `get_edge` are **lossy** (they fold storage errors into `None`) and must stay documented as such. Production code uses `try_get_node` / `try_get_edge`, which return `Result` and reserve `Ok(None)` for genuine absence.
 - Any new public read accessor must decide explicitly between lossy and error-preserving semantics.
@@ -130,10 +130,10 @@ Any modification that violates these rules must be rejected immediately:
 
 14. **Statement-Level Atomicity**
 
-- **Any Cypher write entry point must undo a partially applied statement before returning its error.** Use `GraphLite::rollback_failed_statement`; do not reimplement the sequence, because a second implementation will drift from the first.
+- **Any Cypher write entry point must undo a partially applied statement before returning its error.** Use `NervusDb::rollback_failed_statement`; do not reimplement the sequence, because a second implementation will drift from the first.
 - Rationale, measured: with no rollback, `UNWIND [2, 1, 3] AS v CREATE (n:Num {v: v})` failed on the duplicate `1` and left `{v: 2}` in the buffer pool. A later, unrelated `CREATE (:Other {x: 99})` committed it, so after reopening, `MATCH (n:Num)` returned the row the constraint had rejected. Partial writes are invisible until something else commits them, which is why this survived as long as statements only wrote a handful of records.
 - The sequence is: drain the modified-page set, restore each page from its transaction baseline (`BufferPoolManager::rollback_uncommitted_pages`), restore the allocator metadata snapshot, and `IndexManager::invalidate_all`. It mirrors `Transaction::commit`'s failure path on purpose — one semantics for both.
-- This is not a substitute for explicit transactions. A single statement is the unit of atomicity here; `GraphLite::with_transaction` remains the way to group several statements.
+- This is not a substitute for explicit transactions. A single statement is the unit of atomicity here; `NervusDb::with_transaction` remains the way to group several statements.
 
 ---
 
@@ -145,7 +145,7 @@ Workspace: `src/` (core, zero deps), `bindings/python`, `bindings/nodejs`, `test
 
 | Concern                                                                | Owner                                       |
 | ---------------------------------------------------------------------- | ------------------------------------------- |
-| Public facade, ACID coordination, locking entry points                 | `src/lib.rs` (`GraphLite`, `Transaction`)   |
+| Public facade, ACID coordination, locking entry points                 | `src/lib.rs` (`NervusDb`, `Transaction`)   |
 | Page layout, records, property codec, property pointers                | `src/page.rs`                               |
 | Page I/O and the buffer pool (eviction, STEAL spill, CRC mount points) | `src/buffer.rs`                             |
 | Addressing, disk adjacency, freelists, batch weave                     | `src/disk_graph.rs`                         |
@@ -261,11 +261,11 @@ the name are described in [`docs/testing.md`](docs/testing.md).
 - **Verify an SDK** (the dylib/so copy is required — the bindings do not load from
   `target/`):
   ```bash
-  cargo build -p graphlite-node && cp target/debug/libgraphlite_node.dylib bindings/nodejs/graphlite.node
+  cargo build -p nervusdb-node && cp target/debug/libnervusdb_node.dylib bindings/nodejs/nervusdb.node
   cd bindings/nodejs && node test.mjs
 
-  cargo build -p graphlite-python && cp target/debug/libgraphlite_python.dylib bindings/python/graphlite.so
-  cd bindings/python && PYTHONPATH=. python3 tests/test_graphlite.py
+  cargo build -p nervusdb-python && cp target/debug/libnervusdb_python.dylib bindings/python/nervusdb.so
+  cd bindings/python && PYTHONPATH=. python3 tests/test_nervusdb.py
   ```
 
 ---
@@ -329,7 +329,7 @@ CREATE (n {v: x})` must read `x`. But `MATCH` / `MERGE` pattern properties are
   matching); `UNWIND` is mutating only when it carries `CREATE`.
 - **`SET` / `DELETE` on a scalar binding is an error**, never a silent no-op.
 - **Statements are atomic**: a failed write statement is undone through
-  `GraphLite::rollback_failed_statement` before the error returns. Do not add a write
+  `NervusDb::rollback_failed_statement` before the error returns. Do not add a write
   entry point that skips it.
 - **Variable binding discipline**: contexts bind `Binding::Node(u64) | Binding::Edge(u64) | Binding::Value(Value)`.
   Never key a context by a raw `u64` alone; node and edge ids share a numbering space.
