@@ -754,3 +754,104 @@ fn test_limit_pushdown_does_not_drop_where_clause() -> Result<(), GraphError> {
 
     Ok(())
 }
+
+// =========================================================================
+// sum() 的整数精度与溢出
+// =========================================================================
+/// **`sum()` 对整数必须精确，且溢出必须报错。**
+///
+/// 这是为一个真实的静默错误写的：原来的实现把整数求和借道 `f64` 再转回 `i64`，
+/// 而 f64 的尾数只有 53 位。实测：
+///
+/// ```text
+/// 写入 9007199254740993 (2^53 + 1)  ->  sum() 读回 9007199254740992
+/// 两个该值相加 期望 18014398509481986  ->  读回 18014398509481984
+/// ```
+///
+/// 差 1 且**没有任何提示**。`i64::MAX + 1` 也会静默饱和成 `i64::MAX`。
+///
+/// 修复后：全整数走 `checked_add` 的 i64 累加，溢出返回明确错误；混合类型仍返回
+/// `Float`（既有语义不变）；空集仍返回 `Int(0)`。
+#[test]
+fn test_sum_is_exact_for_integers_and_reports_overflow() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = GraphLite::open(dir.path().join("sum.db"))?;
+
+    let add = |label: &str, v: Value| -> Result<(), GraphError> {
+        let mut m = HashMap::new();
+        m.insert("v".to_string(), v);
+        db.add_node(HashSet::from([label.to_string()]), m)?;
+        Ok(())
+    };
+
+    // 2^53 + 1：f64 无法精确表示的最小整数，旧实现必错
+    let big: i64 = (1i64 << 53) + 1;
+    add("A", Value::Int(big))?;
+    let r = db.run_cypher("MATCH (n:A) RETURN sum(n.v) AS s")?;
+    assert_eq!(
+        r.rows[0].values[0].as_i64(),
+        Some(big),
+        "a single value above 2^53 must survive sum() exactly"
+    );
+
+    // 两个大值相加：误差会被放大
+    add("A", Value::Int(big))?;
+    let r = db.run_cypher("MATCH (n:A) RETURN sum(n.v) AS s")?;
+    assert_eq!(
+        r.rows[0].values[0].as_i64(),
+        Some(big * 2),
+        "sum of two large integers must be exact"
+    );
+
+    // 溢出必须报错，不得静默饱和或回绕
+    let db2 = GraphLite::open(dir.path().join("sum_overflow.db"))?;
+    {
+        let mut m = HashMap::new();
+        m.insert("v".to_string(), Value::Int(i64::MAX));
+        db2.add_node(HashSet::from(["B".to_string()]), m.clone())?;
+        db2.add_node(HashSet::from(["B".to_string()]), m)?;
+    }
+    let overflow = db2.run_cypher("MATCH (n:B) RETURN sum(n.v) AS s");
+    assert!(
+        overflow.is_err(),
+        "sum() overflowing i64 must be an error, not a saturated value; got {:?}",
+        overflow.map(|r| r.rows[0].values[0].clone())
+    );
+
+    // 混合类型仍返回 Float（既有语义不得回退）
+    let db3 = GraphLite::open(dir.path().join("sum_mixed.db"))?;
+    {
+        let mut m = HashMap::new();
+        m.insert("v".to_string(), Value::Int(2));
+        db3.add_node(HashSet::from(["C".to_string()]), m)?;
+        let mut m = HashMap::new();
+        m.insert("v".to_string(), Value::Float(0.5));
+        db3.add_node(HashSet::from(["C".to_string()]), m)?;
+    }
+    let r = db3.run_cypher("MATCH (n:C) RETURN sum(n.v) AS s")?;
+    assert_eq!(
+        r.rows[0].values[0].as_f64(),
+        Some(2.5),
+        "a mixed int/float set must sum as a float"
+    );
+
+    // 空集返回 Int(0)
+    let r = db3.run_cypher("MATCH (n:NoSuchLabel) RETURN sum(n.v) AS s")?;
+    assert_eq!(
+        r.rows[0].values[0].as_i64(),
+        Some(0),
+        "sum over zero rows is 0"
+    );
+
+    // 普通规模仍正确
+    let db4 = GraphLite::open(dir.path().join("sum_small.db"))?;
+    for i in 1..=100i64 {
+        let mut m = HashMap::new();
+        m.insert("v".to_string(), Value::from(i));
+        db4.add_node(HashSet::from(["D".to_string()]), m)?;
+    }
+    let r = db4.run_cypher("MATCH (n:D) RETURN sum(n.v) AS s")?;
+    assert_eq!(r.rows[0].values[0].as_i64(), Some(5050));
+
+    Ok(())
+}

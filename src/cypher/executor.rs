@@ -597,14 +597,32 @@ impl<'a> CypherReadOnlyExecutor<'a> {
             AggregateFunc::Sum => {
                 if collected.is_empty() {
                     Value::Int(0)
-                } else {
-                    let all_int = collected.iter().all(|v| matches!(v, Value::Int(_)));
-                    let sum_f: f64 = collected.iter().filter_map(|v| v.as_f64()).sum();
-                    if all_int {
-                        Value::Int(sum_f as i64)
-                    } else {
-                        Value::Float(sum_f)
+                } else if collected.iter().all(|v| matches!(v, Value::Int(_))) {
+                    // 全整数时**必须用 i64 累加**，不能借道 f64。
+                    //
+                    // f64 的尾数只有 53 位，超过 2^53 的整数无法精确表示。原来的实现
+                    // 是 `sum as f64` 再 `as i64`，于是：
+                    //
+                    // ```text
+                    // 写入 9007199254740993 (2^53+1) -> sum() 读回 9007199254740992
+                    // ```
+                    //
+                    // 差 1 且**没有任何提示**。这类静默错误正是本项目一直在消除的。
+                    let mut acc: i64 = 0;
+                    for v in &collected {
+                        let Value::Int(i) = v else {
+                            unreachable!("checked all-Int above")
+                        };
+                        acc = acc.checked_add(*i).ok_or_else(|| {
+                            GraphError::General(format!(
+                                "sum() overflowed i64 (adding {} to {})",
+                                i, acc
+                            ))
+                        })?;
                     }
+                    Value::Int(acc)
+                } else {
+                    Value::Float(collected.iter().filter_map(|v| v.as_f64()).sum())
                 }
             }
             AggregateFunc::Avg => {

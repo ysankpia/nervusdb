@@ -16,7 +16,23 @@ user has to act on them:
 
 ## [Unreleased]
 
-_No unreleased changes yet._
+### Fixed
+
+- **`sum()` lost precision on integers above 2^53.** The aggregate computed its
+  total through `f64` and cast back to `i64`, and an `f64` mantissa holds only 53
+  bits. Measured:
+
+  ```text
+  write 9007199254740993 (2^53 + 1)  ->  sum() reads back 9007199254740992
+  two such values, expected 18014398509481986  ->  reads 18014398509481984
+  ```
+
+  Off by one, with no indication. `i64::MAX + 1` also saturated silently.
+
+  All-integer sets now accumulate with `checked_add` and report an overflow error
+  rather than saturating or wrapping. Mixed int/float sets still return `Float`,
+  and an empty set still returns `Int(0)` — both unchanged.
+
 
 ## [1.0.0] — 2026-09-12
 
