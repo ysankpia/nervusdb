@@ -21,8 +21,8 @@ For the invariants that any change must preserve, see
   1MB): LRU eviction, per-frame pin/unpin reference counting, and dirty-page
   tracking.
 - Every graph operation pulls the pages it needs through the pool. Resident
-  memory is bounded by the pool size regardless of dataset size, so a 100GB graph
-  running with a 4MB pool stays within 4MB of page cache.
+  memory is bounded by the pool size rather than the dataset size (measured on a
+  4.34 GB graph in a 1 GiB pool), so a graph far larger than RAM stays queryable.
 
 Two details matter more than they look:
 
@@ -236,8 +236,9 @@ zero errors). `open` now takes an exclusive lock on `{path}` via
 sidecar file. The lock is acquired **before** WAL replay, because replay writes
 the main file; locking afterwards would already have raced.
 
-**Integrity checking.** The data file has no page checksums, so structural
-validation is what exists. `integrity_check()` is read-only and never repairs.
+**Integrity checking.** Every data page carries a CRC32 (see section 13), and
+`integrity_check()` sweeps them before any content check, naming the bad pages.
+Beyond that, structural validation is what exists. `integrity_check()` is read-only and never repairs.
 Its core is a **degree-conservation oracle**: chain degree measured by walking the
 on-disk pointers must equal expected degree measured by independently scanning the
 edge id space. Deriving both sides from one traversal would be self-confirmation,
@@ -257,16 +258,17 @@ process abort.
 
 ## 12. Storage format versioning
 
-`DB_PAGE_VERSION` is currently `3`. Version 2 (slotted property pages) and
-version 1 (one 4KB property page per entity) are **not readable**: `open` returns
-an explicit error directing you to export with `.dump` and re-import. It never
-silently reinterprets an old file.
+`DB_PAGE_VERSION` is currently `4`, and **this is the frozen format** — see
+`FORMAT.md` for the byte-level specification and the stability promise. Versions 1,
+2 and 3 are **not readable**: `open` returns an explicit error directing you to
+export with `.dump` and re-import. It never silently reinterprets an old file, and
+the check runs before any write, including WAL replay.
 
 The logical dump (`dump_cypher`) emits `CREATE` plus `SET`, so replaying into an
 existing node **replaces** properties rather than appending, which makes it
 idempotent and doubles as the migration path.
 
-## 13. Page CRCs (version 3)
+## 13. Page CRCs (introduced in version 3, current at version 4)
 
 Version 2 checksummed WAL frames but not the pages already in `{path}`, so a bit
 flip or a half-written page was read back as "not found" and the graph quietly

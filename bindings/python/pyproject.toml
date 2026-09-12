@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "graphlite"
-version = "1.0.0-rc.3"
+version = "1.0.0"
 description = "Python bindings for GraphLite-RS, an embedded single-file property graph database"
 readme = "README.md"
 authors = [{ name = "GraphLite-RS Contributors" }]

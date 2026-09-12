@@ -197,7 +197,7 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         }
 
         let start_pat = &pattern.nodes[0];
-        let candidate_start_nodes = self.find_initial_candidates(start_pat, where_clause);
+        let candidate_start_nodes = self.find_initial_candidates(start_pat, where_clause)?;
 
         let mut matched = Vec::new();
         for start_id in candidate_start_nodes {
@@ -239,7 +239,7 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         }
 
         let start_pat = &pattern.nodes[0];
-        let candidate_start_nodes = self.find_initial_candidates(start_pat, where_clause);
+        let candidate_start_nodes = self.find_initial_candidates(start_pat, where_clause)?;
 
         let mut matched = Vec::new();
         for start_id in candidate_start_nodes {
@@ -258,7 +258,20 @@ impl<'a> CypherReadOnlyExecutor<'a> {
                 ctx.insert(var.clone(), Binding::Node(start_id));
             }
 
-            self.match_path_step(pattern, 0, start_id, &ctx, &mut matched)?;
+            // 下推到本起点的行先收进临时缓冲，**过滤 WHERE 之后**才计入 cap。
+            //
+            // 这里不能直接把 `match_path_step` 的输出并进 `matched`：`cap` 统计的
+            // 必须是「已经满足 WHERE 的行数」。若先按未过滤的行数截断，`LIMIT n`
+            // 就可能返回少于 n 行——而那些被丢掉的行里本来有满足条件的。
+            let mut produced = Vec::new();
+            self.match_path_step(pattern, 0, start_id, &ctx, &mut produced)?;
+
+            match where_clause {
+                Some(w) => {
+                    matched.extend(produced.into_iter().filter(|c| self.eval_expr_truthy(w, c)))
+                }
+                None => matched.extend(produced),
+            }
         }
 
         Ok(matched)
@@ -709,32 +722,39 @@ impl<'a> CypherReadOnlyExecutor<'a> {
     }
 
     /// 起始候选集检索：智能命中属性索引或标签索引，回退走流式磁盘页扫描
+    /// 推导起点候选节点。
+    ///
+    /// 返回 `Result` 而非 `Vec`：全表扫描路径原来是
+    /// `all_node_ids().unwrap_or_default()`，于是**读错误会变成空候选集**，
+    /// 查询静默返回 0 行。实测把数据库截断到 1/3 后，`MATCH (n:T) RETURN count(*)`
+    /// 返回 0（原 3000 节点）且不报任何错——调用方看到的是「这张表是空的」，
+    /// 而真相是「有一页读不出来」。这正是 AGENTS.md §12 禁止的静默读错误。
     fn find_initial_candidates(
         &self,
         node_pat: &NodePattern,
         where_clause: &Option<Expr>,
-    ) -> Vec<u64> {
+    ) -> Result<Vec<u64>, GraphError> {
         if let Some(lbl) = node_pat.labels.first() {
             if self.index_mgr.is_label_complete(lbl) {
                 for (key, val) in &node_pat.properties {
                     if let Some(set) = self.index_mgr.find_by_property_exact(lbl, key, val) {
-                        return set.iter().copied().collect();
+                        return Ok(set.iter().copied().collect());
                     }
                 }
 
                 if let (Some(ref w_expr), Some(ref v_name)) = (where_clause, &node_pat.variable) {
                     if let Some(candidates) = self.try_find_from_where_expr(lbl, w_expr, v_name) {
-                        return candidates;
+                        return Ok(candidates);
                     }
                 }
 
                 if let Some(set) = self.index_mgr.find_by_label(lbl) {
-                    return set.iter().copied().collect();
+                    return Ok(set.iter().copied().collect());
                 }
             }
         }
 
-        self.graph.all_node_ids().unwrap_or_default()
+        self.graph.all_node_ids()
     }
 
     fn try_find_from_where_expr(
@@ -1458,6 +1478,14 @@ impl<'a> CypherExecutor<'a> {
             for node_pat in &pattern.nodes {
                 let labels: HashSet<String> = node_pat.labels.iter().cloned().collect();
 
+                // 唯一约束必须在这里也过一遍：Cypher 直接调 `DiskGraph::add_node`，
+                // 绕过了 `GraphLite::add_node` 上的检查。
+                self.index_mgr.guard_unique_constraints(
+                    self.graph,
+                    &labels,
+                    &node_pat.properties,
+                    None,
+                )?;
                 let node_id = self
                     .graph
                     .add_node(labels.clone(), node_pat.properties.clone())?;
@@ -1633,6 +1661,13 @@ impl<'a> CypherExecutor<'a> {
                 }
 
                 let labels: HashSet<String> = node_pat.labels.iter().cloned().collect();
+                // 同上：约束闸门对 `MATCH ... CREATE` 路径同样必须生效
+                self.index_mgr.guard_unique_constraints(
+                    self.graph,
+                    &labels,
+                    &node_pat.properties,
+                    None,
+                )?;
                 let node_id = self
                     .graph
                     .add_node(labels.clone(), node_pat.properties.clone())?;

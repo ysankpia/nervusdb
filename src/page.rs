@@ -730,7 +730,20 @@ pub fn encode_props(props: &std::collections::HashMap<String, crate::graph::Valu
 pub fn decode_props(data: &[u8]) -> Option<std::collections::HashMap<String, crate::graph::Value>> {
     let mut reader = PropReader::new(data);
     let count = reader.read_varint()? as usize;
-    let mut props = std::collections::HashMap::with_capacity(count);
+    // 先用剩余字节数给 count 设界，再分配。
+    //
+    // `count` 来自磁盘上的 varint，可能被损坏或构造。不设界就
+    // `HashMap::with_capacity(count)`，一个 4 字节的坏值就能要求分配数 GB——
+    // 结果是内存耗尽或容量溢出 panic，而不是一个可诊断的错误。每一项至少要一个
+    // 长度前缀（≥1 字节），因此 `count > remaining` 必然不可能成立。
+    //
+    // 这与 `codec.rs`、`StringDict::decode`、`IndexCatalog::decode` 的做法一致：
+    // 那里的同类检查早已存在，只有这条属性解码路径漏了。
+    if count > reader.remaining() {
+        return None;
+    }
+
+    let mut props = std::collections::HashMap::with_capacity(count.min(reader.remaining()));
     for _ in 0..count {
         let key = reader.read_key()?;
         let value = reader.read_value()?;

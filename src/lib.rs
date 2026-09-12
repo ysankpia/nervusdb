@@ -408,39 +408,6 @@ impl GraphLite {
         Ok(())
     }
 
-    /// 写入前校验唯一约束；返回 `Err` 时该写入必须整体放弃。
-    ///
-    /// 遍历节点标签与属性的**笛卡尔关系**：约束声明在 `(:Label {prop})` 上，
-    /// 因此只有「节点带该标签 **且** 带该属性」才需要检查。
-    ///
-    /// `exclude` 是正在被更新的节点自身（新建时为 `None`）：更新一个节点的属性
-    /// 不应与它自己的旧值冲突。
-    fn check_unique_constraints(
-        index_mgr: &IndexManager,
-        labels: &HashSet<String>,
-        properties: &HashMap<String, Value>,
-        exclude: Option<u64>,
-    ) -> Result<(), GraphError> {
-        // 无约束时立即返回：这是绝大多数写入的路径，不应有任何额外开销
-        if index_mgr.unique_constraints().is_empty() {
-            return Ok(());
-        }
-        for label in labels {
-            for (prop, value) in properties {
-                if let Some((l, p, detail)) =
-                    index_mgr.check_unique_violation(label, prop, value, exclude)
-                {
-                    return Err(GraphError::UniqueConstraintViolation {
-                        label: l,
-                        prop: p,
-                        detail,
-                    });
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// 打开前校验磁盘格式版本，**早于任何写入**（含 WAL 回放）。
     ///
     /// 只读主文件的前 4096 字节——足够读到 magic 与版本字段，且不需要
@@ -455,17 +422,47 @@ impl GraphLite {
             Err(e) => return Err(GraphError::IoError(e)),
         };
 
-        let mut header = [0u8; crate::page::PAGE_SIZE];
-        // 短读说明文件比一页还小：尚无格式，放行
-        if std::io::Read::read(&mut file, &mut header).unwrap_or(0) < crate::page::PAGE_SIZE {
+        let len = file.metadata()?.len();
+
+        // 长度为 0 是唯一被认可的「空文件」形态：等同于文件不存在，可以初始化。
+        //
+        // **不能放宽到「全部字节为 0」。** 一个 4 KiB 全零文件更可能是被截断的
+        // 其它数据，而不是一个恰好还没写过任何内容的新库。把它当新库初始化会
+        // 静默覆盖用户的文件，而「打开」这个动作从不被期望具有破坏性。
+        if len == 0 {
             return Ok(());
+        }
+
+        let mut header = [0u8; crate::page::PAGE_SIZE];
+        if std::io::Read::read(&mut file, &mut header).unwrap_or(0) < crate::page::PAGE_SIZE {
+            return Err(GraphError::StorageError(format!(
+                "'{}' is {} bytes and does not start with a GraphLite header.\n\
+                 It is too small to be a GraphLite database and is not empty, so \
+                 opening it would risk overwriting whatever it actually contains.\n\
+                 Refusing to touch it. Move the file aside if you meant to create a \
+                 new database at this path.",
+                db_path.display(),
+                len
+            )));
         }
 
         let magic = &header[0..4];
         if magic != crate::page::DB_PAGE_MAGIC && magic != crate::page::DB_PAGE_MAGIC_LEGACY {
-            // 不是本项目的文件。交由后续路径处理（会按「新库」初始化），
-            // 这里不越权判定。
-            return Ok(());
+            // 非本项目的文件。**必须拒绝**：下面会走到「初始化新库」的路径并把
+            // Page 0 写掉，从而毁掉原文件。
+            //
+            // 修复前的行为正是直接放行（注释写着「交由后续路径处理」），实测结果是
+            // 一个 8 KB 的任意文件被打开、写入后前 8 KB 内容全部被覆盖。
+            return Err(GraphError::StorageError(format!(
+                "'{}' exists but is not a GraphLite database (its header does not \
+                 begin with the '{}' magic).\n\
+                 Refusing to open it: doing so would initialize the file and \
+                 overwrite its current contents.\n\
+                 If you meant to create a new database, choose a path that does not \
+                 exist yet.",
+                db_path.display(),
+                String::from_utf8_lossy(crate::page::DB_PAGE_MAGIC)
+            )));
         }
 
         let file_version = u32::from_le_bytes(
@@ -1097,7 +1094,16 @@ impl GraphLite {
             .map_err(|e| GraphError::General(e.to_string()))?;
 
         // 唯一约束校验必须在**任何写入之前**：否则失败会留下半个节点。
-        Self::check_unique_constraints(&inner.index_mgr, &labels, &properties, None)?;
+        // 统一走 `IndexManager` 上的闸门：它会在索引不可用时按需重建，
+        // 而不是把合法写入一并拒绝。
+        {
+            let GraphInner {
+                index_mgr,
+                disk_graph,
+                ..
+            } = &mut *inner;
+            index_mgr.guard_unique_constraints(disk_graph, &labels, &properties, None)?;
+        }
 
         let tx_id = inner.next_tx_id;
         inner.next_tx_id += 1;
@@ -1230,7 +1236,14 @@ impl GraphLite {
         if let Ok(Some(node)) = inner.disk_graph.get_node(id) {
             let mut props = HashMap::new();
             props.insert(key_str.clone(), val.clone());
-            Self::check_unique_constraints(&inner.index_mgr, &node.labels, &props, Some(id))?;
+            {
+                let GraphInner {
+                    index_mgr,
+                    disk_graph,
+                    ..
+                } = &mut *inner;
+                index_mgr.guard_unique_constraints(disk_graph, &node.labels, &props, Some(id))?;
+            }
         }
 
         inner
@@ -1376,20 +1389,33 @@ impl GraphLite {
 
     /// 检测全图是否存在有向环路（纯磁盘按页扫描，脱离全局锁并发执行）
     pub fn has_cycle(&self) -> bool {
+        self.try_has_cycle().unwrap_or(false)
+    }
+
+    /// 同 [`GraphLite::has_cycle`]，但**保留读错误**：`Ok(false)` 仅表示确实无环。
+    ///
+    /// 有损版本在损坏的库上会回答「没有环」——而它其实什么都没读到。需要区分
+    /// 「无环」与「读不出来」时用本函数。
+    pub fn try_has_cycle(&self) -> Result<bool, GraphError> {
         let graph = {
             let inner = self.inner.read_recover();
             inner.disk_graph.clone()
         };
-        algo::has_cycle(&graph)
+        algo::try_has_cycle(&graph)
     }
 
     /// 查找全图所有有向环路（脱离全局锁并发执行）
     pub fn find_cycles(&self) -> Vec<Vec<u64>> {
+        self.try_find_cycles().unwrap_or_default()
+    }
+
+    /// 同 [`GraphLite::find_cycles`]，但**保留读错误**。
+    pub fn try_find_cycles(&self) -> Result<Vec<Vec<u64>>, GraphError> {
         let graph = {
             let inner = self.inner.read_recover();
             inner.disk_graph.clone()
         };
-        algo::find_cycles(&graph)
+        algo::try_find_cycles(&graph)
     }
 
     /// PageRank 阻尼迭代：评估全图节点影响力（默认阻尼 0.85、最长 100 轮、容差 1e-6）
@@ -1614,7 +1640,11 @@ impl Transaction {
     ///
     /// 逐条 `add_node` 每次都要取一次 `GraphInner` 的**全局写锁**，仅为分配一个
     /// 自增 ID。跨语言边界（FFI）本身不贵，贵的是「每条记录一次的固定开销」。
-    /// 实测 Python SDK 逐条写入约 42k ops/s，而原生路径在同一规模下约 550k。
+    ///
+    /// 本函数消除的是**锁流量**，不是吞吐量级：实测（两侧均为 release 构建，
+    /// 见 `docs/benchmarks.md`）Python 逐条 355k ops/s、原生 382k ops/s，
+    /// 差距在 15% 以内。此处曾引用 42k vs 550k 的说法，那组数字来自
+    /// debug 绑定对 release 核心的比较，已撤回。
     ///
     /// 本函数把 N 次加解锁压成**一次**：一次性预留 N 个 ID（仍在一次加锁内完成，
     /// 因为 Freelist 遍历需要读记录），此后在**锁外**构造事务动作。
@@ -1883,23 +1913,45 @@ impl Transaction {
                     id,
                     labels,
                     properties,
-                } => inner
-                    .disk_graph
-                    .insert_node_with_id_exact(*id, labels.clone(), properties.clone())
-                    .map(|_| {
-                        for l in labels {
-                            inner.index_mgr.insert_label(l, *id);
-                            inner.disk_graph.index_catalog.labels.insert(l.clone());
-                            for (k, v) in properties {
-                                inner.index_mgr.insert_property(l, k, v.clone(), *id);
-                                inner
-                                    .disk_graph
-                                    .index_catalog
-                                    .properties
-                                    .insert((l.clone(), k.clone()));
+                } => {
+                    // 唯一约束闸门：事务提交同样不得绕过。
+                    // 放在 apply 阶段（而非 `Transaction::add_node`）是有意的——
+                    // 这样一次违例会让**整个事务**原子失败并干净回滚，而不是留下
+                    // 一半已入队的动作。
+                    //
+                    // 先解构借用两个字段：`guard_unique_constraints` 需要同时拿到
+                    // `&mut IndexManager` 与 `&DiskGraph`，而它们是 `inner` 的两个
+                    // 字段，直接写 `&inner.disk_graph` 会与 `inner.index_mgr` 的
+                    // 可变借用冲突。
+                    let GraphInner {
+                        index_mgr,
+                        disk_graph,
+                        ..
+                    } = &mut *inner;
+                    index_mgr
+                        .guard_unique_constraints(disk_graph, labels, properties, None)
+                        .and_then(|_| {
+                            disk_graph.insert_node_with_id_exact(
+                                *id,
+                                labels.clone(),
+                                properties.clone(),
+                            )
+                        })
+                        .map(|_| {
+                            for l in labels {
+                                inner.index_mgr.insert_label(l, *id);
+                                inner.disk_graph.index_catalog.labels.insert(l.clone());
+                                for (k, v) in properties {
+                                    inner.index_mgr.insert_property(l, k, v.clone(), *id);
+                                    inner
+                                        .disk_graph
+                                        .index_catalog
+                                        .properties
+                                        .insert((l.clone(), k.clone()));
+                                }
                             }
-                        }
-                    }),
+                        })
+                }
                 TxAction::AddEdge {
                     id,
                     src_id,

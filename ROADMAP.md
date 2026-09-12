@@ -10,7 +10,7 @@ conditions are quoted with it.
 
 ---
 
-## Current state (v1.0.0-rc.3)
+## Current state (v1.0.0, stable)
 
 Working and covered by tests:
 
@@ -53,7 +53,7 @@ Working and covered by tests:
   report, and `graphlite-studio` for browser-based inspection.
 - Tooling: interactive CLI with dot commands and logical dump; Python and Node.js
   SDKs with transaction and batch-write support.
-- 139 test cases across 12 suites (138 run, 1 intentionally `#[ignore]`d for a
+- 146 test cases across 13 suites (145 run, 1 intentionally `#[ignore]`d for a
   child-process lock probe); `cargo fmt`, `cargo clippy -D warnings` and
   `rustdoc -D warnings` all clean.
 

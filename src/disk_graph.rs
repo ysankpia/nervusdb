@@ -434,36 +434,50 @@ impl DiskGraph {
                 bpm.protect_page(edge_dir);
             }
 
+            // 元数据解码失败必须**报错**，不能 `if let Ok(..)` 吞掉。
+            //
+            // 修复前这四处都是静默忽略：字典一旦解码不了，`self.dict` 就保持为空，
+            // 于是重开后标签与边类型全部消失，而调用方只看到「图模式是空的」——
+            // 数据损坏被伪装成「这个库本来就没标签」。这类静默降级正是
+            // AGENTS.md §12 禁止的读错误隐藏。
             if self.dict_page_id != INVALID_PAGE_ID && self.dict_page_id != 0 {
                 let payload = Self::read_overflow_payload_internal(&mut bpm, self.dict_page_id)?;
-                if let Ok(d) = StringDict::decode(&payload) {
-                    self.dict = d;
-                }
+                self.dict = StringDict::decode(&payload).map_err(|e| {
+                    GraphError::StorageError(format!(
+                        "dictionary is unreadable (page {}): {}",
+                        self.dict_page_id, e
+                    ))
+                })?;
             } else if inline_dict_len > 0 && inline_dict_len <= HeaderPage::MAX_INLINE_PAYLOAD_SIZE
             {
                 let dict_slice = &header_bytes[HeaderPage::INLINE_PAYLOAD_OFFSET
                     ..HeaderPage::INLINE_PAYLOAD_OFFSET + inline_dict_len];
-                if let Ok(d) = StringDict::decode(dict_slice) {
-                    self.dict = d;
-                }
+                self.dict = StringDict::decode(dict_slice).map_err(|e| {
+                    GraphError::StorageError(format!("inline dictionary is unreadable: {}", e))
+                })?;
             }
 
             if self.index_catalog_page_id != INVALID_PAGE_ID && self.index_catalog_page_id != 0 {
-                if let Ok(payload) =
-                    Self::read_overflow_payload_internal(&mut bpm, self.index_catalog_page_id)
-                {
-                    if let Ok(cat) = crate::index::IndexCatalog::decode(&payload) {
-                        self.index_catalog = cat;
-                    }
-                }
+                let payload =
+                    Self::read_overflow_payload_internal(&mut bpm, self.index_catalog_page_id)?;
+                self.index_catalog = crate::index::IndexCatalog::decode(&payload).map_err(|e| {
+                    GraphError::StorageError(format!(
+                        "index catalog is unreadable (page {}): {}",
+                        self.index_catalog_page_id, e
+                    ))
+                })?;
             } else if inline_cat_len > 0
                 && inline_dict_len + inline_cat_len <= HeaderPage::MAX_INLINE_PAYLOAD_SIZE
             {
                 let cat_start = HeaderPage::INLINE_PAYLOAD_OFFSET + inline_dict_len;
                 let cat_slice = &header_bytes[cat_start..cat_start + inline_cat_len];
-                if let Ok(cat) = crate::index::IndexCatalog::decode(cat_slice) {
-                    self.index_catalog = cat;
-                }
+                self.index_catalog =
+                    crate::index::IndexCatalog::decode(cat_slice).map_err(|e| {
+                        GraphError::StorageError(format!(
+                            "inline index catalog is unreadable: {}",
+                            e
+                        ))
+                    })?;
             }
         } else {
             bpm.unpin_page(HEADER_PAGE_ID, false);
@@ -996,9 +1010,11 @@ impl DiskGraph {
             is_write,
         )?;
         if let Some(pid) = res {
+            // 用 `lock_recover` 而非 `.lock().unwrap()`：AGENTS.md §13 禁止后者。
+            // 这里只缓存一个页号提示，中毒后继续使用是安全的——丢了它只是少一次
+            // 缓存命中，不影响正确性；而 panic 会终止整个进程。
             allocator
-                .lock()
-                .unwrap()
+                .lock_recover()
                 .node_page_cache
                 .insert(logical_page, pid);
         }
@@ -1073,9 +1089,9 @@ impl DiskGraph {
             is_write,
         )?;
         if let Some(pid) = res {
+            // 同上：这是可重建的缓存提示，中毒恢复优于进程终止
             allocator
-                .lock()
-                .unwrap()
+                .lock_recover()
                 .edge_page_cache
                 .insert(logical_page, pid);
         }
@@ -1183,6 +1199,62 @@ impl DiskGraph {
         Ok(data)
     }
 
+    /// 把一段元数据（字典或索引目录）写入溢出页链，按 `MAX_PAYLOAD` 分块。
+    ///
+    /// ## 为什么要分块成链
+    ///
+    /// 元数据（`StringDict`、`IndexCatalog`）会随图模式增长：每个标签、每种边类型、
+    /// 每个被索引的属性都占一条。单页只能装 4088 字节——约 140 个标签——而
+    /// `PropertyPage::encode` 对超长载荷是**静默截断**的。
+    ///
+    /// 修复前正是「单页 + 截断」：超过约 80 个标签后，字典在写盘时被切掉一半，
+    /// 重开时解码失败、错误又被静默吞掉，于是整个图模式消失。改为分块成链后，
+    /// 容量不再有这一层上限。
+    ///
+    /// `is_dict = true` 写 `dict_page_id`，否则写 `index_catalog_page_id`。
+    fn write_metadata_chain(
+        bpm: &mut BufferPoolManager,
+        allocator: &Arc<Mutex<AllocatorMeta>>,
+        tx_modified: &Arc<Mutex<HashSet<PageId>>>,
+        existing_head: PageId,
+        payload: &[u8],
+    ) -> Result<PageId, GraphError> {
+        let chunk_size = PropertyPage::MAX_PAYLOAD;
+        let num_chunks = payload.len().div_ceil(chunk_size).max(1);
+
+        // 复用既有头页，不足则继续从溢出空闲链取
+        let mut pages: Vec<PageId> = Vec::with_capacity(num_chunks);
+        if existing_head != INVALID_PAGE_ID && existing_head != 0 {
+            pages.push(existing_head);
+        }
+        while pages.len() < num_chunks {
+            pages.push(Self::raw_allocate_overflow_page(
+                bpm,
+                allocator,
+                tx_modified,
+            )?);
+        }
+
+        for (i, &pid) in pages.iter().enumerate() {
+            let next_pid = pages.get(i + 1).copied().unwrap_or(INVALID_PAGE_ID);
+            let start = i * chunk_size;
+            let end = (start + chunk_size).min(payload.len());
+            let encoded = PropertyPage::encode(next_pid, &payload[start..end]);
+            let fid = bpm.fetch_page(pid)?;
+            {
+                let frame = bpm.get_frame_mut(fid);
+                frame.data.copy_from_slice(&encoded);
+            }
+            bpm.unpin_page(pid, true);
+            bpm.mark_page_uncommitted(pid);
+            if let Ok(mut set) = tx_modified.lock() {
+                set.insert(pid);
+            }
+        }
+
+        Ok(pages[0])
+    }
+
     /// 同步元数据到 Page 0 (包含直接页槽位与紧凑内联字典与索引目录)
     pub fn sync_header(&mut self) -> Result<(), GraphError> {
         let mut bpm = self.bpm.lock_recover();
@@ -1200,49 +1272,35 @@ impl DiskGraph {
             if dict_bytes.len() <= HeaderPage::MAX_INLINE_PAYLOAD_SIZE / 2 {
                 inline_dict_len = dict_bytes.len() as u32;
             } else {
-                if self.dict_page_id == INVALID_PAGE_ID || self.dict_page_id == 0 {
-                    if let Ok(pid) = Self::raw_allocate_overflow_page(
-                        &mut bpm,
-                        &self.allocator,
-                        &self.tx_modified_pages,
-                    ) {
-                        self.dict_page_id = pid;
-                    }
-                }
-                if self.dict_page_id != INVALID_PAGE_ID && self.dict_page_id != 0 {
-                    let encoded = PropertyPage::encode(INVALID_PAGE_ID, &dict_bytes);
-                    if let Ok(dict_fid) = bpm.fetch_page(self.dict_page_id) {
-                        let dict_frame = bpm.get_frame_mut(dict_fid);
-                        dict_frame.data.copy_from_slice(&encoded);
-                        bpm.unpin_page(self.dict_page_id, true);
-                        bpm.mark_page_uncommitted(self.dict_page_id);
-                    }
-                }
+                // 字典放不下内联区，改走**溢出页链**。
+                //
+                // 修复前这里只写单页：`PropertyPage::encode` 会把载荷静默截断到
+                // `MAX_PAYLOAD`（4088 字节），而读取侧遇到截断数据会解码失败、
+                // 又被 `if let Ok(..)` 吞掉——结果是字典整体退化为空。
+                // 实测阈值：80 个标签（约 2.3KB）就会全部丢失，重开后 `.schema`
+                // 与标签列表都是空的。
+                //
+                // 溢出链必须按 `MAX_PAYLOAD` 分块并串起来，与属性载荷走同一条路径。
+                self.dict_page_id = Self::write_metadata_chain(
+                    &mut bpm,
+                    &self.allocator,
+                    &self.tx_modified_pages,
+                    self.dict_page_id,
+                    &dict_bytes,
+                )?;
             }
 
             if cat_bytes.len() + (inline_dict_len as usize) <= HeaderPage::MAX_INLINE_PAYLOAD_SIZE {
                 inline_cat_len = cat_bytes.len() as u32;
             } else {
-                if self.index_catalog_page_id == INVALID_PAGE_ID || self.index_catalog_page_id == 0
-                {
-                    if let Ok(pid) = Self::raw_allocate_overflow_page(
-                        &mut bpm,
-                        &self.allocator,
-                        &self.tx_modified_pages,
-                    ) {
-                        self.index_catalog_page_id = pid;
-                    }
-                }
-                if self.index_catalog_page_id != INVALID_PAGE_ID && self.index_catalog_page_id != 0
-                {
-                    let encoded = PropertyPage::encode(INVALID_PAGE_ID, &cat_bytes);
-                    if let Ok(fid) = bpm.fetch_page(self.index_catalog_page_id) {
-                        let f = bpm.get_frame_mut(fid);
-                        f.data.copy_from_slice(&encoded);
-                        bpm.unpin_page(self.index_catalog_page_id, true);
-                        bpm.mark_page_uncommitted(self.index_catalog_page_id);
-                    }
-                }
+                // 与字典同理：索引目录也可能超过单页，必须分块成链
+                self.index_catalog_page_id = Self::write_metadata_chain(
+                    &mut bpm,
+                    &self.allocator,
+                    &self.tx_modified_pages,
+                    self.index_catalog_page_id,
+                    &cat_bytes,
+                )?;
             }
         }
 
@@ -1597,7 +1655,14 @@ impl DiskGraph {
             .read_varint()
             .ok_or_else(|| GraphError::SerializationError("corrupted node label count".into()))?
             as usize;
-        let mut labels = HashSet::with_capacity(label_count);
+        // 同 `decode_props`：count 来自磁盘，先按剩余字节设界再分配，
+        // 否则一个损坏的 varint 就能触发数 GB 的分配请求。
+        if label_count > reader.remaining() {
+            return Err(GraphError::SerializationError(
+                "corrupted node label count (exceeds payload)".into(),
+            ));
+        }
+        let mut labels = HashSet::with_capacity(label_count.min(reader.remaining()));
         for _ in 0..label_count {
             let label = reader
                 .read_key()
@@ -1609,7 +1674,12 @@ impl DiskGraph {
             .read_varint()
             .ok_or_else(|| GraphError::SerializationError("corrupted node property count".into()))?
             as usize;
-        let mut properties = HashMap::with_capacity(prop_count);
+        if prop_count > reader.remaining() {
+            return Err(GraphError::SerializationError(
+                "corrupted node property count (exceeds payload)".into(),
+            ));
+        }
+        let mut properties = HashMap::with_capacity(prop_count.min(reader.remaining()));
         for _ in 0..prop_count {
             let key = reader.read_key().ok_or_else(|| {
                 GraphError::SerializationError("corrupted node property key".into())
@@ -1883,10 +1953,23 @@ impl DiskGraph {
 
         // 1. 头插法插入源节点出边链
         let old_src_first = src_node.first_outgoing_edge_id;
+        // 无属性的边必须写 `PROP_PTR_NONE`（0），**不能写 `INVALID_PAGE_ID`**。
+        //
+        // 两者数值相同（都是 `u32::MAX`），而 `u32::MAX` 正是
+        // `PROP_PTR_OVERFLOW` 哨兵——含义是「属性位于根页 0x00FFFFFF 的溢出链」。
+        // 于是删除这样一条边时，`free_edge_properties` 会把一个**并不存在的页
+        // 16777215** 当作溢出链回收：它进入溢出空闲链并被标记为脏，随之写进 WAL、
+        // 在 checkpoint 时落到主文件的 68,719,472,640 偏移处。
+        //
+        // 实测后果：删掉一条无属性边，数据库文件从 12KB 变成 **64 GiB**（正好顶到
+        // 格式上限），而 `backup()` / `vacuum()` 会把这个体积一并复制出去。
+        //
+        // 批量织网路径（`insert_edges_batch`）一直用的是正确的 `PROP_PTR_NONE`，
+        // 只有这里写错，因此这是单条插入路径独有的缺陷。
         let prop_page_id = if !properties.is_empty() {
             self.write_edge_properties(&properties)?
         } else {
-            INVALID_PAGE_ID
+            crate::page::PROP_PTR_NONE
         };
 
         let new_edge = EdgeRecord {
@@ -2187,7 +2270,10 @@ impl DiskGraph {
         if let Some(mut dst_node) = self.read_node_record(dst_id)? {
             let mut curr = dst_node.first_incoming_edge_id;
             let mut prev = 0;
-            while curr != 0 {
+            // 环检测守卫：链指针损坏或并发改写可能形成环，无守卫会死循环。
+            // AGENTS.md §10 要求所有指针遍历都带 `seen` 集合，此处曾遗漏。
+            let mut seen = HashSet::new();
+            while curr != 0 && seen.insert(curr) {
                 if curr == edge_id {
                     if prev != 0 {
                         if let Some(mut p) = self.read_edge_record(prev)? {
@@ -2478,8 +2564,12 @@ impl DiskGraph {
         // 2. 扫描间接目录页
         let mut current_dir = self.allocator.lock_recover().node_dir_page_id;
         let mut dir_order = 0;
+        // 环检测守卫：目录链损坏时（`next_dir` 指回上游或自身）无守卫会死循环。
+        // AGENTS.md §10 要求所有指针遍历都带 `seen`，此处曾遗漏——同文件的
+        // `walk_free_chain` 就同时带 `seen` 与步数上限，属不一致的疏漏。
+        let mut seen_dirs = HashSet::new();
 
-        while current_dir != INVALID_PAGE_ID && current_dir != 0 {
+        while current_dir != INVALID_PAGE_ID && current_dir != 0 && seen_dirs.insert(current_dir) {
             let fid = bpm.fetch_page(current_dir)?;
             let frame = bpm.get_frame(fid);
             let next_dir = DirectoryPage::get_next_dir(&frame.data);

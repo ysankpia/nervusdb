@@ -52,16 +52,17 @@ These are recorded in [ROADMAP.md](ROADMAP.md) rather than treated as security
 bugs. If you believe one of them is worse than documented, that is worth
 reporting:
 
-- Only one handle may open a database at a time; there is no read-only
-  multi-reader mode.
-- The data file has **no page checksums**. Structure is validated by
-  `integrity_check`, but bit rot that stays structurally consistent is not
-  detected. Fixing this is a storage format change.
+- A reader and a writer cannot hold the database **simultaneously**: read-only
+  handles take a shared lock and coexist with each other, but a write handle
+  excludes them and vice versa. (A tool that only holds its lock per request, like
+  `graphlite-studio`, can interleave with a writer between requests.)
+- Every data page carries a **CRC32**, verified on read, with a directory chain
+  that is itself checksummed. Bit rot is detected rather than silently returned as
+  missing data. This landed in format version 3 and is documented in `FORMAT.md`.
 - A single very large transaction holds its whole action list in memory. Chunk
   huge writes.
 
 ## Supported versions
 
-This is a pre-release (`v1.0.0-rc.3`). Security fixes are applied to `main` and
-to the most recent tag; there are no maintained older branches yet. Once 1.0 is
-released, this section will list which series receive fixes.
+`v1.0.0` is the current stable release. Security fixes are applied to `main` and
+backported to the most recent tag; there are no maintained older branches yet.

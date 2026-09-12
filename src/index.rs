@@ -273,6 +273,69 @@ impl IndexManager {
         None
     }
 
+    /// 写入前的唯一约束闸门：任何写入路径都必须先过这里。
+    ///
+    /// ## 为什么放在 `IndexManager` 上
+    ///
+    /// 约束状态（`catalog.unique_constraints`）与判定所需的索引都在这里，因此这是
+    /// 唯一一个「三条写入路径都够得着」的位置。
+    ///
+    /// 此前这个检查只存在于 `GraphLite::add_node` / `update_node_property` 两个
+    /// Rust API 入口上，而 `Cypher CREATE`（`execute_create`、`apply_create_clause`）
+    /// 与 `Transaction::commit` 都直接调用 `DiskGraph::add_node`，于是**绕过了约束**：
+    /// 实测声明 `(:C {name})` 唯一后，`CREATE (x:C {name:'林渊'})` 会静默插入第二个
+    /// 同名节点，事务路径同样。
+    ///
+    /// ## 索引未建立时按需重建，而不是拒绝写入
+    ///
+    /// 初版在索引不可用时直接返回违例，理由是「无法验证唯一性就不该放行」。那个
+    /// 判断的**方向**是对的，**手段**是错的：`invalidate_all()`（事务失败时调用）
+    /// 会把所有标签降级为 `Registered`，于是失败一次之后，该标签上的**任何**写入
+    /// 都会被永久拒绝——包括完全合法的取值。实测表现为「写完一个重名被拒之后，
+    /// 连不重名的也写不进去了」。
+    ///
+    /// 现在改为按需重建：需要索引就先建，建完再判定。代价是一次全标签扫描，但只在
+    /// 索引失效后的首次约束检查上发生，且换来的是「约束既不放过重复，也不误杀合法
+    /// 写入」——这正是约束应有的语义。
+    pub fn guard_unique_constraints(
+        &mut self,
+        graph: &crate::disk_graph::DiskGraph,
+        labels: &std::collections::HashSet<String>,
+        properties: &std::collections::HashMap<String, Value>,
+        exclude: Option<u64>,
+    ) -> Result<(), GraphError> {
+        if self.catalog.unique_constraints.is_empty() {
+            return Ok(());
+        }
+
+        // 只有「本次写入涉及的标签」才需要索引，避免为无关标签付扫描代价
+        for label in labels {
+            let constrained = self
+                .catalog
+                .unique_constraints
+                .iter()
+                .any(|c| &c.label == label);
+            if constrained && !self.is_label_complete(label) {
+                self.ensure_label_index(graph, label);
+            }
+        }
+
+        for label in labels {
+            for (prop, value) in properties {
+                if let Some((l, p, detail)) =
+                    self.check_unique_violation(label, prop, value, exclude)
+                {
+                    return Err(GraphError::UniqueConstraintViolation {
+                        label: l,
+                        prop: p,
+                        detail,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// 检查**指定的** `(label, prop)` 在现有数据上是否已有重复值。
     ///
     /// 返回每个重复取值及其节点集合；空表示可以安全声明约束。

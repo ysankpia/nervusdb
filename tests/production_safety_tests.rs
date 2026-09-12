@@ -4,6 +4,7 @@
 //! 1. 同一数据库被两个句柄同时写入导致静默丢数据；
 //! 2. 数据页损坏后静默返回错误/缺失数据而无人报错。
 
+use graphlite::page::PAGE_SIZE;
 use graphlite::{GraphError, GraphLite, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -1104,6 +1105,399 @@ fn test_read_only_handle_rejects_every_write_path() -> Result<(), GraphError> {
     assert_eq!(check.node_count(), 1, "no node may have been created");
     let res = check.run_cypher("MATCH (n) RETURN count(*) AS n")?;
     assert_eq!(res.rows[0].values[0].as_i64(), Some(1));
+
+    Ok(())
+}
+
+/// **打开一个非数据库文件不得破坏它。**
+///
+/// 这是为一个真实的发布阻断级缺陷写的：`check_format_version` 对 magic 不匹配的
+/// 文件直接放行（注释写着「交由后续路径处理」），而后续路径把它当**新库初始化**，
+/// 调用 `sync_header()` 写掉 Page 0。实测：一个 8 KB 的任意文件被打开后，前 8 KB
+/// 内容全部被覆盖——`open` 这个动作静默毁掉了用户的文件。
+///
+/// 判据刻意收得很紧：只有「文件不存在」与「长度为 0」才算新库。一个 4 KiB 全零
+/// 文件也拒绝——它更可能是被截断的其它数据，而不是恰好没写过内容的新库。
+#[test]
+fn test_open_refuses_non_database_files_without_modifying_them() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        // 看起来像图片/压缩包：有内容、magic 不符
+        ("photo.png", (0..8192u32).map(|i| (i % 256) as u8).collect()),
+        // 一整页全零：最容易被误判成「空库」的形态
+        ("zeros.bin", vec![0u8; PAGE_SIZE]),
+        // 短文本：比一页短且非空
+        ("notes.txt", b"my important notes".to_vec()),
+        // 大文件：确认不是只对小文件生效
+        (
+            "big.dat",
+            (0..200_000u32).map(|i| (i * 7 % 251) as u8).collect(),
+        ),
+    ];
+
+    for (name, content) in cases {
+        let path = dir.path().join(name);
+        std::fs::write(&path, &content)?;
+        let before = std::fs::read(&path)?;
+
+        let result = GraphLite::open(&path);
+        assert!(
+            result.is_err(),
+            "'{}' is not a GraphLite database and must be refused",
+            name
+        );
+
+        // 本测试的核心断言：拒绝必须是无副作用的。
+        let after = std::fs::read(&path)?;
+        assert_eq!(
+            before, after,
+            "refusing to open '{}' must not modify it, but its bytes changed",
+            name
+        );
+    }
+
+    // 反向对照：真正的「新库」两种形态必须仍然可用，否则上面的拒绝就是过度收紧
+    let fresh = dir.path().join("fresh.db");
+    {
+        let db = GraphLite::open(&fresh)?;
+        db.add_node(HashSet::from(["N".to_string()]), props(1))?;
+        db.checkpoint()?;
+    }
+    assert_eq!(
+        GraphLite::open(&fresh)?.node_count(),
+        1,
+        "opening a nonexistent path must still create a new database"
+    );
+
+    let empty = dir.path().join("empty.db");
+    std::fs::write(&empty, b"")?;
+    {
+        let db = GraphLite::open(&empty)?;
+        db.add_node(HashSet::from(["N".to_string()]), props(2))?;
+        db.checkpoint()?;
+    }
+    assert_eq!(
+        GraphLite::open(&empty)?.node_count(),
+        1,
+        "a zero-length file must still be treated as a new database"
+    );
+
+    Ok(())
+}
+
+/// **图模式元数据（字典与索引目录）必须能超过一页，且重开后完整。**
+///
+/// 这是为一个真实的发布阻断级缺陷写的：`sync_header` 把整个字典塞进**单页**，
+/// 而 `PropertyPage::encode` 对超长载荷是**静默截断**的。读取侧遇到截断数据解码
+/// 失败，又被 `if let Ok(..)` 吞掉，于是 `self.dict` 保持为空——
+///
+/// 实测阈值：**80 个标签（约 2.3KB）就会全部丢失**；重开后 `db.labels()` 返回空，
+/// 边类型退化为默认值，而调用方只看到「这个库本来就没标签」。数据损坏被伪装成
+/// 空模式。
+///
+/// 本测试覆盖阈值两侧与远超单页的规模，确保既修好了截断，也没把边界算错。
+#[test]
+fn test_graph_metadata_survives_beyond_one_page() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+
+    // 70 条在单页内（修复前恰好能过），200 与 2000 条远超单页
+    for count in [70usize, 200, 2000] {
+        let db_path = dir.path().join(format!("meta_{}.db", count));
+
+        {
+            let db = GraphLite::open(&db_path)?;
+            db.with_transaction(|tx| {
+                for i in 0..count {
+                    let mut m = HashMap::new();
+                    m.insert("i".to_string(), Value::from(i as i64));
+                    tx.add_node(HashSet::from([format!("Label{:016}", i)]), m)?;
+                }
+                // 边类型与标签共用同一个字典，一并验证
+                for i in 0..50u64 {
+                    tx.add_edge(
+                        i + 1,
+                        i + 2,
+                        format!("RelType{:010}", i),
+                        HashMap::new(),
+                        1.0,
+                    )?;
+                }
+                Ok(())
+            })?;
+            db.checkpoint()?;
+        }
+
+        let db = GraphLite::open(&db_path)?;
+        assert_eq!(
+            db.labels().len(),
+            count,
+            "all {} labels must survive a reopen",
+            count
+        );
+        assert_eq!(
+            db.edge_types().len(),
+            50,
+            "all 50 edge types must survive a reopen (they share the dictionary)"
+        );
+
+        // 节点本身也必须还在——元数据丢失时节点计数是对的，这个断言区分了两种情况
+        let total = db.run_cypher("MATCH (a) RETURN count(*) AS n")?;
+        assert_eq!(
+            total.rows[0].values[0].as_i64(),
+            Some(count as i64),
+            "node count must match for {} labels",
+            count
+        );
+    }
+
+    Ok(())
+}
+
+/// **唯一约束必须拦住每一条写入路径，而不只是 Rust API 的两个入口。**
+///
+/// 这是为一个真实的严重缺陷写的：约束检查只挂在 `GraphLite::add_node` 与
+/// `update_node_property` 上，而 `Cypher CREATE`（`execute_create`、
+/// `apply_create_clause`）与 `Transaction::commit` 都直接调用 `DiskGraph::add_node`，
+/// 于是**绕过了约束**。
+///
+/// 实测：声明 `(:C {name})` 唯一之后，
+/// - `CREATE (x:C {name:'林渊'})` 静默插入第二个同名节点
+/// - 事务里的 `add_node` 同样
+/// - 而 Rust 的 `add_node` 被正确拦住
+///
+/// 也就是说约束只在「用户恰好用 Rust API 写」时才生效——一条声明了却不生效的
+/// 约束比没有约束更危险，因为它会让人以为数据是干净的。
+///
+/// 本测试逐条覆盖每个写入口，并验证它**没有过度收紧**（不同值仍可写入）。
+#[test]
+fn test_unique_constraint_applies_to_every_write_path() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = GraphLite::open(dir.path().join("uc_paths.db"))?;
+
+    let named = |name: &str| {
+        let mut p = HashMap::new();
+        p.insert("name".to_string(), Value::from(name));
+        (HashSet::from(["C".to_string()]), p)
+    };
+    let count_of = |db: &GraphLite, name: &str| -> Result<i64, GraphError> {
+        let r = db.run_cypher(&format!(
+            "MATCH (c:C) WHERE c.name = '{}' RETURN count(*) AS n",
+            name
+        ))?;
+        Ok(r.rows[0].values[0].as_i64().unwrap_or(-1))
+    };
+
+    db.add_node(named("林渊").0, named("林渊").1)?;
+    db.create_unique_constraint("C", "name")?;
+    assert_eq!(count_of(&db, "林渊")?, 1);
+
+    // 1) Rust API
+    assert!(
+        db.add_node(named("林渊").0, named("林渊").1).is_err(),
+        "GraphLite::add_node must honour the constraint"
+    );
+
+    // 2) Cypher CREATE —— 修复前这条会成功
+    assert!(
+        db.run_cypher("CREATE (x:C {name: '林渊'})").is_err(),
+        "Cypher CREATE must honour the constraint"
+    );
+
+    // 3) 事务提交 —— 修复前这条也会成功
+    assert!(
+        db.with_transaction(|tx| {
+            tx.add_node(named("林渊").0, named("林渊").1)?;
+            Ok(())
+        })
+        .is_err(),
+        "a transaction must honour the constraint"
+    );
+
+    // 4) MATCH ... CREATE
+    assert!(
+        db.run_cypher("MATCH (c:C) CREATE (y:C {name: '林渊'})")
+            .is_err(),
+        "MATCH ... CREATE must honour the constraint"
+    );
+
+    // 5) 批量接口
+    assert!(
+        db.with_transaction(|tx| {
+            tx.add_nodes(vec![named("林渊")])?;
+            Ok(())
+        })
+        .is_err(),
+        "the batch API must honour the constraint"
+    );
+
+    // 关键收尾：一次都不许漏过去
+    assert_eq!(
+        count_of(&db, "林渊")?,
+        1,
+        "no write path may have created a duplicate"
+    );
+
+    // 反向对照：约束不得变成「这个标签不许再写」
+    db.add_node(named("苏晴").0, named("苏晴").1)?;
+    db.run_cypher("CREATE (z:C {name: '叶辰'})")?;
+    assert_eq!(count_of(&db, "苏晴")?, 1);
+    assert_eq!(count_of(&db, "叶辰")?, 1);
+
+    Ok(())
+}
+
+/// **删除一条无属性的边不得让文件膨胀到格式上限。**
+///
+/// 这是为一个真实的严重缺陷写的：单条边插入路径用 `INVALID_PAGE_ID` 表示「无属性」，
+/// 而它的数值（`u32::MAX`）恰好等于 `PROP_PTR_OVERFLOW` 哨兵——后者的含义是
+/// 「属性位于根页 0x00FFFFFF 的溢出链」。
+///
+/// 于是 `remove_edge` 把一个**并不存在的页 16777215** 当作溢出链回收：它进入溢出
+/// 空闲链并被标记为脏，随 WAL 写盘，在 checkpoint 时落到主文件偏移
+/// 68,719,472,640 处。
+///
+/// 实测后果：删掉一条无属性边，数据库文件从 12 KB 变成 **64 GiB**（正好顶到
+/// FORMAT.md 声明的格式上限），而 `backup()` 与 `vacuum()` 会把这个体积一并复制。
+///
+/// 批量织网路径一直用正确的 `PROP_PTR_NONE`，所以只有单条插入受影响——这也是这个
+/// 缺陷能在大量边测试中存活的原因：那些测试走的是批量路径。
+#[test]
+fn test_deleting_propertyless_edge_does_not_inflate_the_file() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("sentinel.db");
+    let db = GraphLite::open(&db_path)?;
+
+    let a = db.add_node(HashSet::from(["N".to_string()]), HashMap::new())?;
+    let b = db.add_node(HashSet::from(["N".to_string()]), HashMap::new())?;
+
+    // 单条插入 + 无属性：正是触发路径
+    let e = db.add_edge(a, b, "R", HashMap::new(), 1.0)?;
+    db.remove_edge(e)?;
+    db.checkpoint()?;
+
+    let size = std::fs::metadata(&db_path)?.len();
+    assert!(
+        size < 1024 * 1024,
+        "deleting a property-less edge inflated the file to {} bytes; \
+         the 'no properties' sentinel must not collide with the overflow sentinel",
+        size
+    );
+
+    // 重复增删不得累积膨胀
+    for _ in 0..50 {
+        let e = db.add_edge(a, b, "R", HashMap::new(), 1.0)?;
+        db.remove_edge(e)?;
+    }
+    db.checkpoint()?;
+    let size = std::fs::metadata(&db_path)?.len();
+    assert!(
+        size < 1024 * 1024,
+        "repeated add/delete of property-less edges accumulated {} bytes",
+        size
+    );
+
+    // 溢出页分配在之后仍然正常（确认修复没有破坏大属性的存储）
+    let mut m = HashMap::new();
+    m.insert("big".to_string(), Value::from("X".repeat(9000)));
+    let n = db.add_node(HashSet::from(["N".to_string()]), m)?;
+    let len = db.try_get_node(n)?.and_then(|node| {
+        node.get_prop("big")
+            .and_then(|v| v.as_str())
+            .map(|s| s.len())
+    });
+    assert_eq!(len, Some(9000), "multi-page properties must still work");
+
+    // 带属性的边删除也应当正常回收（对照：确认修复没有把回收关掉）
+    let mut props = HashMap::new();
+    props.insert("w".to_string(), Value::from(1.5));
+    let e2 = db.add_edge(a, b, "R", props, 1.0)?;
+    db.remove_edge(e2)?;
+    db.checkpoint()?;
+
+    drop(db);
+    let reopened = GraphLite::open(&db_path)?;
+    assert!(
+        reopened.integrity_check()?.is_ok(),
+        "the database must stay sound after these operations"
+    );
+
+    Ok(())
+}
+
+/// **读错误不得伪装成「空结果」。**
+///
+/// 两处静默吞错：
+/// 1. `find_initial_candidates` 用 `all_node_ids().unwrap_or_default()` 兜底，
+///    于是读错误变成**空候选集**——查询静默返回 0 行。
+/// 2. `algo::has_cycle` / `find_cycles` 把 `all_node_ids()` 的错误折叠成
+///    `false` / 空列表，于是损坏的库会回答「没有环」。
+///
+/// 实测：把数据库截断到 1/3 后，`MATCH (n:T) RETURN count(*)` 返回 **0**
+/// （原 3000 节点）且不报任何错；调用方看到的是「这张表是空的」，而真相是
+/// 「有一页读不出来」。这类降级正是 AGENTS.md §12 禁止的。
+///
+/// 修复后：查询路径**报错**；算法路径新增 `try_*` 变体保留错误，有损变体保持
+/// 原有签名（避免破坏公开 API），但文档写明其有损性。
+#[test]
+fn test_read_errors_do_not_masquerade_as_empty_results() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("truncated.db");
+
+    {
+        let db = GraphLite::open(&db_path)?;
+        db.with_transaction(|tx| {
+            for i in 0..3000i64 {
+                let mut m = HashMap::new();
+                m.insert("i".to_string(), Value::from(i));
+                tx.add_node(HashSet::from(["T".to_string()]), m)?;
+            }
+            Ok(())
+        })?;
+        db.checkpoint()?;
+    }
+
+    // 截断到 1/3：尾部若干页直接不存在
+    let full = std::fs::metadata(&db_path)?.len();
+    {
+        let f = std::fs::OpenOptions::new().write(true).open(&db_path)?;
+        f.set_len(full / 3)?;
+    }
+
+    let db = GraphLite::open(&db_path)?;
+
+    // 1) 查询必须报错，而不是静默返回 0 行
+    let scanned = db.run_cypher("MATCH (n:T) RETURN count(*) AS n");
+    assert!(
+        scanned.is_err(),
+        "a truncated database must not answer a scan with a silent 0; got {:?}",
+        scanned.map(|r| r.rows[0].values[0].clone())
+    );
+
+    // 2) 算法层的 try_* 变体必须把错误报出来
+    let cycle = db.try_has_cycle();
+    assert!(
+        cycle.is_err(),
+        "try_has_cycle must report the read error instead of answering `no cycles`"
+    );
+    assert!(
+        db.try_find_cycles().is_err(),
+        "try_find_cycles must report the read error"
+    );
+
+    // 3) 有损变体保持原签名（公开 API 不破坏），且其有损性已在文档写明
+    let lossy = db.has_cycle();
+    assert!(
+        !lossy,
+        "the lossy variant keeps its signature and folds the error to `false`"
+    );
+
+    // 4) 完整性检查仍应指出问题所在
+    let report = db.integrity_check()?;
+    assert!(
+        !report.is_ok(),
+        "integrity_check must report the truncated pages"
+    );
 
     Ok(())
 }

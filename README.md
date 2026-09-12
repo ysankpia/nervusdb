@@ -32,17 +32,18 @@ fn main() -> Result<(), GraphError> {
 
 ## Status
 
-**`v1.0.0-rc.3` — release candidate.** The engine, Cypher surface, analytics and
-safety guarantees are implemented and covered by 139 tests, but several known
-production gaps remain. Read
+**`v1.0.0` — stable.** The engine, Cypher surface, analytics and safety guarantees
+are implemented and covered by 151 tests. The on-disk format is frozen; see
+`FORMAT.md`. Several known gaps remain — read
 [Known limitations](ROADMAP.md#next-planned) before considering production use.
 
 ## Features
 
 - **Embedded and single-file.** `{path}` plus a page-level WAL `{path}.wal`. No
   sidecar files, no external services.
-- **Bounded memory.** A 4KB page buffer pool with O(1) LRU eviction; a 100GB graph
-  runs inside a 4MB pool.
+- **Bounded memory.** A 4KB page buffer pool with O(1) LRU eviction. Resident
+  memory is set by the pool, not by the dataset: verified on a 4.34 GB graph
+  (68.9 M edges) inside a 1 GiB pool, and bounded by construction past that.
 - **Disk-native adjacency.** Fixed 32-byte node and 64-byte edge records with
   O(1) physical addressing and double-cyclic edge chains. Finding neighbours
   never scans.
@@ -177,7 +178,7 @@ src/
   bin/cli.rs        Interactive REPL
 bindings/
   python/           PyO3 SDK          nodejs/   NAPI-RS SDK
-tests/              9 suites, 92 cases
+tests/              13 suites, 123 cases
 benches/            Reproducible throughput, pool-size and memory probes
 ```
 

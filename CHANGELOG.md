@@ -18,7 +18,7 @@ user has to act on them:
 
 _No unreleased changes yet._
 
-## [1.0.0-rc.3] — 2026-09-12
+## [1.0.0] — 2026-09-12
 
 ### Added
 
@@ -407,6 +407,219 @@ _No unreleased changes yet._
 
 ### Fixed
 
+- **A corrupted length prefix could request a multi-gigabyte allocation.**
+  `decode_props` and `decode_node_data` called `with_capacity(count)` where `count`
+  came straight from a varint on disk. A damaged or crafted 4-byte value would ask
+  for gigabytes — an out-of-memory abort or a capacity-overflow panic instead of a
+  diagnosable error.
+
+  Both now bound the count against the bytes actually remaining, which is the same
+  guard `codec.rs`, `StringDict::decode`, and `IndexCatalog::decode` already used.
+  Every entry costs at least a one-byte length prefix, so a count larger than the
+  remaining payload cannot be legitimate.
+
+
+- **Read errors were reported as empty results.** Two paths folded a storage
+  failure into a "nothing here" answer:
+
+  - `find_initial_candidates` used `all_node_ids().unwrap_or_default()`, so a read
+    error became an **empty candidate set** and the query returned 0 rows.
+  - `algo::has_cycle` / `find_cycles` folded the same error into `false` / an empty
+    list, so a damaged database would answer "no cycles" without having read
+    anything.
+
+  Measured: truncating a database to one third of its size made
+  `MATCH (n:T) RETURN count(*)` return **0** where 3,000 nodes had been — with no
+  error at all. The caller sees "this graph is empty"; the truth is "a page could
+  not be read".
+
+  The query path now propagates the error. For the algorithm path, the existing
+  signatures are part of the public API, so instead of changing them,
+  `try_has_cycle` and `try_find_cycles` were added alongside — matching the
+  `get_node` / `try_get_node` split the project already uses — and the lossy
+  variants are documented as such.
+
+
+- **`has_cycle()` and `find_cycles()` aborted the process on long chains.** Both
+  used recursive DFS, so recursion depth equalled path length. A 60,000-node chain
+  — legitimate data, and the natural shape of a citation or chapter chain — blew
+  the thread stack:
+
+  ```text
+  thread 'main' has overflowed its stack
+  fatal runtime error: stack overflow, aborting
+  ```
+
+  That is an **uncatchable abort**: a host application cannot `catch_unwind` it, and
+  the process dies. For an embedded database, letting valid data crash the process
+  is not an acceptable failure mode.
+
+  Both are now iterative with an explicit heap stack, so memory scales with the
+  data rather than with the stack limit. Verified on chains of 60,000 and 200,000
+  nodes, including the cyclic case, and confirmed by restoring the recursive
+  implementation and watching the test abort with SIGABRT.
+
+
+- **Deleting a property-less edge inflated the database file to 64 GiB.** The
+  single-edge insert path used `INVALID_PAGE_ID` to mean "no properties", but that
+  constant is `u32::MAX` — numerically identical to the `PROP_PTR_OVERFLOW`
+  sentinel, which means "properties live in the overflow chain rooted at page
+  `0x00FFFFFF`".
+
+  `remove_edge` therefore treated a **nonexistent page 16,777,215** as an overflow
+  chain: it pushed it onto the overflow freelist, marked it dirty, wrote it to the
+  WAL, and on checkpoint materialised it at file offset 68,719,472,640.
+
+  Measured: after deleting one property-less edge, the file went from 12 KB to
+  **68,719,476,736 bytes** — exactly the format limit documented in `FORMAT.md`.
+  `backup()` and `vacuum()` would carry that size along.
+
+  The batch weaving path always used the correct `PROP_PTR_NONE` (0), so only
+  single-edge insertion was affected. That is also why the extensive edge test
+  suites never caught it: they exercise the batch path.
+
+
+- **`LIMIT` push-down silently discarded `WHERE`, returning wrong rows.** The
+  fast path added for `LIMIT` used the predicate only to narrow the *candidate
+  start nodes* via the index; it never applied the row filter, which the normal
+  path does with a trailing `retain(eval_expr_truthy)`.
+
+  Measured on five nodes with `age` 10..50:
+
+  ```text
+  MATCH (n:P) WHERE n.age < 30 RETURN n.age LIMIT 5  ->  5 rows (expected 2)
+  MATCH (n:P) WHERE id(n) = 3 RETURN n.age LIMIT 1   ->  10   (expected 30)
+  ```
+
+  The verification written at the time missed it because every query it compared
+  had **no** `WHERE` clause — it only checked "with LIMIT" against "without LIMIT",
+  and both were wrong in the same way. The regression test now covers seven
+  predicate shapes (comparisons, `AND`/`OR`, `id()`), and asserts that the cap
+  counts only rows that pass the filter, so `LIMIT 10` cannot return fewer rows
+  than exist.
+
+- **Unique constraints were enforced on only two of five write paths.**
+  `GraphLite::add_node` and `update_node_property` checked them; `Cypher CREATE`,
+  `MATCH ... CREATE`, and `Transaction::commit` all call `DiskGraph::add_node`
+  directly and bypassed the check entirely.
+
+  Measured: after declaring `(:C {name})` unique, `CREATE (x:C {name:'林渊'})`
+  silently inserted a duplicate, as did a transaction — while the Rust API
+  correctly refused. A constraint that only holds for some callers is worse than
+  no constraint, because it implies the data is clean.
+
+  The check now lives on `IndexManager` (which owns both the constraint set and
+  the index needed to evaluate it) and all five paths route through it.
+
+- **A failed transaction made a constrained label permanently unwritable.**
+  `invalidate_all()` downgrades every label index to `Registered`, and the
+  constraint guard treated "index not built" as a violation. So after one
+  rejected duplicate, *every* subsequent write to that label failed — including
+  perfectly valid values:
+
+  ```text
+  CREATE (x:C {name:'林渊'})   -> rejected (correct)
+  CREATE (y:C {name:'苏晴'})   -> rejected (wrong: not a duplicate)
+  ```
+
+  The guard now rebuilds the index on demand instead of refusing. The original
+  reasoning ("if uniqueness cannot be verified, do not write") had the right
+  intent but the wrong remedy: refusing is only correct if the index can never be
+  rebuilt, and it can.
+
+
+- **Two places violated the project's own invariant 13: `.lock().unwrap()` in
+  library code.** `get_or_allocate_node_page` and `get_or_allocate_edge_page` used
+  it for a page-number cache. `AGENTS.md` forbids that pattern outright and
+  `src/sync_ext.rs` exists to replace it, so the documented guarantee was false as
+  shipped. Both now use `lock_recover`: these caches hold rebuildable hints, so
+  recovering from a poisoned lock costs at most one cache miss, while panicking
+  ends the process.
+
+- **Two pointer-traversal loops had no cycle guard**, against invariant 10's rule
+  that every `while curr != 0` walk carry a `seen` set. The incoming-chain walk in
+  `remove_edge` and the node page-directory walk could both spin forever on a
+  corrupted chain. The other eight walks in the same file already had guards, and
+  `walk_free_chain` right below the second one has both a guard and a step cap —
+  the omission was an inconsistency rather than a design choice.
+
+- **Documentation described the old format in three places**, and one of them
+  contradicted itself: `docs/architecture.md` said "the data file has no page
+  checksums" (section 11) while section 13 of the same file described the page
+  checksums, and both the version number and the section heading still said
+  version 3. `SECURITY.md` repeated the no-checksums claim and also stated that
+  only one handle may open a database, which stopped being true when shared read
+  locks landed. A reader could have concluded the release's central safety property
+  did not exist.
+
+- **A doc comment in the public API quoted retracted benchmark figures.**
+  `Transaction::add_nodes` said "Python ~42k ops/s vs native ~550k". Those were the
+  debug-vs-release artifacts retracted in this same release; the corrected
+  release-vs-release measurement is 355k vs 382k. The comment now states the
+  corrected numbers and what the method is actually for (lock traffic, not
+  throughput).
+
+- **Test counts were stale in four documents**, and `docs/testing.md` omitted three
+  suites entirely (studio, zero-dependency, equivalence) while understating others
+  (production safety said 12, it has 22). All now match the tree: 146 cases across
+  13 suites.
+
+- Two claims were made stronger than the evidence supported: a "100GB graph in a
+  4MB pool" (the largest dataset ever exercised is 4.34 GB) and the LiveJournal
+  figure appearing as two different numbers in `AGENTS.md` and
+  `docs/benchmarks.md` without noting they came from different releases. The first
+  now cites what was measured; the second carries its version.
+
+
+- **A graph with roughly 80 or more distinct labels lost its entire schema on
+  reopen.** `sync_header` wrote the label/edge-type dictionary into a **single**
+  page, and `PropertyPage::encode` silently truncates payloads beyond
+  `MAX_PAYLOAD` (4088 bytes, about 140 short labels). The read side then failed to
+  decode the truncated dictionary — and swallowed the error with
+  `if let Ok(..)`, leaving the dictionary empty.
+
+  Measured: 70 labels survived, **80 did not**. On reopen `db.labels()` returned
+  nothing and edge types degraded to the fallback, so the damage presented as "this
+  database simply has no schema" rather than as corruption.
+
+  Two changes, because either alone would have been a partial fix:
+
+  - Metadata (dictionary and index catalog) is now written as a **chain** of
+    overflow pages, chunked at `MAX_PAYLOAD`, removing the one-page ceiling
+    entirely. Verified from 70 to 2000 labels.
+  - All four metadata decode sites now **return an error** instead of ignoring it.
+    A corrupt dictionary must be reported, not silently reinterpreted as an empty
+    schema — the same rule as `AGENTS.md` §12 for reads.
+
+  Found during the v1.0.0 release audit by testing a dimension the suite had never
+  touched: every existing test used a handful of labels. The regression test covers
+  both sides of the old threshold (70 and 200) plus a size far beyond one page
+  (2000), and reverting the fix makes it fail.
+
+
+- **Opening a non-database file silently destroyed it.** `check_format_version`
+  passed through any file whose magic did not match — the comment said "let the
+  later path handle it", and the later path initialised it as a **new database**,
+  writing Page 0 over whatever was there.
+
+  Measured before the fix: an 8 KB file of arbitrary bytes opened successfully, and
+  after a single write its first 8 KB were overwritten. `open` is never expected to
+  be destructive, so this was release-blocking.
+
+  The criterion is now deliberately narrow: only a **nonexistent** path or a
+  **zero-length** file is treated as a new database. Everything else with a
+  non-GraphLite header is refused with an error that says why and what to do.
+
+  A 4 KiB all-zero file is refused too. It is the shape most likely to be mistaken
+  for "an empty database", but it is equally likely to be truncated data from
+  something else, and guessing wrong here destroys a file.
+
+  `test_open_refuses_non_database_files_without_modifying_them` asserts both halves:
+  the open fails, **and** the file's bytes are unchanged — the second part is what
+  actually pins the defect. It also checks the two legitimate new-database shapes
+  still work, so the check is not merely over-tightened.
+
+
 - **`graphlite-studio` died when its stdout reader went away.** `println!` panics
   if the write fails, and that panic happened on the main thread — so piping the
   output anywhere that stops reading (a test harness, `head`, a log collector)
@@ -761,5 +974,6 @@ Every figure now ships with its scenario and conditions — see the README
 benchmark section and `ROADMAP.md`. A number without its conditions is not
 accepted.
 
-[Unreleased]: https://github.com/ysankpia/graphlite/compare/v1.0.0-rc.1...HEAD
+[Unreleased]: https://github.com/ysankpia/graphlite/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/ysankpia/graphlite/releases/tag/v1.0.0
 [1.0.0-rc.1]: https://github.com/ysankpia/graphlite/releases/tag/v1.0.0-rc.1
