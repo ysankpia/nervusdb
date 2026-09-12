@@ -25,7 +25,7 @@ pub use c_api::*;
 pub use cypher::{
     execute_cypher, execute_mutate, execute_query, CypherResultSet, ExecuteResult, Row,
 };
-pub use disk_graph::{DiskGraph, GraphMetaSnapshot};
+pub use disk_graph::{AllocatorStats, DiskGraph, GraphMetaSnapshot};
 pub use graph::{Direction, Edge, GraphError, Node, Value};
 pub use index::IndexManager;
 pub use integrity::{check_integrity, IntegrityIssue, IntegrityIssueKind, IntegrityReport};
@@ -58,6 +58,41 @@ pub const FRAMES_PER_MB: usize = 256;
 /// 越过该值后在**写锁之外**触发一次 Checkpoint，避免长时间批量导入把 WAL
 /// 撑爆磁盘。设为 `0` 可关闭（见 [`GraphLiteOptions`]）。
 pub const DEFAULT_WAL_AUTO_CHECKPOINT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// [`GraphLite::vacuum`] 的结果报告。
+///
+/// 它是**只读诊断**，不是「已压缩 N 字节」的承诺：本引擎不截断数据文件
+/// （页号是逻辑到物理的映射，截断会破坏映射），因此 `file_bytes` 在调用前后
+/// 相同。给出实际数字而不是一个含糊的成功标志，是为了让调用方自行判断
+/// 空间状况，而不是相信一句「已优化」。
+#[derive(Debug, Clone)]
+pub struct VacuumReport {
+    /// 当前存活节点数
+    pub nodes_live: usize,
+    /// 当前存活边数
+    pub edges_live: usize,
+    /// 数据文件当前大小（字节）
+    pub file_bytes: u64,
+    /// 整页可复用的槽位属性页数
+    pub free_property_pages: usize,
+    /// 整页可复用的溢出页数
+    pub free_overflow_pages: usize,
+}
+
+impl VacuumReport {
+    /// 单行摘要，适合日志或 CLI 输出。
+    pub fn summary(&self) -> String {
+        format!(
+            "{} node(s), {} edge(s); file {} bytes; {} reusable property page(s), \
+             {} reusable overflow page(s)",
+            self.nodes_live,
+            self.edges_live,
+            self.file_bytes,
+            self.free_property_pages,
+            self.free_overflow_pages
+        )
+    }
+}
 
 /// 打开数据库时的可调参数。
 ///
@@ -671,6 +706,117 @@ impl GraphLite {
     /// 获取数据库主文件路径
     pub fn db_path(&self) -> &Path {
         &self.db_path
+    }
+
+    /// WAL 文件路径（`{path}.wal`）
+    pub fn wal_path(&self) -> PathBuf {
+        let mut s = self.db_path.as_os_str().to_os_string();
+        s.push(".wal");
+        PathBuf::from(s)
+    }
+
+    /// 生成一份**一致的**在线副本。
+    ///
+    /// ## 一致性从哪来
+    ///
+    /// 步骤顺序是关键：
+    ///
+    /// 1. **先 checkpoint**：把 WAL 的已提交页落回主文件并截断 WAL。此后主文件
+    ///    自身就是权威且完整的快照；不必也不该复制 WAL，否则副本可能带着半个
+    ///    事务。
+    /// 2. **持写锁复制**：整段复制在写锁内完成，因此期间没有并发写入，读到的页
+    ///    集合自洽。这比「边写边拷 + 增量捕获」简单得多，也不需要额外日志。
+    /// 3. **fsync 副本**：返回时数据确实在盘上。
+    ///
+    /// 目标路径已存在时**拒绝**，不覆盖：备份的价值在于「多一份」，静默覆盖可能
+    /// 抹掉上一份有效备份。
+    pub fn backup<P: AsRef<Path>>(&self, dest: P) -> Result<u64, GraphError> {
+        let dest = dest.as_ref().to_path_buf();
+
+        if dest.exists() {
+            return Err(GraphError::General(format!(
+                "Refusing to overwrite the existing file '{}'. \
+                 Backup creates a new copy; remove or rename the target first.",
+                dest.display()
+            )));
+        }
+        if dest == self.db_path {
+            return Err(GraphError::General(
+                "Backup target must differ from the source database path.".into(),
+            ));
+        }
+        if let Some(parent) = dest.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+
+        // 1. 清空 WAL，使主文件成为唯一权威副本
+        self.checkpoint()?;
+
+        // 2. 持写锁完成复制
+        let inner = self
+            .inner
+            .write()
+            .map_err(|e| GraphError::General(e.to_string()))?;
+
+        let copied = {
+            let src = std::fs::File::open(&self.db_path)?;
+            let mut reader = std::io::BufReader::with_capacity(1 << 20, src);
+            let mut out = std::fs::File::create(&dest)?;
+            let n = std::io::copy(&mut reader, &mut out)?;
+            out.sync_all()?;
+            n
+        };
+
+        // 副本要能独立打开：「两文件」不变量对它同样成立，故建一个空 WAL。
+        // 若省略，副本上第一次写入会因缺少 WAL 而多一次创建——不是错误，但
+        // 让副本与源库结构一致更可预期。
+        let mut wal_dest = dest.as_os_str().to_os_string();
+        wal_dest.push(".wal");
+        std::fs::File::create(PathBuf::from(wal_dest))?.sync_all()?;
+
+        drop(inner);
+        Ok(copied)
+    }
+
+    /// 回收已删除记录占据的空间，并报告实际情况。
+    ///
+    /// ## 它做什么、不做什么
+    ///
+    /// **记录槽位在删除时已即时回收**（`first_free_node_id` /
+    /// `first_free_edge_id` 链表），因此逻辑容量不会碎片化——新节点立刻复用被删
+    /// 节点的槽位。这是本项目与「删了要手动整理」的数据库的重要区别。
+    ///
+    /// 真正会闲置的是**属性页与溢出页**：记录被删除后其属性页链入 freelist，
+    /// 但要等下一次分配属性时才复用。
+    ///
+    /// `vacuum` 的承诺是：**执行 checkpoint 使状态收敛，并把可回收页与文件大小
+    /// 如实报告出来**。它**不截断文件**，因为页号是「逻辑页 → 物理页」的映射，
+    /// 截断会破坏该映射；这是有意的取舍——截断是唯一需要重写整个逻辑映射的操作，
+    /// 而它换来的空间对单机场景并不值得这个风险。
+    pub fn vacuum(&self) -> Result<VacuumReport, GraphError> {
+        self.reject_write("run vacuum")?;
+        self.checkpoint()?;
+
+        let inner = self
+            .inner
+            .read()
+            .map_err(|e| GraphError::General(e.to_string()))?;
+        let graph = &inner.disk_graph;
+
+        let file_bytes = std::fs::metadata(&self.db_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let alloc = graph.allocator_snapshot();
+
+        Ok(VacuumReport {
+            nodes_live: graph.node_count,
+            edges_live: graph.edge_count,
+            file_bytes,
+            free_property_pages: alloc.free_property_pages,
+            free_overflow_pages: alloc.free_overflow_pages,
+        })
     }
 
     /// 扫描数据库的结构完整性（只读，不修改任何页）。

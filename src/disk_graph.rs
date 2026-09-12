@@ -156,6 +156,20 @@ impl StringDict {
     }
 }
 
+/// 分配器的可回收空间统计（由 [`DiskGraph::allocator_snapshot`] 产出）。
+///
+/// 独立于 `AllocatorMeta`：元数据是内部状态（含页号与缓存），而这是一份面向
+/// 调用方的**只读报告**，刻意不含任何页号。
+#[derive(Debug, Clone, Default)]
+pub struct AllocatorStats {
+    /// 已分配页总数（文件高水位）
+    pub allocated_pages: PageId,
+    /// 整页可复用的槽位属性页数
+    pub free_property_pages: usize,
+    /// 整页可复用的溢出页数
+    pub free_overflow_pages: usize,
+}
+
 /// 内部物理页分配元数据
 #[derive(Debug, Clone)]
 pub struct AllocatorMeta {
@@ -2485,6 +2499,57 @@ impl DiskGraph {
     pub fn flush(&self) -> Result<(), GraphError> {
         let mut bpm = self.bpm.lock_recover();
         bpm.flush_all_pages()
+    }
+
+    /// 慢照分配器的可回收空间：沿空闲链走一遍，数出**整页可复用**的属性页与
+    /// 溢出页数量。
+    ///
+    /// 只统计页数，不返回页号列表——调用方（`vacuum` 报告）只需要规模，而返回
+    /// 列表会让一个诊断 API 携带 O(空闲页数) 的分配。
+    ///
+    /// 两条链都以「页首 4 字节 = 下一页」串联（与 `get_free_page` 的读取方式一致），
+    /// 因此走链过程中任何一次读取失败都视为链尾，不返回错误——这是一个只读诊断，
+    /// 不应因为遇到半损坏的链就让整个调用失败。
+    pub fn allocator_snapshot(&self) -> AllocatorStats {
+        let (prop_head, over_head, allocated) = {
+            let a = self.allocator.lock_recover();
+            (
+                a.first_free_prop_page,
+                a.first_free_overflow_page,
+                a.allocated_pages,
+            )
+        };
+
+        AllocatorStats {
+            allocated_pages: allocated,
+            free_property_pages: Self::count_free_chain(self, prop_head),
+            free_overflow_pages: Self::count_free_chain(self, over_head),
+        }
+    }
+
+    /// 沿一条空闲页链数节点；上限 `MAX_FREE_CHAIN_WALK` 防环。
+    fn count_free_chain(&self, head: PageId) -> usize {
+        const MAX_FREE_CHAIN_WALK: usize = 1_000_000;
+        let mut count = 0usize;
+        let mut cur = head;
+        let mut seen = std::collections::HashSet::new();
+
+        while cur != 0 && cur != INVALID_PAGE_ID && count < MAX_FREE_CHAIN_WALK && seen.insert(cur)
+        {
+            let mut bpm = self.bpm.lock_recover();
+            let next = match bpm.fetch_page(cur) {
+                Ok(fid) => {
+                    let frame = bpm.get_frame(fid);
+                    let n = u32::from_le_bytes(frame.data[0..4].try_into().unwrap_or([0; 4]));
+                    bpm.unpin_page(cur, false);
+                    n
+                }
+                Err(_) => break,
+            };
+            count += 1;
+            cur = next;
+        }
+        count
     }
 
     /// 采集轻量元数据快照（O(1) 标量 + 字典/目录，不含图拓扑）

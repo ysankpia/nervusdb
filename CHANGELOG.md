@@ -18,6 +18,33 @@ user has to act on them:
 
 ### Added
 
+- **`db.backup(path)` — a consistent online copy.** The sequence is what makes it
+  consistent: checkpoint first (so the data file becomes the single authoritative
+  snapshot and the WAL is empty), then copy while holding the write lock (so no
+  writer can interleave), then fsync. Copying a WAL that still held half a
+  transaction is the failure mode this ordering avoids.
+
+  The copy is a complete database, not a read-only snapshot: it opens
+  independently, retains multi-page overflow properties, and accepts writes. An
+  empty WAL is created beside it so the two-file invariant holds for the copy too.
+
+  It **refuses to overwrite an existing file** — the value of a backup is having a
+  second copy, so silently replacing a previous one could destroy the only good
+  one. Backing up onto the source path is refused for the same reason.
+
+- **`db.vacuum()` — reports reclaimable space.** Record slots were already
+  reclaimed on delete (new nodes immediately reuse deleted slots), so the honest
+  answer is a measurement rather than a compaction claim. `vacuum` checkpoints to
+  converge state and returns a `VacuumReport`: live counts, file size, and how many
+  whole property and overflow pages are on the free chains.
+
+  **It does not truncate the file, and says so.** Page numbers are a
+  logical-to-physical map, so truncating would require rewriting that map — the one
+  operation that could corrupt addressing. That trade is stated in the report's
+  documentation rather than left as a surprise for someone expecting `VACUUM` to
+  shrink their file.
+
+
 - **Unique constraints**: `db.create_unique_constraint("Character", "name")` makes a
   `(label, property)` pair's values unique across every node carrying that label.
   Violations raise `GraphError::UniqueConstraintViolation` — a distinct variant so

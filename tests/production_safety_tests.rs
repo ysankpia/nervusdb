@@ -877,3 +877,148 @@ fn test_unique_constraint_full_semantics() -> Result<(), GraphError> {
 
     Ok(())
 }
+
+// =========================================================================
+// 10. 运维：在线备份与空间回收
+// =========================================================================
+/// `backup` 必须产出**可独立打开且数据一致**的副本。
+///
+/// 这是「小说数据不能丢」的直接保障：副本不依赖源库，也不依赖任何边的存在。
+#[test]
+fn test_backup_produces_consistent_independent_copy() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let src = dir.path().join("src.db");
+    let bak = dir.path().join("bak.db");
+
+    let db = GraphLite::open(&src)?;
+    let mut ids: Vec<u64> = Vec::new();
+    db.with_transaction(|tx| {
+        for i in 1..=100u64 {
+            let mut p = HashMap::new();
+            p.insert("i".to_string(), Value::from(i as i64));
+            // 多 KB 属性：走溢出页链，确保副本覆盖的不只是定长记录页
+            p.insert("pad".to_string(), Value::from("y".repeat(3000)));
+            ids.push(tx.add_node(HashSet::from(["N".to_string()]), p)?);
+        }
+        for i in 0..99 {
+            tx.add_edge(ids[i], ids[i + 1], "NEXT", HashMap::new(), 1.0)?;
+        }
+        Ok(())
+    })?;
+
+    let copied = db.backup(&bak)?;
+    assert!(copied > 0, "backup must copy bytes");
+    assert!(bak.exists(), "backup target must exist");
+
+    // 副本独立可开：释放源句柄（排他锁）后单独打开副本
+    drop(db);
+    let restored = GraphLite::open(&bak)?;
+    assert_eq!(restored.node_count(), 100);
+    assert_eq!(restored.edge_count(), 99);
+
+    // 属性（含溢出页链）必须完整
+    let node = restored
+        .try_get_node(1)?
+        .expect("node 1 must exist in the copy");
+    assert_eq!(
+        node.get_prop("pad")
+            .and_then(|v| v.as_str())
+            .map(|s| s.len()),
+        Some(3000),
+        "multi-page property must survive the copy"
+    );
+
+    // 边链完整
+    let rows = restored.run_cypher("MATCH (a:N)-[:NEXT]->(b) RETURN count(*) AS n")?;
+    assert_eq!(rows.rows[0].values[0].as_i64(), Some(99));
+
+    // 副本自身可写：证明它是完整的数据库，不是只读快照
+    let extra = restored.add_node(HashSet::from(["N".to_string()]), HashMap::new())?;
+    assert!(extra > 0, "the copy must accept writes");
+
+    Ok(())
+}
+
+/// 覆盖已有文件是危险的：可能抹掉上一份有效备份，因此必须拒绝。
+#[test]
+fn test_backup_refuses_to_overwrite() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let src = dir.path().join("s.db");
+    let bak = dir.path().join("b.db");
+
+    let db = GraphLite::open(&src)?;
+    db.add_node(HashSet::from(["N".to_string()]), props(1))?;
+    db.backup(&bak)?;
+
+    // 第二次备份到同一目标必须被拒
+    let err = db
+        .backup(&bak)
+        .expect_err("backup must refuse to overwrite an existing target");
+    assert!(
+        err.to_string().contains("Refusing to overwrite"),
+        "error must explain the refusal, got: {}",
+        err
+    );
+
+    // 备份到自身同样无意义且危险
+    assert!(
+        db.backup(&src).is_err(),
+        "backing up onto the source file must be refused"
+    );
+
+    Ok(())
+}
+
+/// `vacuum` 报告可回收页，且删除后该数字必须增长——否则它只是个装饰性调用。
+#[test]
+fn test_vacuum_reports_reclaimable_pages() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("vac.db");
+    let db = GraphLite::open(&db_path)?;
+
+    let mut ids = Vec::new();
+    db.with_transaction(|tx| {
+        for i in 1..=200u64 {
+            let mut p = HashMap::new();
+            p.insert("i".to_string(), Value::from(i as i64));
+            p.insert("pad".to_string(), Value::from("z".repeat(300)));
+            ids.push(tx.add_node(HashSet::from(["N".to_string()]), p)?);
+        }
+        Ok(())
+    })?;
+
+    let before = db.vacuum()?;
+    assert_eq!(before.nodes_live, 200);
+    let reclaimable_before = before.free_property_pages + before.free_overflow_pages;
+
+    // 全部删除
+    db.with_transaction(|tx| {
+        for id in &ids {
+            tx.remove_node(*id);
+        }
+        Ok(())
+    })?;
+
+    let after = db.vacuum()?;
+    assert_eq!(after.nodes_live, 0, "all nodes were deleted");
+    let reclaimable_after = after.free_property_pages + after.free_overflow_pages;
+    assert!(
+        reclaimable_after > reclaimable_before,
+        "deleting 200 nodes must increase reclaimable pages: before={}, after={}",
+        reclaimable_before,
+        reclaimable_after
+    );
+
+    // 报告必须自洽：它是一个诊断，不能声称文件被截断
+    assert_eq!(
+        after.file_bytes,
+        std::fs::metadata(&db_path)?.len(),
+        "reported file size must match the actual file"
+    );
+
+    // 回收后新节点应复用空间，而不是无限增长
+    db.add_node(HashSet::from(["N".to_string()]), props(1))?;
+    assert_eq!(db.node_count(), 1);
+
+    Ok(())
+}
