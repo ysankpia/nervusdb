@@ -27,15 +27,16 @@ which one answers your question is the whole point of an index.
 | Document                        | Read it when                                                                           |
 | ------------------------------- | -------------------------------------------------------------------------------------- |
 | [ROADMAP.md](../ROADMAP.md)     | Deciding whether this fits your use case — done, planned, and explicitly out of scope. |
-| [CHANGELOG.md](../CHANGELOG.md) | Before upgrading. Storage-format and behavioural changes are called out separately.    |
+| [CHANGELOG.md](../CHANGELOG.md) | Before upgrading. Storage-format and behavioural changes are called out separately. Starts at 0.1.0. |
 | [SECURITY.md](../SECURITY.md)   | Reporting a vulnerability, or checking the threat model and known limits.              |
 | [LICENSING.md](../LICENSING.md) | Choosing between AGPL-3.0 and the commercial licence.                                  |
 
 ## Historical
 
-| Document                                        | Note                                                                           |
-| ----------------------------------------------- | ------------------------------------------------------------------------------ |
-| [docs/history/PLAN-1.0.md](history/PLAN-1.0.md) | The plan that produced 1.0. Superseded, kept because it records the reasoning. |
+| Document                                                        | Note                                                                                                                                              |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [docs/history/PLAN-1.0.md](history/PLAN-1.0.md)                 | The plan that produced 1.0. Superseded, kept because it records the reasoning.                                                                    |
+| [docs/history/CHANGELOG-legacy.md](history/CHANGELOG-legacy.md) | Release history under the previous name (GraphLite, through `v1.0.0`). That line wrote the `GLDB` magic, which this build refuses to reinterpret. |
 
 ## Not listed, on purpose
 

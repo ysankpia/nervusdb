@@ -1,0 +1,124 @@
+name: Release
+
+# Triggered by pushing a `v*` tag. Publishing to a registry is irreversible — a
+# version can never be overwritten and a finished release cannot be deleted — so the
+# workflow is split in two:
+#
+#   1. `verify` runs the whole gate on the tagged commit and builds the artifacts.
+#      Nothing leaves the repository.
+#   2. `publish` runs only when a human dispatches it with `confirm: publish`, and it
+#      is additionally gated on the `release` GitHub Environment, so the approval can
+#      be required as a repository setting rather than trusted to this file.
+#
+# A tag alone therefore never publishes. That is the point: the tag is cheap to fix,
+# a published version is not.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release (e.g. v0.1.0)"
+        required: true
+      confirm:
+        description: "Type `publish` to actually publish to the registries"
+        required: true
+        default: "dry-run"
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: Verify the tagged commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      # The gate is re-run here rather than assumed from CI: a tag can point at a
+      # commit that never passed, and this is the last checkpoint before a version is
+      # permanent.
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Compile (all targets)
+        run: cargo check --workspace --all-targets
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+      - name: Docs
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
+      # Catch a version that disagrees with the tag before it is published. The
+      # registry name and version are permanent once published.
+      - name: The tag must match the manifest version
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          manifest=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
+          if [ "v$manifest" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match Cargo.toml version v$manifest"
+            exit 1
+          fi
+          echo "tag $TAG matches the manifest"
+
+      - name: Package (validates what would be uploaded)
+        run: cargo package --locked
+
+  publish:
+    name: Publish to the registries
+    needs: verify
+    # A tag push does not publish; only an explicit `workflow_dispatch` with
+    # `confirm: publish` does. The environment adds a second, repository-side gate.
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.confirm == 'publish'
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish the crate
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --locked
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build and publish the Python wheels
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          pip install maturin
+          cd bindings/python
+          maturin build --release --out dist
+          maturin upload --skip-existing dist/*
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Build and publish the Node package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          cd bindings/nodejs
+          npm install
+          npx napi build --platform --release
+          npm publish --access public
