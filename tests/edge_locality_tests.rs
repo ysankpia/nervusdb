@@ -557,8 +557,8 @@ fn test_mixed_transaction_never_takes_batch_path() -> Result<(), GraphError> {
     let n1 = tx.add_node(HashSet::from(["A".to_string()]), HashMap::new())?;
     let n2 = tx.add_node(HashSet::from(["B".to_string()]), HashMap::new())?;
     let e1 = tx.add_edge(n1, n2, "TEST", HashMap::new(), 1.0)?;
-    tx.update_node_property(n1, "status", "active");
-    tx.remove_edge(e1);
+    tx.update_node_property(n1, "status", "active")?;
+    tx.remove_edge(e1)?;
     let n3 = tx.add_node(HashSet::from(["C".to_string()]), HashMap::new())?;
     tx.add_edge(n2, n3, "FINAL", HashMap::new(), 2.0)?;
     tx.commit()?;

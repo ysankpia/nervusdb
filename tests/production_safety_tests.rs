@@ -5,7 +5,7 @@
 //! 2. 数据页损坏后静默返回错误/缺失数据而无人报错。
 
 use graphlite::page::PAGE_SIZE;
-use graphlite::{GraphError, GraphLite, Value};
+use graphlite::{GraphError, GraphLite, GraphLiteOptions, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use tempfile::tempdir;
@@ -995,7 +995,7 @@ fn test_vacuum_reports_reclaimable_pages() -> Result<(), GraphError> {
     // 全部删除
     db.with_transaction(|tx| {
         for id in &ids {
-            tx.remove_node(*id);
+            tx.remove_node(*id)?;
         }
         Ok(())
     })?;
@@ -1498,6 +1498,158 @@ fn test_read_errors_do_not_masquerade_as_empty_results() -> Result<(), GraphErro
         !report.is_ok(),
         "integrity_check must report the truncated pages"
     );
+
+    Ok(())
+}
+
+// =========================================================================
+// 10. 事务动作队列上限（有界内存）
+// =========================================================================
+//
+// 事务在提交前把动作全部留在内存里，因此队列必须有上限，否则「内存由缓冲池
+// 决定」的承诺（AGENTS.md §1）就不成立。实测每动作成本：带属性的节点动作
+// 502 字节、无属性边动作 128 字节，所以 100 万节点的事务就是 479 MB。
+
+/// 触顶时报错，且**不静默分块**。
+///
+/// 分块会破坏事务语义：中途提交意味着失败时无法整体回滚，而「要么全做要么全不
+/// 做」正是调用方使用事务的原因。因此断言的是「明确失败」，而不是「悄悄变慢」。
+#[test]
+fn test_transaction_queue_limit_reports_instead_of_splitting() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = GraphLite::open_with_options(
+        dir.path().join("queue_limit.db"),
+        GraphLiteOptions {
+            buffer_pool_frames: 256,
+            max_transaction_actions: 100,
+            ..GraphLiteOptions::default()
+        },
+    )?;
+
+    let mut tx = db.begin_transaction()?;
+    for _ in 0..100 {
+        tx.add_node(HashSet::new(), HashMap::new())?;
+    }
+
+    // 第 101 个动作必须失败
+    let err = tx
+        .add_node(HashSet::new(), HashMap::new())
+        .expect_err("第 101 个动作必须被拒绝");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("queue is full") && msg.contains("100"),
+        "错误信息必须说明队列已满及上限，实际: {msg}"
+    );
+    // 必须告诉调用方怎么办，否则这个错误只是把问题丢回去
+    assert!(
+        msg.contains("max_transaction_actions"),
+        "错误信息必须指出如何放宽上限，实际: {msg}"
+    );
+
+    // 释放事务：超限后不该留下任何东西
+    drop(tx);
+    assert_eq!(db.node_count(), 0, "被拒绝的事务不得留下部分写入");
+
+    Ok(())
+}
+
+/// 批量入口同样受上限约束。
+///
+/// `add_nodes` 一次性入队 N 个动作，若只在逐条路径上检查，批量路径就成了绕过
+/// 上限的后门。
+#[test]
+fn test_batch_enqueue_respects_the_limit() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = GraphLite::open_with_options(
+        dir.path().join("batch_limit.db"),
+        GraphLiteOptions {
+            buffer_pool_frames: 256,
+            max_transaction_actions: 50,
+            ..GraphLiteOptions::default()
+        },
+    )?;
+
+    let mut tx = db.begin_transaction()?;
+
+    // 一次提交 51 个节点，超过上限 50
+    let items: Vec<_> = (0..51).map(|_| (HashSet::new(), HashMap::new())).collect();
+    let err = tx.add_nodes(items).expect_err("批量入口必须同样受上限约束");
+    assert!(
+        err.to_string().contains("transaction action limit"),
+        "错误信息应说明超出动作上限，实际: {err}"
+    );
+
+    drop(tx);
+
+    // 恰好等于上限则允许（边界不能差一）
+    let mut tx = db.begin_transaction()?;
+    let items: Vec<_> = (0..50).map(|_| (HashSet::new(), HashMap::new())).collect();
+    tx.add_nodes(items)?;
+    tx.commit()?;
+    assert_eq!(db.node_count(), 50, "恰好等于上限应当成功");
+
+    Ok(())
+}
+
+/// 上限设为 0 表示不限制（给确实需要超大事务的调用方一条明路）。
+#[test]
+fn test_zero_limit_means_unlimited() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = GraphLite::open_with_options(
+        dir.path().join("no_limit.db"),
+        GraphLiteOptions {
+            buffer_pool_frames: 256,
+            max_transaction_actions: 0,
+            ..GraphLiteOptions::default()
+        },
+    )?;
+
+    // 远超前面测过的上限，仍然可以入队
+    let mut tx = db.begin_transaction()?;
+    for _ in 0..500 {
+        tx.add_node(HashSet::new(), HashMap::new())?;
+    }
+    tx.commit()?;
+    assert_eq!(db.node_count(), 500);
+
+    Ok(())
+}
+
+/// 逐条入队的四个方法也必须可失败：它们的签名从 `()` 改成了 `Result`。
+///
+/// 若只有 `add_node` / `add_edge` 受限，调用方仍可用 `remove_node` 无限堆队列。
+#[test]
+fn test_update_and_remove_also_respect_the_limit() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = GraphLite::open_with_options(
+        dir.path().join("mixed_limit.db"),
+        GraphLiteOptions {
+            buffer_pool_frames: 256,
+            max_transaction_actions: 10,
+            ..GraphLiteOptions::default()
+        },
+    )?;
+
+    let ids: Vec<u64> = (0..12)
+        .map(|_| db.add_node(HashSet::new(), HashMap::new()))
+        .collect::<Result<_, _>>()?;
+
+    let mut tx = db.begin_transaction()?;
+    for id in ids.iter().take(10) {
+        tx.remove_node(*id)?;
+    }
+
+    // 第 11 个动作必须被拒绝
+    let err = tx
+        .remove_node(ids[10])
+        .expect_err("remove_node 必须同样受限");
+    assert!(err.to_string().contains("queue is full"), "实际: {err}");
+
+    // SET 属性路径同理
+    let err = tx
+        .update_node_property(ids[11], "k", 1i64)
+        .expect_err("update_node_property 必须同样受限");
+    assert!(err.to_string().contains("queue is full"), "实际: {err}");
 
     Ok(())
 }

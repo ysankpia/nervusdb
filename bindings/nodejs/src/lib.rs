@@ -412,7 +412,8 @@ impl Transaction {
         self.inner
             .as_mut()
             .ok_or_else(|| napi::Error::from_reason("transaction already finished"))?
-            .update_node_property(node_id as u64, key, val);
+            .update_node_property(node_id as u64, key, val)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(())
     }
 
@@ -427,7 +428,8 @@ impl Transaction {
         self.inner
             .as_mut()
             .ok_or_else(|| napi::Error::from_reason("transaction already finished"))?
-            .update_edge_property(edge_id as u64, key, val);
+            .update_edge_property(edge_id as u64, key, val)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(())
     }
 
@@ -436,7 +438,8 @@ impl Transaction {
         self.inner
             .as_mut()
             .ok_or_else(|| napi::Error::from_reason("transaction already finished"))?
-            .remove_node(node_id as u64);
+            .remove_node(node_id as u64)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(())
     }
 
@@ -445,7 +448,8 @@ impl Transaction {
         self.inner
             .as_mut()
             .ok_or_else(|| napi::Error::from_reason("transaction already finished"))?
-            .remove_edge(edge_id as u64);
+            .remove_edge(edge_id as u64)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(())
     }
 

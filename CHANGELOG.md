@@ -35,6 +35,35 @@ user has to act on them:
   asserts both halves: `"null"` as a value counts like any other, and `avg` / `min`
   over an empty set return `Null`.
 
+- **A bound on the transaction action queue.** A transaction holds every action in
+  memory until it commits, and that queue was unbounded — which contradicted the
+  project's own rule that memory is bounded by the buffer pool. Measured with a real
+  RSS probe: **502 bytes per node action, 128 bytes per edge action**. A one-million-
+  node transaction therefore cost 479 MB, and ten million would have cost 4.8 GB.
+
+  The queue now defaults to `DEFAULT_MAX_TRANSACTION_ACTIONS` (4,000,000 actions, ≈812 MB
+  measured for an all-node worst case) and reports an error on overflow instead of
+  splitting itself:
+
+  ```text
+  Transaction action queue is full (4000000 actions). ...
+  Commit in batches instead, or raise the limit deliberately with
+  GraphLiteOptions::max_transaction_actions.
+  ```
+
+  Splitting automatically would be the easy answer and the wrong one: it means
+  committing part of a transaction, so a later failure could no longer roll the whole
+  thing back — and all-or-nothing is the reason to use a transaction at all. The limit
+  covers every enqueue path (`add_node`, `add_edge`, `add_nodes`, `add_edges`,
+  `remove_node`, `remove_edge`, `update_node_property`, `update_edge_property`)
+  through a single `push_op` gate.
+
+  **Breaking change:** the four methods that previously returned `()` —
+  `Transaction::remove_node`, `remove_edge`, `update_node_property`,
+  `update_edge_property` — now return `Result<(), GraphError>` so an overflow can be
+  reported. Callers add `?`. Verified the real-data red lines are unchanged (hub 1-hop
+  10,080 / 2-hop 161,877, 81.26 MB, 580k edges/s).
+
 - **`GraphLite::read_snapshot()` — a self-consistent read view.** It holds the shared
   read lock for its lifetime, so a multi-step traversal (read a node's adjacency
   list, then read each of those edges) sees one state instead of stitching together

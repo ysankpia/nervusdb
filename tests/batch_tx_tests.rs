@@ -399,9 +399,9 @@ fn test_batch_mixed_operations_atomic_commit() -> Result<(), GraphError> {
         for id in ids.iter().take(200) {
             tx.add_edge(seed, *id, "LINK", HashMap::new(), 1.0)?;
         }
-        tx.update_node_property(seed, "role", "hub");
+        tx.update_node_property(seed, "role", "hub")?;
         for id in ids.iter().take(50) {
-            tx.remove_node(*id);
+            tx.remove_node(*id)?;
         }
         Ok(ids)
     })?;

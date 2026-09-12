@@ -315,7 +315,7 @@ fn test_04_transaction_atomicity_and_rollback() -> Result<(), GraphError> {
     let n3 = tx.add_node(HashSet::new(), HashMap::new())?;
     tx.add_edge(base_node, n2, "REL", HashMap::new(), 1.0)?;
     tx.add_edge(n2, n3, "REL", HashMap::new(), 2.0)?;
-    tx.update_node_property(base_node, "temp_prop", "temporary_val");
+    tx.update_node_property(base_node, "temp_prop", "temporary_val")?;
 
     // 主动回滚
     tx.rollback()?;

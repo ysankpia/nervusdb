@@ -54,7 +54,7 @@ Working and covered by tests:
 - Tooling: Python and Node.js SDKs with transaction and batch-write support.
   Inspection and dump go through the library API — the CLI and the browser
   workbench were removed in 1.1.0.
-- 177 test cases across 15 suites (176 run, 1 intentionally `#[ignore]`d for a
+- 182 test cases across 15 suites (181 run, 1 intentionally `#[ignore]`d for a
   child-process lock probe); `cargo fmt`, `cargo clippy -D warnings` and
   `rustdoc -D warnings` all clean.
 
@@ -76,12 +76,15 @@ up to a known commit point) while the writer appends. That is a substantial chan
 recovery and page visibility, and it is the largest remaining gap against the
 "agent writes while you watch" workload.
 
-### 2. Planner memory beyond edges
+### 2. Planner memory: spilling instead of capping
 
-A transaction still queues all its actions in memory before commit. Edge batches
-are chunked at `MAX_BATCH_EDGES_IN_MEMORY`, but a multi-million-**node** transaction
-still holds the whole action list. Capping and spilling the planner queue itself is
-the remaining step.
+**Capped in 1.1.0.** The action queue is now bounded by
+`DEFAULT_MAX_TRANSACTION_ACTIONS` and reports an overflow rather than growing without
+limit (see AGENTS.md §5). What remains is *spilling*: a caller that genuinely needs a
+transaction larger than the cap must currently batch it by hand. Writing queued
+actions to the WAL as they arrive and keeping only a location index — the way STEAL
+spilling already works for pages — would let one transaction exceed the cap without
+giving up rollback.
 
 ### 3. Cost-based query planning
 

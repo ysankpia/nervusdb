@@ -508,7 +508,8 @@ impl PyTransaction {
         self.inner
             .as_mut()
             .ok_or_else(|| GraphLiteError::new_err("transaction already finished"))?
-            .update_node_property(node_id, key, val);
+            .update_node_property(node_id, key, val)
+            .map_err(|e| GraphLiteError::new_err(e.to_string()))?;
         Ok(())
     }
 
@@ -523,7 +524,8 @@ impl PyTransaction {
         self.inner
             .as_mut()
             .ok_or_else(|| GraphLiteError::new_err("transaction already finished"))?
-            .update_edge_property(edge_id, key, val);
+            .update_edge_property(edge_id, key, val)
+            .map_err(|e| GraphLiteError::new_err(e.to_string()))?;
         Ok(())
     }
 
@@ -531,7 +533,8 @@ impl PyTransaction {
         self.inner
             .as_mut()
             .ok_or_else(|| GraphLiteError::new_err("transaction already finished"))?
-            .remove_node(node_id);
+            .remove_node(node_id)
+            .map_err(|e| GraphLiteError::new_err(e.to_string()))?;
         Ok(())
     }
 
@@ -539,7 +542,8 @@ impl PyTransaction {
         self.inner
             .as_mut()
             .ok_or_else(|| GraphLiteError::new_err("transaction already finished"))?
-            .remove_edge(edge_id);
+            .remove_edge(edge_id)
+            .map_err(|e| GraphLiteError::new_err(e.to_string()))?;
         Ok(())
     }
 

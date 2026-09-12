@@ -53,6 +53,29 @@ pub const LARGE_POOL_FRAMES: usize = 16384;
 /// 每 MB 对应的 4KB 页帧数
 pub const FRAMES_PER_MB: usize = 256;
 
+/// 单个显式事务可排队的动作数上限（默认 400 万）。
+///
+/// ## 为什么需要上限
+///
+/// 事务在提交前把动作**全部**留在内存里（`Transaction::ops`）。实测每动作的
+/// 常驻成本：带一个属性的节点动作 502 字节、无属性边动作 128 字节。于是一个
+/// 100 万节点的事务就要 479 MB，1000 万节点会到 4.8 GB——远超「内存占用由缓冲池
+/// 决定」的架构承诺（AGENTS.md §1 有界内存）。
+///
+/// 400 万动作按最坏情况（全为节点动作）约 2 GB，是「单进程嵌入式数据库」能接受
+/// 的峰值；也远高于现有基准里最大的单事务（4M 边 ≈ 512 MB）。
+///
+/// ## 触顶时为什么报错而不是自动分块
+///
+/// 自动分块会改变事务语义：中途提交意味着失败时无法整体回滚，而「事务要么全做
+/// 要么全不做」正是调用方使用它的原因。一个悄悄变成「多个小事务」的大事务，会在
+/// 出错时留下写了一半的数据。因此触顶时明确报错，并告诉调用方两条正确路径：
+/// 自己分批提交，或改用 `Transaction::add_nodes` / `add_edges` 以外的方式。
+///
+/// 需要更大的事务可以用 [`GraphLiteOptions::max_transaction_actions`] 显式放宽；
+/// 但那会把内存承诺交给调用方判断，因此必须是有意的决定。
+pub const DEFAULT_MAX_TRANSACTION_ACTIONS: usize = 4_000_000;
+
 /// 默认的 WAL 自动 Checkpoint 阈值：64MB。
 ///
 /// 越过该值后在**写锁之外**触发一次 Checkpoint，避免长时间批量导入把 WAL
@@ -195,6 +218,11 @@ pub struct GraphLiteOptions {
     /// 但未回放的页，打开会失败并提示先用读写句柄打开一次——静默忽略那些页会
     /// 让读者看到过期数据。
     pub read_only: bool,
+    /// 单个显式事务可排队的动作数上限；`0` 表示不限制。
+    ///
+    /// 见 [`DEFAULT_MAX_TRANSACTION_ACTIONS`]：默认 400 万，触顶时报错而不是
+    /// 静默分块（分块会破坏事务的原子性）。
+    pub max_transaction_actions: usize,
 }
 
 impl Default for GraphLiteOptions {
@@ -203,6 +231,7 @@ impl Default for GraphLiteOptions {
             buffer_pool_frames: DEFAULT_BUFFER_POOL_FRAMES,
             wal_auto_checkpoint_bytes: DEFAULT_WAL_AUTO_CHECKPOINT_BYTES,
             read_only: false,
+            max_transaction_actions: DEFAULT_MAX_TRANSACTION_ACTIONS,
         }
     }
 }
@@ -217,6 +246,8 @@ pub struct GraphInner {
     pub wal_checkpoint_pending: Arc<AtomicBool>,
     /// 自动 Checkpoint 阈值快照
     pub wal_auto_checkpoint_bytes: u64,
+    /// 事务动作数上限（见 `DEFAULT_MAX_TRANSACTION_ACTIONS`；0 = 不限制）
+    pub max_transaction_actions: usize,
 }
 
 /// GraphLite: 生产级纯磁盘嵌入式属性图数据库引擎 (SQLite 3.0 标准)
@@ -464,6 +495,7 @@ impl GraphLite {
             next_tx_id: 1,
             wal_checkpoint_pending: Arc::new(AtomicBool::new(false)),
             wal_auto_checkpoint_bytes: options.wal_auto_checkpoint_bytes,
+            max_transaction_actions: options.max_transaction_actions,
         };
 
         Ok(Self {
@@ -1849,6 +1881,29 @@ impl Transaction {
         self.tx_id
     }
 
+    /// 动作入队的**唯一**通道：在此统一执行上限检查。
+    ///
+    /// 所有入队都必须经过它。分散到六个方法里各写一次边界判断，迟早会有一个
+    /// 漏掉——那样上限就只在某些路径上有效，而调用方无从知道是哪一些。
+    fn push_op(&mut self, op: TxAction) -> Result<(), GraphError> {
+        let limit = self.db.inner.read_recover().max_transaction_actions;
+        if limit > 0 && self.ops.len() >= limit {
+            return Err(GraphError::General(format!(
+                "Transaction action queue is full ({limit} actions). \
+                 A transaction holds every action in memory until commit, so the queue \
+                 is capped to keep the footprint bounded (AGENTS.md section 1): measured \
+                 at about 502 bytes per node action and 128 bytes per edge action. \
+                 Commit in batches instead, or raise the limit deliberately with \
+                 GraphLiteOptions::max_transaction_actions. \
+                 The queue is not split automatically because doing so would mean \
+                 committing part of the transaction, and a partially applied \
+                 transaction is exactly what an atomic transaction must not do."
+            )));
+        }
+        self.ops.push(op);
+        Ok(())
+    }
+
     /// 事务内**批量**添加节点，返回按输入顺序排列的 ID 列表。
     ///
     /// ## 为什么需要它
@@ -1882,6 +1937,17 @@ impl Transaction {
             inner.disk_graph.allocate_next_node_ids(nodes.len())?
         };
 
+        let limit = self.db.inner.read_recover().max_transaction_actions;
+        if limit > 0 && self.ops.len() + nodes.len() > limit {
+            return Err(GraphError::General(format!(
+                "Batch of {} node actions would exceed the transaction action limit ({limit}); \
+                 {} queued so far. Commit in batches, or raise the limit with \
+                 GraphLiteOptions::max_transaction_actions.",
+                nodes.len(),
+                self.ops.len()
+            )));
+        }
+
         self.ops.reserve(nodes.len());
         for (id, (labels, properties)) in ids.iter().copied().zip(nodes) {
             self.ops.push(TxAction::AddNode {
@@ -1912,6 +1978,17 @@ impl Transaction {
             inner.disk_graph.allocate_next_edge_ids(edges.len())?
         };
 
+        let limit = self.db.inner.read_recover().max_transaction_actions;
+        if limit > 0 && self.ops.len() + edges.len() > limit {
+            return Err(GraphError::General(format!(
+                "Batch of {} edge actions would exceed the transaction action limit ({limit}); \
+                 {} queued so far. Commit in batches, or raise the limit with \
+                 GraphLiteOptions::max_transaction_actions.",
+                edges.len(),
+                self.ops.len()
+            )));
+        }
+
         self.ops.reserve(edges.len());
         for (id, e) in ids.iter().copied().zip(edges) {
             self.ops.push(TxAction::AddEdge {
@@ -1941,11 +2018,11 @@ impl Transaction {
             inner.disk_graph.allocate_next_node_id()?
         };
 
-        self.ops.push(TxAction::AddNode {
+        self.push_op(TxAction::AddNode {
             id,
             labels,
             properties,
-        });
+        })?;
 
         Ok(id)
     }
@@ -1971,54 +2048,57 @@ impl Transaction {
             inner.disk_graph.allocate_next_edge_id()?
         };
 
-        self.ops.push(TxAction::AddEdge {
+        self.push_op(TxAction::AddEdge {
             id,
             src_id,
             dst_id,
             edge_type: edge_type.into(),
             properties,
             weight,
-        });
+        })?;
 
         Ok(id)
     }
 
-    /// 事务内更新节点属性
+    /// 事务内更新节点属性。
+    ///
+    /// 返回 `Result` 而不是 `()`：动作队列有上限（见
+    /// [`DEFAULT_MAX_TRANSACTION_ACTIONS`]），触顶时必须能报告出来。
     pub fn update_node_property<V: Into<Value>>(
         &mut self,
         id: u64,
         key: impl Into<String>,
         value: V,
-    ) {
-        self.ops.push(TxAction::UpdateNodeProp {
+    ) -> Result<(), GraphError> {
+        self.push_op(TxAction::UpdateNodeProp {
             id,
             key: key.into(),
             value: value.into(),
-        });
+        })
     }
 
-    /// 事务内更新边属性
+    /// 事务内更新边属性（队列上限语义同 [`Transaction::update_node_property`]）
     pub fn update_edge_property<V: Into<Value>>(
         &mut self,
         id: u64,
         key: impl Into<String>,
         value: V,
-    ) {
-        self.ops.push(TxAction::UpdateEdgeProp {
+    ) -> Result<(), GraphError> {
+        self.push_op(TxAction::UpdateEdgeProp {
             id,
             key: key.into(),
             value: value.into(),
-        });
+        })
     }
 
-    /// 事务内删除节点
-    pub fn remove_node(&mut self, id: u64) {
-        self.ops.push(TxAction::RemoveNode { id });
+    /// 事务内删除节点（队列上限语义同 [`Transaction::update_node_property`]）
+    pub fn remove_node(&mut self, id: u64) -> Result<(), GraphError> {
+        self.push_op(TxAction::RemoveNode { id })
     }
 
-    /// 事务内删除边
-    pub fn remove_edge(&mut self, id: u64) {
-        self.ops.push(TxAction::RemoveEdge { id });
+    /// 事务内删除边（队列上限语义同 [`Transaction::update_node_property`]）
+    pub fn remove_edge(&mut self, id: u64) -> Result<(), GraphError> {
+        self.push_op(TxAction::RemoveEdge { id })
     }
 
     /// 提交事务：将修改原子应用至 DiskGraph，批量刷出 PageWrite 帧并提交。

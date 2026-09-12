@@ -49,6 +49,17 @@ Any modification that violates these rules must be rejected immediately:
      - `LARGE_POOL_FRAMES` (16384 frames = 64MB)
    - Convenience constructor: `GraphLite::open_with_pool_mb(path, mb)` sets frames to `(mb * 256).max(2)`.
    - Test switch `Transaction::commit_unclustered()`: Forces per-edge sequential insertion to benchmark and assert mathematical/algorithmic equivalence against `commit()` two-phase batch weaving.
+   - **The action queue is bounded and this is load-bearing.** A transaction queues every
+     action in memory until commit — measured at **502 bytes per node action and 128 bytes
+     per edge action** — so an unbounded queue breaks the bounded-memory rule in §1 no
+     matter how small the buffer pool is. `DEFAULT_MAX_TRANSACTION_ACTIONS` (4,000,000)
+     caps it, configurable through `GraphLiteOptions::max_transaction_actions` (`0` =
+     unlimited). **Every** enqueue goes through `Transaction::push_op`; do not add a
+     second enqueue path that pushes to `ops` directly, because that path silently
+     escapes the cap and the caller has no way to know which paths are covered.
+     Overflow is a hard error, never an automatic flush: flushing mid-transaction would
+     mean committing part of it, which destroys the rollback guarantee that is the
+     reason to use a transaction.
 
 6. **Two-Phase Batch Edge Weaving**
    - Edge batches with `EDGE_BATCH_WEAVE_MIN` or more consecutive `AddEdge` actions in one commit must go through `DiskGraph::insert_edges_batch`, never per-edge head insertion. Per-edge weaving touches the source node page, the target node page and the old head page for every edge; on a graph whose pages far exceed the pool the same page is evicted and re-read many times per batch, and each miss spills a full 4KB page to the WAL ("false spill").
