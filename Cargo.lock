@@ -77,7 +77,7 @@ dependencies = [
 
 [[package]]
 name = "graphlite-node"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "graphlite-rs",
  "napi",
@@ -89,7 +89,7 @@ dependencies = [
 
 [[package]]
 name = "graphlite-python"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "graphlite-rs",
  "pyo3",
@@ -97,7 +97,7 @@ dependencies = [
 
 [[package]]
 name = "graphlite-rs"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "tempfile",
 ]

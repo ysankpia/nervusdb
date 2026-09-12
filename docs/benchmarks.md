@@ -83,28 +83,41 @@ weaving step's own working set is bounded regardless of transaction size.
 
 ### Real-world graphs (SNAP)
 
-`examples/snap_dblp_bench.rs` and `examples/snap_livejournal_bench.rs`. Both take
+`benches/real_data/snap_dblp_bench.rs` and `benches/real_data/snap_livejournal_bench.rs`
+(they moved out of `examples/` in 1.1.0; run them with `cargo bench --bench snap_dblp_bench`).
+Both take
 `DATASET_PATH`/`DATASET_DIR`, `DB_DIR`, `POOL_MB` and `AUTO_CHECKPOINT_MB`, and
 print the configuration they ran with.
 
-com-DBLP (317,080 nodes / 1,049,866 edges, 256MB pool):
+com-DBLP (317,080 nodes / 1,049,866 edges, 256MB pool, auto-checkpoint off;
+measured on 1.1.0, 2026-09-13, release build):
 
 | Metric             | Value                             |
 | ------------------ | --------------------------------- |
-| Node ingestion     | 892,000 ops/s                     |
-| Edge ingestion     | **777,257 ops/s**                 |
-| Hub 1-hop (top 50) | 40.7 µs avg, **10,080** neighbors |
-| Hub 2-hop (top 50) | 1.63 ms avg, **161,877** reached  |
+| Node ingestion     | 579,533 ops/s                     |
+| Edge ingestion     | **761,526 ops/s**                 |
+| Hub 1-hop (top 50) | 42.9 µs avg, **10,080** neighbors |
+| Hub 2-hop (top 50) | 1.86 ms avg, **161,877** reached  |
+| On-disk size       | 81.26 MB                          |
 
-LiveJournal (4,847,571 nodes / 68,993,773 edges, 1GiB pool, auto-checkpoint off):
+LiveJournal (4,847,571 nodes / 68,993,773 edges, 1GiB pool, auto-checkpoint off;
+measured on 1.1.0, 2026-09-13, release build):
 
 | Metric             | Value                             |
 | ------------------ | --------------------------------- |
-| Node ingestion     | 713,000 ops/s                     |
-| Edge ingestion     | **201,823 ops/s**                 |
+| Node ingestion     | 560,455 ops/s                     |
+| Edge ingestion     | **155,363 ops/s**                 |
 | Hub 1-hop (top 50) | 0.35 s avg, **335,194** neighbors |
-| Hub 2-hop (top 50) | 8.1 s avg, **10,027,730** reached |
+| Hub 2-hop (top 50) | 8.9 s avg, **10,027,730** reached |
 | On-disk size       | 4.34 GB                           |
+
+Throughput on a single machine varies run to run: repeated com-DBLP edge runs
+across this session measured 723,458 / 580,139 / 761,526 ops/s, and LiveJournal
+edge ingest measured 155,363 ops/s on 1.1.0 against 201,823 on 1.0.0 — neither
+figure is a regression, since the same binary re-measured at 280,426 earlier in the
+release cycle. The **red lines are the totals, not the rates**: hub 1-hop and 2-hop
+must match exactly, and LiveJournal edge ingest must stay above 150,000 ops/s.
+Rate claims elsewhere in this document carry the run they came from.
 
 Both 1-hop and 2-hop totals are **exact** against an independent recomputation
 over the raw dataset. Getting there required fixing a real determinism bug: the

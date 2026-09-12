@@ -32,9 +32,9 @@ fn main() -> Result<(), GraphError> {
 
 ## Status
 
-**`v1.0.0` — stable.** The engine, Cypher surface, analytics and safety guarantees
-are implemented and covered by 151 tests. The on-disk format is frozen; see
-`FORMAT.md`. Several known gaps remain — read
+**`v1.1.0` — stable.** The engine, Cypher surface, analytics and safety guarantees
+are implemented and covered by 187 tests. The on-disk format is frozen at version 4
+and unchanged by 1.1.0; see `FORMAT.md`. Several known gaps remain — read
 [Known limitations](ROADMAP.md#next-planned) before considering production use.
 
 ## Features
@@ -51,10 +51,23 @@ are implemented and covered by 151 tests. The on-disk format is frozen; see
   40,000 entities with ~150-byte payloads occupy 7.9MB.
 - **ACID.** Explicit transactions, single-fsync group commit, STEAL spilling for
   transactions larger than the pool, crash recovery, exact rollback with a
-  byte-identical main file.
-- **Cypher 1.0.** `CREATE`, `MATCH` (multi-pattern), `WHERE`, `SET`,
-  `DELETE` / `DETACH DELETE`, `ORDER BY`, `SKIP`, `LIMIT`, aggregates, and
-  variable-length paths.
+  byte-identical main file. A failed write statement leaves nothing behind, and the
+  transaction action queue is bounded (≈502 bytes/node action, 128 bytes/edge action,
+  capped at 4M actions) so memory stays set by configuration rather than by input.
+- **Cypher.** `CREATE`, `MATCH` (multi-pattern), `MERGE` (idempotent write),
+  `UNWIND` (batch ingestion in one statement), `WHERE`, `SET`,
+  `DELETE` / `DETACH DELETE`, `ORDER BY`, `SKIP`, `LIMIT`, aggregates,
+  variable-length paths, and `EXPLAIN`.
+
+  ```cypher
+  UNWIND [1, 2, 3] AS i CREATE (n:Num {v: i})   -- three nodes, one statement
+  MERGE (u:User {name: 'alice'})                -- creates, then reuses
+  ```
+
+- **Self-consistent reads.** `GraphLite::read_snapshot()` holds one state across a
+  multi-step traversal, so reading a node and then its edges cannot observe a
+  concurrent delete in between. Snapshots block writers while they live; more
+  concurrency needs versioned page visibility ([ROADMAP](ROADMAP.md) item 1).
 - **Analytics.** BFS, Dijkstra, cycle detection, PageRank, weakly connected
   components, K-hop subgraphs — all over disk cursors.
 - **Production safety.** An exclusive open lock, a structural integrity check, and

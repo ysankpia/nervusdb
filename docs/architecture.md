@@ -163,9 +163,10 @@ results are identical.
 ## 7. Cypher execution
 
 Lexer → recursive-descent parser → executor, over contexts that bind
-`Binding::Node(u64) | Binding::Edge(u64)`. Binding entity kind explicitly is what
-prevents node ids and edge ids — which share a numbering space — from being
-confused.
+`Binding::Node(u64) | Binding::Edge(u64) | Binding::Value(Value)`. Binding entity
+kind explicitly is what prevents node ids and edge ids — which share a numbering
+space — from being confused, and the `Value` variant carries `UNWIND` elements,
+which are values rather than entities.
 
 Pipeline:
 
@@ -175,11 +176,31 @@ MATCH  →  find_matches (per-pattern resolution + shared-variable join)
        →  SET  →  CREATE  →  DELETE
        →  projection (grouped aggregation)
        →  ORDER BY  →  SKIP  →  LIMIT
+
+UNWIND  →  one row per list element  →  [CREATE]  →  projection (same pipeline)
+MERGE   →  match the whole pattern  →  create it only if nothing matched
+                                      →  ON CREATE / ON MATCH SET
 ```
+
+`UNWIND` is why pattern property values are **expressions** rather than literals:
+`CREATE (n {v: x})` has to read the variable `x` bound per row. `MATCH` and `MERGE`
+pattern properties are therefore validated as literals at parse time — a pattern is
+matched before any variable is bound, so an expression there could never be
+evaluated, and silently matching nothing is indistinguishable from an empty graph.
+
+`MERGE` matches or creates the pattern **as a whole**, using MATCH filter semantics
+(named properties must be equal; extra properties on an existing node do not break
+the match).
 
 A statement that mutates takes the exclusive write lock and commits through the
 WAL; a read-only one takes the shared lock, allowing concurrent readers.
-`CypherStatement::is_mutating()` is the single source of truth for that routing.
+`CypherStatement::is_mutating()` is the single source of truth for that routing —
+and `MERGE` is unconditionally mutating, because whether it writes is only known
+after matching.
+
+A failed write statement is rolled back at statement granularity
+(`rollback_failed_statement`), so a multi-record `UNWIND ... CREATE` that fails on
+record 500 leaves none of the first 499 behind.
 
 `RETURN *` expands from the variables actually present in the result bindings,
 `count(*)` counts rows while `count(x)` counts non-null bindings, `sum` returns an
@@ -223,6 +244,20 @@ or concurrently-mutated chain cannot spin forever.
   See §11 for why.
 - `Transaction` is a write-side object: it buffers actions, resolves edge chains
   in memory at commit, and issues a single `fsync` for the whole batch.
+- **`GraphLite::read_snapshot()`** pins one consistent state for the lifetime of the
+  returned guard. It exists because single calls are not enough: `get_node` and
+  `get_edge` each take and release the read lock, so a traversal that reads an
+  adjacency list and then fetches each named edge can stitch together two states and
+  observe an edge that a concurrent delete removed in between. The snapshot closes
+  that correctness gap.
+- A snapshot **blocks writers** while it lives, so keep it short, and never call a
+  write entry point while holding one (it would wait on the lock the snapshot itself
+  holds). Making readers genuinely non-blocking needs versioned page visibility —
+  readers pinning a commit point while a writer appends — which is ROADMAP item 1.
+- The transaction action queue is **bounded** (`DEFAULT_MAX_TRANSACTION_ACTIONS`), since
+  a transaction holds every action in memory until commit at ≈502 bytes per node action
+  and 128 bytes per edge action. Overflow is an error, never an automatic flush:
+  flushing mid-transaction would commit part of it and destroy the rollback guarantee.
 
 ## 11. Production safety
 

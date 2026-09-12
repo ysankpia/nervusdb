@@ -52,17 +52,24 @@ These are recorded in [ROADMAP.md](ROADMAP.md) rather than treated as security
 bugs. If you believe one of them is worse than documented, that is worth
 reporting:
 
-- A reader and a writer cannot hold the database **simultaneously**: read-only
-  handles take a shared lock and coexist with each other, but a write handle
-  excludes them and vice versa. Interleaving reads with a writer requires
-  snapshot isolation, which is not implemented yet.
+- Readers and a writer cannot hold the database **simultaneously**: read-only handles
+  take a shared lock and coexist with each other, but a write handle excludes them and
+  vice versa. `GraphLite::read_snapshot()` gives a caller a consistent view **for the
+  duration of the snapshot**, which closes the correctness gap, but it does not add
+  concurrency — it still blocks writers while it is held. Removing the exclusion needs
+  versioned page visibility and is not implemented yet (ROADMAP item 1).
 - Every data page carries a **CRC32**, verified on read, with a directory chain
   that is itself checksummed. Bit rot is detected rather than silently returned as
   missing data. This landed in format version 3 and is documented in `FORMAT.md`.
-- A single very large transaction holds its whole action list in memory. Chunk
-  huge writes.
+- A transaction queues its actions in memory until commit, at ≈502 bytes per node
+  action and 128 bytes per edge action. It is capped at
+  `DEFAULT_MAX_TRANSACTION_ACTIONS` (4,000,000) and reports an error past that rather
+  than growing without limit; raise it via
+  `GraphLiteOptions::max_transaction_actions` or commit in batches.
+- A read snapshot blocks writers while it is held. Keep snapshots short; a
+  long-lived snapshot stalls every writer on that database.
 
 ## Supported versions
 
-`v1.0.0` is the current stable release. Security fixes are applied to `main` and
+`v1.1.0` is the current stable release. Security fixes are applied to `main` and
 backported to the most recent tag; there are no maintained older branches yet.

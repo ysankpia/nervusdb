@@ -14,7 +14,42 @@ user has to act on them:
 
 ---
 
-## [Unreleased]
+## [1.1.0] — 2026-09-13
+
+The storage format is **unchanged**: `DB_PAGE_VERSION` stays 4, `FORMAT.md` is
+verbatim as in 1.0.0, and a 1.0.0 database opens directly. Everything here is the
+Cypher surface, concurrency visibility, and resource bounds.
+
+**Upgrade actions required:**
+
+- `Transaction::remove_node`, `remove_edge`, `update_node_property` and
+  `update_edge_property` now return `Result<(), GraphError>` instead of `()`. Add `?`
+  (Rust) or expect an exception (Python `RuntimeError`, Node `Error`).
+- A transaction is capped at 4,000,000 queued actions by default. A transaction
+  larger than that now fails instead of consuming unbounded memory; if you genuinely
+  need one, either commit in batches or set
+  `GraphLiteOptions::max_transaction_actions`.
+
+No Cypher statement that worked in 1.0.0 behaves differently. Two previously
+accepted constructs are now rejected, both because they were silently wrong:
+`MATCH`/`MERGE` pattern properties written as expressions (they could never be
+evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar binding.
+
+### Added
+
+- **`UNWIND <list> AS <var>`** — expands a list into rows, the only way to express
+  bulk data in one statement: `UNWIND [1,2,3] AS x CREATE (n:Num {v: x})`.
+
+- **`MERGE <pattern>`** — the idempotent write, with `ON CREATE SET` / `ON MATCH SET`.
+
+- **`GraphLite::read_snapshot()`** — a self-consistent read view; pin one state across
+  a multi-step traversal instead of stitching two together.
+
+- **A bound on the transaction action queue** and the `GraphLiteOptions::max_transaction_actions`
+  setting that controls it.
+
+- **A high-parallelism concurrency stress suite** that sizes itself to the machine, and
+  a **version-consistency guard** over the five manifests that carry the version.
 
 ### Fixed
 
