@@ -1,12 +1,15 @@
 pub mod algo;
 pub mod buffer;
 pub mod c_api;
+pub mod codec;
 pub mod crc;
+pub mod crc32;
 pub mod cypher;
 pub mod disk_graph;
 pub mod graph;
 pub mod index;
 pub mod integrity;
+pub mod json;
 pub mod lock;
 pub mod page;
 pub mod query;
@@ -145,6 +148,20 @@ impl GraphLite {
             Some(DbLock::acquire(&db_path)?)
         };
 
+        // 0b. 格式与尺寸闸门：**必须在任何写入之前**。
+        //
+        //     顺序是硬约束，原因是 WAL 回放会写主数据文件。若等到回放之后才检查
+        //     格式版本，就已经用**当前版本的语义**解释并写回了一个旧格式的库——
+        //     那时文件已经被污染，再报错也晚了。
+        //
+        //     这里同时挡住两件事：
+        //     - 版本不符（v1/v2 旧库）：明确指引用户用匹配的旧版导出再导入
+        //     - 文件超过 64 GiB：属性指针只有 24 位页号，越界会静默指向错误页
+        if !is_memory {
+            Self::check_format_version(&db_path)?;
+            Self::check_file_size_limit(&db_path)?;
+        }
+
         // 1. 初始化页级 WAL 持久化引擎（若存在未 Checkpoint 的 WAL，自动将已提交页重放至主文件）
         let storage = StorageEngine::open(&db_path)?;
 
@@ -200,6 +217,94 @@ impl GraphLite {
             db_path,
             lock: Arc::new(lock),
         })
+    }
+
+    /// 打开前校验磁盘格式版本，**早于任何写入**（含 WAL 回放）。
+    ///
+    /// 只读主文件的前 4096 字节——足够读到 magic 与版本字段，且不需要
+    /// `DiskManager`（它在回放之后才能创建）。
+    ///
+    /// 空文件与全新文件直接放行：它们还没有格式，即将由本版本创建。
+    fn check_format_version(db_path: &Path) -> Result<(), GraphError> {
+        let mut file = match std::fs::File::open(db_path) {
+            Ok(f) => f,
+            // 文件不存在是正常的首次创建路径
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(GraphError::IoError(e)),
+        };
+
+        let mut header = [0u8; crate::page::PAGE_SIZE];
+        // 短读说明文件比一页还小：尚无格式，放行
+        if std::io::Read::read(&mut file, &mut header).unwrap_or(0) < crate::page::PAGE_SIZE {
+            return Ok(());
+        }
+
+        let magic = &header[0..4];
+        if magic != crate::page::DB_PAGE_MAGIC && magic != crate::page::DB_PAGE_MAGIC_LEGACY {
+            // 不是本项目的文件。交由后续路径处理（会按「新库」初始化），
+            // 这里不越权判定。
+            return Ok(());
+        }
+
+        let file_version = u32::from_le_bytes(
+            header[crate::page::HeaderPage::VERSION_OFFSET
+                ..crate::page::HeaderPage::VERSION_OFFSET + 4]
+                .try_into()
+                .unwrap_or([0; 4]),
+        );
+
+        if file_version < crate::page::DB_PAGE_VERSION {
+            return Err(GraphError::StorageError(format!(
+                "Database file format version {} is not readable by this build \
+                 (current format version {}).\n\
+                 GraphLite 1.0 froze the on-disk format and does not silently \
+                 reinterpret older files.\n\
+                 To migrate: export the graph with the matching older GraphLite \
+                 build via `.dump`, then re-import that script into a fresh database.",
+                file_version,
+                crate::page::DB_PAGE_VERSION
+            )));
+        }
+        if file_version > crate::page::DB_PAGE_VERSION {
+            return Err(GraphError::StorageError(format!(
+                "Database file format version {} is newer than this build supports \
+                 (current format version {}).\n\
+                 Upgrade GraphLite to open this file; do not open it with an older \
+                 version, as that risks writing an incompatible format.",
+                file_version,
+                crate::page::DB_PAGE_VERSION
+            )));
+        }
+        Ok(())
+    }
+
+    /// 打开前拒绝超过格式上限的主文件，**早于任何写入**（含 WAL 回放）。
+    ///
+    /// 属性指针以 24 位存页号，因此只有 `2^24 × 4 KiB = 64 GiB` 的地址空间。
+    /// 越界写入会被 `pack_prop_ptr` 拒绝，但**读取**一条已越界的旧数据无法
+    /// 自我修复，且越界页号在 24 位空间里会与合法页号混淆。因此在打开时就拒绝，
+    /// 而不是等到某次写入才失败——那时库可能已经处于半损坏状态。
+    fn check_file_size_limit(db_path: &Path) -> Result<(), GraphError> {
+        let size = match std::fs::metadata(db_path) {
+            Ok(m) => m.len(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(GraphError::IoError(e)),
+        };
+        let limit_bytes =
+            (crate::page::MAX_PROP_PAGE_ID as u64 + 1) * crate::page::PAGE_SIZE as u64;
+        if size > limit_bytes {
+            return Err(GraphError::StorageError(format!(
+                "Database file is {} bytes, which exceeds the {} byte ({} GiB) format limit.\n\
+                 Property pointers encode a page number in 24 bits, so the largest \
+                 addressable file is 2^24 pages x 4 KiB = 64 GiB.\n\
+                 This limit is part of the frozen 1.0 format and will not be raised \
+                 without a format version bump.",
+                size,
+                limit_bytes,
+                limit_bytes / 1024 / 1024 / 1024
+            )));
+        }
+        Ok(())
     }
 
     /// 执行 Cypher 变更语句 (如 CREATE / DETACH DELETE)

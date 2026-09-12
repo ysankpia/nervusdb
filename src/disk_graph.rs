@@ -6,7 +6,6 @@ use crate::page::{
     SLOT_OVERFLOW,
 };
 use crate::sync_ext::MutexRecoverExt;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
@@ -14,7 +13,7 @@ use std::sync::{Arc, Mutex};
 pub const HEADER_PAGE_ID: PageId = 0;
 
 /// 节点复合持久化载荷（标签集合与动态属性字典完整物理存储）
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NodeData {
     pub labels: HashSet<String>,
     pub properties: HashMap<String, Value>,
@@ -52,7 +51,7 @@ pub const EDGE_BATCH_WEAVE_MIN: usize = 64;
 pub const MAX_BATCH_EDGES_IN_MEMORY: usize = 100_000;
 
 /// 字符串字典管理器：将 Label 和 EdgeType 映射为 u32 ID
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct StringDict {
     str_to_id: HashMap<String, u32>,
     id_to_str: HashMap<u32, String>,
@@ -60,6 +59,66 @@ pub struct StringDict {
 }
 
 impl StringDict {
+    /// 编码为磁盘载荷。布局见 `FORMAT.md`：
+    ///
+    /// ```text
+    /// next_id:u32
+    /// count:u32
+    /// count × ( id:u32, str:len:u32 + UTF-8 bytes )
+    /// ```
+    ///
+    /// 只写 `id_to_str` 一侧，`str_to_id` 在解码时重建：两者是同一映射的正反两面，
+    /// 写两份会白占空间，也让两个副本有机会不一致。
+    pub fn encode(&self) -> Vec<u8> {
+        let mut w = crate::codec::Writer::with_capacity(self.id_to_str.len() * 24 + 8);
+        w.u32(self.next_id);
+        w.u32(self.id_to_str.len() as u32);
+        // 排序保证同一字典的编码字节稳定，便于比对与调试
+        let mut entries: Vec<(&u32, &String)> = self.id_to_str.iter().collect();
+        entries.sort_unstable_by_key(|(id, _)| **id);
+        for (id, s) in entries {
+            w.u32(*id);
+            w.string(s);
+        }
+        w.finish()
+    }
+
+    /// 从磁盘载荷解码。畸形输入返回 `Err`，调用方保留现有字典（不半途污染）。
+    pub fn decode(buf: &[u8]) -> Result<StringDict, GraphError> {
+        let mut r = crate::codec::Reader::new(buf);
+        let next_id = r.u32()?;
+        let count = r.u32()? as usize;
+        // 每条至少 4(id)+4(长度) = 8 字节，据此拒绝荒谬的 count，
+        // 避免用损坏的计数预分配巨量内存
+        if count.saturating_mul(8) > r.remaining() {
+            return Err(GraphError::SerializationError(format!(
+                "dictionary claims {} entries but only {} byte(s) remain",
+                count,
+                r.remaining()
+            )));
+        }
+
+        let mut str_to_id = HashMap::with_capacity(count);
+        let mut id_to_str = HashMap::with_capacity(count);
+        for _ in 0..count {
+            let id = r.u32()?;
+            let s = r.string()?;
+            str_to_id.insert(s.clone(), id);
+            id_to_str.insert(id, s);
+        }
+        if !r.is_exhausted() {
+            return Err(GraphError::SerializationError(format!(
+                "dictionary has {} trailing byte(s)",
+                r.remaining()
+            )));
+        }
+
+        Ok(StringDict {
+            str_to_id,
+            id_to_str,
+            next_id,
+        })
+    }
     pub fn new() -> Self {
         Self {
             str_to_id: HashMap::new(),
@@ -208,22 +267,23 @@ impl DiskGraph {
 
         let magic = &frame.data[0..4];
         if magic == crate::page::DB_PAGE_MAGIC || magic == crate::page::DB_PAGE_MAGIC_LEGACY {
-            // 物理格式版本守卫：1.0 的「每实体独占整页」属性布局与 1.1 槽位页不兼容
-            let file_version = u32::from_le_bytes(
-                frame.data[HeaderPage::VERSION_OFFSET..HeaderPage::VERSION_OFFSET + 4]
-                    .try_into()
-                    .unwrap(),
+            // 版本守卫**不在这里**：`GraphLite::open` 已在任何写入（含 WAL 回放）
+            // 之前用 `check_format_version` 挡下不匹配的文件（见 lib.rs）。
+            //
+            // 若在此处再检查一次，就太晚了——回放已经用当前版本的语义解释并写回
+            // 了旧格式的文件，此时报错只会留下一个被污染的库。
+            // 这里保留一处断言，防止有人绕过 `open` 直接构造 `DiskGraph`。
+            debug_assert!(
+                {
+                    let v = u32::from_le_bytes(
+                        frame.data[HeaderPage::VERSION_OFFSET..HeaderPage::VERSION_OFFSET + 4]
+                            .try_into()
+                            .unwrap(),
+                    );
+                    v == crate::page::DB_PAGE_VERSION
+                },
+                "DiskGraph constructed on a file whose format version was not validated"
             );
-            if file_version < crate::page::DB_PAGE_VERSION {
-                bpm.unpin_page(HEADER_PAGE_ID, false);
-                return Err(GraphError::StorageError(format!(
-                    "Database file version {} is not supported by this build \
-                     (current format version {}). Export the graph with an older GraphLite \
-                     via `.dump`, then re-import the script into a fresh database.",
-                    file_version,
-                    crate::page::DB_PAGE_VERSION
-                )));
-            }
 
             self.next_node_id = u64::from_le_bytes(
                 frame.data[HeaderPage::NEXT_NODE_ID_OFFSET..HeaderPage::NEXT_NODE_ID_OFFSET + 8]
@@ -362,14 +422,14 @@ impl DiskGraph {
 
             if self.dict_page_id != INVALID_PAGE_ID && self.dict_page_id != 0 {
                 let payload = Self::read_overflow_payload_internal(&mut bpm, self.dict_page_id)?;
-                if let Ok(d) = bincode::deserialize::<StringDict>(&payload) {
+                if let Ok(d) = StringDict::decode(&payload) {
                     self.dict = d;
                 }
             } else if inline_dict_len > 0 && inline_dict_len <= HeaderPage::MAX_INLINE_PAYLOAD_SIZE
             {
                 let dict_slice = &header_bytes[HeaderPage::INLINE_PAYLOAD_OFFSET
                     ..HeaderPage::INLINE_PAYLOAD_OFFSET + inline_dict_len];
-                if let Ok(d) = bincode::deserialize::<StringDict>(dict_slice) {
+                if let Ok(d) = StringDict::decode(dict_slice) {
                     self.dict = d;
                 }
             }
@@ -378,7 +438,7 @@ impl DiskGraph {
                 if let Ok(payload) =
                     Self::read_overflow_payload_internal(&mut bpm, self.index_catalog_page_id)
                 {
-                    if let Ok(cat) = bincode::deserialize::<crate::index::IndexCatalog>(&payload) {
+                    if let Ok(cat) = crate::index::IndexCatalog::decode(&payload) {
                         self.index_catalog = cat;
                     }
                 }
@@ -387,7 +447,7 @@ impl DiskGraph {
             {
                 let cat_start = HeaderPage::INLINE_PAYLOAD_OFFSET + inline_dict_len;
                 let cat_slice = &header_bytes[cat_start..cat_start + inline_cat_len];
-                if let Ok(cat) = bincode::deserialize::<crate::index::IndexCatalog>(cat_slice) {
+                if let Ok(cat) = crate::index::IndexCatalog::decode(cat_slice) {
                     self.index_catalog = cat;
                 }
             }
@@ -764,18 +824,18 @@ impl DiskGraph {
                 }
                 pids[0]
             };
-            return Ok(crate::page::pack_prop_ptr(root, SLOT_OVERFLOW));
+            return crate::page::pack_prop_ptr(root, SLOT_OVERFLOW);
         }
 
         let pid = Self::locate_prop_page_for(bpm, allocator, tx_modified, hint, payload)?;
         match Self::try_insert_into_prop_page(bpm, tx_modified, pid, payload)? {
-            Some(slot) => Ok(crate::page::pack_prop_ptr(pid, slot)),
+            Some(slot) => crate::page::pack_prop_ptr(pid, slot),
             None => {
                 // 定位阶段的判断与实际插入之间存在竞争（同页并发写），退化为新页
                 let pid = Self::raw_allocate_prop_page(bpm, allocator, tx_modified)?;
                 Self::push_prop_hint(hint, pid);
                 match Self::try_insert_into_prop_page(bpm, tx_modified, pid, payload)? {
-                    Some(slot) => Ok(crate::page::pack_prop_ptr(pid, slot)),
+                    Some(slot) => crate::page::pack_prop_ptr(pid, slot),
                     None => Err(GraphError::StorageError(
                         "Failed to insert property record into a freshly allocated slotted page"
                             .into(),
@@ -1113,8 +1173,8 @@ impl DiskGraph {
     pub fn sync_header(&mut self) -> Result<(), GraphError> {
         let mut bpm = self.bpm.lock_recover();
 
-        let dict_bytes = bincode::serialize(&self.dict).unwrap_or_default();
-        let cat_bytes = bincode::serialize(&self.index_catalog).unwrap_or_default();
+        let dict_bytes = self.dict.encode();
+        let cat_bytes = self.index_catalog.encode();
 
         let mut inline_dict_len: u32 = 0;
         let mut inline_cat_len: u32 = 0;

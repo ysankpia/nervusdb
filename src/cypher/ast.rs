@@ -1,5 +1,4 @@
 use crate::graph::{Direction, Value};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// 二元操作符
@@ -200,7 +199,7 @@ impl CypherStatement {
 }
 
 /// 变更执行结果摘要
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct ExecuteResult {
     pub nodes_created: usize,
     pub edges_created: usize,

@@ -1,7 +1,6 @@
+use crate::crc32::Hasher;
 use crate::graph::GraphError;
 use crate::page::{PageId, PAGE_SIZE};
-use crc32fast::Hasher;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -15,7 +14,7 @@ const WAL_MAGIC: &[u8; 4] = b"GWAL";
 pub const WAL_FRAME_HEADER_SIZE: u64 = 12;
 
 /// 页级 WAL 日志记录
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum WalRecord {
     TxBegin {
         tx_id: u64,
@@ -33,6 +32,108 @@ pub enum WalRecord {
         tx_id: u64,
     },
     Checkpoint,
+}
+
+/// `WalRecord` 的变体标签。**这些数值是磁盘格式的一部分，永不重用。**
+///
+/// 与 `bincode` 的变体序号不同，这里是显式且文档化的：新增变体只能追加新标签，
+/// 已废弃的标签必须保留占位，否则旧 WAL 文件会被解码成错误的记录类型。
+pub mod wal_tag {
+    pub const TX_BEGIN: u8 = 1;
+    pub const PAGE_WRITE: u8 = 2;
+    pub const TX_COMMIT: u8 = 3;
+    pub const TX_ROLLBACK: u8 = 4;
+    pub const CHECKPOINT: u8 = 5;
+}
+
+impl WalRecord {
+    /// 编码为 WAL 帧载荷。
+    ///
+    /// 布局（小端，见 `FORMAT.md`）：
+    ///
+    /// ```text
+    /// tag:u8
+    /// TxBegin     -> tx_id:u64
+    /// TxCommit    -> tx_id:u64
+    /// TxRollback  -> tx_id:u64
+    /// Checkpoint  -> (无载荷)
+    /// PageWrite   -> tx_id:u64, page_id:u32, crc32:u32, data:len:u32 + bytes
+    /// ```
+    pub fn encode(&self) -> Vec<u8> {
+        let mut w = crate::codec::Writer::with_capacity(PAGE_SIZE + 16);
+        match self {
+            WalRecord::TxBegin { tx_id } => {
+                w.u8(wal_tag::TX_BEGIN);
+                w.u64(*tx_id);
+            }
+            WalRecord::TxCommit { tx_id } => {
+                w.u8(wal_tag::TX_COMMIT);
+                w.u64(*tx_id);
+            }
+            WalRecord::TxRollback { tx_id } => {
+                w.u8(wal_tag::TX_ROLLBACK);
+                w.u64(*tx_id);
+            }
+            WalRecord::Checkpoint => {
+                w.u8(wal_tag::CHECKPOINT);
+            }
+            WalRecord::PageWrite {
+                tx_id,
+                page_id,
+                crc32,
+                data,
+            } => {
+                w.u8(wal_tag::PAGE_WRITE);
+                w.u64(*tx_id);
+                w.u32(*page_id);
+                w.u32(*crc32);
+                w.bytes(data);
+            }
+        }
+        w.finish()
+    }
+
+    /// 从 WAL 帧载荷解码。任何畸形输入都返回 `Err`，绝不 panic。
+    ///
+    /// 调用方（`read_frame_at` 等）把 `Err` 视为「这一帧无效」并停止回放，
+    /// 与尾部撕裂帧的处理一致。
+    pub fn decode(buf: &[u8]) -> Result<WalRecord, GraphError> {
+        let mut r = crate::codec::Reader::new(buf);
+        let tag = r.u8()?;
+        let rec = match tag {
+            wal_tag::TX_BEGIN => WalRecord::TxBegin { tx_id: r.u64()? },
+            wal_tag::TX_COMMIT => WalRecord::TxCommit { tx_id: r.u64()? },
+            wal_tag::TX_ROLLBACK => WalRecord::TxRollback { tx_id: r.u64()? },
+            wal_tag::CHECKPOINT => WalRecord::Checkpoint,
+            wal_tag::PAGE_WRITE => {
+                let tx_id = r.u64()?;
+                let page_id = r.u32()?;
+                let crc32 = r.u32()?;
+                let data = r.bytes()?;
+                WalRecord::PageWrite {
+                    tx_id,
+                    page_id,
+                    crc32,
+                    data,
+                }
+            }
+            other => {
+                return Err(GraphError::SerializationError(format!(
+                    "unknown WAL record tag {}",
+                    other
+                )))
+            }
+        };
+        // 拒绝尾部垃圾：编码器从不留多余字节，有残余说明数据被篡改或损坏。
+        if !r.is_exhausted() {
+            return Err(GraphError::SerializationError(format!(
+                "WAL record tag {} has {} trailing byte(s)",
+                tag,
+                r.remaining()
+            )));
+        }
+        Ok(rec)
+    }
 }
 
 fn payload_crc(payload: &[u8]) -> u32 {
@@ -118,8 +219,7 @@ impl WalWriter {
 
     /// 追加单条 WAL 记录，返回该帧在 WAL 中的起始偏移（用于 O(1) 随机回读）
     pub fn append(&self, record: &WalRecord) -> Result<u64, GraphError> {
-        let payload = bincode::serialize(record)
-            .map_err(|e| GraphError::SerializationError(e.to_string()))?;
+        let payload = record.encode();
         let crc = payload_crc(&payload);
 
         if self.is_memory {
@@ -149,7 +249,7 @@ impl WalWriter {
         if self.is_memory {
             let payload = self.lock_mem().get(&offset).cloned();
             return match payload {
-                Some(bytes) => Ok(bincode::deserialize::<WalRecord>(&bytes).ok()),
+                Some(bytes) => Ok(WalRecord::decode(&bytes).ok()),
                 None => Ok(None),
             };
         }
@@ -179,7 +279,7 @@ impl WalWriter {
             return Ok(None);
         }
 
-        match bincode::deserialize::<WalRecord>(&payload) {
+        match WalRecord::decode(&payload) {
             Ok(rec) => Ok(Some(rec)),
             Err(_) => Ok(None),
         }
@@ -285,7 +385,7 @@ impl WalWriter {
                 break;
             }
 
-            match bincode::deserialize::<WalRecord>(&payload) {
+            match WalRecord::decode(&payload) {
                 Ok(rec) => records.push(rec),
                 Err(_) => break,
             }
@@ -399,7 +499,7 @@ impl WalCursor<'_> {
                 let frame_offset = *offset;
                 *offset += WAL_FRAME_HEADER_SIZE + len as u64;
 
-                match bincode::deserialize::<WalRecord>(&payload[..len]) {
+                match WalRecord::decode(&payload[..len]) {
                     Ok(rec) => Ok(Some((frame_offset, rec))),
                     Err(_) => Ok(None),
                 }
@@ -425,7 +525,7 @@ impl WalCursor<'_> {
                 }
                 payload[..bytes.len()].copy_from_slice(&bytes);
 
-                match bincode::deserialize::<WalRecord>(&payload[..bytes.len()]) {
+                match WalRecord::decode(&payload[..bytes.len()]) {
                     Ok(rec) => Ok(Some((frame_offset, rec))),
                     Err(_) => Ok(None),
                 }

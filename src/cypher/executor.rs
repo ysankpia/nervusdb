@@ -5,17 +5,16 @@ use crate::cypher::ast::{
 use crate::disk_graph::DiskGraph;
 use crate::graph::{Direction, GraphError, Value};
 use crate::index::IndexManager;
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// 结果集行
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Row {
     pub values: Vec<Value>,
 }
 
 /// Cypher 查询结果集
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct CypherResultSet {
     pub columns: Vec<String>,
     pub rows: Vec<Row>,
@@ -496,7 +495,7 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         match binding {
             Binding::Node(id) => {
                 if let Some(node) = self.graph.get_node(id)? {
-                    let json = serde_json::to_string(&node.properties).unwrap_or_default();
+                    let json = crate::json::map_to_string(&node.properties);
                     Ok(Value::from(json))
                 } else {
                     Ok(Value::from("{}"))
@@ -504,7 +503,7 @@ impl<'a> CypherReadOnlyExecutor<'a> {
             }
             Binding::Edge(id) => {
                 if let Some(edge) = self.graph.get_edge(id)? {
-                    let json = serde_json::to_string(&edge.properties).unwrap_or_default();
+                    let json = crate::json::map_to_string(&edge.properties);
                     Ok(Value::from(json))
                 } else {
                     Ok(Value::from("{}"))

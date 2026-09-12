@@ -1,5 +1,4 @@
-use crate::graph::Value;
-use serde::{Deserialize, Serialize};
+use crate::graph::{GraphError, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 type PropIndexMap = HashMap<(String, String), BTreeMap<Value, BTreeSet<u64>>>;
@@ -12,13 +11,103 @@ pub enum IndexStatus {
 }
 
 /// 二级索引持久化目录元数据（对齐 SQLite 模式表架构）
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+///
+/// 磁盘布局见 `FORMAT.md`：
+///
+/// ```text
+/// labels_count:u32      labels_count × (len:u32 + UTF-8)
+/// props_count:u32       props_count  × ( label_len:u32 + label,
+///                                        key_len:u32   + key   )
+/// edge_types_count:u32  edge_types_count × (len:u32 + UTF-8)
+/// ```
+#[derive(Debug, Clone, Default)]
 pub struct IndexCatalog {
     pub labels: BTreeSet<String>,
     pub properties: BTreeSet<(String, String)>,
     /// 图模式中的关系类型清单（供 `.schema` 与管理工具展示）
-    #[serde(default)]
     pub edge_types: BTreeSet<String>,
+}
+
+impl IndexCatalog {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut w = crate::codec::Writer::with_capacity(
+            self.labels.len() * 16 + self.properties.len() * 32 + self.edge_types.len() * 16 + 12,
+        );
+        w.u32(self.labels.len() as u32);
+        for l in &self.labels {
+            w.string(l);
+        }
+        w.u32(self.properties.len() as u32);
+        for (l, k) in &self.properties {
+            w.string(l);
+            w.string(k);
+        }
+        w.u32(self.edge_types.len() as u32);
+        for t in &self.edge_types {
+            w.string(t);
+        }
+        w.finish()
+    }
+
+    pub fn decode(buf: &[u8]) -> Result<IndexCatalog, GraphError> {
+        let mut r = crate::codec::Reader::new(buf);
+
+        // 每个集合成员至少 4 字节（长度前缀），据此拒绝荒谬的计数，
+        // 避免用损坏的计数预分配巨量内存。
+        let n = r.u32()? as usize;
+        if n.saturating_mul(4) > r.remaining() {
+            return Err(GraphError::SerializationError(format!(
+                "index catalog claims {} label(s) but only {} byte(s) remain",
+                n,
+                r.remaining()
+            )));
+        }
+        let mut labels = BTreeSet::new();
+        for _ in 0..n {
+            labels.insert(r.string()?);
+        }
+
+        let n = r.u32()? as usize;
+        if n.saturating_mul(8) > r.remaining() {
+            return Err(GraphError::SerializationError(format!(
+                "index catalog claims {} propert(y|ies) but only {} byte(s) remain",
+                n,
+                r.remaining()
+            )));
+        }
+        let mut properties = BTreeSet::new();
+        for _ in 0..n {
+            let l = r.string()?;
+            let k = r.string()?;
+            properties.insert((l, k));
+        }
+
+        let n = r.u32()? as usize;
+        if n.saturating_mul(4) > r.remaining() {
+            return Err(GraphError::SerializationError(format!(
+                "index catalog claims {} edge type(s) but only {} byte(s) remain",
+                n,
+                r.remaining()
+            )));
+        }
+        let mut edge_types = BTreeSet::new();
+        for _ in 0..n {
+            edge_types.insert(r.string()?);
+        }
+
+        if !r.is_exhausted() {
+            return Err(GraphError::SerializationError(format!(
+                "index catalog has {} trailing byte(s)",
+                r.remaining()
+            )));
+        }
+
+        Ok(IndexCatalog {
+            labels,
+            properties,
+            edge_types,
+        })
+    }
 }
 
 /// 二级索引管理器：支持 Label 索引与 (Label, PropKey) 属性索引加速
