@@ -145,7 +145,7 @@ Workspace: `src/` (core, zero deps), `bindings/python`, `bindings/nodejs`, `test
 
 | Concern                                                                | Owner                                       |
 | ---------------------------------------------------------------------- | ------------------------------------------- |
-| Public facade, ACID coordination, locking entry points                 | `src/lib.rs` (`NervusDb`, `Transaction`)   |
+| Public facade, ACID coordination, locking entry points                 | `src/lib.rs` (`NervusDb`, `Transaction`)    |
 | Page layout, records, property codec, property pointers                | `src/page.rs`                               |
 | Page I/O and the buffer pool (eviction, STEAL spill, CRC mount points) | `src/buffer.rs`                             |
 | Addressing, disk adjacency, freelists, batch weave                     | `src/disk_graph.rs`                         |
@@ -258,8 +258,10 @@ the name are described in [`docs/testing.md`](docs/testing.md).
   the exact totals are what detect a regression. Method and conditions:
   [`docs/benchmarks.md`](docs/benchmarks.md).
 
-- **Verify an SDK** (the dylib/so copy is required — the bindings do not load from
-  `target/`):
+- **Verify an SDK.** The copy is mandatory, not a convenience: Node's `require`
+  cannot load a `.so`/`.dylib` (it fails with "Invalid or unexpected token"), and the
+  Python module must be importable as `nervusdb`, which only the renamed `.so`
+  provides. `.node-version` pins the runtime both workflows use.
   ```bash
   cargo build -p nervusdb-node && cp target/debug/libnervusdb_node.dylib bindings/nodejs/nervusdb.node
   cd bindings/nodejs && node test.mjs
@@ -267,6 +269,23 @@ the name are described in [`docs/testing.md`](docs/testing.md).
   cargo build -p nervusdb-python && cp target/debug/libnervusdb_python.dylib bindings/python/nervusdb.so
   cd bindings/python && PYTHONPATH=. python3 tests/test_nervusdb.py
   ```
+
+### 3.5 Releasing
+
+`.github/workflows/release.yml`, triggered by a `v*` tag **or** a manual dispatch.
+Publishing is irreversible — a version cannot be overwritten and a released version
+cannot be deleted — so the two jobs are separated:
+
+- `verify` runs on the tag: the whole §3.1 gate re-run on the tagged commit (a tag can
+  point at a commit that never passed CI), a check that the tag matches the manifest
+  version, and `cargo package --locked`. It publishes nothing.
+- `publish` runs **only** on `workflow_dispatch` with `confirm: publish`, behind the
+  `release` GitHub Environment. A tag alone never publishes.
+
+Required secrets (only referenced in the `publish` job): `CARGO_REGISTRY_TOKEN`,
+`PYPI_API_TOKEN`, `NPM_TOKEN`. Before the first release, create the `release`
+environment and set these. The registry name and version become permanent at that
+point, which is what the version check above exists to protect.
 
 ---
 
@@ -358,10 +377,11 @@ CREATE (n {v: x})` must read `x`. But `MATCH` / `MERGE` pattern properties are
 
 ### 5.1 Development workflow: PR-based, `main` is protected
 
-`main` has branch protection enabled: force pushes and deletions are refused, and
-all three CI checks (`Test (ubuntu-latest)`, `Test (macos-latest)`, `Docs build`)
-must pass. Changes therefore go through a pull request, including the
-maintainer's own work:
+`main` has branch protection enabled: force pushes and deletions are refused, `strict`
+is on (a PR must be up to date with `main` before merging), and **all five CI checks**
+must pass: `Test (ubuntu-latest)`, `Test (macos-latest)`, `SDK (node)`, `SDK (python)`,
+`Docs build`. Changes therefore go through a pull request, including the maintainer's
+own work:
 
 ```bash
 git switch -c fix/short-description
@@ -371,6 +391,14 @@ gh pr create --fill
 # merge once CI is green
 gh pr merge --squash --delete-branch
 ```
+
+The two `SDK` checks exist because `cargo test --workspace` compiles the binding
+crates but has no test target to run there, so their end-to-end suites were invisible
+to every check that preceded them. They are **required** rather than advisory: the
+first run of `SDK (node)` caught a real defect (Node's `require` cannot load a
+`.so`/`.dylib`, so the binding must be copied to `.node` first), and one that a local
+green run had masked because the copy already existed on the developer's machine and
+is gitignored.
 
 Branch naming: `feat/…`, `fix/…`, `perf/…`, `refactor/…`, `test/…`, `docs/…`,
 `chore/…`, matching the commit type it will produce.
