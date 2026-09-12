@@ -146,16 +146,38 @@ distinguishes capacity from defect.
 
 ### SDK throughput
 
-Same host, smoke scale (100k nodes + 400k edges):
+50,000 nodes with properties (and 100,000 edges), 4096-frame pool, file-backed.
+**Bindings must be built with `--release`** — a debug build of the binding against
+a release core produces numbers that are wrong by 6x, which is exactly the mistake
+this section previously contained (see below).
+
+| Path           | Node writes   | Edge writes    |
+| -------------- | ------------- | -------------- |
+| Rust (native)  | 382,000 ops/s | ~450,000 ops/s |
+| Python (PyO3)  | 355,000 ops/s | 422,000 ops/s  |
+| Node.js (NAPI) | 326,000 ops/s | 395,000 ops/s  |
+
+**The bindings are at 0.85–0.93x of the native path.** There is no 9x gap and the
+FFI boundary is not the bottleneck — measured directly, a 50,000-node batch spends
+0.037 s crossing the boundary and parsing, against 0.095 s actually committing to
+disk. The commit is the cost; the boundary is noise.
+
+`Transaction::add_nodes` / `add_edges` exist in both SDKs. They are kept for
+ergonomics and to avoid taking the global write lock once per record, **not** as a
+throughput claim: on the standard benchmark their effect is within run-to-run noise.
+
+Correction history — the previous version of this table read:
 
 | SDK            | Node writes  | Edge writes   |
 | -------------- | ------------ | ------------- |
 | Python (PyO3)  | 63,000 ops/s | 112,000 ops/s |
 | Node.js (NAPI) | 64,000 ops/s | 117,000 ops/s |
 
-The native Rust path is ~550,000 ops/s at the same scale, so the gap is the
-**one-call-per-write FFI boundary**, not engine speed. A batch API accepting an
-array of entities per call would close most of it; see the roadmap.
+Those were produced with **debug** bindings measured against a **release** core.
+The same script measured 499,599 ops/s (release) versus 78,603 ops/s (debug) — a
+6.4x delta that was being attributed to the FFI boundary rather than to the build
+profile. The figure is retracted; the measurement conditions are now stated above
+so the same mistake is harder to repeat.
 
 ---
 

@@ -1434,6 +1434,79 @@ impl Transaction {
         self.tx_id
     }
 
+    /// 事务内**批量**添加节点，返回按输入顺序排列的 ID 列表。
+    ///
+    /// ## 为什么需要它
+    ///
+    /// 逐条 `add_node` 每次都要取一次 `GraphInner` 的**全局写锁**，仅为分配一个
+    /// 自增 ID。跨语言边界（FFI）本身不贵，贵的是「每条记录一次的固定开销」。
+    /// 实测 Python SDK 逐条写入约 42k ops/s，而原生路径在同一规模下约 550k。
+    ///
+    /// 本函数把 N 次加解锁压成**一次**：一次性预留 N 个 ID（仍在一次加锁内完成，
+    /// 因为 Freelist 遍历需要读记录），此后在**锁外**构造事务动作。
+    ///
+    /// 语义与逐条调用完全一致：同一个事务、同样在 commit 时统一落盘、同样受
+    /// 唯一约束保护。返回的 ID 与输入一一对应。
+    pub fn add_nodes(
+        &mut self,
+        nodes: Vec<(HashSet<String>, HashMap<String, Value>)>,
+    ) -> Result<Vec<u64>, GraphError> {
+        if nodes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids = {
+            let mut inner = self
+                .db
+                .inner
+                .write()
+                .map_err(|e| GraphError::General(e.to_string()))?;
+            inner.disk_graph.allocate_next_node_ids(nodes.len())?
+        };
+
+        self.ops.reserve(nodes.len());
+        for (id, (labels, properties)) in ids.iter().copied().zip(nodes) {
+            self.ops.push(TxAction::AddNode {
+                id,
+                labels,
+                properties,
+            });
+        }
+        Ok(ids)
+    }
+
+    /// 事务内**批量**添加边，返回按输入顺序排列的 ID 列表。
+    ///
+    /// 与 [`Self::add_nodes`] 同理：一次性预留 ID，避免每条边取一次全局写锁。
+    pub fn add_edges(
+        &mut self,
+        edges: Vec<crate::disk_graph::EdgeInsert>,
+    ) -> Result<Vec<u64>, GraphError> {
+        if edges.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ids = {
+            let mut inner = self
+                .db
+                .inner
+                .write()
+                .map_err(|e| GraphError::General(e.to_string()))?;
+            inner.disk_graph.allocate_next_edge_ids(edges.len())?
+        };
+
+        self.ops.reserve(edges.len());
+        for (id, e) in ids.iter().copied().zip(edges) {
+            self.ops.push(TxAction::AddEdge {
+                id,
+                src_id: e.src_id,
+                dst_id: e.dst_id,
+                edge_type: e.edge_type,
+                properties: e.properties,
+                weight: e.weight,
+            });
+        }
+        Ok(ids)
+    }
+
     /// 事务内添加节点
     pub fn add_node(
         &mut self,

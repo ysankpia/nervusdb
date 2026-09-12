@@ -95,11 +95,31 @@ The Python and Node.js bindings build and pass their tests but are not published
 to PyPI or npm. Publishing needs packaging polish, versioning policy and
 platform wheel/prebuild matrices.
 
-Their throughput is also bounded by the one-call-per-write FFI boundary
-(measured ~63k ops/s in Python and ~64k in Node, against ~550k for the native
-Rust path at the same scale). A batch API that accepts an array of entities per
-call would close most of that gap; that is the higher-value change and should
-land before publication.
+**Correction (this revision): the previously recorded "9x slower than native"
+figure was a measurement artifact, not a real gap.** Those numbers came from a
+*debug* build of the bindings compared against a *release* build of the core.
+Measured with both sides in release, on the same 50,000-node workload:
+
+| Path | Throughput |
+| --- | --- |
+| Rust, file-backed | 382,000 ops/s |
+| Python, file-backed | 355,000 ops/s |
+| Node, file-backed | 326,000 ops/s |
+
+The bindings are at 0.85–0.93x of the native path, not 0.11x. The debug/release
+delta is 6.4x on an identical script, which is what the old figure was actually
+measuring.
+
+This also means the batch API (`Transaction::add_nodes` / `add_edges`, exposed as
+`tx.add_nodes(...)` in both SDKs) is **not** a large performance win — the FFI
+boundary was never the bottleneck. It is kept because one call per batch is a
+better shape than N calls, but the honest framing is ergonomics and lock traffic,
+not throughput. Where it does help is flattening per-record fixed cost when a
+batch is built up in a loop; measured effect on the standard benchmark is within
+run-to-run noise.
+
+Remaining for publication: packaging, versioning policy, and platform
+wheel/prebuild matrices — unchanged.
 
 ### 7. Concurrency stress at high core counts
 

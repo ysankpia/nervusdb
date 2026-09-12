@@ -13,8 +13,25 @@ db = graphlite.GraphLite.open(db_path, pool_size=pool_frames)
 NODES = 50000
 EDGES = 100000
 
+# 构建模式必须显式声明并打印：debug 绑定比 release 慢约 6 倍，
+# 历史上正是把 debug 数字与 release 核心对比，得出了错误的「SDK 慢 9 倍」结论。
+import sys
+_build = os.environ.get("BUILD_PROFILE", "unknown")
+if _build != "release":
+    print(f"!! BUILD_PROFILE={_build}: 先用 `cargo build --release -p graphlite-python` 重建，")
+    print( "   否则测得的数字不可与文档中的 release 数据比较。")
+
+# 预热：首次运行包含 JIT/页缓存冷启动，实测首次比稳态低 3-4 倍。
+# 不预热会让「同一脚本两次运行」的差异被误读为性能变化。
+with db.begin_transaction() as tx:
+    for i in range(1, 2001):
+        tx.add_node(["Warmup"], {"i": i})
+# 预热数据留在库里，不参与后续度量：它只负责让页缓存与分配器进入稳态。
+# 末尾的 checkpoint 会把预热写入从 WAL 落回主文件。
+db.checkpoint()
+
 print("=== Python SDK Benchmark ===")
-print(f"DB: {db_path}  pool: {pool_frames} frames")
+print(f"DB: {db_path}  pool: {pool_frames} frames  build: {_build}")
 # 1. Nodes
 t0 = time.time()
 with db.begin_transaction() as tx:

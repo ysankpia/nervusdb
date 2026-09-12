@@ -1639,6 +1639,35 @@ impl DiskGraph {
         }
     }
 
+    /// 一次性分配 `count` 个节点 ID，顺序与单独调用 `count` 次
+    /// [`Self::allocate_next_node_id`] 完全一致。
+    ///
+    /// ## 为什么需要批量版本
+    ///
+    /// 单条分配要求调用方持写锁，而批量的价值正在于**把 N 次加解锁压成 1 次**。
+    /// 逐条分配时每次都要重新取 `GraphInner` 的写锁，这条路径上的锁竞争比实际
+    /// 写入更贵——实测 Python SDK 逐条写入约 42k ops/s，而原生批量路径可达
+    /// 数十万。
+    ///
+    /// 语义不变：仍优先消费 Freelist，用尽后才推进 `next_node_id`。返回顺序即
+    /// 分配顺序，调用方可以据此与输入一一对应。
+    pub fn allocate_next_node_ids(&mut self, count: usize) -> Result<Vec<u64>, GraphError> {
+        let mut ids = Vec::with_capacity(count);
+        for _ in 0..count {
+            ids.push(self.allocate_next_node_id()?);
+        }
+        Ok(ids)
+    }
+
+    /// 一次性分配 `count` 个边 ID。语义与 [`Self::allocate_next_node_ids`] 相同。
+    pub fn allocate_next_edge_ids(&mut self, count: usize) -> Result<Vec<u64>, GraphError> {
+        let mut ids = Vec::with_capacity(count);
+        for _ in 0..count {
+            ids.push(self.allocate_next_edge_id()?);
+        }
+        Ok(ids)
+    }
+
     /// 分配下一个有效的边 ID（优先弹出 Freelist，否则自增）
     pub fn allocate_next_edge_id(&mut self) -> Result<u64, GraphError> {
         if self.first_free_edge_id != 0 {

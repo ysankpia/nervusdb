@@ -18,6 +18,36 @@ user has to act on them:
 
 ### Added
 
+- **`Transaction::add_nodes` / `Transaction::add_edges`** in the core, exposed as
+  `tx.add_nodes(...)` / `tx.add_edges(...)` in both SDKs. One boundary crossing and
+  one lock acquisition per batch instead of per record.
+
+- **Correction: the SDKs were never 9x slower than the native path.** The recorded
+  "Python 63k, Node 64k vs Rust 550k ops/s" figures came from **debug** builds of
+  the bindings compared against a **release** core. Measured with both sides in
+  release, on 50,000 nodes with properties:
+
+  | Path | Throughput |
+  | --- | --- |
+  | Rust, file-backed | 382,000 ops/s |
+  | Python | 355,000 ops/s |
+  | Node.js | 326,000 ops/s |
+
+  Same script, debug versus release binding: 78,603 vs 499,599 ops/s — a 6.4x
+  difference that the old figure was attributing to the FFI boundary. Direct
+  measurement of the boundary itself: 0.037 s crossing and parsing a 50,000-node
+  batch versus 0.095 s committing it to disk. The commit is the cost.
+
+  This means the batch API is **not** the large win it was planned as. It is kept
+  for ergonomics and to avoid one lock acquisition per record, and the docs now say
+  exactly that rather than implying a throughput claim.
+
+  The SDK benchmarks now require `BUILD_PROFILE=release` and print the profile,
+  and both warm up before measuring — the first run is 3-4x slower than steady
+  state (Node measured 68k on a cold run and 241k-276k across three warm runs),
+  which is enough to mistake warmup for a performance difference.
+
+
 - **`db.backup(path)` — a consistent online copy.** The sequence is what makes it
   consistent: checkpoint first (so the data file becomes the single authoritative
   snapshot and the WAL is empty), then copy while holding the write lock (so no
