@@ -407,6 +407,22 @@ _No unreleased changes yet._
 
 ### Fixed
 
+- **`graphlite-studio` died when its stdout reader went away.** `println!` panics
+  if the write fails, and that panic happened on the main thread — so piping the
+  output anywhere that stops reading (a test harness, `head`, a log collector)
+  killed the whole server, and clients saw `ConnectionReset`.
+
+  Reproduced locally with `graphlite-studio db 300 | head -3`: the server exited.
+  Startup output now goes through a helper that ignores write errors, and the same
+  applies to the stderr paths (a closed stderr pipe panics identically).
+
+  The test harness had the matching defect: it read stdout only until it found the
+  port, then dropped the reader, closing the pipe. It now keeps draining both
+  streams for the life of the child. This was latent on macOS, where startup output
+  usually fit in the pipe buffer before the reader closed, and failed reliably on
+  Linux CI.
+
+
 - **A 1.8x write-throughput regression introduced by the zero-dependency
   conversion.** Replacing `crc32fast` with a hand-written byte-at-a-time CRC32
   made checksumming the bottleneck: every WAL frame computes two CRCs (the page

@@ -21,12 +21,24 @@ use tempfile::TempDir;
 struct Studio {
     child: Child,
     port: u16,
+    /// 后台排空输出的线程句柄。
+    ///
+    /// **必须持续排空，不能读完端口就丢掉 reader。** 丢掉读端会关闭管道，
+    /// 而 Studio 之后往 stdout 写启动信息时会拿到 `EPIPE`——`println!` 在写失败时
+    /// panic，于是**主线程崩溃、整个服务进程退出**。这个竞态在 macOS 上通常因为
+    /// 输出已提前写入管道缓冲而侥幸通过，在 Linux CI 上稳定失败（表现为客户端
+    /// 收到 `ConnectionReset`）。
+    drainers: Vec<std::thread::JoinHandle<()>>,
 }
 
 impl Drop for Studio {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        // 子进程已退出，读端会自然 EOF，排空线程随之结束
+        for h in self.drainers.drain(..) {
+            let _ = h.join();
+        }
     }
 }
 
@@ -45,8 +57,12 @@ impl Studio {
             .expect("failed to start graphlite-studio");
 
         let stdout = child.stdout.take().expect("stdout pipe");
-        let mut reader = BufReader::new(stdout);
+        let stderr = child.stderr.take().expect("stderr pipe");
 
+        // 读端口需要一个能反复读到端口的通道，同时不能丢掉读端。
+        // 做法：主线程读 stdout 直到解析出端口，之后把**同一个** reader
+        // 交给后台线程继续排空。
+        let mut reader = BufReader::new(stdout);
         let deadline = Instant::now() + Duration::from_secs(20);
         let mut port = None;
         while Instant::now() < deadline {
@@ -65,7 +81,29 @@ impl Studio {
         }
 
         let port = port.expect("studio did not report a listening port");
-        Studio { child, port }
+
+        let mut drainers = Vec::new();
+        // 继续排空 stdout，让服务能安全地继续打印
+        drainers.push(std::thread::spawn(move || {
+            let mut sink = String::new();
+            while reader.read_line(&mut sink).unwrap_or(0) > 0 {
+                sink.clear();
+            }
+        }));
+        // stderr 同样要排空：管道写满 64KB 会让子进程阻塞在写调用上
+        drainers.push(std::thread::spawn(move || {
+            let mut reader = BufReader::new(stderr);
+            let mut sink = String::new();
+            while reader.read_line(&mut sink).unwrap_or(0) > 0 {
+                sink.clear();
+            }
+        }));
+
+        Studio {
+            child,
+            port,
+            drainers,
+        }
     }
 
     /// 发一个最小 HTTP/1.1 GET，返回 `(状态码, 响应体)`。

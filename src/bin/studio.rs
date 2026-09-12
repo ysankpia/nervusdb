@@ -60,7 +60,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(DEFAULT_LIMIT);
 
     if !path.exists() {
-        eprintln!("Database not found: {}", path.display());
+        let mut err = std::io::stderr().lock();
+        let _ = writeln!(err, "Database not found: {}", path.display());
         std::process::exit(1);
     }
 
@@ -72,22 +73,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let probe = match GraphLite::open_read_only(&path) {
             Ok(db) => db,
             Err(e) => {
-                eprintln!("Cannot open '{}':", path.display());
-                eprintln!("  {}", e);
-                eprintln!();
-                eprintln!("Studio opens the database read-only. If the message mentions");
-                eprintln!("an unreplayed WAL, open the database once with a read-write");
-                eprintln!("handle (the CLI, or any SDK) and retry.");
+                let mut err = std::io::stderr().lock();
+                let _ = writeln!(err, "Cannot open '{}':", path.display());
+                let _ = writeln!(err, "  {}", e);
+                let _ = writeln!(err);
+                let _ = writeln!(err, "Studio opens the database read-only. If the message");
+                let _ = writeln!(
+                    err,
+                    "mentions an unreplayed WAL, open the database once with"
+                );
+                let _ = writeln!(err, "a read-write handle (the CLI, or any SDK) and retry.");
                 std::process::exit(1);
             }
         };
-        println!("GraphLite Studio");
-        println!(
+        say("GraphLite Studio");
+        say(&format!(
             "  database : {} ({} nodes, {} edges)",
             path.display(),
             probe.node_count(),
             probe.edge_count()
-        );
+        ));
     }
 
     // 绑回环地址；端口交给内核分配，避免与用户已有服务冲突
@@ -95,9 +100,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let port = listener.local_addr()?.port();
     let url = format!("http://127.0.0.1:{}", port);
 
-    println!("  listening: {}", url);
-    println!("  mode     : read-only; the lock is taken per request, not held");
-    println!("  Ctrl-C to stop");
+    say(&format!("  listening: {}", url));
+    say("  mode     : read-only; the lock is taken per request, not held");
+    say("  Ctrl-C to stop");
 
     open_browser(&url);
 
@@ -140,14 +145,27 @@ fn open_for_request(path: &Path) -> Result<GraphLite, String> {
     GraphLite::open_read_only(path).map_err(|e| e.to_string())
 }
 
+/// 往 stdout 打印一行，**忽略写入失败**。
+///
+/// `println!` 在写失败时会 panic。当 stdout 是一个管道而读端已关闭（例如测试
+/// 读完端口就退出、或用户把输出管给 `head`），这个 panic 发生在主线程，会直接
+/// 干掉整个服务进程——客户端随后收到 `ConnectionReset`。
+///
+/// 一个本地服务不该因为「没人看它的日志」而崩溃，因此这里显式忽略错误。
+fn say(line: &str) {
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{}", line);
+    let _ = out.flush();
+}
+
 fn print_usage() {
-    println!("GraphLite Studio — browse a graph database in your browser");
-    println!();
-    println!("USAGE:");
-    println!("    graphlite-studio <database.db> [default-node-limit]");
-    println!();
-    println!("The server binds to 127.0.0.1 on an OS-assigned port and opens your");
-    println!("browser. The database is opened read-only, so a writer may keep running.");
+    say("GraphLite Studio — browse a graph database in your browser");
+    say("");
+    say("USAGE:");
+    say("    graphlite-studio <database.db> [default-node-limit]");
+    say("");
+    say("The server binds to 127.0.0.1 on an OS-assigned port and opens your");
+    say("browser. The database is opened read-only, so a writer may keep running.");
 }
 
 /// 处理一个连接。只支持 GET：本服务没有任何写端点。
@@ -433,9 +451,11 @@ fn open_browser(url: &str) {
     match std::process::Command::new(program).arg(url).spawn() {
         Ok(_) => {}
         Err(_) => {
-            eprintln!();
-            eprintln!("Could not launch a browser automatically.");
-            eprintln!("Open this URL manually: {}", url);
+            // 用 eprintln! 会在 stderr 是已关闭管道时 panic，同样会拖垮服务
+            let mut err = std::io::stderr().lock();
+            let _ = writeln!(err);
+            let _ = writeln!(err, "Could not launch a browser automatically.");
+            let _ = writeln!(err, "Open this URL manually: {}", url);
         }
     }
 }
