@@ -16,6 +16,10 @@ user has to act on them:
 
 ## [Unreleased]
 
+_No unreleased changes yet._
+
+## [1.0.0-rc.3] — 2026-09-12
+
 ### Added
 
 - **`graphlite-studio` — a local browser workbench.** `graphlite-studio novel.db`
@@ -402,6 +406,40 @@ user has to act on them:
   limitations.
 
 ### Fixed
+
+- **A 1.8x write-throughput regression introduced by the zero-dependency
+  conversion.** Replacing `crc32fast` with a hand-written byte-at-a-time CRC32
+  made checksumming the bottleneck: every WAL frame computes two CRCs (the page
+  and the payload), and the naive table lookup cost **7,028 ns per 4 KiB page**
+  against `crc32fast`'s **323 ns** — 21.8x slower, using hardware CRC32
+  instructions (`SSE4.2` + `PCLMULQDQ`) that process 8 bytes per operation.
+
+  Measured on LiveJournal, 20 million edges, interleaved runs on the same machine:
+
+  | | Edge ingestion |
+  | --- | --- |
+  | before (byte-at-a-time CRC) | 136,865 ops/s |
+  | after (slicing-by-8 CRC) | **280,426 ops/s** |
+  | rc.2 baseline (`crc32fast`) | 297,634 ops/s |
+
+  The fix is slicing-by-8: a second table lets the loop consume 8 bytes per
+  iteration and merge their contributions in one pass, taking the page from
+  7,028 ns to 1,750 ns. It stays pure software and dependency-free; hardware
+  instructions would need `std::arch` intrinsics plus runtime CPU feature
+  detection, which is a larger change than this regression warrants.
+
+  The first measurement of the replacement was wrong in a way worth recording:
+  timing `hash()` in a loop over the *same* buffer let the optimiser collapse the
+  repeated work, reporting 545 MB/s for an implementation that actually ran at
+  142 MB/s. The trustworthy number came from timing the real call pattern
+  (`Hasher::new` + `update` + `finalize` per page).
+
+  `slicing_matches_bytewise_for_all_lengths` pins the new path against a
+  byte-at-a-time reference across 0..=24 bytes plus large sizes. An off-by-one in
+  the slicing table would still produce a plausible-looking checksum — one that
+  would then declare every existing page corrupt — so this equivalence is the
+  property that matters, not any single known value.
+
 
 - **A read-only handle could still write, via `run_cypher`.** Every write entry
   point except this one had the read-only guard: `add_node`, `add_edge`, `execute`

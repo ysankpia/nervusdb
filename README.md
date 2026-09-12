@@ -32,8 +32,8 @@ fn main() -> Result<(), GraphError> {
 
 ## Status
 
-**`v1.0.0-rc.2` — release candidate.** The engine, Cypher surface, analytics and
-safety guarantees are implemented and covered by 100 tests, but several known
+**`v1.0.0-rc.3` — release candidate.** The engine, Cypher surface, analytics and
+safety guarantees are implemented and covered by 139 tests, but several known
 production gaps remain. Read
 [Known limitations](ROADMAP.md#next-planned) before considering production use.
 
@@ -80,7 +80,7 @@ production gaps remain. Read
 
 ```toml
 [dependencies]
-graphlite-rs = "1.0.0-rc.2"
+graphlite-rs = "1.0.0-rc.3"
 ```
 
 The Python and Node.js SDKs are **not published to PyPI or npm yet**. Build them
