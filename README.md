@@ -32,10 +32,12 @@ fn main() -> Result<(), GraphError> {
 
 ## Status
 
-**`v1.1.0` — stable.** The engine, Cypher surface, analytics and safety guarantees
-are implemented and covered by 197 tests. The on-disk format is frozen at version 4
-and unchanged by 1.1.0; see `FORMAT.md`. Several known gaps remain — read
-[Known limitations](ROADMAP.md#next-planned) before considering production use.
+**`v0.1.0` — first release under this name.** The engine, Cypher surface, analytics
+and safety guarantees are implemented and covered by 197 tests. The on-disk format is
+frozen at **version 5**; see `FORMAT.md` for the one exception to that freeze (the
+Page 0 magic, renamed with the project) and its migration path. Several known gaps
+remain — read [Known limitations](ROADMAP.md#next-planned) before considering
+production use.
 
 ## Features
 
@@ -92,15 +94,11 @@ three worth knowing before you start:
 
 ```toml
 [dependencies]
-nervusdb = "1.1.0"
+nervusdb = "0.1.0"
 ```
 
 The Python and Node.js SDKs are **not published to PyPI or npm yet**. Build them
-from source (see [bindings/](bindings/)). When they are published, the Python
-_distribution_ will be `nervusdb` on PyPI while the import stays `import
-nervusdb` — the name `nervusdb` is already taken on PyPI by an unrelated embedded
-graph database, and shipping under it would install someone else's package. See
-[ROADMAP](ROADMAP.md) for the naming decision.
+from source (see [bindings/](bindings/)).
 
 ## Quick start
 

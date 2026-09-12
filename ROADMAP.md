@@ -53,7 +53,7 @@ Working and covered by tests:
   report. Inspection is through the library API — there is no separate CLI or GUI.
 - Tooling: Python and Node.js SDKs with transaction and batch-write support.
   Inspection and dump go through the library API — the CLI and the browser
-  workbench were removed in 1.1.0.
+  workbench were removed before 0.1.0.
 - 198 test cases across 16 suites (197 run, 1 intentionally `#[ignore]`d for a
   child-process lock probe); `cargo fmt`, `cargo clippy -D warnings` and
   `rustdoc -D warnings` all clean.
@@ -64,7 +64,7 @@ Working and covered by tests:
 
 ### 1. Non-blocking readers (versioned page visibility)
 
-**Partially done in 1.1.0.** `NervusDb::read_snapshot()` now gives a caller a
+**Partially done.** `NervusDb::read_snapshot()` now gives a caller a
 self-consistent view: it holds the shared read lock for its lifetime, so a
 multi-step traversal cannot stitch two states together. That closed the correctness
 gap (see `tests/concurrency_isolation_tests.rs`).
@@ -78,7 +78,7 @@ recovery and page visibility, and it is the largest remaining gap against the
 
 ### 2. Planner memory: spilling instead of capping
 
-**Capped in 1.1.0.** The action queue is now bounded by
+**Capped.** The action queue is now bounded by
 `DEFAULT_MAX_TRANSACTION_ACTIONS` and reports an overflow rather than growing without
 limit (see AGENTS.md §5). What remains is _spilling_: a caller that genuinely needs a
 transaction larger than the cap must currently batch it by hand. Writing queued
@@ -112,7 +112,7 @@ both sides in release the bindings run at 0.85-0.93x of the native path. See
 
 ### 5. Latch contention: measured, only the fix remains
 
-**Measured in 1.1.0, and the answer is worse than "not characterised".**
+**Measured, and the answer is worse than "not characterised".**
 `concurrency_stress_tests.rs` covers the correctness guarantees (no deadlock, no lost
 writes, self-consistent structure, readers make progress). A separate profiling run on
 the real com-DBLP database found that read throughput **degrades** as threads are
@@ -144,7 +144,7 @@ initialized since the initial commit, never used. Delete it or make it real.
 - **In-memory graph mode.** A resident full-graph representation would violate
   the bounded-memory invariant that the whole architecture is built around.
 - **Cypher `WITH`, subqueries, stored procedures.** `MERGE` and `UNWIND` landed in
-  1.1.0; the rest each need design work rather than a patch.
+  0.1.0; the rest each need design work rather than a patch.
 - **Full-text or vector indexes.** Separate problem domain.
 
 ---
