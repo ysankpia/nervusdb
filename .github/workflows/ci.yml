@@ -20,7 +20,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -37,7 +37,7 @@ jobs:
           cargo clippy --version
 
       - name: Cache cargo registry and build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index
@@ -82,10 +82,10 @@ jobs:
           - sdk: python
             build: -p nervusdb-python
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index
@@ -97,6 +97,15 @@ jobs:
       - name: Build the binding
         run: cargo build ${{ matrix.build }}
 
+      # Pin the runtime rather than taking the runner's default: the loader and the
+      # napi ABI both depend on it, and "green on whatever the runner shipped this
+      # week" is not a property worth having. The version lives in `.node-version`
+      # so a local setup and CI read the same value.
+      - uses: actions/setup-node@v7
+        if: matrix.sdk == 'node'
+        with:
+          node-version-file: ".node-version"
+
       # Both bindings need the built artifact renamed to the name the runtime
       # looks for. Node's `require` only loads a `.node` file — pointing it at a
       # `.so`/`.dylib` fails with "Invalid or unexpected token", not a helpful
@@ -105,11 +114,12 @@ jobs:
       - name: Run the Node.js end-to-end suite
         if: matrix.sdk == 'node'
         run: |
+          node --version
           cp target/debug/libnervusdb_node.so bindings/nodejs/nervusdb.node 2>/dev/null \
             || cp target/debug/libnervusdb_node.dylib bindings/nodejs/nervusdb.node
           node bindings/nodejs/test.mjs
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: matrix.sdk == 'python'
         with:
           python-version: "3.12"
@@ -125,7 +135,7 @@ jobs:
     name: Docs build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: rustdoc
         run: cargo doc --workspace --no-deps

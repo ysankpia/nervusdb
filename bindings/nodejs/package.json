@@ -2,6 +2,9 @@
   "name": "nervusdb-node",
   "version": "0.1.0",
   "description": "Node.js and TypeScript bindings for NervusDB, an embedded single-file property graph database",
+  "engines": {
+    "node": ">=22"
+  },
   "main": "index.js",
   "types": "index.d.ts",
   "napi": {
