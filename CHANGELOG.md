@@ -16,7 +16,40 @@ user has to act on them:
 
 ## [Unreleased]
 
-### Removed
+### Fixed
+
+- **A property whose value is the string `"null"` was treated as an absent value.**
+  `null` was represented internally as the *string* `"null"`, so the two were
+  indistinguishable:
+
+  ```text
+  CREATE (c:Character {name: 'null'})   -- a real value
+  MATCH (c) RETURN count(c.name)        -- returned 0, silently skipping it
+  ```
+
+  Every `count`, `sum`, `avg`, `min` and `max` over such a property under-counted.
+  Verified before the fix: a node with `name = 'null'` plus one with `name = 'real'`
+  produced `count(c.name) = 1` where 2 is correct.
+
+  `Value` now has a real `Null` variant, so the two are distinct, and the test suite
+  asserts both halves: `"null"` as a value counts like any other, and `avg` / `min`
+  over an empty set return `Null`.
+
+### Added
+
+- **`Value::List` and `Value::Null` as evaluation-time types.** Neither is written
+  to disk: in Cypher, setting a property to null *removes* it, and no current syntax
+  can produce a list-valued property. `FORMAT.md` is therefore unchanged and the
+  format version stays 4 — verified by re-running the real-dataset acceptance, whose
+  red lines (hub 1-hop 10,080 / 2-hop 161,877) and 81.26 MB file size are identical.
+
+  `PropCodec::push_value` and `encode_props` now return `Result` instead of `()` so a
+  non-storable value is reported rather than silently dropped — a `SET` that appeared
+  to succeed while writing nothing is the failure mode this project keeps removing.
+
+- Both SDKs map the new variants to their native types: Python gets `None` and
+  `list`, Node.js gets JSON `null` and `Array`.
+
 
 - **The CLI (`graphlite-cli`) and the browser workbench (`graphlite-studio`), plus
   the demo binary (`graphlite`).** All three were separate binaries that

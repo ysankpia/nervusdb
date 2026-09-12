@@ -1578,12 +1578,25 @@ fn format_props(props: &[(String, Value)]) -> String {
 }
 
 /// 将属性值渲染为 Cypher 字面量
+///
+/// 必须覆盖全部变体：`dump_cypher` 的输出要能被重新读回，因此渲染出的字面量
+/// 必须与解析器接受的语法一致。`Null` 与 `List` 虽不可作为属性落盘，但求值期
+/// 的值会出现在查询结果里，所以这里也给它们正确的字面量形式。
 fn format_literal(value: &Value) -> String {
     match value {
+        Value::Null => "null".to_string(),
         Value::Int(v) => v.to_string(),
         Value::Float(v) => v.to_string(),
         Value::Bool(v) => v.to_string(),
         Value::String(s) => format!("'{}'", s.replace('\'', "\\'")),
+        Value::List(items) => format!(
+            "[{}]",
+            items
+                .iter()
+                .map(format_literal)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 

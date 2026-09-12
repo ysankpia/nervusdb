@@ -280,6 +280,9 @@ fn test_aggregate_functions() -> Result<(), GraphError> {
     assert_eq!(res.rows[0].values[1], Value::from(600));
 
     // 4. 空结果集边界：count = 0、sum = 0、avg/min/max 为 null
+    //
+    // 这里的 null 必须是真正的 `Value::Null`。此前它由字符串 `"null"` 冒充，
+    // 于是「值是空」与「值是字符串 "null"」无法区分——#5 的用例专门锁住这个区别。
     assert_eq!(
         value_of(&db, "MATCH (e:Ghost) RETURN count(e)")?,
         Value::from(0)
@@ -290,12 +293,43 @@ fn test_aggregate_functions() -> Result<(), GraphError> {
     );
     assert_eq!(
         value_of(&db, "MATCH (e:Ghost) RETURN avg(e.salary)")?,
-        Value::from("null")
+        Value::Null
     );
     assert_eq!(
         value_of(&db, "MATCH (e:Ghost) RETURN min(e.salary)")?,
-        Value::from("null")
+        Value::Null
     );
+
+    // 5. **值是字符串 "null" 不能被当成空值。**
+    //
+    // 这是一个真实缺陷的回归守卫：null 曾用字符串 "null" 冒充，于是真的存了这个
+    // 字符串的属性在 `count` 里被静默忽略——`count(c.name)` 返回 0 而该属性确实
+    // 存在，任何聚合都会漏掉这类数据。
+    {
+        let dir2 = tempdir()?;
+        let db2 = GraphLite::open(dir2.path().join("null_str.db"))?;
+        let mut m = HashMap::new();
+        m.insert("name".to_string(), Value::from("null"));
+        db2.add_node(HashSet::from(["C".to_string()]), m)?;
+        let mut m2 = HashMap::new();
+        m2.insert("name".to_string(), Value::from("real"));
+        db2.add_node(HashSet::from(["C".to_string()]), m2)?;
+
+        assert_eq!(
+            value_of(&db2, "MATCH (c:C) RETURN count(c.name)")?,
+            Value::from(2),
+            "a literal string \"null\" is a value and must be counted like any other"
+        );
+
+        // 读回时必须仍是字符串，而不是空值
+        let node = db2.run_cypher("MATCH (c:C) WHERE c.name = 'null' RETURN c.name AS n")?;
+        assert_eq!(
+            node.rows.len(),
+            1,
+            "matching the literal string \"null\" must find the node"
+        );
+        assert_eq!(node.rows[0].values[0], Value::from("null"));
+    }
 
     // 5. 聚合 + WHERE 过滤
     assert_eq!(

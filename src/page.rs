@@ -613,9 +613,17 @@ impl PropCodec {
         self.buf.extend_from_slice(bytes);
     }
 
-    /// 按类型标签推入属性值
-    pub fn push_value(&mut self, value: &crate::graph::Value) {
-        use crate::graph::Value;
+    /// 按类型标签推入属性值。
+    ///
+    /// 返回 `Result` 而不是静默忽略：`Null` 与 `List` **不可落盘**（原因见
+    /// `graph.rs` 对 `Value` 的说明）。若在这里静默跳过，`SET n.k = [1,2]` 会看起来
+    /// 成功而属性其实没变——静默丢弃写入是本项目一直在消除的失败模式。
+    /// `Null` 的正确处理在调用方（删除该属性），因此这里明确报错而不是替它决定。
+    pub fn push_value(
+        &mut self,
+        value: &crate::graph::Value,
+    ) -> Result<(), crate::graph::GraphError> {
+        use crate::graph::{GraphError, Value};
         match value {
             Value::Int(v) => {
                 self.buf.push(VTAG_INT);
@@ -632,7 +640,22 @@ impl PropCodec {
                 self.buf
                     .push(if *b { VTAG_BOOL_TRUE } else { VTAG_BOOL_FALSE });
             }
+            Value::Null => {
+                return Err(GraphError::General(
+                    "cannot store null as a property value; in Cypher, setting a \
+                     property to null removes it"
+                        .into(),
+                ))
+            }
+            Value::List(_) => {
+                return Err(GraphError::General(
+                    "property values cannot be lists: nested value encoding is not \
+                     implemented in this format version"
+                        .into(),
+                ))
+            }
         }
+        Ok(())
     }
 }
 
@@ -716,14 +739,22 @@ impl<'a> PropReader<'a> {
 }
 
 /// 编码属性字典为紧凑字节流
-pub fn encode_props(props: &std::collections::HashMap<String, crate::graph::Value>) -> Vec<u8> {
+///
+/// 返回 `Result`：含 `Null`/`List` 的字典不可落盘，必须让调用方看到而不是静默
+/// 丢掉那个键。
+pub fn encode_props(
+    props: &std::collections::HashMap<String, crate::graph::Value>,
+) -> Result<Vec<u8>, crate::graph::GraphError> {
     let mut codec = PropCodec::new();
     codec.push_varint(props.len() as u64);
-    for (key, value) in props {
+    // 键按字典序排列：保证同一份数据每次编码得到相同字节，便于比对与调试
+    let mut keys: Vec<&String> = props.keys().collect();
+    keys.sort_unstable();
+    for key in keys {
         codec.push_key(key);
-        codec.push_value(value);
+        codec.push_value(&props[key])?;
     }
-    codec.into_bytes()
+    Ok(codec.into_bytes())
 }
 
 /// 解码紧凑字节流为属性字典

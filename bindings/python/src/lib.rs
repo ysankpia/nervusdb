@@ -35,10 +35,20 @@ fn pyany_to_value(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
 
 fn value_to_py(py: Python<'_>, val: &Value) -> PyResult<PyObject> {
     match val {
+        // Python 侧用 None 表示 null，与 `python_to_value` 的映射对称
+        Value::Null => Ok(py.None()),
         Value::Int(i) => Ok(i.into_py(py)),
         Value::Float(f) => Ok(f.into_py(py)),
         Value::String(s) => Ok(s.clone().into_py(py)),
         Value::Bool(b) => Ok(b.into_py(py)),
+        Value::List(items) => {
+            // 递归映射为 Python list，顺序保持一致
+            let list = PyList::empty_bound(py);
+            for item in items {
+                list.append(value_to_py(py, item)?)?;
+            }
+            Ok(list.into_py(py))
+        }
     }
 }
 

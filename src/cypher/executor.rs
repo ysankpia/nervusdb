@@ -1182,12 +1182,20 @@ fn neighbor_of(edge: &crate::graph::Edge, from: u64) -> u64 {
     }
 }
 
+/// 构造 Cypher 的 null。
+///
+/// 这里曾返回**字符串** `"null"`，于是「值是字符串 "null"」与「值是空」无法区分。
+/// 实测后果：一个 `name = 'null'` 的节点在 `count(c.name)` 里被静默忽略，任何
+/// `count`/`sum`/`avg` 都会漏掉这类数据。现在返回真正的 `Value::Null`。
 fn null_value() -> Value {
-    Value::from("null")
+    Value::Null
 }
 
+/// 是否为 null。
+///
+/// 委托给 `Value::is_null`，使判定只有一处实现——判定逻辑分散正是这个缺陷的成因。
 fn is_null(v: &Value) -> bool {
-    matches!(v, Value::String(s) if s == "null")
+    v.is_null()
 }
 
 /// 完整 Cypher 执行器（支持 CREATE / SET / DELETE 等写操作）

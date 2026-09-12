@@ -1593,7 +1593,9 @@ impl DiskGraph {
         if props.is_empty() {
             return Ok(crate::page::PROP_PTR_NONE);
         }
-        let payload = crate::page::encode_props(props);
+        // `encode_props` 会因为 null/list 报错，必须向上传播：静默写入一个不含该键
+        // 的载荷，会让「设置属性」看起来成功而数据其实没变。
+        let payload = crate::page::encode_props(props)?;
 
         let mut bpm = self.bpm.lock_recover();
         Self::write_prop_record(
@@ -1640,9 +1642,13 @@ impl DiskGraph {
             codec.push_key(label);
         }
         codec.push_varint(data.properties.len() as u64);
-        for (key, value) in &data.properties {
+        // 键排序保证同一份数据编码字节稳定
+        let mut keys: Vec<&String> = data.properties.keys().collect();
+        keys.sort_unstable();
+        for key in keys {
             codec.push_key(key);
-            codec.push_value(value);
+            // null/list 不可落盘，`push_value` 会返回错误，这里向上传播
+            codec.push_value(&data.properties[key])?;
         }
         Ok(codec.into_bytes())
     }

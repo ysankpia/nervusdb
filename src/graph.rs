@@ -107,15 +107,66 @@ impl From<std::io::Error> for GraphError {
 }
 
 /// 属性图动态值类型
+///
+/// ## `Null` 与 `List` 是**求值期类型**，不落盘
+///
+/// 这两个变体只存在于查询执行过程中，`PropCodec` 不编码它们：
+///
+/// - **`Null`**：Cypher 语义中「属性值为 null」等价于「该属性不存在」，因此
+///   `SET n.k = null` 会**删除**属性而不是写入一个 null 值。没有东西需要落盘。
+/// - **`List`**：`UNWIND [1,2,3] AS x` 这类列表是查询里的中间值。把它存进属性
+///   需要一套嵌套类型的编解码，而当前没有任何语法能产生「属性值是列表」——
+///   因此暂不支持，遇到时明确报错而不是静默丢弃。
+///
+/// 这样 `FORMAT.md` 描述的磁盘布局**不需要任何改动**，格式版本仍是 4。
+///
+/// ## `Null` 为什么必须是真的变体
+///
+/// 此前 null 用字符串 `"null"` 冒充，于是**真的叫 "null" 的值会被当成空值**：
+///
+/// ```text
+/// CREATE (c:Character {name: 'null'})   -- 用户确实写了这个值
+/// MATCH (c) RETURN count(c.name)        -- 返回 0：值被静默忽略
+/// ```
+///
+/// 任何 `count` / `sum` / `avg` 都会漏掉这类数据。用独立变体后二者不再混淆。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
+    /// SQL/Cypher 意义上的 NULL（求值期专用，不落盘）
+    Null,
     Int(i64),
     Float(f64),
     String(String),
     Bool(bool),
+    /// 同构值的有序集合（求值期专用，不落盘）
+    List(Vec<Value>),
 }
 
 impl Value {
+    /// 是否为 null
+    pub fn is_null(&self) -> bool {
+        matches!(self, Value::Null)
+    }
+
+    /// 构造 null
+    pub fn null() -> Self {
+        Value::Null
+    }
+
+    /// 是否为列表
+    pub fn is_list(&self) -> bool {
+        matches!(self, Value::List(_))
+    }
+
+    /// 该值是否可以写入属性存储。
+    ///
+    /// `Null` 与 `List` 不行：前者按 Cypher 语义表示「删除该属性」，后者需要一套
+    /// 嵌套编解码而当前没有语法能产生它。调用方必须在写入前用它把关，**不能
+    /// 静默丢弃**——静默丢弃会让 `SET` 看起来成功而数据没变。
+    pub fn is_storable(&self) -> bool {
+        !matches!(self, Value::Null | Value::List(_))
+    }
+
     pub fn as_i64(&self) -> Option<i64> {
         match self {
             Value::Int(v) => Some(*v),
@@ -155,8 +206,28 @@ impl PartialOrd for Value {
 
 impl Eq for Value {}
 
+/// 跨类型排序时的类型次序。
+///
+/// 显式排序而不是靠 `match` 的臂顺序兜底：后者在新增变体时极易漏改（编译器只要求
+/// 穷尽匹配，不会提醒「你忘了给新类型定位置」）。数值类型共用一个 rank，因为
+/// `Int` 与 `Float` 之间按数值比较而不是按类型分先后。
+fn type_rank(v: &Value) -> u8 {
+    match v {
+        Value::Int(_) | Value::Float(_) => 0,
+        Value::String(_) => 1,
+        Value::Bool(_) => 2,
+        Value::List(_) => 3,
+        // null 排在最后（SQL 的 NULLS LAST 约定）。`ORDER BY` 依赖这一点；
+        // 而 `min`/`max` 会在聚合层先滤掉 null，不受此影响。
+        Value::Null => 4,
+    }
+}
+
 impl Ord for Value {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+
+        // 同秩才做值比较；跨秩只看类型次序
         match (self, other) {
             (Value::Int(a), Value::Int(b)) => a.cmp(b),
             (Value::Float(a), Value::Float(b)) => a.total_cmp(b),
@@ -164,12 +235,18 @@ impl Ord for Value {
             (Value::Float(a), Value::Int(b)) => a.total_cmp(&(*b as f64)),
             (Value::String(a), Value::String(b)) => a.cmp(b),
             (Value::Bool(a), Value::Bool(b)) => a.cmp(b),
-            (Value::Int(_), _) => std::cmp::Ordering::Less,
-            (_, Value::Int(_)) => std::cmp::Ordering::Greater,
-            (Value::Float(_), _) => std::cmp::Ordering::Less,
-            (_, Value::Float(_)) => std::cmp::Ordering::Greater,
-            (Value::String(_), _) => std::cmp::Ordering::Less,
-            (_, Value::String(_)) => std::cmp::Ordering::Greater,
+            // 列表按字典序比较：逐元素比，先到尽头的更小
+            (Value::List(a), Value::List(b)) => {
+                for (x, y) in a.iter().zip(b.iter()) {
+                    let ord = x.cmp(y);
+                    if ord != Ordering::Equal {
+                        return ord;
+                    }
+                }
+                a.len().cmp(&b.len())
+            }
+            (Value::Null, Value::Null) => Ordering::Equal,
+            _ => type_rank(self).cmp(&type_rank(other)),
         }
     }
 }
@@ -261,10 +338,24 @@ impl From<bool> for Value {
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            // 键盘输入里 `null` 就是字面量 `null`（不带引号），而字符串是带引号的
+            // `"null"`。二者在显示上也必须能区分，否则用户无法判断属性值到底是
+            // 空值还是那个字符串。
+            Value::Null => write!(f, "null"),
             Value::Int(v) => write!(f, "{}", v),
             Value::Float(v) => write!(f, "{}", v),
             Value::String(v) => write!(f, "\"{}\"", v),
             Value::Bool(v) => write!(f, "{}", v),
+            Value::List(items) => {
+                write!(f, "[")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", item)?;
+                }
+                write!(f, "]")
+            }
         }
     }
 }

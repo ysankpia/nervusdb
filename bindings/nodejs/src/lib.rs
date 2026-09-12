@@ -50,12 +50,18 @@ fn json_to_properties(
 
 fn graph_value_to_json(v: &Value) -> serde_json::Value {
     match v {
+        // null 直接映射为 JSON null；此前 null 用字符串 "null" 冒充，JS 侧
+        // 拿到的会是字符串而不是 null
+        Value::Null => serde_json::Value::Null,
         Value::Int(i) => serde_json::Value::from(*i),
         Value::Float(f) => serde_json::Number::from_f64(*f)
             .map(serde_json::Value::Number)
             .unwrap_or(serde_json::Value::Null),
         Value::String(s) => serde_json::Value::from(s.clone()),
         Value::Bool(b) => serde_json::Value::from(*b),
+        Value::List(items) => {
+            serde_json::Value::Array(items.iter().map(graph_value_to_json).collect())
+        }
     }
 }
 
