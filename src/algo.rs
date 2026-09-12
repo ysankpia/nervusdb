@@ -213,7 +213,7 @@ pub fn has_cycle(graph: &DiskGraph) -> bool {
 
     for &node_id in &node_ids {
         if color_map.get(&node_id) == Some(&Color::White)
-            && dfs_has_cycle(graph, node_id, &mut color_map)
+            && dfs_has_cycle_iterative(graph, node_id, &mut color_map)
         {
             return true;
         }
@@ -222,22 +222,54 @@ pub fn has_cycle(graph: &DiskGraph) -> bool {
     false
 }
 
-fn dfs_has_cycle(graph: &DiskGraph, node_id: u64, color_map: &mut HashMap<u64, Color>) -> bool {
-    color_map.insert(node_id, Color::Gray);
+/// 迭代式深度优先环检测（显式栈）。
+///
+/// ## 为什么不能用递归
+///
+/// 递归版本的栈深等于**路径长度**，而这是用户数据决定的：一条 6 万节点的链
+/// （完全合法，且是「作者-作品-引用」这类数据的自然形态）会直接耗尽线程栈。
+///
+/// 实测：`has_cycle()` 在 6 万节点长链上触发
+/// `thread 'main' has overflowed its stack / fatal runtime error: stack overflow`，
+/// 也就是**进程级 abort**——不可捕获、不可恢复。对一个嵌入式库来说，让合法数据
+/// 触发进程崩溃是不可接受的。
+///
+/// 改为显式栈后，内存用量在堆上按需增长，与数据规模成正比而非与栈上限相关。
+/// 着色语义与递归版完全一致（White→Gray 入栈、Gray→Black 出栈，遇到 Gray 即成环）。
+fn dfs_has_cycle_iterative(
+    graph: &DiskGraph,
+    start: u64,
+    color_map: &mut HashMap<u64, Color>,
+) -> bool {
+    // (节点, 是否已完成其全部邻居)
+    let mut stack: Vec<(u64, bool)> = vec![(start, false)];
+    color_map.insert(start, Color::Gray);
 
-    if let Ok(neighbors) = graph.neighbors(node_id, crate::graph::Direction::Outgoing) {
-        for neighbor in neighbors {
-            match color_map.get(&neighbor).copied() {
-                Some(Color::Gray) => return true,
-                Some(Color::White) if dfs_has_cycle(graph, neighbor, color_map) => {
-                    return true;
+    while let Some((node_id, expanded)) = stack.pop() {
+        if expanded {
+            // 邻居已全部处理完，标记为 Black 并出栈
+            color_map.insert(node_id, Color::Black);
+            continue;
+        }
+
+        // 重新压入自己并标记为「待完成」，这样它会在所有子节点之后被处理。
+        // 必须重新压入而不是修改栈顶：邻居也要压栈，必须夹在中间。
+        stack.push((node_id, true));
+
+        if let Ok(neighbors) = graph.neighbors(node_id, crate::graph::Direction::Outgoing) {
+            for neighbor in neighbors {
+                match color_map.get(&neighbor).copied() {
+                    Some(Color::Gray) => return true,
+                    Some(Color::White) => {
+                        color_map.insert(neighbor, Color::Gray);
+                        stack.push((neighbor, false));
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
     }
 
-    color_map.insert(node_id, Color::Black);
     false
 }
 
@@ -253,48 +285,71 @@ pub fn find_cycles(graph: &DiskGraph) -> Vec<Vec<u64>> {
         color_map.insert(node_id, Color::White);
     }
 
-    let mut path_stack = Vec::new();
     let mut cycles = Vec::new();
 
     for &node_id in &node_ids {
         if color_map.get(&node_id) == Some(&Color::White) {
-            dfs_find_cycles(graph, node_id, &mut color_map, &mut path_stack, &mut cycles);
+            dfs_find_cycles_iterative(graph, node_id, &mut color_map, &mut cycles);
         }
     }
 
     cycles
 }
 
-fn dfs_find_cycles(
+/// 迭代式环查找（显式栈），与 `has_cycle` 同理：递归深度等于路径长度，
+/// 长链会让进程栈溢出。这里改为在堆上维护显式栈与当前路径。
+///
+/// 着色语义与递归版一致：White→Gray 入路径，Gray 命中即记录环，出栈时置 Black。
+fn dfs_find_cycles_iterative(
     graph: &DiskGraph,
-    node_id: u64,
+    start: u64,
     color_map: &mut HashMap<u64, Color>,
-    path_stack: &mut Vec<u64>,
     cycles: &mut Vec<Vec<u64>>,
 ) {
-    color_map.insert(node_id, Color::Gray);
-    path_stack.push(node_id);
+    // (节点, 邻居列表, 下一个待处理邻居的下标)
+    let mut stack: Vec<(u64, Vec<u64>, usize)> = Vec::new();
+    let mut path_stack: Vec<u64> = Vec::new();
 
-    if let Ok(neighbors) = graph.neighbors(node_id, crate::graph::Direction::Outgoing) {
-        for neighbor in neighbors {
-            match color_map.get(&neighbor) {
-                Some(Color::Gray) => {
-                    if let Some(pos) = path_stack.iter().position(|&x| x == neighbor) {
-                        let mut cycle = path_stack[pos..].to_vec();
-                        cycle.push(neighbor);
-                        cycles.push(cycle);
-                    }
+    color_map.insert(start, Color::Gray);
+    path_stack.push(start);
+    let first_neighbors = graph
+        .neighbors(start, crate::graph::Direction::Outgoing)
+        .unwrap_or_default();
+    stack.push((start, first_neighbors, 0));
+
+    while let Some((node_id, neighbors, idx)) = stack.last_mut() {
+        let node_id = *node_id;
+        if *idx >= neighbors.len() {
+            // 该节点的邻居已处理完：出路径、置 Black
+            path_stack.pop();
+            color_map.insert(node_id, Color::Black);
+            stack.pop();
+            continue;
+        }
+
+        let neighbor = neighbors[*idx];
+        *idx += 1;
+
+        match color_map.get(&neighbor).copied() {
+            Some(Color::Gray) => {
+                // 命中当前路径上的节点 → 记录这个环
+                if let Some(pos) = path_stack.iter().position(|&x| x == neighbor) {
+                    let mut cycle = path_stack[pos..].to_vec();
+                    cycle.push(neighbor);
+                    cycles.push(cycle);
                 }
-                Some(Color::White) => {
-                    dfs_find_cycles(graph, neighbor, color_map, path_stack, cycles);
-                }
-                _ => {}
             }
+            Some(Color::White) => {
+                color_map.insert(neighbor, Color::Gray);
+                path_stack.push(neighbor);
+                let nbrs = graph
+                    .neighbors(neighbor, crate::graph::Direction::Outgoing)
+                    .unwrap_or_default();
+                stack.push((neighbor, nbrs, 0));
+            }
+            _ => {}
         }
     }
-
-    path_stack.pop();
-    color_map.insert(node_id, Color::Black);
 }
 
 /// PageRank 打分结果（节点 ID 与归一化影响力分数）

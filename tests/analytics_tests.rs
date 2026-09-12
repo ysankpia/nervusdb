@@ -273,3 +273,66 @@ fn test_algorithms_under_constrained_buffer_pool() -> Result<(), GraphError> {
 
     Ok(())
 }
+
+// =========================================================================
+// 环检测不得依赖递归深度
+// =========================================================================
+/// **深链上的环检测不得触发栈溢出。**
+///
+/// 这是为一个真实的进程级崩溃写的：`has_cycle` 与 `find_cycles` 用的是递归 DFS，
+/// 递归深度等于**路径长度**，而路径长度由用户数据决定。一条 6 万节点的链——完全
+/// 合法，且是「引用链」「章节顺序」这类数据的自然形态——会耗尽线程栈：
+///
+/// ```text
+/// thread 'main' has overflowed its stack
+/// fatal runtime error: stack overflow, aborting
+/// ```
+///
+/// 这是**不可捕获**的 abort：调用方无法用 `catch_unwind` 挽救，宿主进程直接退出。
+/// 对嵌入式库来说，让合法数据触发进程崩溃是不可接受的。
+///
+/// 现在两条路径都改为显式栈（堆上），内存随数据规模增长而与栈上限无关。本测试的
+/// 规模足以让旧实现必然崩溃；同时验证结果正确（无环报 false、加回边后报 true），
+/// 确保修复不是靠「不检测」换来的。
+#[test]
+fn test_cycle_detection_handles_deep_chains() -> Result<(), GraphError> {
+    let (dir, db) = open_temp("deep_chain.db")?;
+
+    // 6 万节点长链：旧实现在此规模即崩溃
+    const N: u64 = 60_000;
+    db.with_transaction(|tx| {
+        let mut prev = tx.add_node(HashSet::new(), HashMap::new())?;
+        for _ in 1..N {
+            let cur = tx.add_node(HashSet::new(), HashMap::new())?;
+            tx.add_edge(prev, cur, "NEXT", HashMap::new(), 1.0)?;
+            prev = cur;
+        }
+        Ok(())
+    })?;
+    assert_eq!(db.node_count(), N as usize);
+
+    // 无环：必须返回 false，而不是崩溃
+    assert!(!db.has_cycle(), "a long chain has no cycle");
+    assert!(
+        db.find_cycles().is_empty(),
+        "a long chain has no cycles to report"
+    );
+
+    // 加一条回边：环检测必须仍然正确
+    db.add_edge(N, 1, "BACK", HashMap::new(), 1.0)?;
+    assert!(db.has_cycle(), "the back edge creates a cycle");
+    let cycles = db.find_cycles();
+    assert!(
+        !cycles.is_empty(),
+        "the back edge must be reported as a cycle"
+    );
+    // 环应当回到起点，形成闭合路径
+    assert!(
+        cycles.iter().any(|c| c.first() == c.last()),
+        "a reported cycle must be closed (start repeated at the end)"
+    );
+
+    drop(db);
+    drop(dir);
+    Ok(())
+}

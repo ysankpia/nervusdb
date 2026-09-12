@@ -407,6 +407,26 @@ _No unreleased changes yet._
 
 ### Fixed
 
+- **`has_cycle()` and `find_cycles()` aborted the process on long chains.** Both
+  used recursive DFS, so recursion depth equalled path length. A 60,000-node chain
+  — legitimate data, and the natural shape of a citation or chapter chain — blew
+  the thread stack:
+
+  ```text
+  thread 'main' has overflowed its stack
+  fatal runtime error: stack overflow, aborting
+  ```
+
+  That is an **uncatchable abort**: a host application cannot `catch_unwind` it, and
+  the process dies. For an embedded database, letting valid data crash the process
+  is not an acceptable failure mode.
+
+  Both are now iterative with an explicit heap stack, so memory scales with the
+  data rather than with the stack limit. Verified on chains of 60,000 and 200,000
+  nodes, including the cyclic case, and confirmed by restoring the recursive
+  implementation and watching the test abort with SIGABRT.
+
+
 - **Deleting a property-less edge inflated the database file to 64 GiB.** The
   single-edge insert path used `INVALID_PAGE_ID` to mean "no properties", but that
   constant is `u32::MAX` — numerically identical to the `PROP_PTR_OVERFLOW`
