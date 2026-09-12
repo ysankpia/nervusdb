@@ -407,6 +407,18 @@ _No unreleased changes yet._
 
 ### Fixed
 
+- **A corrupted length prefix could request a multi-gigabyte allocation.**
+  `decode_props` and `decode_node_data` called `with_capacity(count)` where `count`
+  came straight from a varint on disk. A damaged or crafted 4-byte value would ask
+  for gigabytes — an out-of-memory abort or a capacity-overflow panic instead of a
+  diagnosable error.
+
+  Both now bound the count against the bytes actually remaining, which is the same
+  guard `codec.rs`, `StringDict::decode`, and `IndexCatalog::decode` already used.
+  Every entry costs at least a one-byte length prefix, so a count larger than the
+  remaining payload cannot be legitimate.
+
+
 - **Read errors were reported as empty results.** Two paths folded a storage
   failure into a "nothing here" answer:
 

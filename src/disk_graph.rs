@@ -1655,7 +1655,14 @@ impl DiskGraph {
             .read_varint()
             .ok_or_else(|| GraphError::SerializationError("corrupted node label count".into()))?
             as usize;
-        let mut labels = HashSet::with_capacity(label_count);
+        // 同 `decode_props`：count 来自磁盘，先按剩余字节设界再分配，
+        // 否则一个损坏的 varint 就能触发数 GB 的分配请求。
+        if label_count > reader.remaining() {
+            return Err(GraphError::SerializationError(
+                "corrupted node label count (exceeds payload)".into(),
+            ));
+        }
+        let mut labels = HashSet::with_capacity(label_count.min(reader.remaining()));
         for _ in 0..label_count {
             let label = reader
                 .read_key()
@@ -1667,7 +1674,12 @@ impl DiskGraph {
             .read_varint()
             .ok_or_else(|| GraphError::SerializationError("corrupted node property count".into()))?
             as usize;
-        let mut properties = HashMap::with_capacity(prop_count);
+        if prop_count > reader.remaining() {
+            return Err(GraphError::SerializationError(
+                "corrupted node property count (exceeds payload)".into(),
+            ));
+        }
+        let mut properties = HashMap::with_capacity(prop_count.min(reader.remaining()));
         for _ in 0..prop_count {
             let key = reader.read_key().ok_or_else(|| {
                 GraphError::SerializationError("corrupted node property key".into())
