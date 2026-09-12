@@ -322,6 +322,13 @@ impl<'a> CypherReadOnlyExecutor<'a> {
                 };
                 format!("{}({})", func.as_str(), arg_repr)
             }),
+            ReturnItem::Function { name, arg, alias } => alias.clone().unwrap_or_else(|| {
+                let arg_repr = match &**arg {
+                    Expr::Variable(v) => v.clone(),
+                    other => format!("{:?}", other),
+                };
+                format!("{}({})", name, arg_repr)
+            }),
         }
     }
 
@@ -353,6 +360,18 @@ impl<'a> CypherReadOnlyExecutor<'a> {
                         values.push(self.render_property(var, prop, ctx)?)
                     }
                     ReturnItem::Aggregate { .. } => {}
+                    ReturnItem::Function { name, arg, .. } => {
+                        values.push(
+                            self.eval_expr_value(
+                                &Expr::FunctionCall {
+                                    name: name.clone(),
+                                    args: vec![(**arg).clone()],
+                                },
+                                ctx,
+                            )
+                            .unwrap_or_else(null_value),
+                        );
+                    }
                 }
             }
             let _ = default_all;
@@ -487,6 +506,15 @@ impl<'a> CypherReadOnlyExecutor<'a> {
             ReturnItem::Property { var, prop, .. } => self.render_property(var, prop, ctx),
             ReturnItem::All => Ok(null_value()),
             ReturnItem::Aggregate { .. } => Ok(null_value()),
+            ReturnItem::Function { name, arg, .. } => Ok(self
+                .eval_expr_value(
+                    &Expr::FunctionCall {
+                        name: name.clone(),
+                        args: vec![(**arg).clone()],
+                    },
+                    ctx,
+                )
+                .unwrap_or_else(null_value)),
         }
     }
 
@@ -792,20 +820,44 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         true
     }
 
+    /// 判断节点是否满足模式（标签与属性约束）。
+    ///
+    /// ## 为什么不用 `graph.get_node`
+    ///
+    /// `get_node` 会顺带遍历该节点的**整条出边链与入边链**（它返回一个完整的
+    /// `Node`，含邻接表）。而这里只需要标签与属性。
+    ///
+    /// 这个区别在本项目里是 O(N) 与 O(N²) 的分界：`match_path_step` 对每一步的
+    /// 每个候选目标都调用本函数，若每次都走完整条邻接链，那么在一个度为 D 的
+    /// 枢纽上展开 1 跳的代价就是 O(D²) 而不是 O(D)。
+    ///
+    /// 实测（4 个枢纽、边数翻倍）：改用 `read_node_data` 之前，1000/2000/4000/8000
+    /// 条边分别耗时 55/126/573/2385 ms —— 典型的平方增长。
     fn node_matches_pattern(&self, node_id: u64, pattern: &NodePattern) -> bool {
-        let node = match self.graph.get_node(node_id) {
-            Ok(Some(n)) => n,
+        // 无约束时无需触碰磁盘：大多数模式不是每个节点都带标签与属性
+        if pattern.labels.is_empty() && pattern.properties.is_empty() {
+            // 仍需确认节点存在（已删除的槽位不得匹配）
+            return matches!(self.graph.read_node_record(node_id), Ok(Some(_)));
+        }
+
+        let record = match self.graph.read_node_record(node_id) {
+            Ok(Some(r)) => r,
             _ => return false,
         };
 
+        let data = match self.graph.read_node_data(record.prop_page_id) {
+            Ok(d) => d,
+            Err(_) => return false,
+        };
+
         for label in &pattern.labels {
-            if !node.has_label(label) {
+            if !data.labels.contains(label) {
                 return false;
             }
         }
 
         for (k, expected_v) in &pattern.properties {
-            if node.get_prop(k) != Some(expected_v) {
+            if data.properties.get(k) != Some(expected_v) {
                 return false;
             }
         }
@@ -889,6 +941,50 @@ impl<'a> CypherReadOnlyExecutor<'a> {
                     Some(Value::Bool(false))
                 }
             }
+            Expr::FunctionCall { name, args } => self.eval_scalar_function(name, args, ctx),
+        }
+    }
+
+    /// 求值标量函数：`id(x)`、`labels(n)`、`type(r)`。
+    ///
+    /// 函数名已在解析期校验过（未知函数直接报错），因此这里的 `_` 分支不可达；
+    /// 返回 `None` 而非 panic，是为了不给「解析器与求值器不一致」留下崩溃点。
+    fn eval_scalar_function(&self, name: &str, args: &[Expr], ctx: &RowCtx) -> Option<Value> {
+        use crate::cypher::ast::ScalarFunc;
+
+        let func = ScalarFunc::from_name(name)?;
+        if args.len() != func.arity() {
+            return None;
+        }
+
+        // 参数求值为一个绑定；三种函数都只接受节点或边
+        let binding = match &args[0] {
+            Expr::Variable(var) => *ctx.get(var)?,
+            // `id(r)` 之外的嵌套（如 `id(other.x)`）没有意义：ID 不是属性
+            _ => return None,
+        };
+
+        match func {
+            ScalarFunc::Id => match binding {
+                Binding::Node(id) | Binding::Edge(id) => Some(Value::Int(id as i64)),
+            },
+            ScalarFunc::Labels => match binding {
+                Binding::Node(id) => {
+                    let node = self.graph.get_node(id).ok().flatten()?;
+                    // 标签列表按字典序输出，保证同一节点每次渲染一致
+                    let mut labels: Vec<String> = node.labels.iter().cloned().collect();
+                    labels.sort_unstable();
+                    Some(Value::String(labels.join(",")))
+                }
+                Binding::Edge(_) => None,
+            },
+            ScalarFunc::Type => match binding {
+                Binding::Edge(id) => {
+                    let edge = self.graph.get_edge(id).ok().flatten()?;
+                    Some(Value::String(edge.edge_type.clone()))
+                }
+                Binding::Node(_) => None,
+            },
         }
     }
 }

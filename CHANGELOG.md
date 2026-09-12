@@ -16,7 +16,15 @@ user has to act on them:
 
 ## [Unreleased]
 
-### Storage format
+### Added
+
+- Scalar functions `id(x)`, `labels(n)`, and `type(r)` in `WHERE` and `RETURN`.
+  `id` returns the internal node or edge id as an integer, which is what start-node
+  anchoring will key on.
+
+- `test_cli_rejects_unparsable_trailing_input` asserts both halves of the fix: the
+  error is reported, **and** the malformed statement produced no side effects —
+  a prefix must not be executed while the tail is dropped.
 
 - **Format version 4 — the frozen format, and the core library now has zero
   runtime dependencies. This is a breaking change: databases written by
@@ -84,8 +92,6 @@ user has to act on them:
   load). Without this, one silently corrupted L2 page would report every data
   page it covers as a mismatch — thousands of false alarms naming innocent pages.
 
-### Added
-
 - **`integrity_check()` now names the corrupt pages.** It sweeps every page's
   checksum first and reports `PageChecksumMismatch` with the page number, before
   any content-level check runs. Previously a bad page produced a vague "node
@@ -115,6 +121,28 @@ user has to act on them:
 
 - `CrcStore` and the `crc` module are public, so an embedder can verify a page
   on disk (`GraphLite::verify_page_on_disk`) without opening the buffer pool.
+
+- `docs/` for depth: `architecture.md` (paging, WAL, STEAL, slotted pages, batch
+  weave, Cypher, indexing, algorithms, concurrency, production safety, storage
+  versioning), `benchmarks.md` (measured results with their conditions plus the
+  correction notice), `testing.md` (the suite and the adversarial style).
+  Root keeps only the files a reader expects.
+- `CHANGELOG.md` (this file).
+- `ROADMAP.md` — planned work, explicit non-goals, and the rule that any
+  performance claim must ship with a runnable scenario and its measurement
+  conditions.
+- `LICENSING.md` — plain-language explanation of the dual-licence model,
+  including that AGPL does not prohibit commercial use.
+- `CONTRIBUTING.md`, `CLA.md`.
+- `SECURITY.md` — how to report a vulnerability privately.
+- Reproducible benchmarks: `benches/throughput.rs`, `benches/pool_probe.rs`,
+  `benches/mem_probe.rs`, plus `benches/throughput.py` and
+  `benches/throughput.mjs` for the SDKs. Each scenario prints its own
+  configuration, so a number cannot be quoted without its conditions.
+- GitHub Actions CI (format, check, clippy, tests, release-mode throughput
+  suites, rustdoc) on Linux and macOS.
+
+---
 
 ### Changed
 
@@ -170,7 +198,88 @@ user has to act on them:
   of every node adjacent to a hub) gives 161,877, and the benchmark now reports
   exactly that.
 
+- **README rewritten and slimmed from 759 to ~265 lines.** It had grown into a
+  reference manual: 13 architecture subsections inline, an 80-line CLI
+  walkthrough, a per-case description of every test, and a 70-line file tree. It
+  now follows the shape well-regarded embedded databases use — what it is, a
+  runnable example, features, then links — with the depth split out into `docs/`.
+
+- **Contribution policy: this repository no longer accepts external code.**
+  Pull requests from anyone other than the owner, a member or a collaborator are
+  closed automatically. The reason is licensing (dual AGPL + commercial), not
+  code quality: merging an outside patch licensed under AGPL alone would make
+  that code unusable for the commercial licence and break the model
+  project-wide. Issues remain welcome and are acted on. See CONTRIBUTING.md.
+
+  _If you were planning to send a patch, please open an issue with a
+  reproduction instead._
+
+- `CLA.md` now applies **only** to changes the maintainer explicitly invites.
+  Opening a pull request on your own is no longer, and is not treated as,
+  acceptance of it.
+
+- The README no longer describes the project as "production-grade". The release
+  notes and roadmap list known production gaps, so the claim contradicted them.
+  It now states plainly that this is a release candidate and links to the
+  limitations.
+
 ### Fixed
+
+- **`WHERE` conditions containing a function call were silently discarded, so
+  the filter became "always true" and the query returned every row.** This is the
+  worst class of bug a database can have — wrong answers with no error.
+
+  `WHERE id(a) = 1` parsed as the bare variable `id`: the parser recognised `id`
+  as an identifier, saw that the next token was neither `.` nor `:`, returned
+  `Variable("id")`, and never consumed `(a) = 1`. Evaluation then fell through to
+  the catch-all and treated it as true.
+
+  Measured before the fix, on a 5-node graph:
+
+  | Query                                  | Expected | Returned |
+  | -------------------------------------- | -------- | -------- |
+  | `WHERE id(a) = 1`                      | 1 row    | 5 rows   |
+  | `WHERE id(a) = 99` (id does not exist) | 0 rows   | 5 rows   |
+  | `WHERE notafunction(a) = 1`            | 0 rows   | 5 rows   |
+
+  Two changes close it, because either alone would be a patch rather than a fix:
+
+  1. **The parser now rejects trailing input.** After a complete statement only an
+     optional semicolon is allowed. SQLite and Postgres behave the same way, for
+     the same reason: a query that returns wrong data is far worse than one that
+     fails.
+  2. **`id()`, `labels()`, and `type()` are actually implemented**, in both `WHERE`
+     and `RETURN`. Unknown function names are a parse error naming the supported
+     set, rather than a silent no-op.
+
+  A side effect worth noting: `tests/cli_tests.rs` had a multi-line script whose
+  first line lacked a semicolon, so it concatenated two statements into
+  `CREATE (...) RETURN a`. The old parser dropped the `RETURN a` and the test
+  passed; the strict parser failed it immediately. **The test had encoded the
+  bug**, and its script was corrected rather than the check being relaxed.
+
+- **A 1-hop expansion over a high-degree node was O(D²) instead of O(D).**
+  `node_matches_pattern` called `graph.get_node`, which returns a full `Node`
+  _including its adjacency lists_ — so checking one label walked the node's entire
+  outgoing and incoming chains. Since `match_path_step` calls it for every
+  candidate at every step, a hub of degree D cost D² per expansion.
+
+  It now reads only the record and the property payload. Measured on a 4-hub
+  graph, doubling the edge count:
+
+  |                                 | Before    | After     |
+  | ------------------------------- | --------- | --------- |
+  | 1,000 edges                     | 55 ms     | 1 ms      |
+  | 8,000 edges                     | 2,385 ms  | 6 ms      |
+  | 32,000 edges                    | 48,249 ms | **27 ms** |
+  | 32,000 edges, `WHERE id(a) = 1` | 73,576 ms | **21 ms** |
+
+  Growth is now linear in edge count rather than quadratic — 32× the edges costs
+  27× the time. The 32k-edge case improved by roughly 1,800×, and the filtered case
+  by roughly 3,500×.
+
+  A regression test pins the complexity, not just the result: a test that only
+  checks correctness passes at any speed, which is how this survived.
 
 - **`crc_dir_root` was never persisted, so checksums beyond page 256 were never
   actually verified.** Three faults overlapped: `CrcStore` read-modify-wrote
@@ -243,57 +352,6 @@ user has to act on them:
   _If you build the `v1.0.0-rc.1` tag itself, expect those two lint failures;
   they are doc-comment and lint-level only and do not affect the library. Use
   `main` or a later tag._
-
-### Changed
-
-- **README rewritten and slimmed from 759 to ~265 lines.** It had grown into a
-  reference manual: 13 architecture subsections inline, an 80-line CLI
-  walkthrough, a per-case description of every test, and a 70-line file tree. It
-  now follows the shape well-regarded embedded databases use — what it is, a
-  runnable example, features, then links — with the depth split out into `docs/`.
-
-- **Contribution policy: this repository no longer accepts external code.**
-  Pull requests from anyone other than the owner, a member or a collaborator are
-  closed automatically. The reason is licensing (dual AGPL + commercial), not
-  code quality: merging an outside patch licensed under AGPL alone would make
-  that code unusable for the commercial licence and break the model
-  project-wide. Issues remain welcome and are acted on. See CONTRIBUTING.md.
-
-  _If you were planning to send a patch, please open an issue with a
-  reproduction instead._
-
-- `CLA.md` now applies **only** to changes the maintainer explicitly invites.
-  Opening a pull request on your own is no longer, and is not treated as,
-  acceptance of it.
-
-- The README no longer describes the project as "production-grade". The release
-  notes and roadmap list known production gaps, so the claim contradicted them.
-  It now states plainly that this is a release candidate and links to the
-  limitations.
-
-### Added
-
-- `docs/` for depth: `architecture.md` (paging, WAL, STEAL, slotted pages, batch
-  weave, Cypher, indexing, algorithms, concurrency, production safety, storage
-  versioning), `benchmarks.md` (measured results with their conditions plus the
-  correction notice), `testing.md` (the suite and the adversarial style).
-  Root keeps only the files a reader expects.
-- `CHANGELOG.md` (this file).
-- `ROADMAP.md` — planned work, explicit non-goals, and the rule that any
-  performance claim must ship with a runnable scenario and its measurement
-  conditions.
-- `LICENSING.md` — plain-language explanation of the dual-licence model,
-  including that AGPL does not prohibit commercial use.
-- `CONTRIBUTING.md`, `CLA.md`.
-- `SECURITY.md` — how to report a vulnerability privately.
-- Reproducible benchmarks: `benches/throughput.rs`, `benches/pool_probe.rs`,
-  `benches/mem_probe.rs`, plus `benches/throughput.py` and
-  `benches/throughput.mjs` for the SDKs. Each scenario prints its own
-  configuration, so a number cannot be quoted without its conditions.
-- GitHub Actions CI (format, check, clippy, tests, release-mode throughput
-  suites, rustdoc) on Linux and macOS.
-
----
 
 ## [1.0.0-rc.1] — 2026-09-11
 
