@@ -28,6 +28,9 @@ fn main() -> Result<(), GraphError> {
             wal_auto_checkpoint_bytes: 0,
             read_only: false,
             max_transaction_actions: 4_000_000,
+            // `..Default::default()` 而不是逐字段列全：新增选项时这个示例不会
+            // 因为缺一个字段而编译失败。
+            ..Default::default()
         },
     )?;
     drop(db);

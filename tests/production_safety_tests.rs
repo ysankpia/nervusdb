@@ -1571,12 +1571,16 @@ fn test_batch_enqueue_respects_the_limit() -> Result<(), GraphError> {
 
     let mut tx = db.begin_transaction()?;
 
-    // 一次提交 51 个节点，超过上限 50
+    // 一次提交 51 个节点，超过上限 50。
+    //
+    // 报错文案与逐条路径**同一份**（`push_op` 的「queue is full」），因为批量入口
+    // 现在也经 `push_op` 入队。此前批量路径有一份自己的内联检查与自己的文案，
+    // 后果是它看不到后来加入的溢出逻辑——同一选项在两条路径上行为不同。
     let items: Vec<_> = (0..51).map(|_| (HashSet::new(), HashMap::new())).collect();
     let err = tx.add_nodes(items).expect_err("批量入口必须同样受上限约束");
     assert!(
-        err.to_string().contains("transaction action limit"),
-        "错误信息应说明超出动作上限，实际: {err}"
+        err.to_string().contains("queue is full"),
+        "错误信息应说明队列已满，实际: {err}"
     );
 
     drop(tx);

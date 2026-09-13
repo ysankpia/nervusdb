@@ -1,3 +1,4 @@
+pub mod action_codec;
 pub mod algo;
 pub mod buffer;
 pub mod c_api;
@@ -223,6 +224,22 @@ pub struct NervusDbOptions {
     /// 见 [`DEFAULT_MAX_TRANSACTION_ACTIONS`]：默认 400 万，触顶时报错而不是
     /// 静默分块（分块会破坏事务的原子性）。
     pub max_transaction_actions: usize,
+    /// 队列触顶时把动作**溢出到 WAL**，使一个事务可以大于内存上限。
+    ///
+    /// `false`（默认）：触顶即报错，动作全部常驻内存。
+    ///
+    /// `true`：触顶时把已入队的动作写到 WAL（作为本事务的 `ActionWrite` 帧）并
+    /// 只保留位置索引，然后继续接纳。提交时按序读回并施加。
+    ///
+    /// **为什么默认关闭。** 打开它的事务在提交前会向 WAL 写入未提交数据，因此：
+    ///
+    /// - 崩溃恢复必须能正确处理这些帧（已实现并有测试）；
+    /// - 溢出期间 **Checkpoint 被拒绝**（截断 WAL 会丢掉这些帧），直到事务结束；
+    /// - WAL 体积随事务增长，直到提交或回滚。
+    ///
+    /// 这些都是明确的代价，不是缺陷，但默认行为应当是「最省事且最不容易意外」
+    /// 的那一种，而 `false` 是它。
+    pub spill_transaction_actions: bool,
 }
 
 impl Default for NervusDbOptions {
@@ -232,6 +249,7 @@ impl Default for NervusDbOptions {
             wal_auto_checkpoint_bytes: DEFAULT_WAL_AUTO_CHECKPOINT_BYTES,
             read_only: false,
             max_transaction_actions: DEFAULT_MAX_TRANSACTION_ACTIONS,
+            spill_transaction_actions: false,
         }
     }
 }
@@ -248,6 +266,15 @@ pub struct GraphInner {
     pub wal_auto_checkpoint_bytes: u64,
     /// 事务动作数上限（见 `DEFAULT_MAX_TRANSACTION_ACTIONS`；0 = 不限制）
     pub max_transaction_actions: usize,
+    /// 队列触顶时是否把动作**溢出到 WAL** 以继续接纳（见
+    /// [`NervusDbOptions::spill_transaction_actions`]）。
+    pub spill_transaction_actions: bool,
+    /// 当前有**未结束**的事务真的溢出过动作。
+    ///
+    /// 存在的理由只有一个：Checkpoint 会截断 WAL，而截断会让那些动作帧消失。
+    /// 溢出（`spill_resident`）与 Checkpoint 都在写锁内进行，因此这个计数在锁内
+    /// 增减、在锁内读取，不会与截断竞争。
+    pub spilled_txns: usize,
 }
 
 /// NervusDb: 生产级纯磁盘嵌入式属性图数据库引擎 (SQLite 3.0 标准)
@@ -496,6 +523,8 @@ impl NervusDb {
             wal_checkpoint_pending: Arc::new(AtomicBool::new(false)),
             wal_auto_checkpoint_bytes: options.wal_auto_checkpoint_bytes,
             max_transaction_actions: options.max_transaction_actions,
+            spill_transaction_actions: options.spill_transaction_actions,
+            spilled_txns: 0,
         };
 
         Ok(Self {
@@ -797,6 +826,24 @@ impl NervusDb {
         self.reject_write("run a checkpoint")?;
         let mut inner = self.inner.write_recover();
 
+        // 有未结束事务把动作溢出到了 WAL：**现在绝不能截断 WAL**，那些帧就是
+        // 该事务尚未施加的动作，截断等于把它们丢掉。
+        //
+        // 拒绝而不是静默跳过：Checkpoint 的语义是「把 WAL 落回主文件并清空」，
+        // 做不到就应当说做不到，而不是返回成功而实际什么都没清（下一次 Checkpoint
+        // 的调用方会以为上次已经清过了）。
+        //
+        // 自动 Checkpoint 同样走这里，因此它只会被推迟，不会被违反——
+        // 溢出事务提交或回滚后 `spilled_txns` 归零，下一次自动 Checkpoint 正常执行。
+        if inner.spilled_txns > 0 {
+            return Err(GraphError::General(format!(
+                "Checkpoint refused: {} transaction(s) have spilled queued actions into the \
+                 WAL and have not committed or rolled back yet. Truncating the WAL now would \
+                 discard those actions. Commit or roll back first.",
+                inner.spilled_txns
+            )));
+        }
+
         // 1. 把 WAL 中已提交的页按序重放到主数据文件，同时为每页记录校验和。
         //    此步可能首次建立 CRC 目录，因此紧接着把根页号写回 Header 元数据。
         {
@@ -862,8 +909,36 @@ impl NervusDb {
             let inner = self.inner.read_recover();
             inner.wal_checkpoint_pending.swap(false, Ordering::AcqRel)
         };
-        if pending {
-            self.checkpoint()?;
+        if !pending {
+            return Ok(());
+        }
+
+        // 自动 Checkpoint **绝不能让一次已经成功的提交报错**。
+        //
+        // 走到这里时数据已经在 WAL 里落盘、`commit` 的返回值即将是 `Ok`。此时
+        // 若把 Checkpoint 的失败向上抛，调用方看到的是「提交失败」——而它其实
+        // 成功了。调用方唯一合理的反应是重试，重试就产生重复数据。
+        //
+        // 溢出场景下这种「失败」是**预期**的：另一个未结束的事务持有溢出动作，
+        // Checkpoint 必须推迟。实测（`spill_action_tests`）：tx1 溢出后不结束，
+        // tx2 提交时自动 Checkpoint 被拒，tx2 的提交返回 Err 而数据已持久化——
+        // 正是上面描述的不可判定状态。
+        //
+        // 因此：仅当当事务确实在溢出（即失败原因是「推迟」）时吞掉错误并**重新
+        // 置位**，让下一次提交再试；真正的 I/O 错误仍照常上报。
+        if let Err(e) = self.checkpoint() {
+            let still_spilled = {
+                let inner = self.inner.read_recover();
+                if inner.spilled_txns > 0 {
+                    inner.wal_checkpoint_pending.store(true, Ordering::Release);
+                    true
+                } else {
+                    false
+                }
+            };
+            if !still_spilled {
+                return Err(e);
+            }
         }
         Ok(())
     }
@@ -1589,6 +1664,8 @@ impl NervusDb {
             db: self.clone(),
             tx_id,
             ops: Vec::new(),
+            spilled: Vec::new(),
+            has_spilled: false,
             committed: false,
         })
     }
@@ -1858,7 +1935,10 @@ fn format_literal(value: &Value) -> String {
 }
 
 /// 事务操作原子动作记录（用于显式事务在 commit 前的缓存）
-#[derive(Debug, Clone)]
+///
+/// 实现 `PartialEq` 是为了让动作的字节编解码（`action_codec`）能用往返测试
+/// 断言「编码再解码得到同一个动作」——那是溢出路径正确性的基本检查。
+#[derive(Debug, Clone, PartialEq)]
 pub enum TxAction {
     AddNode {
         id: u64,
@@ -1896,6 +1976,14 @@ pub struct Transaction {
     db: NervusDb,
     tx_id: u64,
     ops: Vec<TxAction>,
+    /// 已溢出动作在 WAL 中的帧偏移，**按溢出顺序**排列。
+    ///
+    /// 位置索引的每项是 8 字节，而一个节点动作在内存里约 502 字节、一个边动作
+    /// 约 128 字节（见 `docs/architecture.md`）。因此溢出把「事务内存 = 动作总量」
+    /// 变成「事务内存 = 常驻窗口 + 8 字节 × 动作数」，这正是它能突破上限的原因。
+    spilled: Vec<u64>,
+    /// 本事务是否已把 `spilled_txns` 计数加过一（保证只减一次）。
+    has_spilled: bool,
     committed: bool,
 }
 
@@ -1909,8 +1997,17 @@ impl Transaction {
     /// 所有入队都必须经过它。分散到六个方法里各写一次边界判断，迟早会有一个
     /// 漏掉——那样上限就只在某些路径上有效，而调用方无从知道是哪一些。
     fn push_op(&mut self, op: TxAction) -> Result<(), GraphError> {
-        let limit = self.db.inner.read_recover().max_transaction_actions;
+        let (limit, spill_enabled) = {
+            let inner = self.db.inner.read_recover();
+            (
+                inner.max_transaction_actions,
+                inner.spill_transaction_actions,
+            )
+        };
         if limit > 0 && self.ops.len() >= limit {
+            if spill_enabled {
+                return self.spill_resident(&op);
+            }
             return Err(GraphError::General(format!(
                 "Transaction action queue is full ({limit} actions). \
                  A transaction holds every action in memory until commit, so the queue \
@@ -1927,7 +2024,52 @@ impl Transaction {
         Ok(())
     }
 
-    /// 事务内**批量**添加节点，返回按输入顺序排列的 ID 列表。
+    /// 队列已满：把常驻动作全部溢写到 WAL，再把 `pending` 放进腾出的窗口。
+    ///
+    /// ## 为什么连 `pending` 一起写
+    ///
+    /// 调用方是 `push_op`，它手上正拿着一个**还没入队**的动作。若只溢出旧动作、
+    /// 把 `pending` 留在内存，那么窗口会一直占着一个位置，且下一次触顶又要再判断
+    /// 一次。把它一起写进去，窗口就真正腾空，逻辑只有一个分支。
+    ///
+    /// ## 锁的顺序
+    ///
+    /// 只在 `inner` 写锁内做（调用方 `add_node` 等已经持有或即将释放 `inner` 写锁；
+    /// 这里自己取一次读锁取配置、再取一次写锁更新 `spilled_txns`）。两次取锁之间
+    /// 没有别的锁，因此不与既有锁序冲突。
+    fn spill_resident(&mut self, pending: &TxAction) -> Result<(), GraphError> {
+        // 取一次写锁：既拿到 WAL，又能原子地维护 `spilled_txns`。
+        // Checkpoint 同样在这个写锁内判断是否允许截断 WAL，因此两者不会竞争。
+        let mut inner = self.db.inner.write_recover();
+        let wal = Arc::clone(inner.storage.wal_writer());
+
+        // 先写旧动作，再写 pending：整体顺序必须与入队顺序一致
+        let mut to_write: Vec<&TxAction> = self.ops.iter().collect();
+        to_write.push(pending);
+
+        // 基准必须在循环**之前**取：`self.spilled.push` 会让它的长度在循环里增长，
+        // 写成 `self.spilled.len() + i` 会得到 0、2、4、6…… 而不是 0、1、2、3……
+        // （首版就是这样，读回时的序号校验立刻报「expected seq 1, found 2」）。
+        let base = self.spilled.len();
+        for (i, op) in to_write.iter().enumerate() {
+            // `seq` 是**本事务内的全局序号**，不是窗口内下标：窗口会被反复腾空，
+            // 用下标会让不同批次的动作序号相撞。
+            let seq = (base + i) as u64;
+            let offset = wal.append(&crate::storage::WalRecord::ActionWrite {
+                tx_id: self.tx_id,
+                seq,
+                action: op.encode(),
+            })?;
+            self.spilled.push(offset);
+        }
+
+        self.ops.clear();
+        if !self.has_spilled {
+            self.has_spilled = true;
+            inner.spilled_txns += 1;
+        }
+        Ok(())
+    }
     ///
     /// ## 为什么需要它
     ///
@@ -1960,24 +2102,18 @@ impl Transaction {
             inner.disk_graph.allocate_next_node_ids(nodes.len())?
         };
 
-        let limit = self.db.inner.read_recover().max_transaction_actions;
-        if limit > 0 && self.ops.len() + nodes.len() > limit {
-            return Err(GraphError::General(format!(
-                "Batch of {} node actions would exceed the transaction action limit ({limit}); \
-                 {} queued so far. Commit in batches, or raise the limit with \
-                 NervusDbOptions::max_transaction_actions.",
-                nodes.len(),
-                self.ops.len()
-            )));
-        }
-
-        self.ops.reserve(nodes.len());
+        // 逐条经 `push_op`，因此**上限检查与溢出逻辑都只有一份实现**。
+        //
+        // 这里曾经自己内联判断上限：批量路径因此看不到后来加入的溢出逻辑，
+        // 于是「单条路径能溢出、批量路径仍然报错」——同一选项两种行为。批量
+        // 预留 ID 的收益（免去每条一次加锁）由上面的 `allocate_next_node_ids`
+        // 保有，逐条 `push_op` 只是把入队统一到同一闸门。
         for (id, (labels, properties)) in ids.iter().copied().zip(nodes) {
-            self.ops.push(TxAction::AddNode {
+            self.push_op(TxAction::AddNode {
                 id,
                 labels,
                 properties,
-            });
+            })?;
         }
         Ok(ids)
     }
@@ -2001,27 +2137,16 @@ impl Transaction {
             inner.disk_graph.allocate_next_edge_ids(edges.len())?
         };
 
-        let limit = self.db.inner.read_recover().max_transaction_actions;
-        if limit > 0 && self.ops.len() + edges.len() > limit {
-            return Err(GraphError::General(format!(
-                "Batch of {} edge actions would exceed the transaction action limit ({limit}); \
-                 {} queued so far. Commit in batches, or raise the limit with \
-                 NervusDbOptions::max_transaction_actions.",
-                edges.len(),
-                self.ops.len()
-            )));
-        }
-
-        self.ops.reserve(edges.len());
+        // 同 `add_nodes`：统一走 `push_op`，上限与溢出只有一处实现。
         for (id, e) in ids.iter().copied().zip(edges) {
-            self.ops.push(TxAction::AddEdge {
+            self.push_op(TxAction::AddEdge {
                 id,
                 src_id: e.src_id,
                 dst_id: e.dst_id,
                 edge_type: e.edge_type,
                 properties: e.properties,
                 weight: e.weight,
-            });
+            })?;
         }
         Ok(ids)
     }
@@ -2165,10 +2290,50 @@ impl Transaction {
         let mut failed_err = None;
         // Take ownership of the action list instead of draining it into a fresh
         // allocation; the planner needs owned actions and `take` avoids the copy.
-        let ops: Vec<TxAction> = std::mem::take(&mut self.ops);
+        let mut ops: Vec<TxAction> = std::mem::take(&mut self.ops);
 
+        // 若有动作溢出到 WAL，按序读回并**前置**到常驻动作之前：
+        // 溢出发生时窗口已被清空，因此 `spilled` 里的动作全部早于 `ops` 里的。
+        //
+        // 这里的顺序就是 `push_op` 被调用的顺序，也是不溢出时 `ops` 会有的顺序。
+        // 恢复顺序正确是**正确性前提**：`AddNode` 必须先于引用它的 `AddEdge`。
+        if !self.spilled.is_empty() {
+            let wal = Arc::clone(inner.storage.wal_writer());
+            let mut recovered: Vec<TxAction> = Vec::with_capacity(self.spilled.len());
+            for (expect_seq, offset) in self.spilled.iter().enumerate() {
+                match wal.read_frame_at(*offset)? {
+                    Some(crate::storage::WalRecord::ActionWrite { tx_id, seq, action })
+                        if tx_id == self.tx_id =>
+                    {
+                        if seq != expect_seq as u64 {
+                            failed_err = Some(GraphError::StorageError(format!(
+                                "spilled action out of order: expected seq {expect_seq}, found {seq}"
+                            )));
+                            break;
+                        }
+                        recovered.push(TxAction::decode(&action)?);
+                    }
+                    other => {
+                        failed_err = Some(GraphError::StorageError(format!(
+                            "spilled action frame at offset {offset} is missing or belongs to \
+                             another transaction: {other:?}"
+                        )));
+                        break;
+                    }
+                }
+            }
+            if failed_err.is_none() {
+                recovered.extend(ops);
+                ops = recovered;
+            }
+        }
+
+        // `failed_err.is_none()` 是**原子性要求**，不是风格：读回溢出动作失败时，
+        // `ops` 里只剩下最后一个内存窗口（例如只有 `AddEdge`），继续施加会用它去
+        // 引用尚未读回的 `AddNode`，得到「NodeNotFound」这种与真实原因无关的报错，
+        // 而且会留下部分写入。首版就漏了这个条件，被顺序测试抓出来。
         let mut idx = 0usize;
-        while idx < ops.len() {
+        while failed_err.is_none() && idx < ops.len() {
             // 连续 AddEdge 段达到阈值时走两阶段批量织网，消除批内缓存抖动。
             // 只合并**连续**段，绝不跨非边操作重排，保证 AddNode 先于 AddEdge 的依赖不变。
             // 混合事务因段内夹杂非边操作而天然不触发批量路径，无需额外安全性启发式。
@@ -2346,11 +2511,24 @@ impl Transaction {
             }
             inner.disk_graph.restore_meta(&snapshot);
             inner.index_mgr.invalidate_all();
+            // 注销溢出登记（见下方成功路径的同一段说明）
+            if self.has_spilled {
+                inner.spilled_txns = inner.spilled_txns.saturating_sub(1);
+            }
+            self.committed = true;
             return Err(err);
         }
 
         inner.disk_graph.sync_header()?;
         NervusDb::commit_dirty_pages_to_wal(&mut inner, self.tx_id)?;
+        // 注销溢出登记：**提交成功与提交失败都必须注销**，漏掉任一条
+        // `spilled_txns` 就永远不归零，Checkpoint 会被永久拒绝。
+        // 首版只在回滚路径减了它，于是「溢出事务提交成功后无法再 Checkpoint」
+        // ——`spill_action_tests` 当场抓到。这里不能写成 `&mut self` 的方法：
+        // `inner` 借自 `self.db`，两者不能同时可变借用。
+        if self.has_spilled {
+            inner.spilled_txns = inner.spilled_txns.saturating_sub(1);
+        }
         drop(inner);
 
         self.committed = true;
@@ -2372,6 +2550,15 @@ impl Transaction {
 
     fn revert_internal(&mut self) {
         self.ops.clear();
+        // 已写入 WAL 的动作帧**不需要显式清理**：它们带未提交的 `tx_id`，
+        // 恢复时被「无 TxCommit 即忽略」的规则跳过，Checkpoint 也会截断它们。
+        // 这里只清位置索引与内存窗口。
+        self.spilled.clear();
+        if self.has_spilled {
+            self.has_spilled = false;
+            let mut inner = self.db.inner.write_recover();
+            inner.spilled_txns = inner.spilled_txns.saturating_sub(1);
+        }
     }
 }
 

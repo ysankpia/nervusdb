@@ -268,6 +268,14 @@ or concurrently-mutated chain cannot spin forever.
   a transaction holds every action in memory until commit at ≈502 bytes per node action
   and 128 bytes per edge action. Overflow is an error, never an automatic flush:
   flushing mid-transaction would commit part of it and destroy the rollback guarantee.
+- **An over-cap transaction is opt-in**, via
+  `NervusDbOptions::spill_transaction_actions`. Overflow then writes actions to the WAL
+  as `ActionWrite` frames and keeps an 8-byte location index each — the STEAL pattern,
+  applied to actions instead of pages. Two consequences follow, and both are enforced
+  rather than documented only: `Checkpoint` is **refused** while any transaction has
+  spilled (it truncates the WAL), and a deferred *automatic* checkpoint does not fail
+  the commit that triggered it, because that commit is already durable and a failure
+  return would invite a duplicated retry. See `FORMAT.md` for the frame.
 
 ## 11. Production safety
 

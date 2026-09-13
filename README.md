@@ -33,7 +33,7 @@ fn main() -> Result<(), GraphError> {
 ## Status
 
 **`v0.1.0` — first release under this name.** The engine, Cypher surface, analytics
-and safety guarantees are implemented and covered by 207 passing tests (208 total, 1 intentionally ignored). The on-disk format is
+and safety guarantees are implemented and covered by 222 passing tests (223 total, 1 intentionally ignored). The on-disk format is
 frozen at **version 5**; see `FORMAT.md` for the one exception to that freeze (the
 Page 0 magic, renamed with the project) and its migration path. Several known gaps
 remain — read [Known limitations](ROADMAP.md#next-planned) before considering
@@ -55,7 +55,9 @@ production use.
   transactions larger than the pool, crash recovery, exact rollback with a
   byte-identical main file. A failed write statement leaves nothing behind, and the
   transaction action queue is bounded (≈502 bytes/node action, 128 bytes/edge action,
-  capped at 4M actions) so memory stays set by configuration rather than by input.
+  capped at 4M actions) so memory stays set by configuration rather than by input. A
+  larger transaction is opt-in (`spill_transaction_actions`), which spills queued
+  actions to the WAL and keeps only a location index.
 - **Cypher.** `CREATE`, `MATCH` (multi-pattern), `MERGE` (idempotent write),
   `UNWIND` (batch ingestion in one statement), `WHERE`, `SET`,
   `DELETE` / `DETACH DELETE`, `ORDER BY`, `SKIP`, `LIMIT`, aggregates,
@@ -197,7 +199,7 @@ src/
   graph.rs          Domain models: Node, Edge, Value, Direction, GraphError
 bindings/
   python/           PyO3 SDK          nodejs/   NAPI-RS SDK
-tests/              16 suites, 186 cases (+20 inline unit tests, +2 doctests)
+tests/              17 suites, 196 cases (+25 inline unit tests, +2 doctests)
 benches/            Reproducible throughput, pool-size and memory probes
 ```
 

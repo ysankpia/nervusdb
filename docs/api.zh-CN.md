@@ -43,6 +43,9 @@ let db = NervusDb::open_with_options("mydb.db", NervusDbOptions {
     wal_auto_checkpoint_bytes: 64 * 1024 * 1024,
     read_only: false,
     max_transaction_actions: 4_000_000,
+    // 队列触顶时把动作溢出到 WAL（默认 false）。见下方「事务动作队列」。
+    spill_transaction_actions: false,
+    ..Default::default()
 })?;
 
 // 只读句柄：取共享锁，多个读者可并存；所有写入口都会拒绝。
@@ -151,6 +154,31 @@ NervusDbOptions::max_transaction_actions.
 ```
 
 它不会自动分块——分块等于提交事务的一部分，会破坏「要么全做要么全不做」。
+
+### 想跑更大的事务：让动作溢出到 WAL
+
+默认行为（`spill_transaction_actions: false`）如上：触顶报错。若你确实需要单事务
+超过上限，把它设为 `true`：
+
+```rust
+let db = NervusDb::open_with_options("mydb.db", NervusDbOptions {
+    spill_transaction_actions: true,
+    ..Default::default()
+})?;
+```
+
+此时触顶不再报错，而是把已入队的动作写成 WAL 帧，只在内存里保留**每个动作 8 字节**
+的位置索引。常驻内存从「≈502 字节 × 动作数」变成「一个窗口 + 8 字节 × 动作数」，
+因此事务规模不再由内存上限决定。
+
+**代价是三条，都真实存在：**
+
+- 只要有事务把动作溢出在 WAL 里，**Checkpoint 会被拒绝**并返回错误。Checkpoint 会
+  截断 WAL，而那些帧正是该事务尚未施加的动作。拒绝是**报错**而不是静默跳过——
+  否则调用方会把「推迟了」当成「做完了」。
+- 由这种情况**被推迟的自动 Checkpoint，不会让触发它的那次提交报错**。那次提交此时
+  已经持久化；把它报成失败只会引诱调用方重试，而重试会产生重复数据。
+- WAL 体积随事务增长，直到它提交或回滚。
 
 ---
 

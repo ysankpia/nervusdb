@@ -57,6 +57,13 @@ Any modification that violates these rules must be rejected immediately:
      automatic flush: flushing mid-transaction commits part of it, which destroys the
      rollback guarantee that is the reason to use a transaction. Sizes and rationale:
      [`docs/architecture.md`](docs/architecture.md).
+     **A transaction larger than the cap is possible, but opt-in**:
+     `NervusDbOptions::spill_transaction_actions` writes overflow actions to the WAL as
+     `ActionWrite` frames and keeps only a location index. It is off by default because
+     it costs a partial WAL, and because **`Checkpoint` must be refused while any
+     transaction has spilled** — a checkpoint truncates the WAL, which would discard
+     those frames. A deferred *automatic* checkpoint must not fail the commit that
+     triggered it; that commit is already durable.
 
 6. **Two-Phase Batch Edge Weaving**
    - Edge batches with `EDGE_BATCH_WEAVE_MIN` or more consecutive `AddEdge` actions in one commit must go through `DiskGraph::insert_edges_batch`, never per-edge head insertion. Per-edge weaving touches the source node page, the target node page and the old head page for every edge; on a graph whose pages far exceed the pool the same page is evicted and re-read many times per batch, and each miss spills a full 4KB page to the WAL ("false spill").

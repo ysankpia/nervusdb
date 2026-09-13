@@ -36,12 +36,13 @@ cargo test --test robustness_tests        # page CRC at scale, WAL replay, chunk
 
 ## Current state
 
-**208 test cases — 207 pass, 1 intentionally `#[ignore]`d** (a child-process lock
+**223 test cases — 222 pass, 1 intentionally `#[ignore]`d** (a child-process lock
 probe launched by its parent test).
 
-Run as 16 integration suites (186 cases, of which 1 is `#[ignore]`d) plus 20 inline
-unit tests in the hand-written codecs (`src/codec.rs`, `src/json.rs`, `src/crc32.rs`),
-which are what the on-disk format is made of, plus 2 doc-tests: 186 + 20 + 2 = 208.
+Run as 17 integration suites (196 cases, of which 1 is `#[ignore]`d) plus 25 inline
+unit tests in the hand-written codecs and the action codec (`src/codec.rs`,
+`src/json.rs`, `src/crc32.rs`, `src/action_codec.rs`), which are what the on-disk
+format is made of, plus 2 doc-tests: 196 + 25 + 2 = 223.
 
 The table below is checked against the files by
 `zero_dependency_tests::documented_suite_table_matches_the_files`, so a case added or
@@ -65,6 +66,7 @@ removed without updating this table fails the build rather than drifting:
 | `equivalence_tests.rs`       | 4     | v1.0.0 behaviour guardrails: query, transaction, API, format       |
 | `zero_dependency_tests.rs`   | 10    | Empty deps; version, name, suite-count and section-ref guards       |
 | `planner_tests.rs`           | 8     | Join reorder equivalence, EXPLAIN plan, bound-driven work reduction |
+| `spill_action_tests.rs`      | 10    | Action spill to WAL, order, rollback, checkpoint refusal           |
 | inline (in `src/`)           | 20    | `codec` / `json` / `crc32` round-trips, truncation, vectors         |
 
 Run one suite:

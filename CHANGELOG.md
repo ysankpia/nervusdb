@@ -56,6 +56,34 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
 ### Added
 
+- **`NervusDbOptions::spill_transaction_actions` — transactions larger than memory.**
+  With it enabled, a transaction whose action queue exceeds
+  `max_transaction_actions` no longer fails: the queued actions are written to the WAL
+  as `ActionWrite` frames (WAL tag 6) and only an 8-byte-per-action location index stays
+  resident, so a single transaction can exceed the in-memory cap without giving up
+  rollback. The shape is the one STEAL spilling already uses for pages.
+
+  **Off by default, and the reasons are the point:**
+
+  - While a transaction has spilled actions, **`Checkpoint` is refused** (`GraphError`)
+    rather than silently truncated. A checkpoint truncates the WAL, and those frames
+    *are* the transaction's unapplied work.
+  - An automatic checkpoint that is deferred for this reason does **not** fail the
+    commit that triggered it. The commit is already durable; reporting failure would
+    invite a retry that duplicates data.
+  - WAL size grows with the transaction until it commits or rolls back.
+
+  **Action-queue errors are unchanged when the option is off** (the default), so this
+  is additive. One behavioural note for anyone who was relying on the exact wording of
+  the batch-overflow error: `add_nodes` / `add_edges` now enqueue through the same
+  `push_op` gate as the single-record methods, so they report the same
+  "queue is full" message. They previously had a separate inline check — a second
+  implementation of the cap that could not see this new behaviour at all.
+
+  `FORMAT.md` documents the frame, its recovery rule (an `ActionWrite` is ignored
+  unless its transaction has a matching `TxCommit`, exactly like `PageWrite`), and why
+  `seq` may not be reordered.
+
 - **Cost-based join ordering for multi-pattern `MATCH`.** A query with several patterns
   in one `MATCH` is no longer solved by expanding each pattern independently and
   multiplying. Patterns are ordered by estimated cardinality, preferring ones that share
