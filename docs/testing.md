@@ -36,13 +36,13 @@ cargo test --test robustness_tests        # page CRC at scale, WAL replay, chunk
 
 ## Current state
 
-**241 test cases — 240 pass, 1 intentionally `#[ignore]`d** (a child-process lock
+**244 test cases — 243 pass, 1 intentionally `#[ignore]`d** (a child-process lock
 probe launched by its parent test).
 
 Run as 20 integration suites (214 cases, of which 1 is `#[ignore]`d) plus 25 inline
-unit tests in the hand-written codecs and the action codec (`src/codec.rs`,
-`src/json.rs`, `src/crc32.rs`, `src/action_codec.rs`), which are what the on-disk
-format is made of, plus 2 doc-tests: 214 + 25 + 2 = 241.
+unit tests in the hand-written codecs, the action codec, and the Page-0 layout
+(`src/codec.rs`, `src/json.rs`, `src/crc32.rs`, `src/action_codec.rs`, `src/page.rs`), which are what the on-disk
+format is made of, plus 2 doc-tests: 214 + 28 + 2 = 244.
 
 The table below is checked against the files by
 `zero_dependency_tests::documented_suite_table_matches_the_files`, so a case added or
@@ -70,7 +70,7 @@ removed without updating this table fails the build rather than drifting:
 | `lock_cross_process_tests.rs`    | 1     | Two real processes: second refused, then waits and writes                        |
 | `multi_process_write_tests.rs`   | 1     | 4 processes write concurrently: no lost writes, no deadlock                      |
 | `spill_action_tests.rs`          | 11    | Action spill to WAL, order, rollback, checkpoint refusal, large batch           |
-| inline (in `src/`)               | 20    | `codec` / `json` / `crc32` round-trips, truncation, vectors                     |
+| inline (in `src/`)               | 28    | `codec` / `json` / `crc32` / `action_codec` / Page-0 layout round-trips          |
 
 Run one suite:
 
