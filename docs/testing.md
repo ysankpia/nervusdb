@@ -48,26 +48,26 @@ The table below is checked against the files by
 `zero_dependency_tests::documented_suite_table_matches_the_files`, so a case added or
 removed without updating this table fails the build rather than drifting:
 
-| Suite                        | Cases | Covers                                                             |
-| ---------------------------- | ----- | ------------------------------------------------------------------ |
-| `integration_tests.rs`       | 26    | CRUD, ACID, concurrency, indexing, out-of-core stress              |
-| `production_safety_tests.rs` | 32    | Exclusive lock, integrity, constraints, read-only writes, queue cap |
-| `cypher_advanced_tests.rs`   | 17    | Cypher 1.0 syntax closure, EXPLAIN, aggregate semantics            |
-| `unwind_tests.rs`            | 16    | `UNWIND`, batch ingestion, statement atomicity                     |
-| `merge_tests.rs`             | 14    | `MERGE` idempotence, ON CREATE / ON MATCH                           |
-| `concurrency_isolation_tests.rs` | 11 | Snapshot consistency, atomic visibility, no lost writes, merged-lock `get_node` |
-| `concurrency_stress_tests.rs` | 3   | Core-count-adaptive mixed read/write stress                         |
-| `edge_locality_tests.rs`     | 13    | Weave equivalence, self-loops, false spill, chain-walk equivalence |
-| `robustness_tests.rs`        | 8     | File lock, auto-checkpoint, page CRC at scale, WAL replay, chunking |
-| `batch_tx_tests.rs`          | 7     | Batch commits, single-fsync contract, throughput                   |
-| `slotted_property_tests.rs`  | 7     | Page packing, slot reuse, compaction, density                      |
-| `analytics_tests.rs`         | 7     | PageRank, WCC, K-hop                                               |
-| `steal_spill_tests.rs`       | 5     | Spilling, rollback pollution, checkpoint                           |
-| `equivalence_tests.rs`       | 4     | v1.0.0 behaviour guardrails: query, transaction, API, format       |
-| `zero_dependency_tests.rs`   | 11    | Empty deps; version, name, suite-count, section-ref, package guards  |
-| `planner_tests.rs`           | 8     | Join reorder equivalence, EXPLAIN plan, bound-driven work reduction |
-| `spill_action_tests.rs`      | 10    | Action spill to WAL, order, rollback, checkpoint refusal           |
-| inline (in `src/`)           | 20    | `codec` / `json` / `crc32` round-trips, truncation, vectors         |
+| Suite                            | Cases | Covers                                                                          |
+| -------------------------------- | ----- | ------------------------------------------------------------------------------- |
+| `integration_tests.rs`           | 26    | CRUD, ACID, concurrency, indexing, out-of-core stress                           |
+| `production_safety_tests.rs`     | 32    | Exclusive lock, integrity, constraints, read-only writes, queue cap             |
+| `cypher_advanced_tests.rs`       | 17    | Cypher 1.0 syntax closure, EXPLAIN, aggregate semantics                         |
+| `unwind_tests.rs`                | 16    | `UNWIND`, batch ingestion, statement atomicity                                  |
+| `merge_tests.rs`                 | 14    | `MERGE` idempotence, ON CREATE / ON MATCH                                       |
+| `concurrency_isolation_tests.rs` | 11    | Snapshot consistency, atomic visibility, no lost writes, merged-lock `get_node` |
+| `concurrency_stress_tests.rs`    | 3     | Core-count-adaptive mixed read/write stress                                     |
+| `edge_locality_tests.rs`         | 13    | Weave equivalence, self-loops, false spill, chain-walk equivalence              |
+| `robustness_tests.rs`            | 8     | File lock, auto-checkpoint, page CRC at scale, WAL replay, chunking             |
+| `batch_tx_tests.rs`              | 7     | Batch commits, single-fsync contract, throughput                                |
+| `slotted_property_tests.rs`      | 7     | Page packing, slot reuse, compaction, density                                   |
+| `analytics_tests.rs`             | 7     | PageRank, WCC, K-hop                                                            |
+| `steal_spill_tests.rs`           | 5     | Spilling, rollback pollution, checkpoint                                        |
+| `equivalence_tests.rs`           | 4     | v1.0.0 behaviour guardrails: query, transaction, API, format                    |
+| `zero_dependency_tests.rs`       | 11    | Empty deps; version, name, suite-count, section-ref, package guards             |
+| `planner_tests.rs`               | 8     | Join reorder equivalence, EXPLAIN plan, bound-driven work reduction             |
+| `spill_action_tests.rs`          | 10    | Action spill to WAL, order, rollback, checkpoint refusal                        |
+| inline (in `src/`)               | 20    | `codec` / `json` / `crc32` round-trips, truncation, vectors                     |
 
 Run one suite:
 
@@ -88,18 +88,6 @@ DATASET_PATH=/data/com-dblp.ungraph.txt DB_DIR=/data/bench POOL_MB=256 \
   cargo bench --bench snap_dblp_bench
 DATASET_PATH=/data/soc-LiveJournal1.txt DB_DIR=/data/bench POOL_MB=1024 \
   cargo bench --bench snap_livejournal_bench
-
-The SNAP datasets above are not in the repository, so those two commands only work if
-you have them. This one needs **no dataset** and reproduces the read-scaling curve on a
-synthetic graph, which is what makes the "reads scale negatively" claim checkable by
-someone other than its author:
-
-```bash
-cargo bench --bench concurrency_scaling_bench        # NODES / EDGES / POOL_FRAMES
-```
-
-It reports the cache hit rate alongside each row on purpose: a high hit rate is the
-evidence that the collapse is lock contention rather than disk I/O.
 ```
 
 They take `DATASET_PATH`/`DATASET_DIR`, `DB_DIR`, `POOL_MB`, `MAX_EDGES`,
@@ -107,21 +95,54 @@ They take `DATASET_PATH`/`DATASET_DIR`, `DB_DIR`, `POOL_MB`, `MAX_EDGES`,
 `AUTO_CHECKPOINT_MB=0`: the engine's 64 MB default roughly halves bulk ingest throughput,
 and these benchmarks checkpoint explicitly.
 
+The SNAP files are not in the repository, so those two commands only work if you have
+them. This one needs **no dataset** and reproduces the read-scaling curve on a synthetic
+graph, which is what makes the "reads scale negatively" claim checkable by someone other
+than its author:
+
+```bash
+cargo bench --bench concurrency_scaling_bench        # NODES / EDGES / POOL_FRAMES
+```
+
+It reports the cache hit rate alongside each row on purpose: a high hit rate is the
+evidence that the collapse is lock contention rather than disk I/O.
+
 **Red lines — a change here is a correctness regression, not noise:**
 
-| Metric | Value |
-| --- | --- |
-| LiveJournal edge ingestion | **≥150,000 ops/s** |
+| Metric                        | Value                            |
+| ----------------------------- | -------------------------------- |
+| LiveJournal edge ingestion    | **≥150,000 ops/s**               |
 | LiveJournal hub 1-hop / 2-hop | **exactly** 335,194 / 10,027,730 |
-| com-DBLP hub 1-hop / 2-hop | **exactly** 10,080 / 161,877 |
+| com-DBLP hub 1-hop / 2-hop    | **exactly** 10,080 / 161,877     |
 
 **The exact totals are the check; the rates are not.** Measured rates vary by 20%+ run
 to run on one machine ([benchmarks.md](benchmarks.md#concurrency-scaling) shows the
 spread), so treating a rate as a regression detector produces false alarms. The totals
 are deterministic, which is what makes them useful.
 
+### Recorded verification run (2026-09-13)
+
+Both red lines were confirmed on real data after the join planner, action spilling and
+single-acquisition `get_node` changes landed:
+
+| Benchmark                     | Totals observed      | Red line             |
+| ----------------------------- | -------------------- | -------------------- |
+| com-DBLP hub 1-hop / 2-hop    | 10,080 / 161,877     | 10,080 / 161,877     |
+| LiveJournal hub 1-hop / 2-hop | 335,194 / 10,027,730 | 335,194 / 10,027,730 |
+
+The rate row is where the warning above earned its place. Five consecutive LiveJournal
+runs on the same machine, alternating two builds that differed only by an inlined bounds
+check, produced **136k, 167k, 190k, 195k, 176k ops/s**. Two runs of the _same_ build
+differed by 40%, and each build's range overlapped the other's entirely — so the first
+136k reading looked exactly like a regression from a change that made no measurable
+difference. That change was reverted rather than kept: an optimization with no evidence
+of benefit does not belong in the tree.
+
+Taking that reading as a regression would have been both wrong and expensive. The table
+above quotes **totals only** for this reason.
+
 Hub selection must stay a **total order** (degree descending, then raw id ascending).
-com-DBLP has three nodes tied at degree 164 *exactly at rank 50*, so a partial order
+com-DBLP has three nodes tied at degree 164 _exactly at rank 50_, so a partial order
 makes the 2-hop total depend on sort internals — and produced three different
 "correct" numbers across runs.
 
@@ -141,7 +162,7 @@ Two traps make a would-be reproducer useless, and both recur:
   normal `drop` flushes the buffer pool and writes pages and checksums together, hiding
   it completely.
 
-Two earlier reproducers for those defects passed *with the fix removed* and were
+Two earlier reproducers for those defects passed _with the fix removed_ and were
 discarded rather than kept. A test that cannot fail is worse than no test: it is a
 claim of coverage that nothing backs.
 
