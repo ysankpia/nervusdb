@@ -15,16 +15,18 @@ The short answer for NervusDB today is in [section 1](#1-what-nervusdb-does-toda
 Measured, not read off the source (`tests/` had a probe for this while the question was
 open):
 
-| Scenario                                               | Result                             |
-| ------------------------------------------------------ | ---------------------------------- |
-| Two **write** handles on one file                      | The second fails: `DatabaseLocked` |
-| A **read-only** handle while a write handle is open    | Fails: `DatabaseLocked`            |
-| Two **read-only** handles                              | Both succeed (readers coexist)     |
-| A **write** handle while a read-only handle is open    | Fails: `DatabaseLocked`            |
-| **Four threads** writing through **one shared handle** | All succeed (200/200 writes)       |
+| Scenario                                               | Result                                                      |
+| ------------------------------------------------------ | ----------------------------------------------------------- |
+| Two **write** handles on one file                      | The second fails: `DatabaseLocked`                          |
+| A **read-only** handle while a write handle is open    | Fails: `DatabaseLocked`                                     |
+| Two **read-only** handles                              | Both succeed (readers coexist)                              |
+| A **write** handle while a read-only handle is open    | Fails: `DatabaseLocked`                                     |
+| **Four threads** writing through **one shared handle** | All succeed (200/200 writes)                                |
+| Two **write** handles, the second with `lock_wait_ms`  | The second **waits**, then succeeds once the first releases |
 
 So the rule is: **one writer at a time, across processes and within one process;
-readers coexist with each other but not with a writer.**
+readers coexist with each other but not with a writer.** The last row is opt-in and off
+by default — see [3.2](#32-wait-instead-of-failing-lock_wait_ms--implemented).
 
 Two consequences that are easy to get wrong:
 
@@ -117,14 +119,24 @@ between writes", this is already sufficient and costs nothing. The failure is lo
 
 **Cost: zero.** Keep it as the default regardless of what else is chosen.
 
-### 3.2 Wait instead of failing (`busy_timeout`)
+### 3.2 Wait instead of failing: `lock_wait_ms` — **implemented**
 
 Right now a second writer gets an immediate error. SQLite has the same model but offers
 `busy_timeout`, so a caller can say "wait up to N ms and retry" — which turns a hard
 failure into a short wait for the common case of brief writes.
 
-This is the **smallest change** on this list: a bounded retry loop around `try_lock`.
+**This is implemented.** `NervusDbOptions::lock_wait_ms` (default `0` = no waiting, the
+previous behaviour bit for bit) retries the lock with exponential backoff — 200µs doubling
+to a 20ms cap — until the budget expires, then returns `DatabaseLocked` as before. The
+timeout error names the option, so a caller who hits it learns the fix without reading the
+source.
+
 It does not make two writers concurrent; it makes one writer _patient_ about the other.
+`tests/lock_cross_process_tests.rs` proves it across **real processes**: a child process is
+refused with exit code `3` while the parent holds the lock, and succeeds when given a wait
+budget that outlasts a 250ms hold. That test exists because same-process `flock` semantics
+are not equivalent on every platform, so the "two session windows" case cannot be
+validated inside one process.
 
 **Cost: small** (a loop plus an option). **Benefit: high for multi-process tools**
 (clients, scripts, editors), where writes are short and infrequent. This is what most
@@ -160,16 +172,16 @@ built on the opposite premise, and this option is explicitly out of scope in ROA
 
 ## 4. Recommended
 
-**If the concern is "two windows, short writes, shouldn't error out": do 3.2.** It is the
-small change that removes the only _surprising_ part of the current behaviour — the
+**If the concern is "two windows, short writes, shouldn't error out": 3.2 is done.** Set
+`lock_wait_ms`; it removes the only _surprising_ part of the previous behaviour — the
 immediate error — and it is what SQLite users expect from a file database.
 
 **If the concern is "one window writes, others watch live": that is 3.3**, and it is
 already ROADMAP item 1. It is a large piece of work with a clear goal.
 
-**Neither is 3.5 (per-frame latching, ROADMAP item 5).** That one only matters when
-several threads read the _same_ process concurrently; it does nothing for multiple
-processes, which is what session windows are. Keeping the three separate matters, because
+**None of these is per-frame latching (ROADMAP item 5).** That one only matters when
+several threads read inside the _same_ process concurrently; it does nothing for multiple
+processes, which is what session windows are. Keeping the three apart matters, because
 they are easy to conflate and they have different fixes.
 
 Do **not** do 3.4. The premise is one embedded file; a server is a different product, and

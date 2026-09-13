@@ -45,6 +45,9 @@ let db = NervusDb::open_with_options("mydb.db", NervusDbOptions {
     max_transaction_actions: 4_000_000,
     // 队列触顶时把动作溢出到 WAL（默认 false）。见下方「事务动作队列」。
     spill_transaction_actions: false,
+    // 库被别的句柄占用时最多等多少毫秒（默认 0 = 不等待，立即报错）。
+    // 见 docs/concurrency.md：两个会话窗口先后写同一个库时的关键选项。
+    lock_wait_ms: 0,
     ..Default::default()
 })?;
 
@@ -154,6 +157,27 @@ NervusDbOptions::max_transaction_actions.
 ```
 
 它不会自动分块——分块等于提交事务的一部分，会破坏「要么全做要么全不做」。
+
+### 多会话/多进程：第二个句柄该等还是该报错
+
+**嵌入式数据库一次只允许一个写者**（SQLite 默认同样如此）。两个会话窗口同时写
+同一个库时，后来者默认**立即**拿到 `DatabaseLocked`。
+
+若你的写入是**先后**发生（第二个窗口在第一个写完之后才来），把 `lock_wait_ms`
+设成非零值让它等待：
+
+```rust
+let db = NervusDb::open_with_options("mydb.db", NervusDbOptions {
+    // 最多等 3 秒；持有者释放后立即成功，超时仍是 DatabaseLocked
+    lock_wait_ms: 3000,
+    ..Default::default()
+})?;
+```
+
+**它不能让两个写者并存**——只是把「立刻失败」变成「等一会儿，超时仍失败」。
+真正的并发写需要版本可见性或服务器模型，见 `docs/concurrency.md`。
+
+只读句柄同样受这个选项影响（等写者释放后打开）。
 
 ### 想跑更大的事务：让动作溢出到 WAL
 

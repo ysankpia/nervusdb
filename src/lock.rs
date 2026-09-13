@@ -21,6 +21,7 @@
 use crate::graph::GraphError;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// 锁的持有模式
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,7 +48,27 @@ impl DbLock {
     /// - 锁被其它进程或本进程的另一个句柄持有时返回 `GraphError::DatabaseLocked`；
     /// - `:memory:` 模式无文件，调用方应跳过本函数。
     pub fn acquire<P: AsRef<Path>>(path: P) -> Result<Self, GraphError> {
-        Self::acquire_inner(path, LockMode::Exclusive)
+        Self::acquire_inner(path, LockMode::Exclusive, None)
+    }
+
+    /// 加**排他**锁，但在 `wait` 时间内**重试**而不是立即失败。
+    ///
+    /// 这是本项目版的 `busy_timeout`：两个进程（例如两个会话窗口）先后写同一个库时，
+    /// 后来者不再立刻拿到错误，而是等先到者写完。默认不等待，见
+    /// [`NervusDbOptions::lock_wait_ms`](crate::NervusDbOptions::lock_wait_ms)。
+    ///
+    /// **它不会让两个写者并存**——只是把「立即失败」变成「短暂等待后仍然失败」。
+    /// 真正的并发写需要版本可见性或服务器模型，见 `docs/concurrency.md`。
+    pub fn acquire_wait<P: AsRef<Path>>(path: P, wait: Duration) -> Result<Self, GraphError> {
+        Self::acquire_inner(path, LockMode::Exclusive, Some(wait))
+    }
+
+    /// 加**共享**锁，在 `wait` 时间内重试（等待写者释放）。
+    pub fn acquire_shared_wait<P: AsRef<Path>>(
+        path: P,
+        wait: Duration,
+    ) -> Result<Self, GraphError> {
+        Self::acquire_inner(path, LockMode::Shared, Some(wait))
     }
 
     /// 尝试加**共享**锁（只读句柄）。
@@ -58,10 +79,14 @@ impl DbLock {
     /// 调用方仍需保证自己不写文件：共享锁不阻止写入，它阻止的是**别的进程**
     /// 同时写。请配合 `StorageEngine::pending_replay_pages() == 0` 一起使用。
     pub fn acquire_shared<P: AsRef<Path>>(path: P) -> Result<Self, GraphError> {
-        Self::acquire_inner(path, LockMode::Shared)
+        Self::acquire_inner(path, LockMode::Shared, None)
     }
 
-    fn acquire_inner<P: AsRef<Path>>(path: P, mode: LockMode) -> Result<Self, GraphError> {
+    fn acquire_inner<P: AsRef<Path>>(
+        path: P,
+        mode: LockMode,
+        wait: Option<Duration>,
+    ) -> Result<Self, GraphError> {
         let path_ref = path.as_ref();
         let path = path_ref.to_path_buf();
 
@@ -81,31 +106,60 @@ impl DbLock {
             .truncate(false)
             .open(&path)?;
 
-        let result = match mode {
-            LockMode::Exclusive => file.try_lock(),
-            LockMode::Shared => file.try_lock_shared(),
-        };
+        // 重试的**退避**：先让出 CPU，再逐渐拉长间隔。
+        //
+        // 不用固定 1ms 忙等：那在 1 秒预算里会打 1000 次 `try_lock`，都是系统调用，
+        // 而竞争者可能只是要写完几个字节。也不用纯 `sleep`：第一次就睡 10ms 会让
+        // 「竞争者刚好要释放」的常见情形白等 10ms。折中：起始 200µs，每次 ×2，
+        // 上限 20ms —— 覆盖 1ms 到数秒的等待预算，且总系统调用数是个位数到几十。
+        let deadline = wait.map(|w| Instant::now() + w);
+        let mut backoff = Duration::from_micros(200);
 
-        match result {
-            Ok(()) => Ok(Self { file, path, mode }),
-            Err(TryLockError::WouldBlock) => Err(GraphError::DatabaseLocked(format!(
-                "Database '{}' is already open {} this handle. \
-                 A NervusDb database allows one writer and any number of readers; \
-                 a write handle excludes readers and vice versa.",
-                path.display(),
-                match mode {
-                    // 拿不到排他锁：可能是别的写者，也可能有读者
-                    LockMode::Exclusive => "by another process or handle, or by a reader,",
-                    // 拿不到共享锁：一定有写者
-                    LockMode::Shared => "for writing by another process or handle,",
+        loop {
+            let result = match mode {
+                LockMode::Exclusive => file.try_lock(),
+                LockMode::Shared => file.try_lock_shared(),
+            };
+
+            match result {
+                Ok(()) => return Ok(Self { file, path, mode }),
+                Err(TryLockError::WouldBlock) => {
+                    // 没给等待预算，或已经等够了 —— 立即失败，行为与过去完全一致。
+                    let Some(deadline) = deadline else {
+                        return Err(Self::locked_error(&path, mode));
+                    };
+                    if Instant::now() >= deadline {
+                        return Err(Self::locked_error(&path, mode));
+                    }
+                    std::thread::sleep(backoff);
+                    backoff = (backoff * 2).min(Duration::from_millis(20));
                 }
-            ))),
-            Err(TryLockError::Error(e)) => Err(GraphError::StorageError(format!(
-                "Failed to lock database file '{}': {}",
-                path.display(),
-                e
-            ))),
+                Err(TryLockError::Error(e)) => {
+                    return Err(GraphError::StorageError(format!(
+                        "Failed to lock database file '{}': {}",
+                        path.display(),
+                        e
+                    )))
+                }
+            }
         }
+    }
+
+    fn locked_error(path: &Path, mode: LockMode) -> GraphError {
+        GraphError::DatabaseLocked(format!(
+            "Database '{}' is already open {} this handle. \
+             A NervusDb database allows one writer and any number of readers; \
+             a write handle excludes readers and vice versa. \
+             Raise `lock_wait_ms` in NervusDbOptions to wait for the other handle \
+             instead of failing immediately.",
+            path.display(),
+            match mode {
+                // 拿不到排他锁：可能是别的写者，也可能有读者
+                LockMode::Exclusive => "by another process or handle, or by a reader,",
+                // 拿不到共享锁：一定有写者
+                LockMode::Shared => "for writing by another process or handle,",
+            }
+        ))
     }
 
     /// 数据库主文件路径

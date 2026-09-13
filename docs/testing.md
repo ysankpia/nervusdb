@@ -36,13 +36,13 @@ cargo test --test robustness_tests        # page CRC at scale, WAL replay, chunk
 
 ## Current state
 
-**226 test cases — 225 pass, 1 intentionally `#[ignore]`d** (a child-process lock
+**232 test cases — 231 pass, 1 intentionally `#[ignore]`d** (a child-process lock
 probe launched by its parent test).
 
-Run as 17 integration suites (199 cases, of which 1 is `#[ignore]`d) plus 25 inline
+Run as 19 integration suites (205 cases, of which 1 is `#[ignore]`d) plus 25 inline
 unit tests in the hand-written codecs and the action codec (`src/codec.rs`,
 `src/json.rs`, `src/crc32.rs`, `src/action_codec.rs`), which are what the on-disk
-format is made of, plus 2 doc-tests: 199 + 25 + 2 = 226.
+format is made of, plus 2 doc-tests: 205 + 25 + 2 = 232.
 
 The table below is checked against the files by
 `zero_dependency_tests::documented_suite_table_matches_the_files`, so a case added or
@@ -66,6 +66,8 @@ removed without updating this table fails the build rather than drifting:
 | `equivalence_tests.rs`           | 4     | v1.0.0 behaviour guardrails: query, transaction, API, format                    |
 | `zero_dependency_tests.rs`       | 11    | Empty deps; version, name, suite-count, section-ref, package guards             |
 | `planner_tests.rs`               | 8     | Join reorder equivalence, EXPLAIN plan, bound-driven work reduction             |
+| `lock_wait_tests.rs`             | 5     | Lock wait: default no-wait, wait succeeds, timeout, still exclusive              |
+| `lock_cross_process_tests.rs`    | 1     | Two real processes: second refused, then waits and writes                        |
 | `spill_action_tests.rs`          | 10    | Action spill to WAL, order, rollback, checkpoint refusal                        |
 | inline (in `src/`)               | 20    | `codec` / `json` / `crc32` round-trips, truncation, vectors                     |
 

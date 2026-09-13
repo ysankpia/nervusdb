@@ -41,6 +41,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
+use std::time::Duration;
 
 /// 微型缓冲池：1MB（256 帧），用于极低内存环境与受限内存回归测试
 pub const SMALL_POOL_FRAMES: usize = 256;
@@ -240,6 +241,27 @@ pub struct NervusDbOptions {
     /// 这些都是明确的代价，不是缺陷，但默认行为应当是「最省事且最不容易意外」
     /// 的那一种，而 `false` 是它。
     pub spill_transaction_actions: bool,
+    /// 打开时若数据库已被别的句柄占用，最多等待多少毫秒再报错。`0` = 不等待（默认）。
+    ///
+    /// ## 它解决什么
+    ///
+    /// 两个进程（例如两个会话窗口）先后写同一个库时，后来者默认**立即**拿到
+    /// `DatabaseLocked`。这是实测的当前行为，也是嵌入式单写者模型的常态（SQLite
+    /// 默认同样如此）。
+    ///
+    /// 但对「先后而非同时」的写入——第二个窗口在第一个写完之后才来——立即失败是
+    /// 令人意外的：调用方看到错误，而竞争其实几百毫秒后就消失了。设一个非零值让
+    /// 后来者等待，把这类失败消除掉。
+    ///
+    /// ## 它不解决什么
+    ///
+    /// **不会让两个写者并存。** 等待超时后仍然是 `DatabaseLocked`。真正的并发写
+    /// 需要版本可见性或服务器模型，见 [`docs/concurrency.md`](../docs/concurrency.md)。
+    /// 这也不是 `ROADMAP` 第 5 项（按帧 latch，那是同一进程内读者之间的争用）。
+    ///
+    /// 取值会按 200µs 起、指数退避至 20ms 的间隔重试，因此等待期间的系统调用次数
+    /// 很少（毫秒级预算下是个位数）。
+    pub lock_wait_ms: u64,
 }
 
 impl Default for NervusDbOptions {
@@ -250,6 +272,7 @@ impl Default for NervusDbOptions {
             read_only: false,
             max_transaction_actions: DEFAULT_MAX_TRANSACTION_ACTIONS,
             spill_transaction_actions: false,
+            lock_wait_ms: 0,
         }
     }
 }
@@ -432,12 +455,18 @@ impl NervusDb {
         //    若在其之后才加锁，并发回放本身就已经破坏了数据。
         //
         //    只读模式取**共享**锁：多个读者可以共存，但与写者互斥。
+        // `lock_wait_ms = 0`（默认）时走原来的 `acquire`/`acquire_shared`，
+        // 行为与加这个选项之前逐位相同：立即失败，不引入任何等待或重试。
+        let wait = (options.lock_wait_ms > 0).then(|| Duration::from_millis(options.lock_wait_ms));
         let lock = if is_memory {
             None
-        } else if options.read_only {
-            Some(DbLock::acquire_shared(&db_path)?)
         } else {
-            Some(DbLock::acquire(&db_path)?)
+            match (options.read_only, wait) {
+                (true, Some(w)) => Some(DbLock::acquire_shared_wait(&db_path, w)?),
+                (false, Some(w)) => Some(DbLock::acquire_wait(&db_path, w)?),
+                (true, None) => Some(DbLock::acquire_shared(&db_path)?),
+                (false, None) => Some(DbLock::acquire(&db_path)?),
+            }
         };
 
         // 0a. 只读模式不得回放 WAL：那会写主数据文件。
