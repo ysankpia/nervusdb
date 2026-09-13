@@ -1420,17 +1420,30 @@ impl DiskGraph {
 
     /// 读取原始节点记录（不校验 in_use，供 Freelist 使用）
     pub fn read_node_record_raw(&self, node_id: u64) -> Result<Option<NodeRecord>, GraphError> {
+        let mut bpm = self.bpm.lock_recover();
+        Self::read_node_record_locked(&mut bpm, &self.allocator, &self.tx_modified_pages, node_id)
+    }
+
+    /// 在**调用方已持有** `bpm` 锁的前提下读一条节点记录。
+    ///
+    /// 与 [`DiskGraph::read_edge_record_locked`] 同一目的：让一次点读的多个寻址步骤
+    /// 共用一次加锁。语义与 `read_node_record_raw` 完全一致。
+    fn read_node_record_locked(
+        bpm: &mut BufferPoolManager,
+        allocator: &Arc<Mutex<AllocatorMeta>>,
+        tx_modified: &Arc<Mutex<HashSet<PageId>>>,
+        node_id: u64,
+    ) -> Result<Option<NodeRecord>, GraphError> {
         if node_id == 0 {
             return Ok(None);
         }
         let logical_page = (node_id - 1) as usize / NODE_RECORDS_PER_PAGE;
         let offset = ((node_id - 1) as usize % NODE_RECORDS_PER_PAGE) * NodeRecord::RECORD_SIZE;
 
-        let mut bpm = self.bpm.lock_recover();
         let physical_page = match Self::get_or_allocate_node_page(
-            &mut bpm,
-            &self.allocator,
-            &self.tx_modified_pages,
+            bpm,
+            allocator,
+            tx_modified,
             logical_page,
             false,
         )? {
@@ -1599,7 +1612,15 @@ impl DiskGraph {
         }
 
         let mut bpm = self.bpm.lock_recover();
-        let payload = Self::read_prop_record(&mut bpm, ptr)?;
+        Self::read_node_data_locked(&mut bpm, ptr)
+    }
+
+    /// 在**调用方已持有** `bpm` 锁的前提下读节点载荷。
+    fn read_node_data_locked(
+        bpm: &mut BufferPoolManager,
+        ptr: u32,
+    ) -> Result<NodeData, GraphError> {
+        let payload = Self::read_prop_record(bpm, ptr)?;
         if payload.is_empty() {
             return Ok(NodeData {
                 labels: HashSet::new(),
@@ -1891,16 +1912,53 @@ impl DiskGraph {
         Ok(())
     }
 
-    /// 获取完整 Node 结构体（按需通过 Buffer Pool 调入）
+    /// 获取完整 Node 结构体（按需通过 Buffer Pool 调入）。
+    ///
+    /// ## 一次加锁，而不是四次
+    ///
+    /// 这条路径由 `read_node_record` + `read_node_data` + 两条链遍历组成。若各自
+    /// 持锁，一次 `get_node` 就是 **4 次**全局 `bpm` 加锁（链遍历已由
+    /// `collect_edge_chain_batched` 从 O(度) 降到 O(1)）。4 次在单线程下无所谓，
+    /// 在 16 线程下就是 4 倍的争用窗口。
+    ///
+    /// 本机实测（20 万节点/60 万边，读互不相交区间，命中率 98.7%，即瓶颈是锁而非
+    /// 磁盘）：1 线程 779k ops/s，8 线程降到 195k——**负扩展**。把 4 次合并为 1 次
+    /// 直接缩小每个读取在临界区里的停留次数。
+    ///
+    /// ## 这不等于让读者并行
+    ///
+    /// `bpm` 仍是**一把**全局锁：合并加锁只缩短临界区，两个读者依然互斥。真正的
+    /// 并行需要按帧加锁（缓冲池并发模型重设计，见 AGENTS.md §10 与 `ROADMAP.md`）。
+    /// 这里做到的是「把 4 次争用变成 1 次」，不是「没有争用」。
     pub fn get_node(&self, node_id: u64) -> Result<Option<Node>, GraphError> {
-        let record = match self.read_node_record(node_id)? {
-            Some(r) => r,
-            None => return Ok(None),
+        // 单次持锁完成全部读取。四个步骤原本各自 `lock_recover()`，现在共用一次。
+        let mut bpm = self.bpm.lock_recover();
+
+        let record = match Self::read_node_record_locked(
+            &mut bpm,
+            &self.allocator,
+            &self.tx_modified_pages,
+            node_id,
+        )? {
+            Some(r) if r.in_use == 1 => r,
+            _ => return Ok(None),
         };
 
-        let node_data = self.read_node_data(record.prop_page_id)?;
-        let outgoing = self.collect_outgoing_edge_ids(record.first_outgoing_edge_id)?;
-        let incoming = self.collect_incoming_edge_ids(record.first_incoming_edge_id)?;
+        let node_data = Self::read_node_data_locked(&mut bpm, record.prop_page_id)?;
+        let outgoing = Self::collect_edge_chain_locked(
+            &mut bpm,
+            &self.allocator,
+            &self.tx_modified_pages,
+            record.first_outgoing_edge_id,
+            false,
+        )?;
+        let incoming = Self::collect_edge_chain_locked(
+            &mut bpm,
+            &self.allocator,
+            &self.tx_modified_pages,
+            record.first_incoming_edge_id,
+            true,
+        )?;
 
         let mut node = Node::new(node_id, node_data.labels, node_data.properties);
         node.outgoing = outgoing;
@@ -1948,19 +2006,34 @@ impl DiskGraph {
         first_edge_id: u64,
         incoming: bool,
     ) -> Result<Vec<u64>, GraphError> {
+        // 锁的持有顺序与既有实现一致（先 bpm，后 allocator），不引入新的锁序。
+        let mut bpm = self.bpm.lock_recover();
+        Self::collect_edge_chain_locked(
+            &mut bpm,
+            &self.allocator,
+            &self.tx_modified_pages,
+            first_edge_id,
+            incoming,
+        )
+    }
+
+    /// 在**调用方已持有** `bpm` 锁的前提下遍历整条边链。
+    ///
+    /// 抽出来的原因与 `read_edge_record_locked` 相同：让 `get_node` 的四个读取步骤
+    /// 共用一次加锁（见 [`DiskGraph::get_node`]）。
+    fn collect_edge_chain_locked(
+        bpm: &mut BufferPoolManager,
+        allocator: &Arc<Mutex<AllocatorMeta>>,
+        tx_modified: &Arc<Mutex<HashSet<PageId>>>,
+        first_edge_id: u64,
+        incoming: bool,
+    ) -> Result<Vec<u64>, GraphError> {
         let mut ids = Vec::new();
         let mut curr = first_edge_id;
         let mut seen = HashSet::new();
 
-        // 锁的持有顺序与既有实现一致（先 bpm，后 allocator），不引入新的锁序。
-        let mut bpm = self.bpm.lock_recover();
         while curr != 0 && seen.insert(curr) {
-            match Self::read_edge_record_locked(
-                &mut bpm,
-                &self.allocator,
-                &self.tx_modified_pages,
-                curr,
-            )? {
+            match Self::read_edge_record_locked(bpm, allocator, tx_modified, curr)? {
                 // 与 `read_edge_record` 一致：只接受 in_use 的记录
                 Some(record) if record.in_use == 1 => {
                     ids.push(curr);

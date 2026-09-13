@@ -54,6 +54,23 @@ accepted constructs are now rejected, both because they were silently wrong:
 `MATCH`/`MERGE` pattern properties written as expressions (they could never be
 evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar binding.
 
+### Changed
+
+- **A point read (`get_node`) now takes the buffer-pool mutex once instead of four
+  times** — the node record, its property payload, and its outgoing and incoming edge
+  chains each used to be a separate acquisition. No API or format change; this only
+  shortens how long a reader holds the one global lock.
+
+  Measured on a reproducible synthetic instrument
+  (`cargo bench --bench concurrency_scaling_bench`, 200k nodes / 600k edges, 4096-frame
+  pool, 98.7% cache hit so the cause is not disk I/O): **8 threads went from 191–208k
+  to 396k ops/s (2.0×)**, with the single-thread number unchanged. The unchanged
+  single-thread row is the control: reducing critical-section count cannot help one
+  thread, and it does not.
+
+  **Reads are still serialized** — one global mutex remains, and throughput still
+  falls as threads are added (894k → 396k from 1 to 8). See `ROADMAP.md` item 5.
+
 ### Added
 
 - **`NervusDbOptions::spill_transaction_actions` — transactions larger than memory.**

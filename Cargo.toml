@@ -74,6 +74,12 @@ name = "crash_recovery_test"
 path = "benches/real_data/crash_recovery_test.rs"
 harness = false
 
+# 读扩展性基准：用合成图复现「读吞吐随线程数下降」，因此不依赖 SNAP 数据集。
+[[bench]]
+name = "concurrency_scaling_bench"
+path = "benches/real_data/concurrency_scaling_bench.rs"
+harness = false
+
 [[bench]]
 name = "scale_bench"
 path = "benches/real_data/scale_bench.rs"

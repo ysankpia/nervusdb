@@ -55,7 +55,7 @@ Working and covered by tests:
 - Tooling: Python and Node.js SDKs with transaction and batch-write support.
   Inspection and dump go through the library API — the CLI and the browser
   workbench were removed before 0.1.0.
-- 223 test cases across 17 suites (222 run, 1 intentionally `#[ignore]`d for a
+- 225 test cases across 17 suites (224 run, 1 intentionally `#[ignore]`d for a
   child-process lock probe); `cargo fmt`, `cargo clippy -D warnings` and
   `rustdoc -D warnings` all clean.
 
@@ -207,12 +207,22 @@ cost ≈345 acquisitions.
 (`collect_edge_chain_batched`), which under 8-thread contention on a shared hub
 measured 1.4-2.2× (17.4-27.8k → 37.8-38.3k ops/s, and far more stable run to run).
 
-**Still open:** readers remain serialized, because the mutex is still global and still
-taken once per call — 16-thread scaling efficiency is ≈4%, against the ≈40% this
-machine can deliver. Closing that needs per-frame latching, i.e. a redesign of the
-buffer pool's concurrency model, not a patch. **Not the same fix as item 1** — that one
-is reader-versus-writer through the outer lock; this one is reader-versus-reader inside
-the pool, which is what the 4% measures. See the note under item 1.
+**Further reduced, not fixed.** `get_node` now takes the global mutex **once** instead
+of four times (record, payload, outgoing chain, incoming chain — the chain walks had
+already gone from one acquisition per edge to one per chain). Measured on a
+reproducible synthetic instrument
+(`benches/real_data/concurrency_scaling_bench.rs`, 200k nodes / 600k edges, 4096-frame
+pool, 98.7% cache hit so the cause is not disk): **8 threads went from 191–208k to
+396k ops/s (2.0×)**, while the 1-thread row is unchanged — which is the control that
+proves this is contention reduction rather than a faster path.
+
+**Still open:** readers remain serialized, because the mutex is still global. The curve
+still falls (894k → 396k from 1 to 8 threads), so **there is no read parallelism yet** —
+only fewer, shorter visits to one lock. Closing it needs per-frame latching, i.e. a
+redesign of the buffer pool's concurrency model, not a patch.
+
+**Not the same fix as item 1** — that one is reader-versus-writer through the outer
+`RwLock`; this one is reader-versus-reader inside the pool. See the note under item 1.
 
 Also found while profiling: `Frame::latch` was dead code — declared and initialized
 since the initial commit, never read or written. **Deleted**, so the struct no longer

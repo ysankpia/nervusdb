@@ -260,6 +260,40 @@ The read-side collapse above is therefore not a general "everything is slow" sto
 reads are serialized by the buffer-pool mutex at any transaction size, while writes
 are limited by one fsync per commit and scale once batching removes that.
 
+**A second mitigation: one lock acquisition per `get_node`, not four.** `get_node` was
+taking the global `bpm` mutex four times (record, payload, outgoing chain, incoming
+chain). The chain walks had already been collapsed from one acquisition *per edge* to
+one per chain; this collapses the remaining four into one, so a point read is a single
+critical section instead of four.
+
+Measured with a **reproducible** instrument — `benches/real_data/concurrency_scaling_bench.rs`,
+which builds a synthetic 200k-node/600k-edge graph so no external dataset is needed.
+512 frames (2MB) would not reproduce the contention; 4096 frames (16MB) against ~45MB
+of data does, and every row below reports a 98.7% cache hit rate, which is what rules
+out disk I/O as the cause:
+
+| Threads | Before (4 acquisitions) | After (1 acquisition) | Change |
+| ------- | ----------------------- | --------------------- | ------ |
+| 1       | 872k / 892k ops/s       | 894k ops/s            | ~1.00× (no change) |
+| 2       | 510k / 521k ops/s       | 594k ops/s            | 1.15×  |
+| 4       | 326k / 322k ops/s       | 437k ops/s            | 1.35×  |
+| 8       | 191k / 208k ops/s       | 396k ops/s            | **2.0×** |
+
+Two rows are quoted for the "before" column because it was measured twice; the "after"
+value is stable across three runs (425–440k at 4 threads, 396k at 8).
+
+**The single-thread row is the control.** It is unchanged, which is what distinguishes
+"less contention" from "a faster code path": reducing critical-section count cannot
+help a single thread, and it does not. The gain appears only where threads compete, and
+grows with thread count.
+
+**This is not the fix for read parallelism.** Readers are still serialized by one global
+mutex; the curve still falls from 894k to 396k. Collapsing four acquisitions into one
+shortens each visit to the critical section, it does not admit two readers at once.
+That needs per-frame latching — a buffer-pool concurrency redesign, not a patch.
+`ROADMAP.md` item 5 tracks it; item 1 (reader-versus-writer through the outer lock) is a
+separate problem with a separate fix.
+
 **Scope of the claim.** This is about *read parallelism*, not correctness or
 single-threaded speed: the full suite passes, and the batched walk is
 indistinguishable from the per-edge walk in every existing test (the chain semantics,

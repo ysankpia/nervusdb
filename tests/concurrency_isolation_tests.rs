@@ -699,3 +699,219 @@ fn test_integrity_check_stays_healthy_under_concurrent_writes() -> Result<(), Gr
 
     Ok(())
 }
+
+// =========================================================================
+// 合并加锁的 get_node：语义不得改变
+// =========================================================================
+
+/// 单次加锁的 `get_node` 必须返回与逐项读取**完全相同**的节点。
+///
+/// `get_node` 原本是 4 次独立加锁（记录 + 载荷 + 出链 + 入链），合并成 1 次是为了
+/// 缩小争用窗口。合并时最可能的错误是**遗漏某个读取步骤**或**把某一步读了两次**，
+/// 而那种错误在简单夹具上也可能看不出来——因此这里用带属性、带出边、带入边的
+/// 节点逐个字段比对。
+#[test]
+fn test_get_node_single_lock_matches_field_by_field() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = NervusDb::open(dir.path().join("single_lock.db"))?;
+
+    // 中心节点：有标签（>1 个）、有属性、既有入边也有出边
+    let mut props = HashMap::new();
+    props.insert("name".to_string(), Value::from("hub"));
+    props.insert("rank".to_string(), Value::from(7));
+    let hub = db.add_node(
+        HashSet::from(["A".to_string(), "B".to_string()]),
+        props.clone(),
+    )?;
+
+    // 多个源指向 hub（入边），hub 指向多个目标（出边）
+    for i in 0..5 {
+        let src = db.add_node(HashSet::from(["S".to_string()]), HashMap::new())?;
+        db.add_edge(src, hub, "IN", HashMap::new(), 1.0)?;
+        let dst = db.add_node(HashSet::from(["T".to_string()]), HashMap::new())?;
+        db.add_edge(hub, dst, "OUT", HashMap::new(), 1.0)?;
+        let _ = i;
+    }
+
+    let node = db.try_get_node(hub)?.expect("hub must exist");
+
+    // 标签与属性（来自载荷读取那一步）
+    assert!(node.has_label("A") && node.has_label("B"));
+    for (k, v) in &props {
+        assert_eq!(node.get_prop(k), Some(v), "property {k} must survive");
+    }
+
+    // 邻接表（来自两条链遍历）：ID 集合必须完整，且每条边都能解析
+    assert_eq!(node.outgoing.len(), 5, "hub has 5 outgoing edges");
+    assert_eq!(node.incoming.len(), 5, "hub has 5 incoming edges");
+
+    let mut outward = std::collections::BTreeSet::new();
+    for eid in &node.outgoing {
+        let e = db.try_get_edge(*eid)?.expect("outgoing edge must resolve");
+        assert_eq!(e.src_id, hub, "outgoing edge must start at the hub");
+        outward.insert(e.dst_id);
+    }
+    assert_eq!(
+        outward.len(),
+        5,
+        "the 5 outgoing edges must have distinct targets"
+    );
+
+    let mut inward = std::collections::BTreeSet::new();
+    for eid in &node.incoming {
+        let e = db.try_get_edge(*eid)?.expect("incoming edge must resolve");
+        assert_eq!(e.dst_id, hub, "incoming edge must end at the hub");
+        inward.insert(e.src_id);
+    }
+    assert_eq!(
+        inward.len(),
+        5,
+        "the 5 incoming edges must have distinct sources"
+    );
+
+    // 没有任何端点重叠：出边的目标与入边的源是两批不同节点
+    assert!(
+        outward.is_disjoint(&inward),
+        "outgoing targets and incoming sources must not be the same nodes"
+    );
+
+    // 无属性的节点也必须能读（本轮重构绕过了「无属性」的提前返回，
+    // 由 `read_prop_record` 处理 none 指针）
+    let bare = db.add_node(HashSet::new(), HashMap::new())?;
+    let bare_node = db.try_get_node(bare)?.expect("bare node must exist");
+    assert!(bare_node.properties.is_empty());
+    assert!(bare_node.labels.is_empty());
+    assert!(bare_node.outgoing.is_empty());
+    assert!(bare_node.incoming.is_empty());
+
+    Ok(())
+}
+
+/// 合并加锁后，**读者之间**与「读者对写者」的一致性都不得退化。
+///
+/// 这条测试同时施压新路径的两个方面：多线程并发 `get_node`（争用合并后的那把锁），
+/// 以及写者在其中增删边（合并加锁不得读到撕裂的邻接表）。
+#[test]
+fn test_merged_lock_get_node_is_consistent_under_concurrent_writes() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = NervusDb::open(dir.path().join("merged_lock_stress.db"))?;
+
+    // 稳定骨架：一个中心 + 32 个叶子，写者在叶子之间反复连边
+    let hub = db.add_node(
+        HashSet::from(["Hub".to_string()]),
+        HashMap::from([("k".to_string(), Value::from(1))]),
+    )?;
+    let mut ids = vec![hub];
+    for _ in 0..32 {
+        ids.push(db.add_node(HashSet::from(["L".to_string()]), HashMap::new())?);
+    }
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let checked = Arc::new(AtomicUsize::new(0));
+    let problems = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+
+    let mut handles = Vec::new();
+
+    // 写者
+    {
+        let db = db.clone();
+        let stop = Arc::clone(&stop);
+        let ids = ids.clone();
+        handles.push(thread::spawn(move || {
+            let mut i = 0usize;
+            while !stop.load(Ordering::Relaxed) {
+                let src = ids[1 + (i % 32)];
+                let dst = ids[1 + ((i * 5 + 7) % 32)];
+                if src != dst {
+                    if let Ok(eid) = db.add_edge(src, dst, "L", HashMap::new(), 1.0) {
+                        let _ = db.remove_edge(eid);
+                    }
+                }
+                // 同时改动中心节点的属性，施压载荷读取那一步
+                let _ = db.update_node_property(hub, "k", Value::from((i % 97) as i64));
+                i += 1;
+            }
+        }));
+    }
+
+    // 多个读者并发 get_node（同一把锁，合并后只进一次临界区）
+    for _ in 0..4 {
+        let db = db.clone();
+        let stop = Arc::clone(&stop);
+        let checked = Arc::clone(&checked);
+        let problems = Arc::clone(&problems);
+        let ids = ids.clone();
+        handles.push(thread::spawn(move || {
+            let mut i = 0usize;
+            while !stop.load(Ordering::Relaxed) {
+                let nid = ids[i % ids.len()];
+                // **必须在一个快照内核对**，否则「读节点」与「读它的每条边」是两次
+                // 独立取锁，写者会在中间删掉边——那产生的是**测试自身的**假阳性，
+                // 与 `get_node` 是否正确无关。本文件顶部的 `check_adjacency_integrity`
+                // 与它引用的 `test_snapshot_prevents_interleaved_deletion` 都是
+                // 同一个道理。
+                //
+                // 这里同时施压新路径：`snapshot.get_node` 内部就是合并加锁后的
+                // `DiskGraph::get_node`。
+                let problems = Arc::clone(&problems);
+                let snapshot = db.read_snapshot();
+                match snapshot.get_node(nid) {
+                    Ok(Some(node)) => {
+                        for eid in node.outgoing.iter().chain(node.incoming.iter()) {
+                            match snapshot.get_edge(*eid) {
+                                Ok(Some(e)) => {
+                                    if e.src_id != nid && e.dst_id != nid {
+                                        problems.lock().unwrap().push(format!(
+                                            "edge {eid} in node {nid}'s adjacency does not \
+                                             mention it ({} -> {})",
+                                            e.src_id, e.dst_id
+                                        ));
+                                    }
+                                }
+                                Ok(None) => problems
+                                    .lock()
+                                    .unwrap()
+                                    .push(format!("edge {eid} named by node {nid} is absent")),
+                                Err(e) => problems
+                                    .lock()
+                                    .unwrap()
+                                    .push(format!("edge {eid} unreadable: {e}")),
+                            }
+                        }
+                    }
+                    Ok(None) => problems
+                        .lock()
+                        .unwrap()
+                        .push(format!("node {nid} disappeared mid-test")),
+                    Err(e) => problems
+                        .lock()
+                        .unwrap()
+                        .push(format!("node {nid} unreadable: {e}")),
+                }
+                drop(snapshot);
+                checked.fetch_add(1, Ordering::Relaxed);
+                i += 1;
+            }
+        }));
+    }
+
+    thread::sleep(std::time::Duration::from_millis(2500));
+    stop.store(true, Ordering::Relaxed);
+    for h in handles {
+        let _ = h.join();
+    }
+
+    let problems = problems.lock().unwrap().clone();
+    assert!(
+        problems.is_empty(),
+        "merged-lock get_node produced inconsistent reads:\n{}",
+        problems.join("\n")
+    );
+    assert!(
+        checked.load(Ordering::Relaxed) > 50,
+        "readers must actually make progress (checked={})",
+        checked.load(Ordering::Relaxed)
+    );
+
+    Ok(())
+}
