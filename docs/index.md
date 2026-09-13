@@ -11,18 +11,19 @@ which one answers your question is the whole point of an index.
 | [README.md](../README.md)               | First. Install, quick start, capabilities, limitations.                                                            |
 | [FORMAT.md](../FORMAT.md)               | You need the exact bytes — writing a reader, or reasoning about durability. The frozen-format contract lives here. |
 | [docs/architecture.md](architecture.md) | You want to know _why_ it works: paging, WAL, adjacency, batch weave, locks.                                       |
+| [docs/concurrency.md](concurrency.md)   | Multiple handles, threads, or processes — what is allowed today, what each other database allows, and the options. |
 | [docs/benchmarks.md](benchmarks.md)     | You need a performance number **and the conditions it was measured under**.                                        |
 
 ## Working on it
 
-| Document                              | Read it when                                                                                       |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| [AGENTS.md](../AGENTS.md)             | **Before changing code.** Invariants, contracts, verification workflow.                            |
+| Document                              | Read it when                                                                                                           |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| [AGENTS.md](../AGENTS.md)             | **Before changing code.** Invariants, contracts, verification workflow.                                                |
 | [docs/testing.md](testing.md)         | Running or adding tests — the CI gate, the red-line totals, the suite inventory, and the adversarial style it follows. |
-| [docs/cypher.md](cypher.md)           | Changing the query language — grammar and the executor constraints it depends on.                  |
-| [docs/releasing.md](releasing.md)     | Cutting a release, or changing the release workflow.                                               |
-| [CONTRIBUTING.md](../CONTRIBUTING.md) | Before opening anything. **Issues only; external PRs are closed automatically.**                   |
-| [CLA.md](../CLA.md)                   | You have been asked to sign a CLA. The project does not collect them; see CONTRIBUTING.md for why. |
+| [docs/cypher.md](cypher.md)           | Changing the query language — grammar and the executor constraints it depends on.                                      |
+| [docs/releasing.md](releasing.md)     | Cutting a release, or changing the release workflow.                                                                   |
+| [CONTRIBUTING.md](../CONTRIBUTING.md) | Before opening anything. **Issues only; external PRs are closed automatically.**                                       |
+| [CLA.md](../CLA.md)                   | You have been asked to sign a CLA. The project does not collect them; see CONTRIBUTING.md for why.                     |
 
 ## Status, policy, licensing
 
@@ -52,10 +53,10 @@ just be two files nobody reads.
 
 中文文档只有这两份，深度文档以英文版为唯一权威来源——同一件事写两遍必然漂移。
 
-| Document | Contents |
-| -------- | -------- |
-| [README.zh-CN.md](../README.zh-CN.md) | 项目介绍：状态、特性、安装、快速上手。 |
-| [docs/api.zh-CN.md](api.zh-CN.md) | 按任务分组的 API 用法样例，每段都在 `examples/` 下编译并运行过。 |
+| Document                              | Contents                                                         |
+| ------------------------------------- | ---------------------------------------------------------------- |
+| [README.zh-CN.md](../README.zh-CN.md) | 项目介绍：状态、特性、安装、快速上手。                           |
+| [docs/api.zh-CN.md](api.zh-CN.md)     | 按任务分组的 API 用法样例，每段都在 `examples/` 下编译并运行过。 |
 
 ## Historical
 
