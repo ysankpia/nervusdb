@@ -106,3 +106,46 @@ known to belong to another project, naming the owner in the message.
 3. Confirm every document states the version being released — the guards in
    `zero_dependency_tests.rs` cover the test counts, the manifest versions, and the
    format version.
+4. **Test the packaged crate, not just the repository.** `cargo test` passing in your
+   checkout does not mean the tarball works: `cargo package` applies its own file
+   selection, and anything it omits is absent for every consumer while remaining present
+   for you.
+
+   ```bash
+   cargo package --allow-dirty
+   (cd target/package/nervusdb-0.1.0 && cargo test)
+   ```
+
+   This is not hypothetical. The first time it was run, the packaged crate **failed two
+   tests**: `bindings/` is excluded automatically (cargo drops nested packages from the
+   parent), and two guards read those manifests with `expect()`. Every
+   `cargo add nervusdb` followed by `cargo test` would have shown two failures caused by
+   this repository's packaging, not by the consumer's code. The guards now tolerate a
+   trimmed package, and `published_package_is_self_consistent` asserts the packaged file
+   list contains the library, the whole test suite, and every file the other guards read.
+
+   The real-dataset step above cannot be replaced by this one, and this one cannot be
+   replaced by that: one checks the engine at scale, the other checks what actually gets
+   shipped.
+
+## Two cargo file-selection traps
+
+Both were hit while making the packaged crate self-consistent, and neither is obvious
+from the manifest.
+
+**`include` is an allowlist; `exclude` is a denylist.** An `include = [...]` listing the
+extra files needed for packaging **silently removed everything else**, including
+`src/lib.rs` and all of `tests/`. The failure was `no targets specified in the manifest`
+at build time, but the manifest was already wrong — the file list should be checked, not
+inferred from a later error. Use `exclude` when you want the defaults minus something.
+
+**cargo excludes nested packages from the parent.** `bindings/python` and
+`bindings/nodejs` are workspace members, so they are never in the `nervusdb` tarball.
+Any test or build step that reads them must tolerate their absence, because in the
+published package they genuinely are not there.
+
+A related finding, worth knowing before "fixing" it: `.cargo/config.toml` **must stay in
+this repository** (pyo3's `extension-module` cdylib fails to link without the macOS
+`-undefined dynamic_lookup` flags) but **must not be published**. It is inert for
+consumers — verified: cargo does not read a dependency's `.cargo/config.toml` — so this
+is hygiene, not a hazard.
