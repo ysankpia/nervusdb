@@ -169,6 +169,47 @@ impl<'a> Lexer<'a> {
                     if self.chars.peek() == Some(&'>') {
                         self.chars.next();
                         tokens.push(Token::ArrowRight);
+                    } else if matches!(self.chars.peek(), Some(c) if c.is_ascii_digit()) {
+                        // 负数字面量：`-7`、`-7.5`。
+                        //
+                        // 负号在这里直接折进数字，而不是先发一个 `Dash` 再让语法层拼。
+                        // 原因是**词法与语法的接缝处**：`SET n.k = -7` 与模式里的
+                        // `{v: -7.5}` 都走 `parse_primary_expr`，它只接受单个 primary
+                        // token，没有一元运算符的概念；在那里补一个 `Expr::Unary`
+                        // 会牵动求值器，而折进字面量对两侧都透明。
+                        //
+                        // 不这样做的话，`dump_cypher` 会**写出自己的解析器读不回来的
+                        // 脚本**：属性值为负的库 dump 出 `SET n.v = -42`，重导入直接
+                        // 报 `Unexpected expression token: Some(Dash)`。文档把
+                        // dump→re-import 指定为版本迁移路径，因此这条往返必须成立。
+                        let mut num_str = String::from("-");
+                        let mut is_float = false;
+                        while let Some(&ch) = self.chars.peek() {
+                            if ch.is_ascii_digit() {
+                                num_str.push(ch);
+                                self.chars.next();
+                            } else if ch == '.'
+                                && !is_float
+                                && !matches!(self.chars.clone().nth(1), Some('.'))
+                            {
+                                is_float = true;
+                                num_str.push('.');
+                                self.chars.next();
+                            } else {
+                                break;
+                            }
+                        }
+                        if is_float {
+                            let val: f64 = num_str.parse().map_err(|e| {
+                                GraphError::General(format!("Invalid float literal: {}", e))
+                            })?;
+                            tokens.push(Token::Literal(Value::from(val)));
+                        } else {
+                            let val: i64 = num_str.parse().map_err(|e| {
+                                GraphError::General(format!("Invalid integer literal: {}", e))
+                            })?;
+                            tokens.push(Token::Literal(Value::from(val)));
+                        }
                     } else {
                         tokens.push(Token::Dash);
                     }

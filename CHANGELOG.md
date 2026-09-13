@@ -337,6 +337,28 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
 ### Fixed
 
+- **`dump_cypher` produced a script the parser could not read back, for any negative or
+  whole-number float property.** Two defects in the same round trip, which the docs
+  designate as the format-migration path:
+
+  - **Negative literals did not parse at all.** The lexer emitted `Token::Dash` for every
+    `-`, and both `SET n.k = -7` and pattern properties (`{v: -7.5}`) go through
+    `parse_primary_expr`, which accepts a single primary token and has no
+    unary-operator concept. So `MATCH (n:N) SET n.v = -7` failed with
+    `Unexpected expression token: Some(Dash)` — and `dump_cypher` writes exactly that form
+    for a negative property. Measured on `v1.0.0` too: the dump succeeds, the re-import
+    fails. Fixed in the lexer by folding `-` directly into a numeric literal when it is
+    followed by a digit, which covers `SET`, pattern properties and comparisons at once.
+
+  - **Float properties came back as integers.** `format_literal` rendered `Value::Float`
+    with `f64::to_string()`, which gives `"3"` for `3.0` — no decimal point, so the
+    re-import parsed `Int(3)`. Measured: of 60 nodes with `f = i * 1.5`, 30 (exactly the
+    whole-number results) changed type. A whole-number float now keeps its `.0`.
+
+  Arithmetic operators are a separate matter: `BinaryOperator` has only comparisons and
+  boolean logic, so `n.v - 1` does not work — a scope limit, not this defect. Verified it
+  behaves identically before and after this change.
+
 - **`Transaction::add_edges` silently ignored the `edge_id` the caller supplied.**
   `EdgeInsert` is public and so is its `edge_id` field, so writing
   `EdgeInsert { edge_id: 999_000, .. }` compiles — and `add_edges` discarded it, assigned
@@ -412,8 +434,9 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
   itself (chunking would silently change the workload the published figures describe)
   and honours `GL_MAX_ACTIONS` so a constrained machine can still see the rejection.
 
-All five predate this release — the `:memory:`, NO-STEAL, read-only and `add_edges`
-defects all reproduce on `v1.0.0` — and none changes the storage format.
+All six predate this release — the `:memory:`, NO-STEAL, read-only, `add_edges` and
+both literal-round-trip defects reproduce on `v1.0.0` — and none changes the storage
+format.
 
 - **Read concurrency was _negative_: more threads made reads slower.** Measured on
   com-DBLP, 16 threads doing plain point reads reached **0.6%–1.4% of single-thread

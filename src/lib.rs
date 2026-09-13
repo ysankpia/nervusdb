@@ -1954,7 +1954,26 @@ fn format_literal(value: &Value) -> String {
     match value {
         Value::Null => "null".to_string(),
         Value::Int(v) => v.to_string(),
-        Value::Float(v) => v.to_string(),
+        // 浮点必须**保留为浮点**：`f64::to_string()` 对整数值给出 `"3"`，没有任何
+        // 小数点，重新解析就变成 `Int(3)`——类型在 dump/restore 往返中丢失。
+        // 实测 60 个 `f = i * 1.5` 的节点有 30 个（恰好是所有整数结果）被读回成
+        // `Int`，而文档把 dump→re-import 指定为**版本迁移路径**。
+        //
+        // 补 `.0` 是最小修法：`"3"` → `"3.0"`，解析器已接受小数形式。不能用
+        // `{:?}`：它对 `f64` 在某些值上走科学计数法，而 `parse` 是否接受取决于
+        // 具体实现；`{}` 配一个显式的小数点则覆盖两者。
+        //
+        // `inf`/`NaN` 没有字面量形式（解析器也不接受），保持 `to_string()` 的原样
+        // 输出——它们本就不是可移植的属性值，安静地写出一个不可解析的记号比造一个
+        // 错误的数要好。
+        Value::Float(v) => {
+            let s = v.to_string();
+            if s.contains(['.', 'e', 'E']) || !v.is_finite() {
+                s
+            } else {
+                format!("{s}.0")
+            }
+        }
         Value::Bool(v) => v.to_string(),
         Value::String(s) => format!("'{}'", s.replace('\'', "\\'")),
         Value::List(items) => format!(

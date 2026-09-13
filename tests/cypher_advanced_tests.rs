@@ -889,3 +889,151 @@ fn test_sum_is_exact_for_integers_and_reports_overflow() -> Result<(), GraphErro
 
     Ok(())
 }
+
+// =========================================================================
+// 数字字面量：负数与浮点必须在 dump→re-import 往返中保真
+// =========================================================================
+
+/// **负数必须能作为字面量解析，否则 `dump_cypher` 的输出读不回来。**
+///
+/// ## 缺陷
+///
+/// 词法层把 `-` 一律发成 `Token::Dash`，而 `SET n.k = -7` 与模式里的
+/// `{v: -7.5}` 都走 `parse_primary_expr`——它只接受一个 primary token，没有一元
+/// 运算符的概念。于是**负数在任何位置都无法解析**：
+///
+/// ```text
+/// MATCH (n:N) SET n.v = -7   ->  Unexpected expression token: Some(Dash)
+/// CREATE (n:P {v: -42})      ->  Unexpected expression token: Some(Dash)
+/// ```
+///
+/// 后果不是「少一个便利」：`dump_cypher` 会把属性值 `-42` 写成 `SET n.v = -42`，
+/// 即**产出一份自己的解析器拒绝的脚本**。文档把 dump→re-import 指定为格式版本
+/// 迁移路径，所以属性里只要有一个负数，迁移就是断的。实测（`v1.0.0` 与当前
+/// 行为一致）：dump 成功、重导入报 Dash 错误。
+///
+/// 修法在**词法层**：`-` 紧跟数字时折成一个负字面量。放在语法层需要一个
+/// `Expr::Unary` 变体并牵动求值器，而折进 token 对 SET、模式、比较三条路径
+/// 同时生效。
+#[test]
+fn negative_number_literals_parse_and_survive_a_dump_round_trip() -> Result<(), GraphError> {
+    let (_dir, db) = open_temp("negative_literals.db")?;
+    db.add_node(HashSet::from(["N".to_string()]), HashMap::new())?;
+
+    // SET 路径
+    db.run_cypher("MATCH (n:N) SET n.v = -7")?;
+    assert_eq!(value_of(&db, "MATCH (n:N) RETURN n.v")?, Value::from(-7i64));
+
+    // 浮点负数：小数点是关键，`-7` 与 `-7.0` 必须落成不同变体
+    db.run_cypher("MATCH (n:N) SET n.f = -7.5")?;
+    assert_eq!(
+        value_of(&db, "MATCH (n:N) RETURN n.f")?,
+        Value::from(-7.5f64)
+    );
+
+    // 模式属性路径（与 SET 是两条独立的解析路径）
+    db.run_cypher("CREATE (p:Neg {v: -42, f: -0.5})")?;
+    assert_eq!(
+        value_of(&db, "MATCH (p:Neg) RETURN p.v")?,
+        Value::from(-42i64)
+    );
+    assert_eq!(
+        value_of(&db, "MATCH (p:Neg) RETURN p.f")?,
+        Value::from(-0.5f64)
+    );
+
+    // 比较中的负数（此前也失败）
+    assert_eq!(
+        value_of(&db, "MATCH (n:N) WHERE n.v > -10 RETURN n.v")?,
+        Value::from(-7i64)
+    );
+
+    // i64::MIN 是负数折入的边界：字面量拼接后必须仍能解析回原值。
+    //
+    // 属性名用 `lowest` 而非 `min`：`min` 是聚合函数名，会被词法层当作关键字。那
+    // 本身是一个可以讨论的限制，但把它混进这条测试只会让失败原因变得含混。
+    db.run_cypher("MATCH (n:N) SET n.lowest = -9223372036854775808")?;
+    assert_eq!(
+        value_of(&db, "MATCH (n:N) RETURN n.lowest")?,
+        Value::from(i64::MIN),
+        "i64::MIN must survive the negative-literal path"
+    );
+
+    Ok(())
+}
+
+/// **浮点属性在 dump→re-import 后必须仍是浮点。**
+///
+/// `f64::to_string()` 对整数值给出 `"3"`——没有小数点。`format_literal` 直接用了
+/// 它，于是重导入把它解析成 `Int(3)`：**类型在迁移中丢失**。实测 60 个
+/// `f = i * 1.5` 的节点里有 30 个（恰好是所有整数结果）被读回成 `Int`。
+///
+/// 断言用 `matches!` 明确要求 `Float` 变体，而不是比较数值——`Int(3) == Float(3.0)`
+/// 若在 `Value` 的 `PartialEq` 里被判等，只比数值的断言会漏掉这正是本测试要防的事。
+#[test]
+fn float_properties_keep_their_type_across_a_dump_round_trip() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let src = dir.path().join("float_src.db");
+    let dst = dir.path().join("float_dst.db");
+
+    // 值的选取覆盖三类：整数值浮点（`3.0` — 会退化成 "3"）、分数、负数分数。
+    let originals: Vec<(&str, f64)> = vec![
+        ("whole", 3.0),
+        ("whole_neg", -7.0),
+        ("fraction", 1.5),
+        ("fraction_neg", -2.25),
+        ("zero", 0.0),
+        // 17 位有效数字、需要完整 f64 精度才能原样返回的值。刻意避开 π、e 一类
+        // 常量：clippy 的 `approx_constant` 会拒绝，而这条测试要的是「精度」本身，
+        // 不是某个特定常量。
+        ("precision", 1.2345678901234567e3),
+    ];
+
+    {
+        let db = NervusDb::open(&src)?;
+        db.with_transaction(|tx| {
+            for (name, v) in &originals {
+                let mut props = HashMap::new();
+                props.insert("k".to_string(), Value::from(*name));
+                props.insert("f".to_string(), Value::from(*v));
+                tx.add_node(HashSet::from(["F".to_string()]), props)?;
+            }
+            Ok(())
+        })?;
+        db.checkpoint()?;
+
+        let mut dump = Vec::new();
+        db.dump_cypher(&mut dump)?;
+        let text = String::from_utf8(dump).expect("dump is UTF-8");
+
+        let restored = NervusDb::open(&dst)?;
+        let mut replayed = 0;
+        for line in text.lines() {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with("--") {
+                continue;
+            }
+            restored
+                .run_cypher(t)
+                .unwrap_or_else(|e| panic!("dump replay failed on `{t}`: {e}"));
+            replayed += 1;
+        }
+        assert!(replayed > 0, "the dump must contain statements");
+
+        for (name, v) in &originals {
+            let got = value_of(
+                &restored,
+                &format!("MATCH (n:F {{k: '{name}'}}) RETURN n.f"),
+            )?;
+            assert!(
+                matches!(got, Value::Float(_)),
+                "property `{name}` came back as {got:?}, not a Float — the dump lost \
+                 the type (original {v})"
+            );
+            let Value::Float(g) = got else { unreachable!() };
+            assert_eq!(g, *v, "property `{name}` changed value");
+        }
+    }
+
+    Ok(())
+}
