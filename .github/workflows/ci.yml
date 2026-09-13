@@ -150,6 +150,36 @@ jobs:
             || cp target/debug/libnervusdb_python.dylib bindings/python/nervusdb.so
           PYTHONPATH=bindings/python python3 bindings/python/tests/test_nervusdb.py
 
+  # A binding bug is invisible from *inside* the binding: each SDK's own suite can be
+  # green while the two disagree. That is how the integer defect survived — Python
+  # returned 9007199254740993 and Node returned 9007199254740992 for the same write,
+  # and Node's fixture never contained a value an f64 cannot represent. This job builds
+  # both bindings and diffs them, so the comparison runs on every change rather than
+  # existing as a script somebody has to remember to run.
+  cross-sdk:
+    name: Cross-SDK agreement
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: ".node-version"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Build both bindings
+        run: cargo build -p nervusdb-node -p nervusdb-python
+
+      - name: Stage the loadable artifacts
+        run: |
+          cp target/debug/libnervusdb_node.so bindings/nodejs/nervusdb.node
+          cp target/debug/libnervusdb_python.so bindings/python/nervusdb.so
+
+      - name: Compare the two SDKs
+        run: python3 bindings/cross_sdk_check.py
+
   docs:
     name: Docs build
     runs-on: ubuntu-latest

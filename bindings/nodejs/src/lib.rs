@@ -1,88 +1,196 @@
 #[macro_use]
 extern crate napi_derive;
 
+// 显式导入，**不用 `bindgen_prelude::*`**：那个 glob 带入 napi 自己的
+// `Result<T, S = Status>` 别名并遮蔽 `std::result::Result`，于是本文件里随处可见的
+// `Result<X, napi::Error>` 会被解析成 `Error<napi::Error>`，报出
+// 「`napi::Error: AsRef<str>` is not satisfied」这种看不出因果的错误。
+use napi::bindgen_prelude::{BigInt, FromNapiValue};
+use napi::{Env, JsObject, JsUnknown, ValueType};
 use nervusdb_core::{NervusDb as CoreNervusDb, Transaction as CoreTransaction, Value};
 use std::collections::{HashMap, HashSet};
 
-/// 把任意 JSON 标量转为图属性值
-fn json_to_value(v: &serde_json::Value) -> Value {
-    match v {
-        serde_json::Value::Bool(b) => Value::from(*b),
-        serde_json::Value::Number(num) => {
-            if let Some(i) = num.as_i64() {
-                Value::from(i)
-            } else if let Some(f) = num.as_f64() {
-                Value::from(f)
+/// `i64` → JS BigInt（输出侧）。
+fn bigint(v: i64) -> BigInt {
+    BigInt::from(v)
+}
+
+/// BigInt 参数 → `u64`，超出范围时**报出真实数值**。
+///
+/// 负数和超过 `u64::MAX` 的值都会被拒绝，而不是取模或截断——ID 是个身份，
+/// 静默换一个身份比报错危险得多。
+fn to_u64(v: &BigInt) -> Result<u64, napi::Error> {
+    let (sign, val, lossless) = v.get_u128();
+    if sign || !lossless || val > u64::MAX as u128 {
+        let shown = if sign {
+            format!("-{val}")
+        } else {
+            val.to_string()
+        };
+        return Err(napi::Error::from_reason(format!(
+            "id {shown} is not a valid node or edge id (must be 0..=u64::MAX)"
+        )));
+    }
+    Ok(val as u64)
+}
+
+/// 图中整数属性的**精确**往返。
+///
+/// ## 为什么整数在 JS 侧必须是 BigInt
+///
+/// 属性值是 `i64`，而 JavaScript 的 `number` 是 f64：超过 2^53 的整数经过它就
+/// **静默舍入**。实测（本改动之前）：
+///
+/// | 写入            | 读回                    |
+/// | --------------- | ----------------------- |
+/// | `2^53 + 1`      | `9007199254740992`      |
+/// | `i64::MAX`      | `9223372036854776000`   |
+/// | `i64::MIN`      | `-9223372036854776000`  |
+///
+/// Python SDK 没有这个问题（`int` 是任意精度），所以同一个库、同一个值，两个 SDK
+/// 给出不同答案——而 Node 那侧不报错。
+///
+/// 这不是「JS 的天然限制」：内核**专门**为精确性放弃过便利（`sum()` 用
+/// `checked_add`，因为它曾用 f64 累加而静默丢精度，见 CHANGELOG）。binding 把
+/// 内核刚保住的精确性再丢掉，是 self-defeating。
+///
+/// ## 代价（明确记录）
+///
+/// 全部整数变 `bigint` 后，用户代码里这些写法会抛 `TypeError`：
+/// `count + 1`（不能混算）、`JSON.stringify(结果)`（BigInt 不可序列化）、
+/// `Math.max(...)`。读取、比较、模板字符串不受影响。这是一次**破坏性变更**，
+/// 在 CHANGELOG 与 SDK 文档里都标明了。
+fn i64_to_js(env: &Env, v: i64) -> Result<JsUnknown, napi::Error> {
+    env.create_bigint_from_i64(v)?.into_unknown()
+}
+
+/// 把任意 JS 标量转成图属性值。
+///
+/// BigInt 是主路径（整数一律以 BigInt 出入）。`number` 仍然接受，且**区分整数与
+/// 浮点**：`2.0` 是浮点，`2n` 是整数——若把 `2.0` 也当整数，用户就没法写浮点属性。
+fn js_to_value(_env: &Env, val: JsUnknown) -> Result<Value, napi::Error> {
+    match val.get_type()? {
+        ValueType::Boolean => {
+            let b = val.coerce_to_bool()?.get_value()?;
+            Ok(Value::from(b))
+        }
+        ValueType::Number => {
+            let n: f64 = val.coerce_to_number()?.get_double()?;
+            if n.fract() == 0.0 && n.is_finite() && n.abs() <= 9_007_199_254_740_992.0 {
+                // 安全的整数值：转成 Int，与 `2n` 落成同一类型，避免「同一个 2，
+                // 一个来自 `2` 另一个来自 `2n`」在库里变成两种值。
+                Ok(Value::from(n as i64))
             } else {
-                Value::from(num.to_string())
+                Ok(Value::from(n))
             }
         }
-        serde_json::Value::String(s) => Value::from(s.clone()),
-        other => Value::from(other.to_string()),
+        ValueType::String => {
+            let s = val.coerce_to_string()?.into_utf8()?.as_str()?.to_string();
+            Ok(Value::from(s))
+        }
+        ValueType::BigInt => {
+            // 用 bindgen 侧的 `BigInt`（有 `FromNapiValue`），而不是旧式 `JsBigInt`
+            // （它既没有 `coerce_to_bigint` 也没有 `TryFrom<JsUnknown>`）。
+            // `from_unknown` 顺带算出 word_count 并处理符号位。
+            let big = BigInt::from_unknown(val)
+                .map_err(|_| napi::Error::from_reason("expected a BigInt".to_string()))?;
+            // 先取 i128，以便**超出 i64 时把真实数值报给用户**：只说「超出范围」
+            // 而不说是哪个数，调用方无从判断是自己写错还是精度丢失。
+            let (wide, _) = big.get_i128();
+            let (v, lossless) = big.get_i64();
+            if !lossless {
+                return Err(napi::Error::from_reason(format!(
+                    "integer {wide} is outside the range a graph property can hold (i64)"
+                )));
+            }
+            Ok(Value::from(v))
+        }
+        ValueType::Null | ValueType::Undefined => Ok(Value::Null),
+        ValueType::Object => Err(napi::Error::from_reason(
+            "objects and arrays cannot be stored as a graph property; \
+             supported types are string, bigint, number, boolean and null"
+                .to_string(),
+        )),
+        other => Err(napi::Error::from_reason(format!(
+            "cannot store a {other} as a graph property; supported types are \
+             string, bigint, number, boolean and null"
+        ))),
     }
 }
 
-fn json_to_properties(
-    val_opt: Option<serde_json::Value>,
+/// 属性字典（`{k: v}`）→ 图属性表。
+fn js_to_properties(
+    env: &Env,
+    val_opt: Option<JsUnknown>,
 ) -> Result<HashMap<String, Value>, napi::Error> {
     let mut map = HashMap::new();
-    if let Some(serde_json::Value::Object(obj)) = val_opt {
-        for (k, v) in obj {
-            let prop_val = match v {
-                serde_json::Value::Bool(b) => Value::from(b),
-                serde_json::Value::Number(num) => {
-                    if let Some(i) = num.as_i64() {
-                        Value::from(i)
-                    } else if let Some(f) = num.as_f64() {
-                        Value::from(f)
-                    } else {
-                        Value::from(num.to_string())
-                    }
-                }
-                serde_json::Value::String(s) => Value::from(s),
-                _ => Value::from(v.to_string()),
-            };
-            map.insert(k, prop_val);
-        }
+    let Some(val) = val_opt else {
+        return Ok(map);
+    };
+    if val.get_type()? != ValueType::Object {
+        return Ok(map);
+    }
+    // `Object::get` 需要 `napi_get_named_property` 的键；先取键列表再逐项读。
+    // 用 `JsObject::keys`（而非 serde 反序列化）是为了让值**保持 BigInt**——
+    // 走 `serde_json::Value` 会把 BigInt 变成 f64，正是本改动要消除的问题。
+    let obj = JsObject::try_from(val)
+        .map_err(|_| napi::Error::from_reason("expected an object".to_string()))?;
+    for key in JsObject::keys(&obj)? {
+        let child: Option<JsUnknown> = JsObject::get(&obj, &key)?;
+        let Some(child) = child else { continue };
+        map.insert(key, js_to_value(env, child)?);
     }
     Ok(map)
 }
 
-fn graph_value_to_json(v: &Value) -> serde_json::Value {
+/// 图属性值 → JS 标量。整数一律 BigInt。
+fn value_to_js(env: &Env, v: &Value) -> Result<JsUnknown, napi::Error> {
     match v {
-        // null 直接映射为 JSON null；此前 null 用字符串 "null" 冒充，JS 侧
-        // 拿到的会是字符串而不是 null
-        Value::Null => serde_json::Value::Null,
-        Value::Int(i) => serde_json::Value::from(*i),
-        Value::Float(f) => serde_json::Number::from_f64(*f)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null),
-        Value::String(s) => serde_json::Value::from(s.clone()),
-        Value::Bool(b) => serde_json::Value::from(*b),
+        Value::Null => Ok(env.get_undefined()?.into_unknown()),
+        Value::Int(i) => i64_to_js(env, *i),
+        Value::Float(f) => Ok(env.create_double(*f)?.into_unknown()),
+        Value::Bool(b) => Ok(env.get_boolean(*b)?.into_unknown()),
+        Value::String(s) => Ok(env.create_string(s)?.into_unknown()),
         Value::List(items) => {
-            serde_json::Value::Array(items.iter().map(graph_value_to_json).collect())
+            let mut arr = env.create_array_with_length(items.len())?;
+            for (i, item) in items.iter().enumerate() {
+                arr.set_element(i as u32, value_to_js(env, item)?)?;
+            }
+            Ok(arr.into_unknown())
         }
     }
+}
+
+/// 一行查询结果 → JS 对象（列名 → 值）。
+fn row_to_js(env: &Env, columns: &[String], values: &[Value]) -> Result<JsUnknown, napi::Error> {
+    let mut obj = env.create_object()?;
+    for (idx, name) in columns.iter().enumerate() {
+        match values.get(idx) {
+            Some(v) => obj.set_named_property(name, value_to_js(env, v)?)?,
+            None => obj.set_named_property(name, env.get_undefined()?.into_unknown())?,
+        }
+    }
+    Ok(obj.into_unknown())
 }
 
 #[napi(object)]
 pub struct DijkstraResult {
     pub cost: f64,
-    pub path: Vec<i64>,
+    pub path: Vec<BigInt>,
 }
 
 #[napi(object)]
 pub struct SubgraphEdge {
-    pub id: i64,
-    pub src_id: i64,
-    pub dst_id: i64,
+    pub id: BigInt,
+    pub src_id: BigInt,
+    pub dst_id: BigInt,
     pub edge_type: String,
     pub weight: f64,
 }
 
 #[napi(object)]
 pub struct KHopSubgraph {
-    pub nodes: Vec<i64>,
+    pub nodes: Vec<BigInt>,
     pub edges: Vec<SubgraphEdge>,
 }
 
@@ -117,39 +225,39 @@ impl JsNervusDb {
     }
 
     #[napi]
-    pub fn execute(&self, cypher: String) -> Result<serde_json::Value, napi::Error> {
+    pub fn execute(&self, env: Env, cypher: String) -> Result<JsUnknown, napi::Error> {
         let res = self
             .inner
             .execute(&cypher)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        let obj = serde_json::json!({
-            "nodes_created": res.nodes_created,
-            "edges_created": res.edges_created,
-            "nodes_deleted": res.nodes_deleted,
-            "edges_deleted": res.edges_deleted,
-            "properties_set": res.properties_set,
-            "message": res.message,
-        });
-        Ok(obj)
+        let mut obj = env.create_object()?;
+        // 计数字段也是整数，走同一套 BigInt 规则——否则 `nodes_created` 会是
+        // number 而属性里的整数是 bigint，同一个 SDK 里两种整数类型。
+        obj.set_named_property("nodes_created", i64_to_js(&env, res.nodes_created as i64)?)?;
+        obj.set_named_property("edges_created", i64_to_js(&env, res.edges_created as i64)?)?;
+        obj.set_named_property("nodes_deleted", i64_to_js(&env, res.nodes_deleted as i64)?)?;
+        obj.set_named_property("edges_deleted", i64_to_js(&env, res.edges_deleted as i64)?)?;
+        obj.set_named_property(
+            "properties_set",
+            i64_to_js(&env, res.properties_set as i64)?,
+        )?;
+        obj.set_named_property("message", env.create_string(&res.message)?)?;
+        Ok(obj.into_unknown())
     }
 
+    /// 查询并返回行数组；每行是一个 `{列名: 值}` 对象。
+    ///
+    /// 整数列（含 `count()` 一类聚合）返回 **BigInt**，浮点返回 `number`；理由见
+    /// `i64_to_js` 的说明（该函数是私有的，故此处用文字而非文档链接）。
     #[napi]
-    pub fn query(&self, cypher: String) -> Result<Vec<serde_json::Value>, napi::Error> {
+    pub fn query(&self, env: Env, cypher: String) -> Result<Vec<JsUnknown>, napi::Error> {
         let res = self
             .inner
             .query_cypher(&cypher)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        let mut rows = Vec::new();
+        let mut rows = Vec::with_capacity(res.rows.len());
         for row in res.rows {
-            let mut map = serde_json::Map::new();
-            for (idx, col_name) in res.columns.iter().enumerate() {
-                if let Some(val) = row.values.get(idx) {
-                    map.insert(col_name.clone(), graph_value_to_json(val));
-                } else {
-                    map.insert(col_name.clone(), serde_json::Value::Null);
-                }
-            }
-            rows.push(serde_json::Value::Object(map));
+            rows.push(row_to_js(&env, &res.columns, &row.values)?);
         }
         Ok(rows)
     }
@@ -157,86 +265,104 @@ impl JsNervusDb {
     #[napi]
     pub fn add_node(
         &self,
+        env: Env,
         labels: Vec<String>,
-        properties: Option<serde_json::Value>,
-    ) -> Result<i64, napi::Error> {
+        properties: Option<JsUnknown>,
+    ) -> Result<BigInt, napi::Error> {
         let labels_set: HashSet<String> = labels.into_iter().collect();
-        let props = json_to_properties(properties)?;
+        let props = js_to_properties(&env, properties)?;
         let id = self
             .inner
             .add_node(labels_set, props)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        Ok(id as i64)
+        Ok(bigint(id as i64))
     }
 
     #[napi]
     pub fn add_edge(
         &self,
-        src: i64,
-        dst: i64,
+        env: Env,
+        src: BigInt,
+        dst: BigInt,
         edge_type: String,
-        properties: Option<serde_json::Value>,
+        properties: Option<JsUnknown>,
         weight: Option<f64>,
-    ) -> Result<i64, napi::Error> {
-        let props = json_to_properties(properties)?;
+    ) -> Result<BigInt, napi::Error> {
+        let props = js_to_properties(&env, properties)?;
         let w = weight.unwrap_or(1.0);
         let id = self
             .inner
-            .add_edge(src as u64, dst as u64, &edge_type, props, w)
+            .add_edge(to_u64(&src)?, to_u64(&dst)?, &edge_type, props, w)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        Ok(id as i64)
+        Ok(bigint(id as i64))
     }
 
     #[napi]
     pub fn dijkstra(
         &self,
-        start: i64,
-        end: i64,
+        start: BigInt,
+        end: BigInt,
         edge_type: Option<String>,
     ) -> Result<Option<DijkstraResult>, napi::Error> {
         let res = self
             .inner
-            .dijkstra(start as u64, end as u64, edge_type.as_deref());
+            .dijkstra(to_u64(&start)?, to_u64(&end)?, edge_type.as_deref());
         Ok(res.map(|(cost, path)| DijkstraResult {
             cost,
-            path: path.into_iter().map(|id| id as i64).collect(),
+            path: path.into_iter().map(|id| bigint(id as i64)).collect(),
         }))
     }
 
     #[napi]
-    pub fn stats(&self) -> Result<serde_json::Value, napi::Error> {
+    pub fn stats(&self, env: Env) -> Result<JsUnknown, napi::Error> {
         let s = self.inner.buffer_stats();
-        let obj = serde_json::json!({
-            "capacity_frames": s.capacity_frames,
-            "used_frames": s.used_frames,
-            "dirty_frames": s.dirty_frames,
-            "cache_hits": s.cache_hits,
-            "cache_misses": s.cache_misses,
-            "hit_rate_percentage": s.hit_rate_percentage,
-            "disk_reads": s.disk_reads,
-            "disk_writes": s.disk_writes,
-            "file_size_bytes": s.file_size_bytes,
-            "wal_page_count": s.wal_page_count,
-            "spill_count": s.spill_count,
-            "wal_size_bytes": s.wal_size_bytes,
-            "wal_fsync_count": s.wal_fsync_count,
-            "wal_frames_written": s.wal_frames_written,
-        });
-        Ok(obj)
+        let mut obj = env.create_object()?;
+        // 全部计数都是整数 → BigInt，与属性值同一规则。
+        obj.set_named_property(
+            "capacity_frames",
+            i64_to_js(&env, s.capacity_frames as i64)?,
+        )?;
+        obj.set_named_property("used_frames", i64_to_js(&env, s.used_frames as i64)?)?;
+        obj.set_named_property("dirty_frames", i64_to_js(&env, s.dirty_frames as i64)?)?;
+        obj.set_named_property("cache_hits", i64_to_js(&env, s.cache_hits as i64)?)?;
+        obj.set_named_property("cache_misses", i64_to_js(&env, s.cache_misses as i64)?)?;
+        obj.set_named_property("disk_reads", i64_to_js(&env, s.disk_reads as i64)?)?;
+        obj.set_named_property("disk_writes", i64_to_js(&env, s.disk_writes as i64)?)?;
+        obj.set_named_property(
+            "file_size_bytes",
+            i64_to_js(&env, s.file_size_bytes as i64)?,
+        )?;
+        obj.set_named_property("wal_page_count", i64_to_js(&env, s.wal_page_count as i64)?)?;
+        obj.set_named_property("spill_count", i64_to_js(&env, s.spill_count as i64)?)?;
+        obj.set_named_property("wal_size_bytes", i64_to_js(&env, s.wal_size_bytes as i64)?)?;
+        obj.set_named_property(
+            "wal_fsync_count",
+            i64_to_js(&env, s.wal_fsync_count as i64)?,
+        )?;
+        obj.set_named_property(
+            "wal_frames_written",
+            i64_to_js(&env, s.wal_frames_written as i64)?,
+        )?;
+        // 命中率是**浮点**，保持 number：它是比例，不是计数。
+        obj.set_named_property(
+            "hit_rate_percentage",
+            env.create_double(s.hit_rate_percentage)?,
+        )?;
+        Ok(obj.into_unknown())
     }
 
     /// 无权 BFS 最短路径
     #[napi]
     pub fn bfs(
         &self,
-        start: i64,
-        end: i64,
+        start: BigInt,
+        end: BigInt,
         edge_type: Option<String>,
-    ) -> Result<Option<Vec<i64>>, napi::Error> {
+    ) -> Result<Option<Vec<BigInt>>, napi::Error> {
         Ok(self
             .inner
-            .bfs(start as u64, end as u64, edge_type.as_deref())
-            .map(|path| path.into_iter().map(|id| id as i64).collect()))
+            .bfs(to_u64(&start)?, to_u64(&end)?, edge_type.as_deref())
+            .map(|path| path.into_iter().map(|id| bigint(id as i64)).collect()))
     }
 
     #[napi]
@@ -248,29 +374,34 @@ impl JsNervusDb {
     #[napi(js_name = "pageRank")]
     pub fn pagerank(
         &self,
+        env: Env,
         damping_factor: Option<f64>,
         max_iterations: Option<u32>,
         tolerance: Option<f64>,
-    ) -> Result<Vec<serde_json::Value>, napi::Error> {
+    ) -> Result<Vec<JsUnknown>, napi::Error> {
         let scores = self.inner.pagerank_with(
             damping_factor.unwrap_or(0.85),
             max_iterations.unwrap_or(100) as usize,
             tolerance.unwrap_or(1e-6),
         );
-        Ok(scores
-            .into_iter()
-            .map(|s| serde_json::json!({ "node_id": s.node_id, "score": s.score }))
-            .collect())
+        let mut out = Vec::with_capacity(scores.len());
+        for s in scores {
+            let mut obj = env.create_object()?;
+            obj.set_named_property("node_id", i64_to_js(&env, s.node_id as i64)?)?;
+            obj.set_named_property("score", env.create_double(s.score)?)?;
+            out.push(obj.into_unknown());
+        }
+        Ok(out)
     }
 
     /// 弱连通分量：[[node_id, ...], ...]，按分量规模降序
     #[napi]
-    pub fn weakly_connected_components(&self) -> Result<Vec<Vec<i64>>, napi::Error> {
+    pub fn weakly_connected_components(&self) -> Result<Vec<Vec<BigInt>>, napi::Error> {
         Ok(self
             .inner
             .weakly_connected_components()
             .into_iter()
-            .map(|c| c.into_iter().map(|id| id as i64).collect())
+            .map(|c| c.into_iter().map(|id| bigint(id as i64)).collect())
             .collect())
     }
 
@@ -278,7 +409,7 @@ impl JsNervusDb {
     #[napi]
     pub fn k_hop_subgraph(
         &self,
-        start: i64,
+        start: BigInt,
         k: u32,
         direction: Option<String>,
         edge_type: Option<String>,
@@ -286,18 +417,18 @@ impl JsNervusDb {
         let dir = parse_direction(direction.as_deref())?;
         let sub = self
             .inner
-            .k_hop_subgraph_with(start as u64, k as usize, dir, edge_type.as_deref())
+            .k_hop_subgraph_with(to_u64(&start)?, k as usize, dir, edge_type.as_deref())
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
 
         Ok(KHopSubgraph {
-            nodes: sub.nodes.into_iter().map(|id| id as i64).collect(),
+            nodes: sub.nodes.into_iter().map(|id| bigint(id as i64)).collect(),
             edges: sub
                 .edges
                 .into_iter()
                 .map(|e| SubgraphEdge {
-                    id: e.id as i64,
-                    src_id: e.src_id as i64,
-                    dst_id: e.dst_id as i64,
+                    id: bigint(e.id as i64),
+                    src_id: bigint(e.src_id as i64),
+                    dst_id: bigint(e.dst_id as i64),
                     edge_type: e.edge_type,
                     weight: e.weight,
                 })
@@ -355,21 +486,22 @@ pub struct Transaction {
 #[napi]
 impl Transaction {
     #[napi]
-    pub fn tx_id(&self) -> Result<i64, napi::Error> {
+    pub fn tx_id(&self) -> Result<BigInt, napi::Error> {
         self.inner
             .as_ref()
-            .map(|tx| tx.tx_id() as i64)
+            .map(|tx| bigint(tx.tx_id() as i64))
             .ok_or_else(|| napi::Error::from_reason("transaction already finished"))
     }
 
     #[napi]
     pub fn add_node(
         &mut self,
+        env: Env,
         labels: Vec<String>,
-        properties: Option<serde_json::Value>,
-    ) -> Result<i64, napi::Error> {
+        properties: Option<JsUnknown>,
+    ) -> Result<BigInt, napi::Error> {
         let labels_set: HashSet<String> = labels.into_iter().collect();
-        let props = json_to_properties(properties)?;
+        let props = js_to_properties(&env, properties)?;
         let tx = self
             .inner
             .as_mut()
@@ -377,42 +509,44 @@ impl Transaction {
         let id = tx
             .add_node(labels_set, props)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        Ok(id as i64)
+        Ok(bigint(id as i64))
     }
 
     #[napi]
     pub fn add_edge(
         &mut self,
-        src: i64,
-        dst: i64,
+        env: Env,
+        src: BigInt,
+        dst: BigInt,
         edge_type: String,
-        properties: Option<serde_json::Value>,
+        properties: Option<JsUnknown>,
         weight: Option<f64>,
-    ) -> Result<i64, napi::Error> {
-        let props = json_to_properties(properties)?;
+    ) -> Result<BigInt, napi::Error> {
+        let props = js_to_properties(&env, properties)?;
         let w = weight.unwrap_or(1.0);
         let tx = self
             .inner
             .as_mut()
             .ok_or_else(|| napi::Error::from_reason("transaction already finished"))?;
         let id = tx
-            .add_edge(src as u64, dst as u64, &edge_type, props, w)
+            .add_edge(to_u64(&src)?, to_u64(&dst)?, &edge_type, props, w)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
-        Ok(id as i64)
+        Ok(bigint(id as i64))
     }
 
     #[napi]
     pub fn update_node_property(
         &mut self,
-        node_id: i64,
+        env: Env,
+        node_id: BigInt,
         key: String,
-        value: serde_json::Value,
+        value: JsUnknown,
     ) -> Result<(), napi::Error> {
-        let val = json_to_value(&value);
+        let val = js_to_value(&env, value)?;
         self.inner
             .as_mut()
             .ok_or_else(|| napi::Error::from_reason("transaction already finished"))?
-            .update_node_property(node_id as u64, key, val)
+            .update_node_property(to_u64(&node_id)?, key, val)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(())
     }
@@ -420,35 +554,36 @@ impl Transaction {
     #[napi]
     pub fn update_edge_property(
         &mut self,
-        edge_id: i64,
+        env: Env,
+        edge_id: BigInt,
         key: String,
-        value: serde_json::Value,
+        value: JsUnknown,
     ) -> Result<(), napi::Error> {
-        let val = json_to_value(&value);
+        let val = js_to_value(&env, value)?;
         self.inner
             .as_mut()
             .ok_or_else(|| napi::Error::from_reason("transaction already finished"))?
-            .update_edge_property(edge_id as u64, key, val)
+            .update_edge_property(to_u64(&edge_id)?, key, val)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(())
     }
 
     #[napi]
-    pub fn remove_node(&mut self, node_id: i64) -> Result<(), napi::Error> {
+    pub fn remove_node(&mut self, node_id: BigInt) -> Result<(), napi::Error> {
         self.inner
             .as_mut()
             .ok_or_else(|| napi::Error::from_reason("transaction already finished"))?
-            .remove_node(node_id as u64)
+            .remove_node(to_u64(&node_id)?)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(())
     }
 
     #[napi]
-    pub fn remove_edge(&mut self, edge_id: i64) -> Result<(), napi::Error> {
+    pub fn remove_edge(&mut self, edge_id: BigInt) -> Result<(), napi::Error> {
         self.inner
             .as_mut()
             .ok_or_else(|| napi::Error::from_reason("transaction already finished"))?
-            .remove_edge(edge_id as u64)
+            .remove_edge(to_u64(&edge_id)?)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(())
     }

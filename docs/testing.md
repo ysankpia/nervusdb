@@ -47,7 +47,7 @@ format is made of, plus 2 doc-tests: 225 + 28 + 2 = 255.
 **The one `#[ignore]`d case is not a skipped test.** It is
 `production_safety_tests::cross_process_child_probe`, an eight-line probe that must be
 launched by `test_cross_process_lock_excludes` **as a real child process** while the parent
-holds the database lock, so the lock's exclusivity is observed *across processes* rather
+holds the database lock, so the lock's exclusivity is observed _across processes_ rather
 than within one. It takes the target path from `GL_CHILD_DB` (set by the parent) and has no
 assertions of its own — it prints `CHILD_RESULT=…` and the parent decides. Both facts mean
 it must not run in a default `cargo test`: it would panic on the missing variable, and on
@@ -62,30 +62,30 @@ The table below is checked against the files by
 `zero_dependency_tests::documented_suite_table_matches_the_files`, so a case added or
 removed without updating this table fails the build rather than drifting:
 
-| Suite                            | Cases | Covers                                                                          |
-| -------------------------------- | ----- | ------------------------------------------------------------------------------- |
-| `integration_tests.rs`           | 31    | CRUD, ACID, concurrency, indexing, stress, query chain, public-API helpers      |
+| Suite                            | Cases | Covers                                                                                                                |
+| -------------------------------- | ----- | --------------------------------------------------------------------------------------------------------------------- |
+| `integration_tests.rs`           | 31    | CRUD, ACID, concurrency, indexing, stress, query chain, public-API helpers                                            |
 | `memory_mode_tests.rs`           | 6     | `:memory:` disk-free + readable across checkpoint; clean-uncommitted eviction; backup refusal; uncovered entry points |
-| `production_safety_tests.rs`     | 33    | Exclusive lock, integrity, constraints, read-only writes (incl. transaction paths), queue cap |
-| `cypher_advanced_tests.rs`       | 19    | Cypher 1.0 syntax closure, EXPLAIN, aggregates, negative/float literal round trip |
-| `unwind_tests.rs`                | 16    | `UNWIND`, batch ingestion, statement atomicity                                  |
-| `merge_tests.rs`                 | 14    | `MERGE` idempotence, ON CREATE / ON MATCH                                       |
-| `concurrency_isolation_tests.rs` | 11    | Snapshot consistency, atomic visibility, no lost writes, merged-lock `get_node` |
-| `concurrency_stress_tests.rs`    | 3     | Core-count-adaptive mixed read/write stress                                     |
-| `edge_locality_tests.rs`         | 13    | Weave equivalence, self-loops, false spill, chain-walk equivalence              |
-| `robustness_tests.rs`            | 9     | File lock, auto-checkpoint (both paths), page CRC, WAL replay, chunking          |
-| `batch_tx_tests.rs`              | 7     | Batch commits, single-fsync contract, throughput                                |
-| `slotted_property_tests.rs`      | 7     | Page packing, slot reuse, compaction, density                                   |
-| `analytics_tests.rs`             | 7     | PageRank, WCC, K-hop                                                            |
-| `steal_spill_tests.rs`           | 5     | Spilling, rollback pollution, checkpoint                                        |
-| `equivalence_tests.rs`           | 4     | v1.0.0 behaviour guardrails: query, transaction, API, format                    |
-| `zero_dependency_tests.rs`       | 13    | Empty deps; version, name, suite-count, section-ref, package, ignore + example guards |
-| `planner_tests.rs`               | 9     | Join reorder equivalence, EXPLAIN plan, bound-driven work reduction, non-driven rescan |
-| `lock_wait_tests.rs`             | 5     | Lock wait: default no-wait, wait succeeds, timeout, still exclusive              |
-| `lock_cross_process_tests.rs`    | 1     | Two real processes: second refused, then waits and writes                        |
-| `multi_process_write_tests.rs`   | 1     | 4 processes write concurrently: no lost writes, no deadlock                      |
-| `spill_action_tests.rs`          | 11    | Action spill to WAL, order, rollback, checkpoint refusal, large batch           |
-| inline (in `src/`)               | 28    | `codec` / `json` / `crc32` / `action_codec` / Page-0 layout round-trips          |
+| `production_safety_tests.rs`     | 33    | Exclusive lock, integrity, constraints, read-only writes (incl. transaction paths), queue cap                         |
+| `cypher_advanced_tests.rs`       | 19    | Cypher 1.0 syntax closure, EXPLAIN, aggregates, negative/float literal round trip                                     |
+| `unwind_tests.rs`                | 16    | `UNWIND`, batch ingestion, statement atomicity                                                                        |
+| `merge_tests.rs`                 | 14    | `MERGE` idempotence, ON CREATE / ON MATCH                                                                             |
+| `concurrency_isolation_tests.rs` | 11    | Snapshot consistency, atomic visibility, no lost writes, merged-lock `get_node`                                       |
+| `concurrency_stress_tests.rs`    | 3     | Core-count-adaptive mixed read/write stress                                                                           |
+| `edge_locality_tests.rs`         | 13    | Weave equivalence, self-loops, false spill, chain-walk equivalence                                                    |
+| `robustness_tests.rs`            | 9     | File lock, auto-checkpoint (both paths), page CRC, WAL replay, chunking                                               |
+| `batch_tx_tests.rs`              | 7     | Batch commits, single-fsync contract, throughput                                                                      |
+| `slotted_property_tests.rs`      | 7     | Page packing, slot reuse, compaction, density                                                                         |
+| `analytics_tests.rs`             | 7     | PageRank, WCC, K-hop                                                                                                  |
+| `steal_spill_tests.rs`           | 5     | Spilling, rollback pollution, checkpoint                                                                              |
+| `equivalence_tests.rs`           | 4     | v1.0.0 behaviour guardrails: query, transaction, API, format                                                          |
+| `zero_dependency_tests.rs`       | 13    | Empty deps; version, name, suite-count, section-ref, package, ignore + example guards                                 |
+| `planner_tests.rs`               | 9     | Join reorder equivalence, EXPLAIN plan, bound-driven work reduction, non-driven rescan                                |
+| `lock_wait_tests.rs`             | 5     | Lock wait: default no-wait, wait succeeds, timeout, still exclusive                                                   |
+| `lock_cross_process_tests.rs`    | 1     | Two real processes: second refused, then waits and writes                                                             |
+| `multi_process_write_tests.rs`   | 1     | 4 processes write concurrently: no lost writes, no deadlock                                                           |
+| `spill_action_tests.rs`          | 11    | Action spill to WAL, order, rollback, checkpoint refusal, large batch                                                 |
+| inline (in `src/`)               | 28    | `codec` / `json` / `crc32` / `action_codec` / Page-0 layout round-trips                                               |
 
 Run one suite:
 
@@ -222,6 +222,25 @@ answer. Two forms are used in this codebase:
   must produce identical results. `commit()` (batch weaving) versus
   `commit_unclustered()` (per-edge insertion) is asserted to produce identical
   graph structure and PageRank scores agreeing within 1e-12.
+- **Cross-SDK oracle** — the same operation through both language bindings must
+  produce the same answer. `bindings/cross_sdk_check.py` drives the Python and Node.js
+  SDKs over the same values and diffs the results.
+
+  This one exists because a binding bug is invisible from _inside_ the binding: each
+  SDK's own suite can be green while the two disagree. That is exactly how the integer
+  defect survived — Python returned `9007199254740993` and Node returned
+  `9007199254740992` for the same write, and neither suite compared against the other.
+  Node's own suite could not have caught it either, because it only used small
+  integers; the value that an f64 cannot represent was never in the fixture.
+
+  Run it with `python3 bindings/cross_sdk_check.py` (needs both bindings built). It
+  passes values as **strings** and rebuilds them with `BigInt(...)` on the Node side:
+  a JSON number is an f64 there, so passing `9223372036854775807` as a number would
+  corrupt it before the SDK ever saw it and the check would be measuring the harness.
+
+  Verified the way every guard here is: reverting the Node binding to `number` makes
+  it fail with the original three symptoms, naming `i64_max`, `i64_min` and
+  `pow53_plus_1`.
 
 ## Assertions must not depend on machine speed
 

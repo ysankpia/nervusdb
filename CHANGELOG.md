@@ -79,6 +79,35 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
 ### Changed
 
+- **BREAKING: the Node.js SDK now represents every integer as a JavaScript `BigInt`.**
+  Graph integers are `i64`, and JavaScript's `number` is an f64, so values above 2^53
+  were being rounded **silently** on the way in and out:
+
+  | Written                           | Previously read back   | Now                    |
+  | --------------------------------- | ---------------------- | ---------------------- |
+  | `9007199254740993` (2^53 + 1)     | `9007199254740992`     | `9007199254740993`     |
+  | `9223372036854775807` (i64::MAX)  | `9223372036854776000`  | `9223372036854775807`  |
+  | `-9223372036854775808` (i64::MIN) | `-9223372036854776000` | `-9223372036854775808` |
+
+  The Python SDK was already exact (`int` is arbitrary precision), so the same database
+  returned different answers depending on the SDK — with Node never reporting an error.
+  The core engine had already chosen exactness over convenience here (`sum()` uses
+  `checked_add` because an f64 accumulation once rounded silently), and the binding was
+  discarding it.
+
+  Affected: node and edge ids, integer properties, `execute()` counts, `stats()`
+  counters, aggregate results, and the ids inside `pageRank` / `bfs` / `dijkstra` /
+  `weaklyConnectedComponents` / `kHopSubgraph`. Floats stay `number`.
+
+  **What breaks in existing Node code:** `count + 1` now throws
+  `TypeError: Cannot mix BigInt and other types`, and `JSON.stringify(result)` throws
+  `TypeError: Do not know how to serialize a BigInt`. Comparisons (`>`, `===` against a
+  BigInt), template strings and `Number(x)` all still work. Convert at the boundary:
+  `Number(row["count(n)"])`, or a `JSON.stringify(v, (k, x) => typeof x === "bigint" ? x.toString() : x)`.
+
+  A value outside `i64` is now refused with the offending number named, instead of being
+  wrapped.
+
 - **`NervusDb::wal_path()` is now used by the test suite.** It was documented and
   correct but untested; three tests built `{path}.wal` by hand instead. They now call the
   accessor, so the path rule has one implementation.
