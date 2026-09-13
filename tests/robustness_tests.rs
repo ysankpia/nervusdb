@@ -507,3 +507,83 @@ fn test_lock_poisoning_recovery() -> Result<(), GraphError> {
 
     Ok(())
 }
+
+/// 自动 Checkpoint 必须在**自动提交的 CRUD 入口**上生效。
+///
+/// ## 为什么需要这条（覆盖缺口是实测发现的）
+///
+/// 已有的 `test_wal_auto_checkpoint_triggers` 走的是 `with_transaction`，而那条路径的
+/// 自动 Checkpoint 由 `Transaction::commit` 自己调用。**自动提交的 CRUD 入口**
+/// （`add_node` 等）走的是另一条收尾路径，此前没有被任何测试覆盖过。
+///
+/// 这个缺口是 #18 暴露出来的：把 10 处收尾抽成统一入口时，我故意去掉
+/// `with_autocommit` 里的自动 Checkpoint 调用，**全套测试无一处失败**——说明那一行
+/// 在 CRUD 路径上从未被验证。补上这条之后，去掉它就会失败。
+#[test]
+fn test_autocommit_path_triggers_auto_checkpoint() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("autocommit_chk.db");
+
+    // 阈值 1 字节：任何一次提交之后都必然越过它
+    let db = NervusDb::open_with_options(
+        &db_path,
+        NervusDbOptions {
+            buffer_pool_frames: 256,
+            wal_auto_checkpoint_bytes: 1,
+            ..NervusDbOptions::default()
+        },
+    )?;
+
+    let wal_path = {
+        let mut p = db_path.as_os_str().to_os_string();
+        p.push(".wal");
+        std::path::PathBuf::from(p)
+    };
+
+    // 走**自动提交**入口（不是 with_transaction）
+    for i in 0..200 {
+        let mut props = HashMap::new();
+        props.insert(
+            "payload".to_string(),
+            Value::from(format!("Autocommit_Node_{i}_Payload_For_Wal_Growth")),
+        );
+        db.add_node(HashSet::from(["Item".to_string()]), props)?;
+    }
+
+    // 自动 Checkpoint 应当已经触发过：主文件被写入，且 WAL 不会一直膨胀。
+    // 断言用「WAL 远小于累计写入量」而不是固定数字：阈值 1 字节时它每次提交后都会
+    // 尝试截断，因此 WAL 只应保留最后一次提交的量级。
+    let total_written = db.node_count();
+    assert_eq!(
+        total_written, 200,
+        "all 200 autocommit nodes must be present"
+    );
+
+    let wal_len = if wal_path.exists() {
+        std::fs::metadata(&wal_path)?.len()
+    } else {
+        0
+    };
+
+    // 关闭自动 Checkpoint 时，200 次提交的 WAL 会累积到远大于 64KB；
+    // 开启后（阈值 1 字节）应接近「一次提交」的规模。
+    assert!(
+        wal_len < 64 * 1024,
+        "the autocommit path must auto-checkpoint: WAL is {wal_len} bytes after 200 commits, \
+         which means truncation never happened on this path"
+    );
+
+    // 重开确认数据完整（自动 Checkpoint 不能丢数据）
+    drop(db);
+    let reopened = NervusDb::open(&db_path)?;
+    assert_eq!(
+        reopened
+            .query_cypher("MATCH (i:Item) RETURN count(*)")?
+            .rows[0]
+            .values[0],
+        Value::from(200),
+        "auto-checkpoint on the autocommit path must not lose committed data"
+    );
+
+    Ok(())
+}
