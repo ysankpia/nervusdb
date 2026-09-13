@@ -2184,6 +2184,12 @@ impl Transaction {
     /// 事务内**批量**添加边，返回按输入顺序排列的 ID 列表。
     ///
     /// 与 [`Self::add_nodes`] 同理：一次性预留 ID，避免每条边取一次全局写锁。
+    ///
+    /// **ID 由引擎分配。** [`EdgeInsert`](crate::disk_graph::EdgeInsert) 有一个
+    /// `edge_id` 字段，但它是提交路径内部使用的载体，作为这里的输入会被**忽略**：
+    /// 本方法先预留 `edges.len()` 个 ID，再按输入顺序配对。要构造输入请用
+    /// [`EdgeInsert::new`](crate::disk_graph::EdgeInsert::new)，它不暴露那个字段。
+    /// 返回值才是真正落库的 ID。
     pub fn add_edges(
         &mut self,
         edges: Vec<crate::disk_graph::EdgeInsert>,

@@ -337,6 +337,18 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
 ### Fixed
 
+- **`Transaction::add_edges` silently ignored the `edge_id` the caller supplied.**
+  `EdgeInsert` is public and so is its `edge_id` field, so writing
+  `EdgeInsert { edge_id: 999_000, .. }` compiles — and `add_edges` discarded it, assigned
+  its own ids, and returned `[1, 2, 3, 4]`. Measured: `get_edge(999_000)` is `None`. The
+  same category as the interfaces removed in 0.1.0 (they claimed a capability that had no
+  effect), except this field cannot be deleted: the commit path uses it to carry already
+  allocated ids. Added `EdgeInsert::new`, which does not expose the field, and documented
+  the rule at both ends. Pinned by
+  `tests/memory_mode_tests.rs::add_edges_assigns_ids_and_ignores_the_supplied_edge_id`,
+  which asserts both halves — returned ids work, supplied ids do not exist — because
+  either half alone misses a way this can go wrong.
+
 - **`backup()` on a `:memory:` database failed with a message that pointed at the wrong
   thing.** It reported `Storage I/O error: No such file or directory`, because the copy
   step opens `db_path`, which in memory mode is the literal string `":memory:"`. A caller
@@ -400,8 +412,8 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
   itself (chunking would silently change the workload the published figures describe)
   and honours `GL_MAX_ACTIONS` so a constrained machine can still see the rejection.
 
-All four predate this release — the `:memory:`, NO-STEAL and read-only defects all
-reproduce on `v1.0.0` — and none changes the storage format.
+All five predate this release — the `:memory:`, NO-STEAL, read-only and `add_edges`
+defects all reproduce on `v1.0.0` — and none changes the storage format.
 
 - **Read concurrency was _negative_: more threads made reads slower.** Measured on
   com-DBLP, 16 threads doing plain point reads reached **0.6%–1.4% of single-thread

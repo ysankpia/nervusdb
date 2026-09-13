@@ -20,14 +20,52 @@ pub struct NodeData {
 }
 
 /// 批量织网的单条边插入请求
+///
+/// ## `edge_id` 由引擎分配，不是调用方的输入
+///
+/// [`Transaction::add_edges`](crate::Transaction::add_edges) 会**忽略**这个字段：
+/// 它一次性预留 N 个 ID 再逐条填充，返回的 `Vec<u64>` 才是真正落库的 ID。所以
+/// 用 `EdgeInsert { edge_id: 999_000, .. }` 传入并不会创建 ID 为 999000 的边——
+/// 实测传 999000 得到的是 1，而 `get_edge(999_000)` 返回 `None`。
+///
+/// 这个字段之所以存在，是因为同一个结构体也用作**提交路径内部**的载体，那里
+/// 它承载的正是已分配好的 ID（见 `Transaction::commit_internal`）。两条用途
+/// 共用一个类型，于是公开这一侧出现了一个无法生效的字段。
+///
+/// **要构造公开输入，用 [`EdgeInsert::new`]**，它不给你误设的机会。直接写字面量
+/// 仍然可以编译，但 `edge_id` 写什么都不会生效。
 #[derive(Debug, Clone)]
 pub struct EdgeInsert {
+    /// 落库 ID。**由引擎分配**；作为 `add_edges` 的输入时被忽略。
     pub edge_id: u64,
     pub src_id: u64,
     pub dst_id: u64,
     pub edge_type: String,
     pub properties: HashMap<String, Value>,
     pub weight: f64,
+}
+
+impl EdgeInsert {
+    /// 构造一条待插入的边，**不含** `edge_id`：那个值由引擎分配。
+    ///
+    /// 供 [`Transaction::add_edges`](crate::Transaction::add_edges) 的调用方使用，
+    /// 使「ID 由引擎分配」这件事在类型层面就成立，而不是靠调用方读到文档才发现。
+    pub fn new(
+        src_id: u64,
+        dst_id: u64,
+        edge_type: impl Into<String>,
+        properties: HashMap<String, Value>,
+        weight: f64,
+    ) -> Self {
+        Self {
+            edge_id: 0, // 占位；add_edges 会忽略并在提交时填入真实值
+            src_id,
+            dst_id,
+            edge_type: edge_type.into(),
+            properties,
+            weight,
+        }
+    }
 }
 
 /// 批量织网的写放大阈值：段长达到该规模才走两阶段批量路径。
