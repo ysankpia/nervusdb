@@ -163,6 +163,8 @@ Workspace: `src/` (core, zero deps), `bindings/python`, `bindings/nodejs`, `test
 | Secondary indexes (label inverted, property BTreeMap) and constraints  | `src/index.rs`                              |
 | Structural verification (degree-conservation oracle)                   | `src/integrity.rs`                          |
 | Cypher: tokenize → parse → execute                                     | `src/cypher/{lexer,parser,executor,ast}.rs` |
+| Join order and the cost model (multi-pattern `MATCH`)                  | `src/cypher/planner.rs`                     |
+| Queued-action byte encoding (transaction spill to the WAL)             | `src/action_codec.rs`                       |
 | Graph algorithms over disk cursors                                     | `src/algo.rs`                               |
 | Domain models and `GraphError`                                         | `src/graph.rs`                              |
 | Byte-level format contract (**authoritative**)                         | `FORMAT.md`                                 |

@@ -88,6 +88,18 @@ DATASET_PATH=/data/com-dblp.ungraph.txt DB_DIR=/data/bench POOL_MB=256 \
   cargo bench --bench snap_dblp_bench
 DATASET_PATH=/data/soc-LiveJournal1.txt DB_DIR=/data/bench POOL_MB=1024 \
   cargo bench --bench snap_livejournal_bench
+
+The SNAP datasets above are not in the repository, so those two commands only work if
+you have them. This one needs **no dataset** and reproduces the read-scaling curve on a
+synthetic graph, which is what makes the "reads scale negatively" claim checkable by
+someone other than its author:
+
+```bash
+cargo bench --bench concurrency_scaling_bench        # NODES / EDGES / POOL_FRAMES
+```
+
+It reports the cache hit rate alongside each row on purpose: a high hit rate is the
+evidence that the collapse is lock contention rather than disk I/O.
 ```
 
 They take `DATASET_PATH`/`DATASET_DIR`, `DB_DIR`, `POOL_MB`, `MAX_EDGES`,
