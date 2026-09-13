@@ -73,6 +73,63 @@ cargo test --test production_safety_tests
 cargo test --release --test batch_tx_tests -- --nocapture
 ```
 
+## The real dataset is the only end-to-end check at scale
+
+Unit and integration suites run on fixtures. The SNAP benchmarks run on real graphs, and
+they are the only check that exercises the engine at a scale where page eviction, CRC
+directory churn, and recovery actually happen. **Run them for any page, checksum, or
+replay change.**
+
+```bash
+DATASET_PATH=/data/com-dblp.ungraph.txt DB_DIR=/data/bench POOL_MB=256 \
+  cargo bench --bench snap_dblp_bench
+DATASET_PATH=/data/soc-LiveJournal1.txt DB_DIR=/data/bench POOL_MB=1024 \
+  cargo bench --bench snap_livejournal_bench
+```
+
+They take `DATASET_PATH`/`DATASET_DIR`, `DB_DIR`, `POOL_MB`, `MAX_EDGES`,
+`AUTO_CHECKPOINT_MB` and print the configuration they ran with. Leave
+`AUTO_CHECKPOINT_MB=0`: the engine's 64 MB default roughly halves bulk ingest throughput,
+and these benchmarks checkpoint explicitly.
+
+**Red lines — a change here is a correctness regression, not noise:**
+
+| Metric | Value |
+| --- | --- |
+| LiveJournal edge ingestion | **≥150,000 ops/s** |
+| LiveJournal hub 1-hop / 2-hop | **exactly** 335,194 / 10,027,730 |
+| com-DBLP hub 1-hop / 2-hop | **exactly** 10,080 / 161,877 |
+
+**The exact totals are the check; the rates are not.** Measured rates vary by 20%+ run
+to run on one machine ([benchmarks.md](benchmarks.md#concurrency-scaling) shows the
+spread), so treating a rate as a regression detector produces false alarms. The totals
+are deterministic, which is what makes them useful.
+
+Hub selection must stay a **total order** (degree descending, then raw id ascending).
+com-DBLP has three nodes tied at degree 164 *exactly at rank 50*, so a partial order
+makes the 2-hop total depend on sort internals — and produced three different
+"correct" numbers across runs.
+
+## A regression test that passes with the fix removed proves nothing
+
+This is not a slogan; it is the acceptance bar for every fix in this repository. The
+fix is reverted in isolation, the new test re-run, and it must fail with a symptom that
+matches the diagnosis.
+
+Two traps make a would-be reproducer useless, and both recur:
+
+- **Too small a fixture.** The CRC-directory defects need more directory pages than
+  `CRC_CACHE_CAPACITY` (64) holds — roughly 65,000 data pages. 90k- and 800k-node
+  fixtures passed while the engine was broken; only 300,000 distinct page numbers reach
+  the eviction path.
+- **Too clean a shutdown.** The WAL-replay checksum defect needs a real `SIGKILL`. A
+  normal `drop` flushes the buffer pool and writes pages and checksums together, hiding
+  it completely.
+
+Two earlier reproducers for those defects passed *with the fix removed* and were
+discarded rather than kept. A test that cannot fail is worse than no test: it is a
+claim of coverage that nothing backs.
+
 ## The house style: adversarial, not happy-path
 
 A test that only exercises the happy path is treated here as incomplete. In
