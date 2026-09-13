@@ -1522,3 +1522,191 @@ fn test_tx_commit_failure_memory_cleanup() -> Result<(), GraphError> {
 
     Ok(())
 }
+
+// =========================================================================
+// #16：链式查询中此前从未被调用的三个构建方法
+// =========================================================================
+
+/// `limit` / `filter_src` / `filter_edge` 必须真正生效。
+///
+/// ## 为什么这条测试存在
+///
+/// #16 把 `QueryBuilder` 与 `GraphQuery` 两套重复实现合并成一套（原先字段相同、
+/// 九个方法逐行等价，只有「借用 vs 拥有」的差别）。合并的**风险**在于转发写错：
+/// 某个方法没接到 `builder` 上，调用它就静默变成空操作，而现有测试不会发现——
+/// 因为这三个方法全项目**从来没有被调用过**。
+///
+/// 因此这条测试的价值不是「覆盖一个新功能」，而是**给转发补上可观测点**：
+/// 一旦某个方法的转发断掉，这里的断言就会失败。
+#[test]
+fn test_query_chain_limit_filter_src_filter_edge() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = NervusDb::open(dir.path().join("query_chain.db"))?;
+
+    // 图：hub 出发 3 条边，指向 A / B / C；每条边带 kind 属性
+    let hub = db.add_node(HashSet::from(["Hub".to_string()]), {
+        let mut p = HashMap::new();
+        p.insert("name".to_string(), Value::from("hub"));
+        p
+    })?;
+    for (i, (name, kind)) in [("A", "keep"), ("B", "keep"), ("C", "drop")]
+        .iter()
+        .enumerate()
+    {
+        let n = db.add_node(HashSet::from(["Leaf".to_string()]), {
+            let mut p = HashMap::new();
+            p.insert("name".to_string(), Value::from(*name));
+            p.insert("idx".to_string(), Value::from(i as i64));
+            p
+        })?;
+        let mut ep = HashMap::new();
+        ep.insert("kind".to_string(), Value::from(*kind));
+        db.add_edge(hub, n, "LINK", ep, 1.0)?;
+    }
+
+    // 1) traverse 不带筛选：3 条路径
+    let all = db
+        .query()
+        .traverse(hub, "LINK", Direction::Outgoing, 1)
+        .execute();
+    assert_eq!(all.multi_hop_paths().len(), 3, "all three edges must match");
+
+    // 2) limit=2：必须只返回 2 条 —— 这条断言使 `limit` 的转发可观测
+    let limited = db
+        .query()
+        .traverse(hub, "LINK", Direction::Outgoing, 1)
+        .limit(2)
+        .execute();
+    assert_eq!(
+        limited.multi_hop_paths().len(),
+        2,
+        "`limit` must actually truncate; a broken forward would return all 3"
+    );
+
+    // 3) filter_edge：只留 kind == "keep" 的边 —— 共 2 条
+    let kept = db
+        .query()
+        .traverse(hub, "LINK", Direction::Outgoing, 1)
+        .filter_edge(|e| e.get_prop("kind").and_then(|v| v.as_str()) == Some("keep"))
+        .execute();
+    assert_eq!(
+        kept.multi_hop_paths().len(),
+        2,
+        "`filter_edge` must actually filter; a broken forward would return all 3"
+    );
+
+    // 4) filter_src + match_pattern：起点名必须是 hub
+    let by_src = db
+        .query()
+        .match_pattern("Hub", "LINK", "Leaf")
+        .filter_src(|n| n.get_prop("name").and_then(|v| v.as_str()) == Some("hub"))
+        .execute();
+    assert_eq!(
+        by_src.paths().len(),
+        3,
+        "`filter_src` must keep matching sources"
+    );
+
+    // 5) filter_src 收窄到不存在的名字 → 0 条（证明它真的在筛，而不是恒真）
+    let none = db
+        .query()
+        .match_pattern("Hub", "LINK", "Leaf")
+        .filter_src(|n| n.get_prop("name").and_then(|v| v.as_str()) == Some("nope"))
+        .execute();
+    assert_eq!(
+        none.paths().len(),
+        0,
+        "`filter_src` must be able to reject; a no-op forward would keep all 3"
+    );
+
+    Ok(())
+}
+
+/// 回归：`filter_src` / `filter_edge` 在 traverse 路径上曾经是**静默空操作**。
+///
+/// ## 这是一个真实缺陷，不是重构的副产品
+///
+/// `execute_traverse` 此前只应用 `dst_filters` 与 `prop_filters`，**完全忽略**
+/// `src_filters` 与 `edge_filters`（`execute_pattern` 四个都应用）。因此：
+///
+/// ```text
+/// db.query().traverse(hub, "LINK", Outgoing, 1)
+///           .filter_edge(|e| e.get_prop("kind") == Some("keep"))
+///           .execute()
+/// ```
+///
+/// 会返回**全部** 3 条边，而不是 2 条——筛选被丢弃且不报错。调用方看到的是
+/// 「查出来比预期多」，而没有任何信号说明筛选没生效。
+///
+/// 该缺陷在 `main` 上同样存在（已用 `git show origin/main:src/query.rs` 确认），
+/// 是既有问题。它长期存活的**原因**正是 #16 指出的：这两个方法改造前全项目
+/// 没有任何调用点，所以没人撞上。
+#[test]
+fn test_traverse_honors_edge_and_src_filters() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = NervusDb::open(dir.path().join("traverse_filters.db"))?;
+
+    let hub = db.add_node(
+        HashSet::from(["Hub".to_string()]),
+        HashMap::from([("name".to_string(), Value::from("hub"))]),
+    )?;
+    for (name, kind) in [("A", "keep"), ("B", "keep"), ("C", "drop")] {
+        let n = db.add_node(
+            HashSet::from(["Leaf".to_string()]),
+            HashMap::from([("name".to_string(), Value::from(name))]),
+        )?;
+        db.add_edge(
+            hub,
+            n,
+            "LINK",
+            HashMap::from([("kind".to_string(), Value::from(kind))]),
+            1.0,
+        )?;
+    }
+
+    // 不加筛选：3 条
+    let all = db
+        .query()
+        .traverse(hub, "LINK", Direction::Outgoing, 1)
+        .execute();
+    assert_eq!(all.multi_hop_paths().len(), 3, "sanity: three edges exist");
+
+    // 边筛选：只剩 kind == "keep" 的两条
+    let kept = db
+        .query()
+        .traverse(hub, "LINK", Direction::Outgoing, 1)
+        .filter_edge(|e| e.get_prop("kind").and_then(|v| v.as_str()) == Some("keep"))
+        .execute();
+    assert_eq!(
+        kept.multi_hop_paths().len(),
+        2,
+        "`filter_edge` must be applied on the traverse path; returning 3 means it was \
+         silently ignored (the pre-fix behaviour)"
+    );
+
+    // 起点筛选：hub 满足 → 3 条；换成不存在的名字 → 0 条
+    let ok = db
+        .query()
+        .traverse(hub, "LINK", Direction::Outgoing, 1)
+        .filter_src(|n| n.get_prop("name").and_then(|v| v.as_str()) == Some("hub"))
+        .execute();
+    assert_eq!(
+        ok.multi_hop_paths().len(),
+        3,
+        "matching src filter keeps paths"
+    );
+
+    let rejected = db
+        .query()
+        .traverse(hub, "LINK", Direction::Outgoing, 1)
+        .filter_src(|n| n.get_prop("name").and_then(|v| v.as_str()) == Some("other"))
+        .execute();
+    assert_eq!(
+        rejected.multi_hop_paths().len(),
+        0,
+        "`filter_src` must be applied on the traverse path; returning 3 means it was \
+         silently ignored (the pre-fix behaviour)"
+    );
+
+    Ok(())
+}
