@@ -2575,15 +2575,15 @@ impl Transaction {
         }
 
         if let Some(err) = failed_err {
-            // 失败事务清理：丢弃未提交页（按基线还原内容与 WAL 位置索引）、
-            // 回拨内存元数据、并使二级索引整体失效，确保零残留、主库零污染。
-            let failed_pages = inner.disk_graph.drain_modified_pages();
-            {
-                let mut bpm = inner.disk_graph.bpm.lock_recover();
-                let _ = bpm.rollback_uncommitted_pages(&failed_pages);
-            }
-            inner.disk_graph.restore_meta(&snapshot);
-            inner.index_mgr.invalidate_all();
+            // 失败事务清理：与语句级原子性**共用同一份实现**，不再内联第二份。
+            //
+            // 这里曾经把四步序列（丢弃未提交页 → 按基线还原 → 回拨元数据 → 索引失效）
+            // 手写了一遍。AGENTS.md §14 明确禁止那样做：「不要重新实现该序列，因为
+            // 第二份实现会与第一份产生分歧」——而它确实分歧了：溢出登记的注销只加在
+            // 这一份上。改为调用 `rollback_failed_statement` 之后，两条路径的回滚语义
+            // 由构造保证一致，而不是靠两处注释互相提醒。
+            NervusDb::rollback_failed_statement(&mut inner, &snapshot);
+
             // 注销溢出登记（见下方成功路径的同一段说明）
             if self.has_spilled {
                 inner.spilled_txns = inner.spilled_txns.saturating_sub(1);
