@@ -337,6 +337,18 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
 ### Fixed
 
+- **`backup()` on a `:memory:` database failed with a message that pointed at the wrong
+  thing.** It reported `Storage I/O error: No such file or directory`, because the copy
+  step opens `db_path`, which in memory mode is the literal string `":memory:"`. A caller
+  reads that as "my path is wrong" and goes looking for a typo, when the real answer is
+  "this database has no file to copy". It now refuses up front, names the cause, and
+  points at `dump_cypher` as the alternative.
+
+  Worth recording why this survived: before the `:memory:` checkpoint fix above, this
+  path did not fail at all — the checkpoint wrote a stray file to `":memory:"`, so
+  `File::open` succeeded, `backup` **reported success**, and it copied that garbage into
+  a file the caller would reasonably believe was a backup.
+
 - **A read-only handle could write, and did — silently.** `reject_write` guarded the 12
   direct write entry points (CRUD, Cypher, checkpoint, vacuum, constraints) but no
   transaction entry point. `with_transaction(|tx| tx.add_node(..))` on a handle from

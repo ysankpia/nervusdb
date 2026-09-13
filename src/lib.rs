@@ -1030,8 +1030,25 @@ impl NervusDb {
     ///
     /// 目标路径已存在时**拒绝**，不覆盖：备份的价值在于「多一份」，静默覆盖可能
     /// 抹掉上一份有效备份。
+    ///
+    /// `:memory:` 库**明确拒绝**，而不是让它失败在一个无关的错误上。此前这条路径
+    /// 没有被测过：`db_path` 是字面串 `":memory:"`，于是复制阶段
+    /// `File::open(":memory:")` 报 `No such file or directory`——调用方会以为是自己
+    /// 给的路径写错了，而真实原因是「这个库根本没有文件」。更早之前，`:memory:` 的
+    /// checkpoint 缺陷还会先把一个垃圾文件写到那个路径上，使 backup **报告成功**并
+    /// 复制出一份无意义的副本；`tests/memory_mode_tests.rs` 记录了那次修复。
     pub fn backup<P: AsRef<Path>>(&self, dest: P) -> Result<u64, GraphError> {
         let dest = dest.as_ref().to_path_buf();
+
+        if self.inner.read_recover().storage.is_memory() {
+            return Err(GraphError::General(
+                "Cannot back up a `:memory:` database: it has no file to copy.\n\
+                 A backup is a copy of the data file, and an in-memory database never \
+                 creates one. Use `dump_cypher` to serialize it to a script you can \
+                 re-import, or open the database from a path if you need file copies."
+                    .to_string(),
+            ));
+        }
 
         if dest.exists() {
             return Err(GraphError::General(format!(

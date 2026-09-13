@@ -158,3 +158,60 @@ fn a_pool_full_of_clean_uncommitted_frames_can_still_evict(
 
     Ok(())
 }
+
+/// `:memory:` 上的 `backup` 必须被拒绝，且**理由要说对**。
+///
+/// ## 为什么这条值得单独一个测试
+///
+/// 「失败」与「失败得有意义」是两回事。这条路径此前没有被走过，它失败在
+/// `File::open(":memory:")` 上，报的是：
+///
+/// ```text
+/// Storage I/O error: No such file or directory (os error 2)
+/// ```
+///
+/// 调用方读到的意思是「我给的路径有问题」。真实原因是「这个库没有文件可复制」，
+/// 而这两者指向完全不同的补救动作：一个是检查路径拼写，另一个是改用
+/// `dump_cypher`。所以断言不能只写 `is_err()` —— 那正是让这个缺陷长期幸存的写法。
+///
+/// 更早的版本里它甚至**不会失败**：`:memory:` 的 checkpoint 缺陷会先把一个垃圾
+/// 文件写到 `":memory:"` 这个路径上，于是 `File::open` 成功，backup **报告成功**
+/// 并复制出一份无意义的副本。那次修复在本文件的另一个测试里；这里盯的是错误信息。
+#[test]
+fn backing_up_a_memory_database_is_refused_with_the_real_reason(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempdir()?;
+    let db = NervusDb::open(":memory:")?;
+    db.with_transaction(|tx| {
+        tx.add_node(HashSet::from(["N".to_string()]), HashMap::new())?;
+        Ok(())
+    })?;
+
+    let dest = dir.path().join("from_memory.db");
+    let err = db
+        .backup(&dest)
+        .expect_err("backing up a `:memory:` database must be refused")
+        .to_string();
+
+    assert!(
+        err.contains(":memory:"),
+        "the error must name the actual cause (an in-memory database), got: {err}"
+    );
+    assert!(
+        err.contains("dump_cypher"),
+        "the error must point at a way forward, got: {err}"
+    );
+    assert!(
+        !err.contains("No such file"),
+        "a missing-file error sends the caller to check their path, which is not \
+         the problem; got: {err}"
+    );
+
+    // 而且不得留下任何文件。
+    assert!(
+        !dest.exists(),
+        "a refused backup must not create the target"
+    );
+
+    Ok(())
+}
