@@ -163,8 +163,32 @@ impl<'a> CypherReadOnlyExecutor<'a> {
     ///
     /// 现在由 `planner` 决定求解顺序，并在起点变量已被绑定时**只从那个节点展开**。
     ///
-    /// 单模式路径的结果与行序与旧实现**逐位相同**：定序退化为 `[0]`，而「空上下文 +
-    /// 枚举候选起点」正是原来的 `find_single_pattern_matches`。
+    /// ## 两条路径：起点是否已被绑定，决定用哪一种
+    ///
+    /// - **起点已绑定 → 索引嵌套循环。** 只从那个节点展开，展开量由「一个节点」决定，
+    ///   而不是由「该模式在全图中的匹配总数」决定。这是本改动的收益来源。
+    /// - **起点未绑定 → 整体求一次，再做内存连接。** 此时该模式的匹配集与当前行
+    ///   **无关**，逐行重求只会得到同一份结果。
+    ///
+    /// ## 为什么必须区分（本函数曾经只有第一条）
+    ///
+    /// 曾经无条件是「逐行展开」：对未绑定的起点，它在每一行里重新枚举候选、并重新
+    /// 从磁盘展开每个候选。于是下面这种**通过非起点变量连接**的常见写法退化为
+    /// `O(行数 × 候选数 × 度数)`：
+    ///
+    /// ```text
+    /// MATCH (a:P)-[:R]->(b:P), (c:P)-[:R]->(b) RETURN count(*)
+    /// ```
+    ///
+    /// 该形态下 `b` 是第二个模式的**终点**，起点 `c` 仍未绑定，因此会走逐行枚举。
+    /// 实测（3000 个点、各 2 条出边，三次运行）：`main` 4.7–5.0 秒，逐行版本
+    /// 21.0–22.4 秒，**约 4.4 倍**；展开次数在 2000 点时是 **8,002,000 次**，
+    /// 而真正被驱动的那种形态只有 6,000 次。
+    ///
+    /// ## 行序
+    ///
+    /// 两条路径各自确定，但**彼此不一定同序**（驱动路径按邻接链顺序，连接路径按该模式
+    /// 匹配集的顺序）。Cypher 在无 `ORDER BY` 时不保证行序，行**集合**不受影响。
     pub fn find_matches(
         &self,
         patterns: &[PathPattern],
@@ -182,16 +206,45 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         for planned in order.iter() {
             let pattern = &patterns[planned.index];
 
+            if combined.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            // 起点变量是否已被前面的模式绑定到**节点**？
+            //
+            // 只认 `Binding::Node`：绑到边或标量（`UNWIND` 元素）时本模式不可能靠它
+            // 驱动，走连接路径即可。用 `first()` 判断是安全的——同一变量的绑定在
+            // 所有行里要么存在要么不存在（连接按变量名做一致性合并）。
+            let start_var = pattern.nodes.first().and_then(|n| n.variable.as_deref());
+            let driven = start_var.is_some_and(|v| {
+                combined
+                    .iter()
+                    .any(|c| matches!(c.get(v), Some(Binding::Node(_))))
+            });
+
             let mut next: Vec<RowCtx> = Vec::new();
-            for base in &combined {
-                // WHERE 交给每个模式：`find_initial_candidates` 只在 WHERE 里出现
-                // **本模式起点变量**的等值/范围条件时才会用它收窄候选，否则原样退回
-                // 标签索引或全扫。因此对不相干的模式它是惰性的。
+
+            if driven {
+                // 索引嵌套循环：每一行只从它绑定的那个节点展开。
+                for base in &combined {
+                    self.expand_pattern(pattern, base, &mut next)?;
+                }
+            } else {
+                // 非驱动：匹配集与行无关，只求一次，再与行集做内存连接。
                 //
-                // 定序之前只有 `patterns[0]` 得到这份收窄，而 `patterns[0]` 未必是
-                // 被选中先执行的那个。传给它自己，收窄才跟着它走；漏传只是少一次
-                // 优化（行集不变），传错模式也不可能——收窄条件仍受最终 WHERE 过滤。
-                self.expand_pattern(pattern, base, where_clause, &mut next)?;
+                // WHERE 传给它——`find_initial_candidates` 只在 WHERE 里出现**本模式
+                // 起点变量**的条件时才用它收窄候选，因此对不相干的模式是惰性的。
+                // 定序之前只有 `patterns[0]` 得到这份收窄，而 `patterns[0]` 未必是被
+                // 选中先执行的那个；传给被选中的那个，收窄才跟着它走。
+                let rows = self.find_single_pattern_matches(pattern, where_clause)?;
+                for base in &combined {
+                    for candidate in &rows {
+                        // 共享变量必须绑定一致，否则这次连接不成立
+                        if let Some(merged) = merge_contexts(base, candidate) {
+                            next.push(merged);
+                        }
+                    }
+                }
             }
 
             if next.is_empty() {
@@ -207,37 +260,27 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         Ok(combined)
     }
 
-    /// 在一个既有行上下文上展开一个模式（索引嵌套循环的内层）。
+    /// 求解单个路径模式的全部匹配上下文，起点为**空上下文**（不与任何行绑定）。
     ///
-    /// 起点变量若已被前面的模式绑定，就直接从那个节点展开；否则枚举候选起点。
-    /// 这条 `if` 就是复杂度差异的来源：绑定存在时，展开量由「一个节点」决定，
-    /// 而不是由「该模式在全图中的匹配总数」决定。
-    fn expand_pattern(
+    /// 这是「非驱动」路径：模式与当前行不共享起点变量时，它的匹配集与行无关，
+    /// 因此只需求一次，由调用方与行集做内存连接。
+    ///
+    /// 与 [`Self::find_single_pattern_matches_capped`] 的区别只有一点：后者凑够
+    /// `cap` 行即停，用于 `LIMIT` 下推；本函数总是求全部。
+    fn find_single_pattern_matches(
         &self,
         pattern: &PathPattern,
-        base: &RowCtx,
         where_clause: &Option<Expr>,
-        out: &mut Vec<RowCtx>,
-    ) -> Result<(), GraphError> {
-        let Some(start_pat) = pattern.nodes.first() else {
-            return Ok(());
-        };
-
-        if let Some(var) = &start_pat.variable {
-            if let Some(Binding::Node(bound_id)) = base.get(var) {
-                let start_id = *bound_id;
-                // 模式对起点可能还有额外约束（`MATCH (a:P), (a:Q)-[:R]->(b)`），
-                // 已绑定不等于满足本模式的标签/属性要求。
-                if self.graph.read_node_record(start_id)?.is_some()
-                    && self.node_matches_pattern(start_id, start_pat)
-                {
-                    self.match_path_step(pattern, 0, start_id, base, out)?;
-                }
-                return Ok(());
-            }
+    ) -> Result<Vec<RowCtx>, GraphError> {
+        if pattern.nodes.is_empty() {
+            return Ok(Vec::new());
         }
 
-        for start_id in self.find_initial_candidates(start_pat, where_clause)? {
+        let start_pat = &pattern.nodes[0];
+        let candidate_start_nodes = self.find_initial_candidates(start_pat, where_clause)?;
+
+        let mut matched = Vec::new();
+        for start_id in candidate_start_nodes {
             // 通过定长 NodeRecord 做快速过滤，避免无谓的溢出页调入
             if self.graph.read_node_record(start_id)?.is_none() {
                 continue;
@@ -246,14 +289,47 @@ impl<'a> CypherReadOnlyExecutor<'a> {
                 continue;
             }
 
-            let mut ctx = base.clone();
+            let mut ctx = RowCtx::new();
             if let Some(ref var) = start_pat.variable {
-                // 同名变量是连接约束而非覆盖
-                if !bind_or_reject(&mut ctx, var, Binding::Node(start_id)) {
-                    continue;
-                }
+                ctx.insert(var.clone(), Binding::Node(start_id));
             }
-            self.match_path_step(pattern, 0, start_id, &ctx, out)?;
+
+            self.match_path_step(pattern, 0, start_id, &ctx, &mut matched)?;
+        }
+
+        Ok(matched)
+    }
+
+    /// 在一个既有行上下文上展开一个模式（索引嵌套循环的内层）。
+    ///
+    /// **只在起点变量已被绑定到节点时调用**（由 [`Self::find_matches`] 判定）。
+    /// 因此这里不需要候选枚举，也不需要 `where_clause`：展开量由那一个节点决定。
+    fn expand_pattern(
+        &self,
+        pattern: &PathPattern,
+        base: &RowCtx,
+        out: &mut Vec<RowCtx>,
+    ) -> Result<(), GraphError> {
+        let Some(start_pat) = pattern.nodes.first() else {
+            return Ok(());
+        };
+
+        let Some(var) = start_pat.variable.as_deref() else {
+            // 起点没有变量（`MATCH (a)-[:R]->(b), ()-[:R]->(c)`）：无从绑定，
+            // 也就无从驱动。调用方已确保非驱动路径会处理这种情况。
+            return Ok(());
+        };
+        let Some(Binding::Node(start_id)) = base.get(var) else {
+            return Ok(());
+        };
+        let start_id = *start_id;
+
+        // 模式对起点可能还有额外约束（`MATCH (a:P), (a:Q)-[:R]->(b)`），
+        // 已绑定不等于满足本模式的标签/属性要求。
+        if self.graph.read_node_record(start_id)?.is_some()
+            && self.node_matches_pattern(start_id, start_pat)
+        {
+            self.match_path_step(pattern, 0, start_id, base, out)?;
         }
 
         Ok(())
@@ -1370,6 +1446,25 @@ fn bind_or_reject(ctx: &mut RowCtx, var: &str, binding: Binding) -> bool {
             true
         }
     }
+}
+
+/// 把左右两行上下文合并成一行；共享变量绑定不一致则返回 `None`（连接不成立）。
+///
+/// 这是**非驱动路径**的连接原语：某个模式的匹配集与当前行无关时，它被整体求出来后
+/// 与行集做连接，靠本函数做一致性约束。驱动路径不需要它——那条路径是在已有行上下文
+/// 上继续展开，绑定天然一致。
+fn merge_contexts(base: &RowCtx, candidate: &RowCtx) -> Option<RowCtx> {
+    let mut merged = base.clone();
+    for (k, v) in candidate {
+        match merged.get(k) {
+            Some(existing) if existing != v => return None,
+            Some(_) => {}
+            None => {
+                merged.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    Some(merged)
 }
 
 /// 依据遍历方向求取边上「对端」节点

@@ -331,3 +331,91 @@ fn test_reordered_join_matches_hand_computed_answer() -> Result<(), GraphError> 
 
     Ok(())
 }
+
+// =========================================================================
+// #12：通过**非起点变量**连接时，不得逐行重新枚举候选
+// =========================================================================
+
+/// 非驱动连接必须只求一次候选，而不是每一行重求一次。
+///
+/// ## 信号为什么是页读取次数，不是耗时
+///
+/// 本机实测同一实现的速率波动可达 40%（见 `docs/testing.md`），把耗时写成断言
+/// 会变成噪声源。而**缓冲池未命中次数**是确定性的：两种实现的差异不是「快一点」，
+/// 而是「每行都重新从磁盘展开一遍候选」，量级差几百倍。
+///
+/// 实测（16 帧池，规则图每个节点 2 条出边）：
+///
+/// | N | 只求一次 | 逐行重求 |
+/// |---|---|---|
+/// | 400 | **30** | 12,015 |
+/// | 800 | **77** | 60,839 |
+///
+/// 修复后接近线性增长，修复前是平方级。断言用「不超过 500」这一个保守上界：
+/// 距修复后的 77 有 6 倍余量，距修复前的 60,839 有 120 倍余量，因此不会因为
+/// 页目录或元数据的少量波动而漂边界。
+///
+/// ## 为什么必须用「放不进池子」的规模
+///
+/// 初版用 300 个节点配 64 帧池，两种实现的 misses **都是 0**——整张图都装进了池里，
+/// 根本没有磁盘访问，测不出任何差异。夹具的形状是被这个观察逼出来的。
+#[test]
+fn test_non_start_variable_join_does_not_rescan_per_row() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let n: u64 = 800;
+    // 16 帧 = 64KB，远小于 N=800 时的节点记录与属性页
+    let db = NervusDb::open_with_options(
+        dir.path().join("nondriven.db"),
+        nervusdb::NervusDbOptions {
+            buffer_pool_frames: 16,
+            wal_auto_checkpoint_bytes: 0,
+            ..Default::default()
+        },
+    )?;
+
+    {
+        let mut tx = db.begin_transaction()?;
+        let mut ids = Vec::new();
+        for _ in 0..n {
+            ids.push(tx.add_node(
+                std::collections::HashSet::from(["P".to_string()]),
+                std::collections::HashMap::new(),
+            )?);
+        }
+        // 每个节点 2 条出边，目标是 i+8 与 i+15（模 n），互不相同 → 入度也是 2
+        for (i, &src) in ids.iter().enumerate() {
+            for k in 1..=2u64 {
+                let dst = ids[((i as u64 + k * 7 + 1) % n) as usize];
+                tx.add_edge(src, dst, "R", std::collections::HashMap::new(), 1.0)?;
+            }
+        }
+        tx.commit()?;
+    }
+    db.checkpoint()?;
+
+    // 共享变量 b 是第二个模式的**终点**，起点 c 未绑定 → 非驱动路径
+    let query = "MATCH (a:P)-[:R]->(b:P), (c:P)-[:R]->(b) RETURN count(*)";
+
+    // 手算：A 形态 Σ 入度×出度 = n×2×2 = 4n；B 形态 Σ 入度² = n×2² = 4n
+    let expected = 4 * n as i64;
+    let warm = db.run_cypher(query)?;
+    assert_eq!(
+        warm.rows[0].values[0],
+        Value::from(expected),
+        "row count must equal the hand-computed 4n"
+    );
+
+    let before = db.buffer_stats().cache_misses;
+    let res = db.run_cypher(query)?;
+    let misses = db.buffer_stats().cache_misses.saturating_sub(before);
+
+    assert_eq!(res.rows[0].values[0], Value::from(expected));
+    assert!(
+        misses < 500,
+        "a non-driven join must not re-enumerate candidates per row: \
+         {misses} page misses for {n} nodes (the per-row version measured 60,839; \
+         the once-only version measured 77)"
+    );
+
+    Ok(())
+}
