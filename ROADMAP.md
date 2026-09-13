@@ -74,14 +74,23 @@ What remains is the _performance_ gap: a snapshot blocks writers while it lives,
 because a reader and a writer still exclude each other. Removing that needs
 versioned page visibility — readers pin a snapshot (typically by reading from the WAL
 up to a known commit point) while the writer appends. That is a substantial change to
-recovery and page visibility, and it is the largest remaining gap against the
-"agent writes while you watch" workload.
+recovery and page visibility.
+
+**This is the same work as item 5, not a separate one.** Non-blocking readers and
+per-frame latching both require replacing the single `Arc<Mutex<BufferPoolManager>>`
+with per-frame state and versioned visibility; a reader cannot pin a snapshot while a
+writer appends unless the lock is no longer global. Doing either one does the other.
+They are listed separately only because they were discovered separately — item 5 by
+profiling, this item by a correctness test — and merging the entries would lose that
+history. Plan for one piece of work, not two. Which is also why _both_ entries used to
+call themselves "the largest remaining piece": there was only ever one.
 
 ### 2. Planner memory: spilling instead of capping
 
 **Capped.** The action queue is now bounded by
 `DEFAULT_MAX_TRANSACTION_ACTIONS` and reports an overflow rather than growing without
-limit (see AGENTS.md §5). What remains is _spilling_: a caller that genuinely needs a
+limit (see [`docs/architecture.md`](docs/architecture.md)). What remains is
+_spilling_: a caller that genuinely needs a
 transaction larger than the cap must currently batch it by hand. Writing queued
 actions to the WAL as they arrive and keeping only a location index — the way STEAL
 spilling already works for pages — would let one transaction exceed the cap without
@@ -136,8 +145,8 @@ measured 1.4-2.2× (17.4-27.8k → 37.8-38.3k ops/s, and far more stable run to 
 **Still open:** readers remain serialized, because the mutex is still global and still
 taken once per call — 16-thread scaling efficiency is ≈4%, against the ≈40% this
 machine can deliver. Closing that needs per-frame latching, i.e. a redesign of the
-buffer pool's concurrency model, not a patch. It is the largest remaining piece of
-work in this file.
+buffer pool's concurrency model, not a patch. **Same work as item 1** — see the note
+there for why the two entries are one job.
 
 Also found while profiling: `Frame::latch` was dead code — declared and initialized
 since the initial commit, never read or written. **Deleted**, so the struct no longer
