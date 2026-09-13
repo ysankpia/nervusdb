@@ -134,7 +134,25 @@ fn test_cross_process_lock_excludes() -> Result<(), GraphError> {
 }
 
 /// 子进程探针：由 `test_cross_process_lock_excludes` 以真实子进程方式启动。
-/// 默认 `#[ignore]`，只有被显式调用时才运行。
+///
+/// ## 这里的 `#[ignore]` 不是「跳过了一个测试」
+///
+/// 它是一个**进程内探针**，必须由父测试在**持有数据库锁**的状态下启动，才能观察
+/// 到锁的排他性。因此它有两个特点，缺一不可：
+///
+/// 1. **依赖父进程传入环境变量。** `GL_CHILD_DB` 指向父进程正持锁的那个库文件；
+///    直接单独运行会因为拿不到变量而 panic。
+/// 2. **不是独立用例。** 它没有自己的断言，只把观察结果打印成 `CHILD_RESULT=...`，
+///    由父测试判定。单独跑它即使成功也没有验证任何东西。
+///
+/// 两条加起来意味着：**它绝不能参与默认的 `cargo test` 全量执行**，否则每次都会
+/// panic。`#[ignore]` + 父进程的 `--ignored` 正是 libtest 为「仅由其它测试显式
+/// 调用」预留的机制。
+///
+/// 移除它会同时破坏两个测试 —— 这也是实测过的：探针 panic（缺变量），
+/// 且 `test_cross_process_lock_excludes` 因拿不到 `CHILD_RESULT=locked` 而失败。
+///
+/// 反过来说，全量测试里那个 `1 ignored` 是**预期计数**，不是遗漏的覆盖。
 #[test]
 #[ignore]
 fn cross_process_child_probe() {

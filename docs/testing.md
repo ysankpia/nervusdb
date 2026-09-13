@@ -36,13 +36,27 @@ cargo test --test robustness_tests        # page CRC at scale, WAL replay, chunk
 
 ## Current state
 
-**244 test cases — 243 pass, 1 intentionally `#[ignore]`d** (a child-process lock
+**245 test cases — 244 pass, 1 intentionally `#[ignore]`d** (a child-process lock
 probe launched by its parent test).
 
-Run as 20 integration suites (214 cases, of which 1 is `#[ignore]`d) plus 25 inline
+Run as 20 integration suites (215 cases, of which 1 is `#[ignore]`d) plus 28 inline
 unit tests in the hand-written codecs, the action codec, and the Page-0 layout
 (`src/codec.rs`, `src/json.rs`, `src/crc32.rs`, `src/action_codec.rs`, `src/page.rs`), which are what the on-disk
-format is made of, plus 2 doc-tests: 214 + 28 + 2 = 244.
+format is made of, plus 2 doc-tests: 215 + 28 + 2 = 245.
+
+**The one `#[ignore]`d case is not a skipped test.** It is
+`production_safety_tests::cross_process_child_probe`, an eight-line probe that must be
+launched by `test_cross_process_lock_excludes` **as a real child process** while the parent
+holds the database lock, so the lock's exclusivity is observed *across processes* rather
+than within one. It takes the target path from `GL_CHILD_DB` (set by the parent) and has no
+assertions of its own — it prints `CHILD_RESULT=…` and the parent decides. Both facts mean
+it must not run in a default `cargo test`: it would panic on the missing variable, and on
+its own it verifies nothing. `#[ignore]` plus the parent's `--ignored` is libtest's
+mechanism for exactly this. Removing it breaks **two** tests — measured, not reasoned: the
+probe panics, and the parent then cannot find `CHILD_RESULT=locked`.
+
+So `1 ignored` is the expected count, and it is the only one. If that number ever rises, a
+case was silenced rather than fixed.
 
 The table below is checked against the files by
 `zero_dependency_tests::documented_suite_table_matches_the_files`, so a case added or
@@ -64,7 +78,7 @@ removed without updating this table fails the build rather than drifting:
 | `analytics_tests.rs`             | 7     | PageRank, WCC, K-hop                                                            |
 | `steal_spill_tests.rs`           | 5     | Spilling, rollback pollution, checkpoint                                        |
 | `equivalence_tests.rs`           | 4     | v1.0.0 behaviour guardrails: query, transaction, API, format                    |
-| `zero_dependency_tests.rs`       | 11    | Empty deps; version, name, suite-count, section-ref, package guards             |
+| `zero_dependency_tests.rs`       | 12    | Empty deps; version, name, suite-count, section-ref, package, ignore guards     |
 | `planner_tests.rs`               | 9     | Join reorder equivalence, EXPLAIN plan, bound-driven work reduction, non-driven rescan |
 | `lock_wait_tests.rs`             | 5     | Lock wait: default no-wait, wait succeeds, timeout, still exclusive              |
 | `lock_cross_process_tests.rs`    | 1     | Two real processes: second refused, then waits and writes                        |

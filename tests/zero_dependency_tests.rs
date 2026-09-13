@@ -1046,3 +1046,105 @@ fn published_package_is_self_consistent() {
         problems.join("\n")
     );
 }
+
+// =========================================================================
+// 被忽略的测试守卫
+// =========================================================================
+
+/// 全项目只允许**一个** `#[ignore]`，且它必须是那个有理由的子进程探针。
+///
+/// ## 为什么值得一条守卫
+///
+/// `#[ignore]` 是**让测试静默不跑**的机制，而「静默不跑」与「跑过了」在 CI 上是
+/// 同一种绿色。因此它是本项目最容易被误用的属性：一个偶发失败的用例，改成
+/// `#[ignore]` 就绿了，而它验证的东西从此再没人验证。
+///
+/// 实测过它确实有正当用途：`cross_process_child_probe` 必须由父测试在**持锁**状态
+/// 下作为真实子进程启动（跨进程互斥只能那样验证），它自己依赖父进程传入的
+/// `GL_CHILD_DB`、且没有自己的断言。移除 `#[ignore]` 会同时让探针 panic、父测试失败。
+///
+/// 所以这条守卫不是「禁止 ignore」，而是**要求它始终是有理由的那一个**：
+///
+/// - 数量必须恰好是 1（新增一个 = 有人静默关掉了测试，必须解释）
+/// - 它必须仍是那个探针（被换成别的 = 原探针消失了）
+/// - 它的文档注释必须说明为什么必须被忽略（否则下一个人只会看到一行 `#[ignore]`）
+#[test]
+fn only_the_documented_child_probe_is_ignored() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    let mut found: Vec<(String, usize, String)> = Vec::new();
+
+    for entry in fs::read_dir(root.join("tests")).expect("tests/ must exist") {
+        let path = entry.expect("readable dir entry").path();
+        if path.extension().and_then(|s| s.to_str()) != Some("rs") {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .expect("file has a name")
+            .to_string_lossy()
+            .to_string();
+        let Ok(contents) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let lines: Vec<&str> = contents.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if line.trim() != "#[ignore]" {
+                continue;
+            }
+            // 找它下面的 fn 名
+            let fn_name = lines[i..]
+                .iter()
+                .find_map(|l| l.trim().strip_prefix("fn "))
+                .and_then(|rest| rest.split('(').next())
+                .unwrap_or("<unnamed>")
+                .to_string();
+            // 向上收集文档注释，作为「有理由」的证据。
+            //
+            // 必须**跳过属性行**（`#[test]` 就在 `#[ignore]` 上方）：朴素地只看紧邻
+            // 上一行会在属性处中断，得到空字符串——那时守卫会误报「没有理由」。
+            // 同一类归属问题在 Page-0 那处守卫里也踩过一次（见 #20 的记录）。
+            let mut doc = String::new();
+            let mut j = i;
+            while j > 0 {
+                let prev = lines[j - 1].trim();
+                if prev.starts_with("///") {
+                    doc.push_str(prev);
+                    doc.push(' ');
+                    j -= 1;
+                } else if prev.starts_with("#[") {
+                    // 属性行：越过它继续往上找文档注释
+                    j -= 1;
+                } else {
+                    break;
+                }
+            }
+            found.push((format!("{name}::{fn_name}"), i + 1, doc));
+        }
+    }
+
+    assert_eq!(
+        found.len(),
+        1,
+        "exactly one `#[ignore]` is expected (the cross-process child probe), found {}: {:?}\n\
+         A second `#[ignore]` means a test was silenced rather than fixed. If a genuinely \
+         ignore-only test was added, update this guard and say why in its doc comment.",
+        found.len(),
+        found
+            .iter()
+            .map(|(n, l, _)| format!("{n} at line {l}"))
+            .collect::<Vec<_>>()
+    );
+
+    let (name, _line, doc) = &found[0];
+    assert!(
+        name.ends_with("cross_process_child_probe"),
+        "the one ignored test must remain `cross_process_child_probe`, but it is `{name}`. \
+         If the probe was renamed or removed, this guard needs updating deliberately."
+    );
+    assert!(
+        doc.contains("GL_CHILD_DB") || doc.contains("子进程") || doc.contains("child process"),
+        "the ignored test must carry a doc comment explaining *why* it is ignored; its \
+         current doc is: {doc:?}"
+    );
+}
