@@ -132,11 +132,29 @@ timeout error names the option, so a caller who hits it learns the fix without r
 source.
 
 It does not make two writers concurrent; it makes one writer _patient_ about the other.
-`tests/lock_cross_process_tests.rs` proves it across **real processes**: a child process is
-refused with exit code `3` while the parent holds the lock, and succeeds when given a wait
-budget that outlasts a 250ms hold. That test exists because same-process `flock` semantics
-are not equivalent on every platform, so the "two session windows" case cannot be
-validated inside one process.
+
+**What the three-window scenario actually does now**, measured with four real concurrent
+processes each performing 25 open-write-close cycles against one database:
+
+| `lock_wait_ms` | Outcome |
+| --- | --- |
+| `0` (default) | 3 of 4 processes refused partway; writes lost |
+| `8000` | All 4 finish; **exactly 101 nodes land** (4 × 25 + seed) |
+
+Two tests hold this, and both exist because the obvious test does not work:
+
+- `tests/lock_cross_process_tests.rs` — a child process is refused while the parent holds
+  the lock, and succeeds given a budget that outlasts a 250ms hold. Same-process `flock`
+  semantics are not equivalent on every platform, so this cannot be validated inside one
+  process.
+- `tests/multi_process_write_tests.rs` — four processes writing concurrently, asserting
+  **no lost writes** (counted independently in the parent rather than trusted from the
+  children), **no deadlock**, and that the interleaving actually happened. Setting the
+  budget to `0` makes it fail, which is what proves it is testing contention.
+
+Both report through **exit codes**, not stdout: they are the same test binary, so their
+`println!` goes into the harness's capture buffer and `Command::output()` sees nothing.
+Reading stdout made an earlier version treat a normal exit as "not refused".
 
 **Cost: small** (a loop plus an option). **Benefit: high for multi-process tools**
 (clients, scripts, editors), where writes are short and infrequent. This is what most
