@@ -337,6 +337,73 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
 ### Fixed
 
+- **`dump_cypher` produced a script the parser could not read back, for any negative or
+  whole-number float property.** Two defects in the same round trip, which the docs
+  designate as the format-migration path:
+
+  - **Negative literals did not parse at all.** The lexer emitted `Token::Dash` for every
+    `-`, and both `SET n.k = -7` and pattern properties (`{v: -7.5}`) go through
+    `parse_primary_expr`, which accepts a single primary token and has no
+    unary-operator concept. So `MATCH (n:N) SET n.v = -7` failed with
+    `Unexpected expression token: Some(Dash)` — and `dump_cypher` writes exactly that form
+    for a negative property. Measured on `v1.0.0` too: the dump succeeds, the re-import
+    fails. Fixed in the lexer by folding `-` directly into a numeric literal when it is
+    followed by a digit, which covers `SET`, pattern properties and comparisons at once.
+
+  - **Float properties came back as integers.** `format_literal` rendered `Value::Float`
+    with `f64::to_string()`, which gives `"3"` for `3.0` — no decimal point, so the
+    re-import parsed `Int(3)`. Measured: of 60 nodes with `f = i * 1.5`, 30 (exactly the
+    whole-number results) changed type. A whole-number float now keeps its `.0`.
+
+  Arithmetic operators are a separate matter: `BinaryOperator` has only comparisons and
+  boolean logic, so `n.v - 1` does not work — a scope limit, not this defect. Verified it
+  behaves identically before and after this change.
+
+- **`Transaction::add_edges` silently ignored the `edge_id` the caller supplied.**
+  `EdgeInsert` is public and so is its `edge_id` field, so writing
+  `EdgeInsert { edge_id: 999_000, .. }` compiles — and `add_edges` discarded it, assigned
+  its own ids, and returned `[1, 2, 3, 4]`. Measured: `get_edge(999_000)` is `None`. The
+  same category as the interfaces removed in 0.1.0 (they claimed a capability that had no
+  effect), except this field cannot be deleted: the commit path uses it to carry already
+  allocated ids. Added `EdgeInsert::new`, which does not expose the field, and documented
+  the rule at both ends. Pinned by
+  `tests/memory_mode_tests.rs::add_edges_assigns_ids_and_ignores_the_supplied_edge_id`,
+  which asserts both halves — returned ids work, supplied ids do not exist — because
+  either half alone misses a way this can go wrong.
+
+- **`backup()` on a `:memory:` database failed with a message that pointed at the wrong
+  thing.** It reported `Storage I/O error: No such file or directory`, because the copy
+  step opens `db_path`, which in memory mode is the literal string `":memory:"`. A caller
+  reads that as "my path is wrong" and goes looking for a typo, when the real answer is
+  "this database has no file to copy". It now refuses up front, names the cause, and
+  points at `dump_cypher` as the alternative.
+
+  Worth recording why this survived: before the `:memory:` checkpoint fix above, this
+  path did not fail at all — the checkpoint wrote a stray file to `":memory:"`, so
+  `File::open` succeeded, `backup` **reported success**, and it copied that garbage into
+  a file the caller would reasonably believe was a backup.
+
+- **A read-only handle could write, and did — silently.** `reject_write` guarded the 12
+  direct write entry points (CRUD, Cypher, checkpoint, vacuum, constraints) but no
+  transaction entry point. `with_transaction(|tx| tx.add_node(..))` on a handle from
+  `open_read_only` therefore returned `Ok` and persisted: measured, the WAL went from 0
+  to 12429 bytes and the node was present after reopening. `begin_transaction` too.
+
+  The consequence is worse than "a read-only handle wrote". Read-only handles take a
+  **shared** lock, and shared locks do not exclude each other — that is the
+  many-readers design. Once a reader could write, N read-only handles became N writers
+  with **no mutex between them**. Measured: two handles committing 500 transactions
+  each returned `Ok` **1000 times** and left **zero** of those writes behind, with
+  `integrity_check` reporting no problem at all — it verifies graph structure, not
+  whether writes landed. This is exactly the silent-multi-writer case that
+  `AGENTS.md` §11 exists to forbid, reached through the read-only door.
+
+  `DbLock::acquire_shared`'s own doc comment stated the premise ("the caller must still
+  guarantee it does not write"); nothing enforced it. The guard is now in
+  `begin_transaction`, the single entry point that `with_transaction` also goes
+  through — not in `commit`, because by then the caller has already been told nothing is
+  wrong.
+
 - **`checkpoint()` on a `:memory:` database wrote a real file to the working
   directory, and lost the data that was supposed to be in memory.** Checkpoint
   replayed the WAL's committed pages through `StorageEngine::db_path()`, which in
@@ -367,8 +434,9 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
   itself (chunking would silently change the workload the published figures describe)
   and honours `GL_MAX_ACTIONS` so a constrained machine can still see the rejection.
 
-All three predate this release — the `:memory:` and NO-STEAL defects reproduce on
-`v1.0.0` as well — and none changes the storage format.
+All six predate this release — the `:memory:`, NO-STEAL, read-only, `add_edges` and
+both literal-round-trip defects reproduce on `v1.0.0` — and none changes the storage
+format.
 
 - **Read concurrency was _negative_: more threads made reads slower.** Measured on
   com-DBLP, 16 threads doing plain point reads reached **0.6%–1.4% of single-thread

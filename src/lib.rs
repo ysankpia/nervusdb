@@ -1030,8 +1030,25 @@ impl NervusDb {
     ///
     /// 目标路径已存在时**拒绝**，不覆盖：备份的价值在于「多一份」，静默覆盖可能
     /// 抹掉上一份有效备份。
+    ///
+    /// `:memory:` 库**明确拒绝**，而不是让它失败在一个无关的错误上。此前这条路径
+    /// 没有被测过：`db_path` 是字面串 `":memory:"`，于是复制阶段
+    /// `File::open(":memory:")` 报 `No such file or directory`——调用方会以为是自己
+    /// 给的路径写错了，而真实原因是「这个库根本没有文件」。更早之前，`:memory:` 的
+    /// checkpoint 缺陷还会先把一个垃圾文件写到那个路径上，使 backup **报告成功**并
+    /// 复制出一份无意义的副本；`tests/memory_mode_tests.rs` 记录了那次修复。
     pub fn backup<P: AsRef<Path>>(&self, dest: P) -> Result<u64, GraphError> {
         let dest = dest.as_ref().to_path_buf();
+
+        if self.inner.read_recover().storage.is_memory() {
+            return Err(GraphError::General(
+                "Cannot back up a `:memory:` database: it has no file to copy.\n\
+                 A backup is a copy of the data file, and an in-memory database never \
+                 creates one. Use `dump_cypher` to serialize it to a script you can \
+                 re-import, or open the database from a path if you need file copies."
+                    .to_string(),
+            ));
+        }
 
         if dest.exists() {
             return Err(GraphError::General(format!(
@@ -1649,7 +1666,16 @@ impl NervusDb {
     }
 
     /// 开启显式事务
+    ///
+    /// **只读句柄在此拒绝**，而不是在 `commit` 处。这是唯一的入口：`with_transaction`
+    /// 也走它，因此一处守卫覆盖两条事务路径。
+    ///
+    /// 为什么必须在入口拦：只读句柄取的是**共享**锁，共享锁之间互不排斥（「多个读者」
+    /// 的设计）。一旦只读者能写，多个只读句柄就变成多个**没有互斥的写者**——实测两个
+    /// 只读句柄各提交 500 次，1000 次全部返回 `Ok` 而数据一条不剩。等到 `commit` 才拦
+    /// 也晚了一步：事务已经构造完成，调用方在两次调用之间看不出任何异常。
     pub fn begin_transaction(&self) -> Result<Transaction, GraphError> {
+        self.reject_write("begin a transaction")?;
         let (tx_id, max_actions, spill_enabled) = {
             let mut inner = self
                 .inner
@@ -1928,7 +1954,26 @@ fn format_literal(value: &Value) -> String {
     match value {
         Value::Null => "null".to_string(),
         Value::Int(v) => v.to_string(),
-        Value::Float(v) => v.to_string(),
+        // 浮点必须**保留为浮点**：`f64::to_string()` 对整数值给出 `"3"`，没有任何
+        // 小数点，重新解析就变成 `Int(3)`——类型在 dump/restore 往返中丢失。
+        // 实测 60 个 `f = i * 1.5` 的节点有 30 个（恰好是所有整数结果）被读回成
+        // `Int`，而文档把 dump→re-import 指定为**版本迁移路径**。
+        //
+        // 补 `.0` 是最小修法：`"3"` → `"3.0"`，解析器已接受小数形式。不能用
+        // `{:?}`：它对 `f64` 在某些值上走科学计数法，而 `parse` 是否接受取决于
+        // 具体实现；`{}` 配一个显式的小数点则覆盖两者。
+        //
+        // `inf`/`NaN` 没有字面量形式（解析器也不接受），保持 `to_string()` 的原样
+        // 输出——它们本就不是可移植的属性值，安静地写出一个不可解析的记号比造一个
+        // 错误的数要好。
+        Value::Float(v) => {
+            let s = v.to_string();
+            if s.contains(['.', 'e', 'E']) || !v.is_finite() {
+                s
+            } else {
+                format!("{s}.0")
+            }
+        }
         Value::Bool(v) => v.to_string(),
         Value::String(s) => format!("'{}'", s.replace('\'', "\\'")),
         Value::List(items) => format!(
@@ -2158,6 +2203,12 @@ impl Transaction {
     /// 事务内**批量**添加边，返回按输入顺序排列的 ID 列表。
     ///
     /// 与 [`Self::add_nodes`] 同理：一次性预留 ID，避免每条边取一次全局写锁。
+    ///
+    /// **ID 由引擎分配。** [`EdgeInsert`](crate::disk_graph::EdgeInsert) 有一个
+    /// `edge_id` 字段，但它是提交路径内部使用的载体，作为这里的输入会被**忽略**：
+    /// 本方法先预留 `edges.len()` 个 ID，再按输入顺序配对。要构造输入请用
+    /// [`EdgeInsert::new`](crate::disk_graph::EdgeInsert::new)，它不暴露那个字段。
+    /// 返回值才是真正落库的 ID。
     pub fn add_edges(
         &mut self,
         edges: Vec<crate::disk_graph::EdgeInsert>,

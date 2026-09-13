@@ -235,20 +235,45 @@ Frames are appended to `{path}.wal`. Each frame:
 
 A frame whose CRC does not match is treated as a torn tail and stops replay.
 
+**This is deliberate, and it has a cost that callers should know about.** A torn tail is
+what a crash mid-append looks like, and refusing to replay past it is the safe choice —
+the bytes after it are not trustworthy. But the same rule cannot distinguish a torn tail
+from an **interior** corruption: a flipped byte in the middle of the WAL looks identical,
+so replay stops there and every committed transaction **after** that point is discarded.
+Measured on a three-commit WAL (30 nodes) with one byte flipped:
+
+| Corruption at  | Nodes recovered | Silently discarded |
+| -------------- | --------------- | ------------------ |
+| none (control) | 30              | 0                  |
+| 1/8            | 0               | 30                 |
+| 1/2            | 10              | 20                 |
+| 7/8            | 20              | 10                 |
+
+`open` succeeds and `integrity_check` reports **zero** issues in every one of those rows.
+The check is not wrong — it verifies graph structure, and the structure is fine. Nothing
+verifies that a WAL's committed transactions were all replayed.
+
+The frame header carries `Magic | length | CRC-of-payload`, with no checksum covering
+the frame's position or its predecessor. Adding one (a chained checksum, as SQLite's
+WAL does with a running salt) would let a reader say "this frame is intact but the next
+one is not" instead of "the log ends here". That is a format change and has not been
+made; until it is, **a WAL with interior damage loses the tail of its committed work
+without an error**, and the recovery path cannot tell you it happened.
+
 ### Payload encoding (version 5)
 
 A one-byte tag followed by the fields. **Tag values are part of the format and
 are never reused**; a retired tag must keep its slot rather than be reassigned,
 or an old WAL would decode as the wrong record type.
 
-| Tag | Record       | Fields                                          |
-| --- | ------------ | ----------------------------------------------- |
-| 1   | `TxBegin`    | `tx_id:u64`                                     |
-| 2   | `PageWrite`  | `tx_id:u64`, `page_id:u32`, `crc32:u32`, `data` |
-| 3   | `TxCommit`   | `tx_id:u64`                                     |
-| 4   | `TxRollback` | `tx_id:u64`                                     |
-| 5   | `Checkpoint` | _(none)_                                        |
-| 6   | `ActionWrite` | `tx_id:u64`, `seq:u64`, `action`               |
+| Tag | Record        | Fields                                          |
+| --- | ------------- | ----------------------------------------------- |
+| 1   | `TxBegin`     | `tx_id:u64`                                     |
+| 2   | `PageWrite`   | `tx_id:u64`, `page_id:u32`, `crc32:u32`, `data` |
+| 3   | `TxCommit`    | `tx_id:u64`                                     |
+| 4   | `TxRollback`  | `tx_id:u64`                                     |
+| 5   | `Checkpoint`  | _(none)_                                        |
+| 6   | `ActionWrite` | `tx_id:u64`, `seq:u64`, `action`                |
 
 Variable-length fields carry a `u32` length prefix. A decoder that finds trailing
 bytes after a record rejects the frame rather than ignoring them.
