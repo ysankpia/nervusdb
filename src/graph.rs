@@ -388,18 +388,6 @@ impl Node {
     pub fn get_prop(&self, key: &str) -> Option<&Value> {
         self.properties.get(key)
     }
-
-    pub fn set_prop<V: Into<Value>>(&mut self, key: impl Into<String>, value: V) {
-        self.properties.insert(key.into(), value.into());
-    }
-
-    pub fn add_label(&mut self, label: impl Into<String>) {
-        self.labels.insert(label.into());
-    }
-
-    pub fn remove_label(&mut self, label: &str) -> bool {
-        self.labels.remove(label)
-    }
 }
 
 /// 边模型：包含源、目的节点、类型、权重和动态属性
@@ -434,10 +422,6 @@ impl Edge {
 
     pub fn get_prop(&self, key: &str) -> Option<&Value> {
         self.properties.get(key)
-    }
-
-    pub fn set_prop<V: Into<Value>>(&mut self, key: impl Into<String>, value: V) {
-        self.properties.insert(key.into(), value.into());
     }
 }
 

@@ -54,7 +54,34 @@ accepted constructs are now rejected, both because they were silently wrong:
 `MATCH`/`MERGE` pattern properties written as expressions (they could never be
 evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar binding.
 
+### Removed
+
+- **Five public functions that no caller could reach.** An audit of the public surface
+  found 20+ functions with no call anywhere in the repository; these are the ones that
+  were removed rather than kept and tested:
+
+  - `Node::set_prop`, `Node::add_label`, `Node::remove_label`, `Edge::set_prop`. These
+    mutated the in-memory `Node`/`Edge` struct — a value returned by `get_node` /
+    `get_edge` — and **nothing ever wrote it back**. `node.set_prop("k", v)` therefore
+    changed a local copy and persisted nothing, silently. That contradicts the engine's
+    central invariant (`DiskGraph` is the single source of truth; no in-memory value is
+    primary state), so removing them is a fix, not only a cleanup. Use
+    `NervusDb::update_node_property` / `update_edge_property`.
+  - `json::write_raw_json_string` — zero callers, including none internally.
+  - `IndexManager::new` — byte-for-byte equivalent to the derived `Default`, which
+    `IndexManager::default()` still provides.
+  - `IndexManager::{edge_types, label_index_count, property_index_count}` — all three had
+    no caller at all; `NervusDb::edge_types()` reads the persisted catalog directly and
+    never went through the first.
+
+  **If you called any of these, the compiler will point at the line.** None were exposed
+  by the Python or Node.js bindings, and none were documented.
+
 ### Changed
+
+- **`NervusDb::wal_path()` is now used by the test suite.** It was documented and
+  correct but untested; three tests built `{path}.wal` by hand instead. They now call the
+  accessor, so the path rule has one implementation.
 
 - **A point read (`get_node`) now takes the buffer-pool mutex once instead of four
   times** — the node record, its property payload, and its outgoing and incoming edge
@@ -84,7 +111,7 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
   - While a transaction has spilled actions, **`Checkpoint` is refused** (`GraphError`)
     rather than silently truncated. A checkpoint truncates the WAL, and those frames
-    *are* the transaction's unapplied work.
+    _are_ the transaction's unapplied work.
   - An automatic checkpoint that is deferred for this reason does **not** fail the
     commit that triggered it. The commit is already durable; reporting failure would
     invite a retry that duplicates data.

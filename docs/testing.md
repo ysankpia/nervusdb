@@ -36,13 +36,13 @@ cargo test --test robustness_tests        # page CRC at scale, WAL replay, chunk
 
 ## Current state
 
-**238 test cases — 237 pass, 1 intentionally `#[ignore]`d** (a child-process lock
+**241 test cases — 240 pass, 1 intentionally `#[ignore]`d** (a child-process lock
 probe launched by its parent test).
 
-Run as 20 integration suites (211 cases, of which 1 is `#[ignore]`d) plus 25 inline
+Run as 20 integration suites (214 cases, of which 1 is `#[ignore]`d) plus 25 inline
 unit tests in the hand-written codecs and the action codec (`src/codec.rs`,
 `src/json.rs`, `src/crc32.rs`, `src/action_codec.rs`), which are what the on-disk
-format is made of, plus 2 doc-tests: 211 + 25 + 2 = 238.
+format is made of, plus 2 doc-tests: 214 + 25 + 2 = 241.
 
 The table below is checked against the files by
 `zero_dependency_tests::documented_suite_table_matches_the_files`, so a case added or
@@ -50,7 +50,7 @@ removed without updating this table fails the build rather than drifting:
 
 | Suite                            | Cases | Covers                                                                          |
 | -------------------------------- | ----- | ------------------------------------------------------------------------------- |
-| `integration_tests.rs`           | 28    | CRUD, ACID, concurrency, indexing, out-of-core stress, query chain              |
+| `integration_tests.rs`           | 31    | CRUD, ACID, concurrency, indexing, stress, query chain, public-API helpers      |
 | `production_safety_tests.rs`     | 32    | Exclusive lock, integrity, constraints, read-only writes, queue cap             |
 | `cypher_advanced_tests.rs`       | 17    | Cypher 1.0 syntax closure, EXPLAIN, aggregate semantics                         |
 | `unwind_tests.rs`                | 16    | `UNWIND`, batch ingestion, statement atomicity                                  |

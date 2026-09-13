@@ -67,11 +67,9 @@ fn test_wal_auto_checkpoint_triggers() -> Result<(), GraphError> {
     }
 
     // 验证自动 checkpoint 成功将主数据文件写入且 WAL 截断
-    let wal_path = {
-        let mut p = db_path.as_os_str().to_os_string();
-        p.push(".wal");
-        std::path::PathBuf::from(p)
-    };
+    // 用库自己的访问器，而不是手工拼 `{path}.wal`：
+    // 路径规则由实现负责，测试不该复制它。
+    let wal_path = db.wal_path();
 
     let wal_len = if wal_path.exists() {
         std::fs::metadata(&wal_path)?.len()
@@ -534,11 +532,9 @@ fn test_autocommit_path_triggers_auto_checkpoint() -> Result<(), GraphError> {
         },
     )?;
 
-    let wal_path = {
-        let mut p = db_path.as_os_str().to_os_string();
-        p.push(".wal");
-        std::path::PathBuf::from(p)
-    };
+    // 用库自己的访问器，而不是手工拼 `{path}.wal`：
+    // 路径规则由实现负责，测试不该复制它。
+    let wal_path = db.wal_path();
 
     // 走**自动提交**入口（不是 with_transaction）
     for i in 0..200 {

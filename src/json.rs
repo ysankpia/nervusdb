@@ -78,14 +78,6 @@ pub fn write_value(out: &mut String, v: &Value) {
     }
 }
 
-/// 把 `Binding` 渲染出的字符串解析回 JSON 无关：这里只负责转义为 JSON 字符串。
-///
-/// 单独提供是因为 Cypher 的 `RETURN n` 把节点渲染成**已经构造好的 JSON 文本**
-/// （见 `render_binding`），此处按原文嵌入，不再二次转义。
-pub fn write_raw_json_string(out: &mut String, raw: &str) {
-    out.push_str(raw);
-}
-
 /// 编码一个 Cypher 结果集：`{"columns":[...],"rows":[[...],...]}`
 ///
 /// 行以数组而非对象表示：重复列名（`RETURN a.x AS n, b.y AS n`）在对象里会

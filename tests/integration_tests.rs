@@ -397,6 +397,10 @@ fn test_05_crash_recovery_from_wal() -> Result<(), GraphError> {
     }
 
     // 模拟灾难现场：在 WAL 文件末尾追加损坏的垃圾半帧数据（模拟写入到一半突发断电导致帧残缺）
+    //
+    // 这里**不能**用 `db.wal_path()`：`db` 在上面的作用域末尾被刻意 drop 掉了
+    // （模拟突发断电），句柄已不存在。因此只能按同一条规则手工拼出路径——
+    // 这是本测试唯一必须这么做的地方，其余测试一律用访问器。
     let wal_path = {
         let mut s = db_path.as_os_str().to_os_string();
         s.push(".wal");
@@ -1707,6 +1711,171 @@ fn test_traverse_honors_edge_and_src_filters() -> Result<(), GraphError> {
         "`filter_src` must be applied on the traverse path; returning 3 means it was \
          silently ignored (the pre-fix behaviour)"
     );
+
+    Ok(())
+}
+// =========================================================================
+// #19：把「刻意对外提供」的接口补上可观测点
+// =========================================================================
+//
+// 审出 20 多个公开函数零调用。分诊结论里，这一类**保留**：它们是刻意提供的
+// 接口（文档写过、或被 SDK 作为能力入口），只是当时没有测试。删掉它们会移除
+// 用户真正需要的能力，所以按 #19 的第三种处置——补测试。
+//
+// 没有测试的公开 API 与不存在的 API 在实践上很难区分：改错没人发现，删掉也
+// 没人发现。这条测试就是那个「有人用」的证据。
+
+/// `Value` 的辅助判定必须与内部表示一致。
+#[test]
+fn test_value_helpers_match_their_representation() -> Result<(), GraphError> {
+    // `Value::null()` 是 `Value::Null` 的构造器，两者必须相等
+    assert_eq!(Value::null(), Value::Null);
+    assert!(Value::null().is_null());
+    assert!(!Value::from(1).is_null());
+
+    // `is_list` 只对 `List` 为真
+    assert!(Value::List(vec![Value::from(1)]).is_list());
+    assert!(!Value::from(1).is_list());
+    assert!(!Value::Null.is_list());
+    assert!(!Value::from("x").is_list());
+
+    // `is_storable` 与 `is_list`/`is_null` 的关系：后两者都不可落盘
+    assert!(!Value::Null.is_storable());
+    assert!(!Value::List(vec![]).is_storable());
+    assert!(Value::from(1).is_storable());
+    assert!(Value::from("x").is_storable());
+    assert!(Value::from(true).is_storable());
+    Ok(())
+}
+
+/// `VacuumReport::summary` 必须把关键数字都带上（它是给人看的单行摘要）。
+#[test]
+fn test_vacuum_summary_reports_the_counts() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = NervusDb::open(dir.path().join("vacuum_summary.db"))?;
+
+    // 建一些数据，确保数字不是全零（全零会让「什么都对」）
+    for i in 0..10 {
+        db.add_node(
+            HashSet::from(["V".to_string()]),
+            HashMap::from([("i".to_string(), Value::from(i as i64))]),
+        )?;
+    }
+    db.checkpoint()?;
+
+    let report = db.vacuum()?;
+    let text = report.summary();
+
+    // 摘要必须包含它承诺的每一项
+    for needle in ["node(s)", "edge(s)", "bytes", "reusable property page(s)"] {
+        assert!(
+            text.contains(needle),
+            "vacuum summary must mention `{needle}`, got: {text}"
+        );
+    }
+    // 节点数是实测的 10，摘要里应当出现
+    assert!(
+        text.contains("10 node"),
+        "the summary must report the live node count, got: {text}"
+    );
+    Ok(())
+}
+
+/// `QueryResult` 的取值方法与 `MultiHopPath` 的访问器必须自洽。
+#[test]
+fn test_query_result_and_path_accessors() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = NervusDb::open(dir.path().join("qr_accessors.db"))?;
+
+    // 链：a -> b -> c，另有 d 作为端点
+    db.execute("CREATE (a:T {name: 'a'})-[:R]->(b:T {name: 'b'})-[:R]->(c:T {name: 'c'})")?;
+    db.execute("CREATE (d:T {name: 'd'})")?;
+    let a = db
+        .query_cypher("MATCH (n:T {name: 'a'}) RETURN id(n)")?
+        .rows[0]
+        .values[0]
+        .as_i64()
+        .expect("id must be an integer") as u64;
+
+    // --- 单跳：paths() / nodes() / edges() / count() ---
+    let single = db.query().match_pattern("T", "R", "T").execute();
+    assert_eq!(single.paths().len(), 2, "two :R edges exist in the chain");
+    assert_eq!(single.count(), 2, "count() must equal the path count");
+    assert_eq!(
+        single.edges().len(),
+        2,
+        "edges() must deduplicate to 2 edges"
+    );
+    // 涉及 3 个不同节点（a、b、c）
+    let node_names: std::collections::BTreeSet<String> = single
+        .nodes()
+        .iter()
+        .filter_map(|n| {
+            n.get_prop("name")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        })
+        .collect();
+    assert_eq!(
+        node_names,
+        ["a", "b", "c"].iter().map(|s| s.to_string()).collect(),
+        "nodes() must return every distinct endpoint"
+    );
+    // src_nodes 只含起点：a 与 b
+    let srcs: std::collections::BTreeSet<String> = single
+        .src_nodes()
+        .iter()
+        .filter_map(|n| {
+            n.get_prop("name")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        })
+        .collect();
+    assert_eq!(
+        srcs,
+        ["a", "b"].iter().map(|s| s.to_string()).collect(),
+        "src_nodes() must return only the sources"
+    );
+
+    // --- 多跳：multi_hop_paths() 与 MultiHopPath 的访问器 ---
+    let multi = db
+        .query()
+        .traverse(a, "R", Direction::Outgoing, 2)
+        .execute();
+    assert_eq!(
+        multi.multi_hop_paths().len(),
+        1,
+        "only one 2-hop path from a"
+    );
+    let path = &multi.multi_hop_paths()[0];
+    assert_eq!(path.hop_count(), 2, "hop_count() must equal the edge count");
+    assert_eq!(
+        path.start_node()
+            .and_then(|n| n.get_prop("name"))
+            .and_then(|v| v.as_str()),
+        Some("a"),
+        "start_node() must be the traversal start"
+    );
+    assert_eq!(
+        path.end_node()
+            .and_then(|n| n.get_prop("name"))
+            .and_then(|v| v.as_str()),
+        Some("c"),
+        "end_node() must be the far end"
+    );
+    // 多跳结果没有单跳 paths，因此 count() 回落到多跳计数
+    assert_eq!(
+        multi.count(),
+        1,
+        "count() must fall back to the multi-hop count"
+    );
+    assert!(!multi.is_empty());
+
+    // 空结果集的两个取值方法都应给 0 / true
+    let empty = db.query().match_pattern("Nope", "R", "Nope").execute();
+    assert!(empty.is_empty());
+    assert_eq!(empty.count(), 0);
+    assert!(empty.nodes().is_empty());
 
     Ok(())
 }
