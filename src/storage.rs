@@ -31,6 +31,20 @@ pub enum WalRecord {
     TxRollback {
         tx_id: u64,
     },
+    /// 显式事务的**动作溢出帧**：动作队列超出上限时，把动作写到 WAL 并只保留
+    /// 位置索引，使单个事务可以大于内存上限而不放弃回滚。
+    ///
+    /// 与 `PageWrite` 同性质：它属于某个 `tx_id`，**只有该事务提交后**才被视为
+    /// 权威数据。回放（第 2 遍）只处理 `PageWrite`，因此本记录天然不会被写进
+    /// 主数据文件——它描述的是「尚未施加的动作」，不是「页的新内容」。
+    ActionWrite {
+        tx_id: u64,
+        /// 该动作在所属事务内的序号（从 0 起）。**必须单调递增且连续**：
+        /// 提交时按序号重排，以保证「先 AddNode 后 AddEdge」的顺序不被打破。
+        seq: u64,
+        /// `TxAction::encode()` 的字节
+        action: Vec<u8>,
+    },
     Checkpoint,
 }
 
@@ -44,6 +58,8 @@ pub mod wal_tag {
     pub const TX_COMMIT: u8 = 3;
     pub const TX_ROLLBACK: u8 = 4;
     pub const CHECKPOINT: u8 = 5;
+    /// 动作溢出帧（事务动作队列溢出到 WAL）。追加式新增，不改动已有标签含义。
+    pub const ACTION_WRITE: u8 = 6;
 }
 
 impl WalRecord {
@@ -77,6 +93,12 @@ impl WalRecord {
             WalRecord::Checkpoint => {
                 w.u8(wal_tag::CHECKPOINT);
             }
+            WalRecord::ActionWrite { tx_id, seq, action } => {
+                w.u8(wal_tag::ACTION_WRITE);
+                w.u64(*tx_id);
+                w.u64(*seq);
+                w.bytes(action);
+            }
             WalRecord::PageWrite {
                 tx_id,
                 page_id,
@@ -105,6 +127,12 @@ impl WalRecord {
             wal_tag::TX_COMMIT => WalRecord::TxCommit { tx_id: r.u64()? },
             wal_tag::TX_ROLLBACK => WalRecord::TxRollback { tx_id: r.u64()? },
             wal_tag::CHECKPOINT => WalRecord::Checkpoint,
+            wal_tag::ACTION_WRITE => {
+                let tx_id = r.u64()?;
+                let seq = r.u64()?;
+                let action = r.bytes()?;
+                WalRecord::ActionWrite { tx_id, seq, action }
+            }
             wal_tag::PAGE_WRITE => {
                 let tx_id = r.u64()?;
                 let page_id = r.u32()?;

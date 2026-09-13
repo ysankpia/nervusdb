@@ -1,3 +1,4 @@
+pub mod action_codec;
 pub mod algo;
 pub mod buffer;
 pub mod c_api;
@@ -40,6 +41,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
+use std::time::Duration;
 
 /// 微型缓冲池：1MB（256 帧），用于极低内存环境与受限内存回归测试
 pub const SMALL_POOL_FRAMES: usize = 256;
@@ -223,6 +225,43 @@ pub struct NervusDbOptions {
     /// 见 [`DEFAULT_MAX_TRANSACTION_ACTIONS`]：默认 400 万，触顶时报错而不是
     /// 静默分块（分块会破坏事务的原子性）。
     pub max_transaction_actions: usize,
+    /// 队列触顶时把动作**溢出到 WAL**，使一个事务可以大于内存上限。
+    ///
+    /// `false`（默认）：触顶即报错，动作全部常驻内存。
+    ///
+    /// `true`：触顶时把已入队的动作写到 WAL（作为本事务的 `ActionWrite` 帧）并
+    /// 只保留位置索引，然后继续接纳。提交时按序读回并施加。
+    ///
+    /// **为什么默认关闭。** 打开它的事务在提交前会向 WAL 写入未提交数据，因此：
+    ///
+    /// - 崩溃恢复必须能正确处理这些帧（已实现并有测试）；
+    /// - 溢出期间 **Checkpoint 被拒绝**（截断 WAL 会丢掉这些帧），直到事务结束；
+    /// - WAL 体积随事务增长，直到提交或回滚。
+    ///
+    /// 这些都是明确的代价，不是缺陷，但默认行为应当是「最省事且最不容易意外」
+    /// 的那一种，而 `false` 是它。
+    pub spill_transaction_actions: bool,
+    /// 打开时若数据库已被别的句柄占用，最多等待多少毫秒再报错。`0` = 不等待（默认）。
+    ///
+    /// ## 它解决什么
+    ///
+    /// 两个进程（例如两个会话窗口）先后写同一个库时，后来者默认**立即**拿到
+    /// `DatabaseLocked`。这是实测的当前行为，也是嵌入式单写者模型的常态（SQLite
+    /// 默认同样如此）。
+    ///
+    /// 但对「先后而非同时」的写入——第二个窗口在第一个写完之后才来——立即失败是
+    /// 令人意外的：调用方看到错误，而竞争其实几百毫秒后就消失了。设一个非零值让
+    /// 后来者等待，把这类失败消除掉。
+    ///
+    /// ## 它不解决什么
+    ///
+    /// **不会让两个写者并存。** 等待超时后仍然是 `DatabaseLocked`。真正的并发写
+    /// 需要版本可见性或服务器模型，见 [`docs/concurrency.md`](../docs/concurrency.md)。
+    /// 这也不是 `ROADMAP` 第 5 项（按帧 latch，那是同一进程内读者之间的争用）。
+    ///
+    /// 取值会按 200µs 起、指数退避至 20ms 的间隔重试，因此等待期间的系统调用次数
+    /// 很少（毫秒级预算下是个位数）。
+    pub lock_wait_ms: u64,
 }
 
 impl Default for NervusDbOptions {
@@ -232,6 +271,8 @@ impl Default for NervusDbOptions {
             wal_auto_checkpoint_bytes: DEFAULT_WAL_AUTO_CHECKPOINT_BYTES,
             read_only: false,
             max_transaction_actions: DEFAULT_MAX_TRANSACTION_ACTIONS,
+            spill_transaction_actions: false,
+            lock_wait_ms: 0,
         }
     }
 }
@@ -248,6 +289,15 @@ pub struct GraphInner {
     pub wal_auto_checkpoint_bytes: u64,
     /// 事务动作数上限（见 `DEFAULT_MAX_TRANSACTION_ACTIONS`；0 = 不限制）
     pub max_transaction_actions: usize,
+    /// 队列触顶时是否把动作**溢出到 WAL** 以继续接纳（见
+    /// [`NervusDbOptions::spill_transaction_actions`]）。
+    pub spill_transaction_actions: bool,
+    /// 当前有**未结束**的事务真的溢出过动作。
+    ///
+    /// 存在的理由只有一个：Checkpoint 会截断 WAL，而截断会让那些动作帧消失。
+    /// 溢出（`spill_resident`）与 Checkpoint 都在写锁内进行，因此这个计数在锁内
+    /// 增减、在锁内读取，不会与截断竞争。
+    pub spilled_txns: usize,
 }
 
 /// NervusDb: 生产级纯磁盘嵌入式属性图数据库引擎 (SQLite 3.0 标准)
@@ -405,12 +455,18 @@ impl NervusDb {
         //    若在其之后才加锁，并发回放本身就已经破坏了数据。
         //
         //    只读模式取**共享**锁：多个读者可以共存，但与写者互斥。
+        // `lock_wait_ms = 0`（默认）时走原来的 `acquire`/`acquire_shared`，
+        // 行为与加这个选项之前逐位相同：立即失败，不引入任何等待或重试。
+        let wait = (options.lock_wait_ms > 0).then(|| Duration::from_millis(options.lock_wait_ms));
         let lock = if is_memory {
             None
-        } else if options.read_only {
-            Some(DbLock::acquire_shared(&db_path)?)
         } else {
-            Some(DbLock::acquire(&db_path)?)
+            match (options.read_only, wait) {
+                (true, Some(w)) => Some(DbLock::acquire_shared_wait(&db_path, w)?),
+                (false, Some(w)) => Some(DbLock::acquire_wait(&db_path, w)?),
+                (true, None) => Some(DbLock::acquire_shared(&db_path)?),
+                (false, None) => Some(DbLock::acquire(&db_path)?),
+            }
         };
 
         // 0a. 只读模式不得回放 WAL：那会写主数据文件。
@@ -496,6 +552,8 @@ impl NervusDb {
             wal_checkpoint_pending: Arc::new(AtomicBool::new(false)),
             wal_auto_checkpoint_bytes: options.wal_auto_checkpoint_bytes,
             max_transaction_actions: options.max_transaction_actions,
+            spill_transaction_actions: options.spill_transaction_actions,
+            spilled_txns: 0,
         };
 
         Ok(Self {
@@ -669,44 +727,17 @@ impl NervusDb {
         {
             self.reject_write("execute a mutating Cypher statement")?;
         }
-        let mut inner = self
-            .inner
-            .write()
-            .map_err(|e| GraphError::General(e.to_string()))?;
 
-        let tx_id = inner.next_tx_id;
-        inner.next_tx_id += 1;
-
-        // 语句级原子性，与 `run_cypher` 同源（两条写入口必须给出相同保证）
-        let snapshot = inner.disk_graph.snapshot_meta();
-        {
-            let mut bpm = inner.disk_graph.bpm.lock_recover();
-            bpm.begin_tx(tx_id);
-        }
-
-        let result = {
+        // 收尾（取锁 → 事务号 → 提交 WAL → 释放 → 自动 Checkpoint）由
+        // `with_statement_tx` 统一负责；语句级原子性同源。
+        self.with_statement_tx(|inner, _tx_id| {
             let GraphInner {
                 disk_graph,
                 index_mgr,
                 ..
-            } = &mut *inner;
-            match cypher::execute_mutate(cypher_str, disk_graph, index_mgr) {
-                Ok(r) => r,
-                Err(e) => {
-                    Self::rollback_failed_statement(&mut inner, &snapshot);
-                    return Err(e);
-                }
-            }
-        };
-
-        // 若产生了物理修改，生成页级 WAL 记录并持久化
-        Self::commit_dirty_pages_to_wal(&mut inner, tx_id)?;
-
-        let stats = result.stats;
-        drop(inner);
-        // 写锁已释放，此时才能安全做 Checkpoint（它需要重新获取写锁）
-        self.maybe_auto_checkpoint()?;
-        Ok(stats)
+            } = inner;
+            cypher::execute_mutate(cypher_str, disk_graph, index_mgr).map(|r| r.stats)
+        })
     }
 
     /// 执行 Cypher 查询语句 (True MRSW: 只读语句并发持有共享读锁，写操作持有排他写锁并写入 WAL)
@@ -741,53 +772,15 @@ impl NervusDb {
         // `run_cypher` 跑写语句」这条路径。
         self.reject_write("run a mutating Cypher statement")?;
 
-        // 写操作：获取 inner.write() 排他锁，记录 WAL 并持久化
-        let mut inner = self
-            .inner
-            .write()
-            .map_err(|e| GraphError::General(e.to_string()))?;
-        let tx_id = inner.next_tx_id;
-        inner.next_tx_id += 1;
-
-        // 语句级原子性：执行前采集元数据快照并开启事务上下文。
-        //
-        // 没有这一步，一条失败的写语句会留下**部分写入**：已创建的节点留在缓冲池里，
-        // 随后任何一次成功的提交都会把它们一起刷进主文件。实测（本仓库 rc.1 行为）：
-        //
-        // ```text
-        // CREATE (:Num {v: 1}); declare UNIQUE (:Num.v)
-        // UNWIND [2, 1, 3] AS v CREATE (n:Num {v: v})   -- 因重复值失败
-        // CREATE (:Other {x: 99})                        -- 一次无关的成功写入
-        // ```
-        //
-        // 之后重开数据库，`MATCH (n:Num)` 会看到 `{v: 1}` **和** 那个本该被拒绝的
-        // `{v: 2}`。UNWIND 让这条路径变得常见——一条语句本来就可能写上千条记录，
-        // 中途失败是最可能的失败形态，所以必须在提交前把失败语句的写入整体撤掉。
-        let snapshot = inner.disk_graph.snapshot_meta();
-        {
-            let mut bpm = inner.disk_graph.bpm.lock_recover();
-            bpm.begin_tx(tx_id);
-        }
-
-        let GraphInner {
-            disk_graph,
-            index_mgr,
-            ..
-        } = &mut *inner;
-
-        let result = match cypher::execute_mutate(cypher_str, disk_graph, index_mgr) {
-            Ok(r) => r,
-            Err(e) => {
-                Self::rollback_failed_statement(&mut inner, &snapshot);
-                return Err(e);
-            }
-        };
-
-        Self::commit_dirty_pages_to_wal(&mut inner, tx_id)?;
-        drop(inner);
-        // 写锁已释放，此时才能安全做 Checkpoint
-        self.maybe_auto_checkpoint()?;
-        Ok(result)
+        // 收尾与语句级原子性同源（见 `with_statement_tx`），不再逐句重写。
+        self.with_statement_tx(|inner, _tx_id| {
+            let GraphInner {
+                disk_graph,
+                index_mgr,
+                ..
+            } = inner;
+            cypher::execute_mutate(cypher_str, disk_graph, index_mgr)
+        })
     }
 
     /// 执行检查点 Checkpoint：将 WAL 中所有已提交物理页落回主文件，刷出常驻脏页并截断 WAL。
@@ -796,6 +789,24 @@ impl NervusDb {
     pub fn checkpoint(&self) -> Result<(), GraphError> {
         self.reject_write("run a checkpoint")?;
         let mut inner = self.inner.write_recover();
+
+        // 有未结束事务把动作溢出到了 WAL：**现在绝不能截断 WAL**，那些帧就是
+        // 该事务尚未施加的动作，截断等于把它们丢掉。
+        //
+        // 拒绝而不是静默跳过：Checkpoint 的语义是「把 WAL 落回主文件并清空」，
+        // 做不到就应当说做不到，而不是返回成功而实际什么都没清（下一次 Checkpoint
+        // 的调用方会以为上次已经清过了）。
+        //
+        // 自动 Checkpoint 同样走这里，因此它只会被推迟，不会被违反——
+        // 溢出事务提交或回滚后 `spilled_txns` 归零，下一次自动 Checkpoint 正常执行。
+        if inner.spilled_txns > 0 {
+            return Err(GraphError::General(format!(
+                "Checkpoint refused: {} transaction(s) have spilled queued actions into the \
+                 WAL and have not committed or rolled back yet. Truncating the WAL now would \
+                 discard those actions. Commit or roll back first.",
+                inner.spilled_txns
+            )));
+        }
 
         // 1. 把 WAL 中已提交的页按序重放到主数据文件，同时为每页记录校验和。
         //    此步可能首次建立 CRC 目录，因此紧接着把根页号写回 Header 元数据。
@@ -862,8 +873,36 @@ impl NervusDb {
             let inner = self.inner.read_recover();
             inner.wal_checkpoint_pending.swap(false, Ordering::AcqRel)
         };
-        if pending {
-            self.checkpoint()?;
+        if !pending {
+            return Ok(());
+        }
+
+        // 自动 Checkpoint **绝不能让一次已经成功的提交报错**。
+        //
+        // 走到这里时数据已经在 WAL 里落盘、`commit` 的返回值即将是 `Ok`。此时
+        // 若把 Checkpoint 的失败向上抛，调用方看到的是「提交失败」——而它其实
+        // 成功了。调用方唯一合理的反应是重试，重试就产生重复数据。
+        //
+        // 溢出场景下这种「失败」是**预期**的：另一个未结束的事务持有溢出动作，
+        // Checkpoint 必须推迟。实测（`spill_action_tests`）：tx1 溢出后不结束，
+        // tx2 提交时自动 Checkpoint 被拒，tx2 的提交返回 Err 而数据已持久化——
+        // 正是上面描述的不可判定状态。
+        //
+        // 因此：仅当当事务确实在溢出（即失败原因是「推迟」）时吞掉错误并**重新
+        // 置位**，让下一次提交再试；真正的 I/O 错误仍照常上报。
+        if let Err(e) = self.checkpoint() {
+            let still_spilled = {
+                let inner = self.inner.read_recover();
+                if inner.spilled_txns > 0 {
+                    inner.wal_checkpoint_pending.store(true, Ordering::Release);
+                    true
+                } else {
+                    false
+                }
+            };
+            if !still_spilled {
+                return Err(e);
+            }
         }
         Ok(())
     }
@@ -897,70 +936,58 @@ impl NervusDb {
     /// 声明本身会持久化到 Page 0 的索引目录，冷重启后依然生效。
     pub fn create_unique_constraint(&self, label: &str, prop: &str) -> Result<(), GraphError> {
         self.reject_write("create a constraint")?;
-        let mut inner = self
-            .inner
-            .write()
-            .map_err(|e| GraphError::General(e.to_string()))?;
+        // 收尾（取锁 → 事务号 → 提交 WAL → 释放 → 自动 Checkpoint）由
+        // `with_autocommit` 统一负责，见该函数的说明。
+        self.with_autocommit(|inner, _tx_id| {
+            // 先建/刷新该标签的索引，否则无法判定既有数据是否已违规
+            let GraphInner {
+                disk_graph,
+                index_mgr,
+                ..
+            } = inner;
+            index_mgr.ensure_label_index(disk_graph, label);
 
-        // 先建/刷新该标签的索引，否则无法判定既有数据是否已违规
-        let GraphInner {
-            disk_graph,
-            index_mgr,
-            ..
-        } = &mut *inner;
-        index_mgr.ensure_label_index(disk_graph, label);
+            // 查**候选约束**而非已声明的约束：声明时它还没进 catalog，
+            // 查已声明的集合会永远返回「无重复」，静默接受脏数据。
+            // （这是初版的实际行为，端到端验证时被抓出来。）
+            if let Some((value, nodes)) = index_mgr
+                .find_duplicates_for(label, prop)
+                .into_iter()
+                .next()
+            {
+                return Err(GraphError::UniqueConstraintViolation {
+                    label: label.to_string(),
+                    prop: prop.to_string(),
+                    detail: format!(
+                        "{:?} is already shared by {} nodes ({:?}); \
+                         resolve the duplicates before declaring the constraint",
+                        value,
+                        nodes.len(),
+                        nodes
+                    ),
+                });
+            }
 
-        // 查**候选约束**而非已声明的约束：声明时它还没进 catalog，
-        // 查已声明的集合会永远返回「无重复」，静默接受脏数据。
-        // （这是初版的实际行为，端到端验证时被抓出来。）
-        if let Some((value, nodes)) = index_mgr
-            .find_duplicates_for(label, prop)
-            .into_iter()
-            .next()
-        {
-            return Err(GraphError::UniqueConstraintViolation {
-                label: label.to_string(),
-                prop: prop.to_string(),
-                detail: format!(
-                    "{:?} is already shared by {} nodes ({:?}); \
-                     resolve the duplicates before declaring the constraint",
-                    value,
-                    nodes.len(),
-                    nodes
-                ),
-            });
-        }
-
-        let GraphInner {
-            disk_graph,
-            index_mgr,
-            ..
-        } = &mut *inner;
-        index_mgr.declare_unique(label, prop);
-        // 持久化到 Page 0 目录。
-        //
-        // **必须显式 `sync_header`**：改 `index_catalog` 只是改了内存里的一个字段，
-        // 而 `commit_dirty_pages_to_wal` 提交的是「已标记为修改的页」。这里没有标记，
-        // 也没有写 Page 0，于是约束只活在当前句柄的内存中。
-        //
-        // 修复前的实测后果：声明约束后重开数据库，`unique_constraints()` 返回空，
-        // 重复值被静默接受——约束形同虚设，而调用方以为它在生效。
-        // `DiskGraph::add_node` 正是靠结尾的 `sync_header()` 才让标签落盘。
-        disk_graph
-            .index_catalog
-            .unique_constraints
-            .insert(crate::index::UniqueConstraint {
-                label: label.to_string(),
-                prop: prop.to_string(),
-            });
-        disk_graph.sync_header()?;
-
-        let tx_id = inner.next_tx_id;
-        inner.next_tx_id += 1;
-        Self::commit_dirty_pages_to_wal(&mut inner, tx_id)?;
-        drop(inner);
-        self.maybe_auto_checkpoint()?;
-        Ok(())
+            index_mgr.declare_unique(label, prop);
+            // 持久化到 Page 0 目录。
+            //
+            // **必须显式 `sync_header`**：改 `index_catalog` 只是改了内存里的一个字段，
+            // 而 `commit_dirty_pages_to_wal` 提交的是「已标记为修改的页」。这里没有标记，
+            // 也没有写 Page 0，于是约束只活在当前句柄的内存中。
+            //
+            // 修复前的实测后果：声明约束后重开数据库，`unique_constraints()` 返回空，
+            // 重复值被静默接受——约束形同虚设，而调用方以为它在生效。
+            // `DiskGraph::add_node` 正是靠结尾的 `sync_header()` 才让标签落盘。
+            disk_graph
+                .index_catalog
+                .unique_constraints
+                .insert(crate::index::UniqueConstraint {
+                    label: label.to_string(),
+                    prop: prop.to_string(),
+                });
+            disk_graph.sync_header()?;
+            Ok(())
+        })
     }
 
     /// 列出已声明的唯一约束，格式为 `(label, prop)`。
@@ -1316,48 +1343,39 @@ impl NervusDb {
         properties: HashMap<String, Value>,
     ) -> Result<u64, GraphError> {
         self.reject_write("add a node")?;
-        let mut inner = self
-            .inner
-            .write()
-            .map_err(|e| GraphError::General(e.to_string()))?;
-
-        // 唯一约束校验必须在**任何写入之前**：否则失败会留下半个节点。
-        // 统一走 `IndexManager` 上的闸门：它会在索引不可用时按需重建，
-        // 而不是把合法写入一并拒绝。
-        {
-            let GraphInner {
-                index_mgr,
-                disk_graph,
-                ..
-            } = &mut *inner;
-            index_mgr.guard_unique_constraints(disk_graph, &labels, &properties, None)?;
-        }
-
-        let tx_id = inner.next_tx_id;
-        inner.next_tx_id += 1;
-
-        let node_id = inner
-            .disk_graph
-            .add_node(labels.clone(), properties.clone())?;
-
-        // 维护二级索引与目录
-        for l in &labels {
-            inner.index_mgr.insert_label(l, node_id);
-            inner.disk_graph.index_catalog.labels.insert(l.clone());
-            for (k, v) in &properties {
-                inner.index_mgr.insert_property(l, k, v.clone(), node_id);
-                inner
-                    .disk_graph
-                    .index_catalog
-                    .properties
-                    .insert((l.clone(), k.clone()));
+        // 收尾由 `with_autocommit` 统一负责（见该函数说明）。
+        self.with_autocommit(|inner, _tx_id| {
+            // 唯一约束校验必须在**任何写入之前**：否则失败会留下半个节点。
+            // 统一走 `IndexManager` 上的闸门：它会在索引不可用时按需重建，
+            // 而不是把合法写入一并拒绝。
+            {
+                let GraphInner {
+                    index_mgr,
+                    disk_graph,
+                    ..
+                } = &mut *inner;
+                index_mgr.guard_unique_constraints(disk_graph, &labels, &properties, None)?;
             }
-        }
 
-        Self::commit_dirty_pages_to_wal(&mut inner, tx_id)?;
-        drop(inner);
-        self.maybe_auto_checkpoint()?;
-        Ok(node_id)
+            let node_id = inner
+                .disk_graph
+                .add_node(labels.clone(), properties.clone())?;
+
+            // 维护二级索引与目录
+            for l in &labels {
+                inner.index_mgr.insert_label(l, node_id);
+                inner.disk_graph.index_catalog.labels.insert(l.clone());
+                for (k, v) in &properties {
+                    inner.index_mgr.insert_property(l, k, v.clone(), node_id);
+                    inner
+                        .disk_graph
+                        .index_catalog
+                        .properties
+                        .insert((l.clone(), k.clone()));
+                }
+            }
+            Ok(node_id)
+        })
     }
 
     /// 添加单条有向属性边（维护磁盘双向双环免索引邻接链表）
@@ -1371,67 +1389,37 @@ impl NervusDb {
     ) -> Result<u64, GraphError> {
         self.reject_write("add an edge")?;
         let edge_type_str = edge_type.into();
-        let mut inner = self
-            .inner
-            .write()
-            .map_err(|e| GraphError::General(e.to_string()))?;
-
-        let tx_id = inner.next_tx_id;
-        inner.next_tx_id += 1;
-
-        let edge_id =
+        // 收尾由 `with_autocommit` 统一负责（见该函数说明）。
+        self.with_autocommit(|inner, _tx_id| {
             inner
                 .disk_graph
-                .add_edge(src_id, dst_id, &edge_type_str, properties, weight)?;
-
-        Self::commit_dirty_pages_to_wal(&mut inner, tx_id)?;
-        drop(inner);
-        self.maybe_auto_checkpoint()?;
-        Ok(edge_id)
+                .add_edge(src_id, dst_id, &edge_type_str, properties, weight)
+        })
     }
 
     /// 删除节点（级联删除关联边，槽位回收至 Freelist）
     pub fn remove_node(&self, id: u64) -> Result<Node, GraphError> {
         self.reject_write("remove a node")?;
-        let mut inner = self
-            .inner
-            .write()
-            .map_err(|e| GraphError::General(e.to_string()))?;
+        // 收尾由 `with_autocommit` 统一负责（见该函数说明）。
+        self.with_autocommit(|inner, _tx_id| {
+            let node = inner.disk_graph.remove_node(id)?;
 
-        let tx_id = inner.next_tx_id;
-        inner.next_tx_id += 1;
+            // 清理二级索引
+            let labels_bt: std::collections::BTreeSet<String> =
+                node.labels.iter().cloned().collect();
+            inner
+                .index_mgr
+                .remove_node_all_indices(id, &labels_bt, &node.properties);
 
-        let node = inner.disk_graph.remove_node(id)?;
-
-        // 清理二级索引
-        let labels_bt: std::collections::BTreeSet<String> = node.labels.iter().cloned().collect();
-        inner
-            .index_mgr
-            .remove_node_all_indices(id, &labels_bt, &node.properties);
-
-        Self::commit_dirty_pages_to_wal(&mut inner, tx_id)?;
-        drop(inner);
-        self.maybe_auto_checkpoint()?;
-        Ok(node)
+            Ok(node)
+        })
     }
 
     /// 删除边（从双向双环磁盘链表中脱链，槽位回收至 Freelist）
     pub fn remove_edge(&self, id: u64) -> Result<Edge, GraphError> {
         self.reject_write("remove an edge")?;
-        let mut inner = self
-            .inner
-            .write()
-            .map_err(|e| GraphError::General(e.to_string()))?;
-
-        let tx_id = inner.next_tx_id;
-        inner.next_tx_id += 1;
-
-        let edge = inner.disk_graph.remove_edge(id)?;
-
-        Self::commit_dirty_pages_to_wal(&mut inner, tx_id)?;
-        drop(inner);
-        self.maybe_auto_checkpoint()?;
-        Ok(edge)
+        // 收尾由 `with_autocommit` 统一负责（见该函数说明）。
+        self.with_autocommit(|inner, _tx_id| inner.disk_graph.remove_edge(id))
     }
 
     /// 更新节点属性
@@ -1445,61 +1433,57 @@ impl NervusDb {
         let key_str = key.into();
         let val = value.into();
 
-        let mut inner = self
-            .inner
-            .write()
-            .map_err(|e| GraphError::General(e.to_string()))?;
+        // 收尾由 `with_autocommit` 统一负责（见该函数说明）。
+        self.with_autocommit(|inner, _tx_id| {
+            let old_val = if let Ok(Some(node)) = inner.disk_graph.get_node(id) {
+                node.get_prop(&key_str).cloned()
+            } else {
+                None
+            };
 
-        let tx_id = inner.next_tx_id;
-        inner.next_tx_id += 1;
-
-        let old_val = if let Ok(Some(node)) = inner.disk_graph.get_node(id) {
-            node.get_prop(&key_str).cloned()
-        } else {
-            None
-        };
-
-        // 唯一约束：在写入之前校验，且排除该节点自身的旧值
-        // （更新一个节点不应与它自己冲突）
-        if let Ok(Some(node)) = inner.disk_graph.get_node(id) {
-            let mut props = HashMap::new();
-            props.insert(key_str.clone(), val.clone());
-            {
-                let GraphInner {
-                    index_mgr,
-                    disk_graph,
-                    ..
-                } = &mut *inner;
-                index_mgr.guard_unique_constraints(disk_graph, &node.labels, &props, Some(id))?;
-            }
-        }
-
-        inner
-            .disk_graph
-            .update_node_property(id, key_str.clone(), val.clone())?;
-
-        // 更新索引：先移除旧值索引，再插入新值索引
-        if let Ok(Some(node)) = inner.disk_graph.get_node(id) {
-            for l in &node.labels {
-                if let Some(ref ov) = old_val {
-                    inner.index_mgr.remove_property(l, &key_str, ov, id);
+            // 唯一约束：在写入之前校验，且排除该节点自身的旧值
+            // （更新一个节点不应与它自己冲突）
+            if let Ok(Some(node)) = inner.disk_graph.get_node(id) {
+                let mut props = HashMap::new();
+                props.insert(key_str.clone(), val.clone());
+                {
+                    let GraphInner {
+                        index_mgr,
+                        disk_graph,
+                        ..
+                    } = &mut *inner;
+                    index_mgr.guard_unique_constraints(
+                        disk_graph,
+                        &node.labels,
+                        &props,
+                        Some(id),
+                    )?;
                 }
-                inner
-                    .index_mgr
-                    .insert_property(l, &key_str, val.clone(), id);
-                inner.disk_graph.index_catalog.labels.insert(l.clone());
-                inner
-                    .disk_graph
-                    .index_catalog
-                    .properties
-                    .insert((l.clone(), key_str.clone()));
             }
-        }
 
-        Self::commit_dirty_pages_to_wal(&mut inner, tx_id)?;
-        drop(inner);
-        self.maybe_auto_checkpoint()?;
-        Ok(())
+            inner
+                .disk_graph
+                .update_node_property(id, key_str.clone(), val.clone())?;
+
+            // 更新索引：先移除旧值索引，再插入新值索引
+            if let Ok(Some(node)) = inner.disk_graph.get_node(id) {
+                for l in &node.labels {
+                    if let Some(ref ov) = old_val {
+                        inner.index_mgr.remove_property(l, &key_str, ov, id);
+                    }
+                    inner
+                        .index_mgr
+                        .insert_property(l, &key_str, val.clone(), id);
+                    inner.disk_graph.index_catalog.labels.insert(l.clone());
+                    inner
+                        .disk_graph
+                        .index_catalog
+                        .properties
+                        .insert((l.clone(), key_str.clone()));
+                }
+            }
+            Ok(())
+        })
     }
 
     /// 更新边属性
@@ -1512,21 +1496,10 @@ impl NervusDb {
         self.reject_write("update an edge property")?;
         let key_str = key.into();
         let val = value.into();
-
-        let mut inner = self
-            .inner
-            .write()
-            .map_err(|e| GraphError::General(e.to_string()))?;
-
-        let tx_id = inner.next_tx_id;
-        inner.next_tx_id += 1;
-
-        inner.disk_graph.update_edge_property(id, key_str, val)?;
-
-        Self::commit_dirty_pages_to_wal(&mut inner, tx_id)?;
-        drop(inner);
-        self.maybe_auto_checkpoint()?;
-        Ok(())
+        // 收尾由 `with_autocommit` 统一负责（见该函数说明）。
+        self.with_autocommit(|inner, _tx_id| {
+            inner.disk_graph.update_edge_property(id, key_str, val)
+        })
     }
 
     /// 内部辅助：撤掉一个失败写语句的全部物理影响。
@@ -1573,22 +1546,132 @@ impl NervusDb {
         result
     }
 
+    /// 自动提交（autocommit）的**唯一**收尾入口。
+    ///
+    /// ## 它替代了什么
+    ///
+    /// 此前每个写入口都自己走一遍这套流程：取写锁 → 分配事务号 → 干活 →
+    /// `commit_dirty_pages_to_wal` → 释放锁 → 可能做自动 Checkpoint。
+    /// 一共 **10 处**（`execute`、`run_cypher` 的写分支、`create_unique_constraint`，
+    /// 以及六个 CRUD 方法），`commit_dirty_pages_to_wal` 与 `maybe_auto_checkpoint`
+    /// 各出现 10 次。
+    ///
+    /// 重复的代价不是行数，而是**漏一步不报错**。这个形态已经出过事故：
+    /// `run_cypher` 的写分支曾经漏掉只读句柄的守卫，成为当时唯一能让只读句柄写数据的
+    /// 路径。收进一个入口之后，「新加入口忘记某一步」在构造上就不可能。
+    ///
+    /// ## 两个入口，一个有快照一个没有
+    ///
+    /// - [`Self::with_statement_tx`]：语句级原子性。执行前记元数据快照、开启事务上下文，
+    ///   闭包返回 `Err` 时整体撤销。`execute` 与 `run_cypher` 用它——一条语句可能写上千条
+    ///   记录，中途失败是最可能的失败形态。
+    /// - [`Self::with_autocommit`]：单动作写入。只分配事务号并提交，**不取快照**：
+    ///   这类入口的写入是单个 `DiskGraph` 调用，失败时它自己已经保证不留半条记录，
+    ///   为它记一份 O(1) 但每次分配的元数据快照是纯开销。
+    ///
+    /// 两条路径共用同一段「提交 → 释放锁 → 自动 Checkpoint」，因此收尾语义只有一份。
+    ///
+    /// ## 为什么是闭包
+    ///
+    /// 闭包让调用方在**持锁状态**下执行自己的写入（它们需要 `&mut GraphInner`），
+    /// 而收尾由本函数统一负责。返回 `Result<R>`：成功时把闭包的返回值透传出去。
+    fn with_autocommit<R, F>(&self, work: F) -> Result<R, GraphError>
+    where
+        F: FnOnce(&mut GraphInner, u64) -> Result<R, GraphError>,
+    {
+        let mut inner = self
+            .inner
+            .write()
+            .map_err(|e| GraphError::General(e.to_string()))?;
+        let tx_id = inner.next_tx_id;
+        inner.next_tx_id += 1;
+
+        let value = work(&mut inner, tx_id)?;
+
+        Self::commit_dirty_pages_to_wal(&mut inner, tx_id)?;
+        drop(inner);
+        // 写锁已释放，此时才能安全做 Checkpoint（它需要重新获取写锁）
+        self.maybe_auto_checkpoint()?;
+        Ok(value)
+    }
+
+    /// 语句级原子性入口：见 [`Self::with_autocommit`] 的对照说明。
+    ///
+    /// 闭包返回 `Err` 时，本函数通过 [`Self::rollback_failed_statement`] 撤销整条语句
+    /// 已产生的写入，然后才把错误返回给调用方。**顺序不能变**：先返回错误再撤销，
+    /// 调用方就可能在撤销完成前观察到中间态。
+    fn with_statement_tx<R, F>(&self, work: F) -> Result<R, GraphError>
+    where
+        F: FnOnce(&mut GraphInner, u64) -> Result<R, GraphError>,
+    {
+        let mut inner = self
+            .inner
+            .write()
+            .map_err(|e| GraphError::General(e.to_string()))?;
+        let tx_id = inner.next_tx_id;
+        inner.next_tx_id += 1;
+
+        // 语句级原子性：执行前采集元数据快照并开启事务上下文。
+        //
+        // 没有这一步，一条失败的写语句会留下**部分写入**：已创建的节点留在缓冲池里，
+        // 随后任何一次成功的提交都会把它们一起刷进主文件。实测（本仓库 rc.1 行为）：
+        //
+        // ```text
+        // CREATE (:Num {v: 1}); declare UNIQUE (:Num.v)
+        // UNWIND [2, 1, 3] AS v CREATE (n:Num {v: v})   -- 因重复值失败
+        // CREATE (:Other {x: 99})                        -- 一次无关的成功写入
+        // ```
+        //
+        // 之后重开数据库，`MATCH (n:Num)` 会看到 `{v: 1}` **和**那个本该被拒绝的
+        // `{v: 2}`。UNWIND 让这条路径变得常见——一条语句本来就可能写上千条记录，
+        // 中途失败是最可能的失败形态，所以必须在提交前把失败语句的写入整体撤掉。
+        let snapshot = inner.disk_graph.snapshot_meta();
+        {
+            let mut bpm = inner.disk_graph.bpm.lock_recover();
+            bpm.begin_tx(tx_id);
+        }
+
+        let value = match work(&mut inner, tx_id) {
+            Ok(v) => v,
+            Err(e) => {
+                Self::rollback_failed_statement(&mut inner, &snapshot);
+                return Err(e);
+            }
+        };
+
+        Self::commit_dirty_pages_to_wal(&mut inner, tx_id)?;
+        drop(inner);
+        // 写锁已释放，此时才能安全做 Checkpoint（它需要重新获取写锁）
+        self.maybe_auto_checkpoint()?;
+        Ok(value)
+    }
+
     /// 开启显式事务
     pub fn begin_transaction(&self) -> Result<Transaction, GraphError> {
-        let tx_id = {
+        let (tx_id, max_actions, spill_enabled) = {
             let mut inner = self
                 .inner
                 .write()
                 .map_err(|e| GraphError::General(e.to_string()))?;
             let tx_id = inner.next_tx_id;
             inner.next_tx_id += 1;
-            tx_id
+            // 上限与溢出开关在此取一次快照：开库后不再改变，而 `push_op` 每个
+            // 动作都要用它。见 `Transaction::max_actions` 的说明。
+            (
+                tx_id,
+                inner.max_transaction_actions,
+                inner.spill_transaction_actions,
+            )
         };
 
         Ok(Transaction {
             db: self.clone(),
             tx_id,
             ops: Vec::new(),
+            spilled: Vec::new(),
+            has_spilled: false,
+            max_actions,
+            spill_enabled,
             committed: false,
         })
     }
@@ -1858,7 +1941,10 @@ fn format_literal(value: &Value) -> String {
 }
 
 /// 事务操作原子动作记录（用于显式事务在 commit 前的缓存）
-#[derive(Debug, Clone)]
+///
+/// 实现 `PartialEq` 是为了让动作的字节编解码（`action_codec`）能用往返测试
+/// 断言「编码再解码得到同一个动作」——那是溢出路径正确性的基本检查。
+#[derive(Debug, Clone, PartialEq)]
 pub enum TxAction {
     AddNode {
         id: u64,
@@ -1896,6 +1982,30 @@ pub struct Transaction {
     db: NervusDb,
     tx_id: u64,
     ops: Vec<TxAction>,
+    /// 已溢出动作在 WAL 中的帧偏移，**按溢出顺序**排列。
+    ///
+    /// 位置索引的每项是 8 字节，而一个节点动作在内存里约 502 字节、一个边动作
+    /// 约 128 字节（见 `docs/architecture.md`）。因此溢出把「事务内存 = 动作总量」
+    /// 变成「事务内存 = 常驻窗口 + 8 字节 × 动作数」，这正是它能突破上限的原因。
+    spilled: Vec<u64>,
+    /// 本事务是否已把 `spilled_txns` 计数加过一（保证只减一次）。
+    has_spilled: bool,
+    /// 动作队列上限与溢出开关的**快照**，在 `begin_transaction` 时取一次。
+    ///
+    /// ## 为什么快照而不是每次现取
+    ///
+    /// 这两个值在打开数据库之后不再改变（只由 `NervusDbOptions` 设置，见
+    /// `GraphInner` 的构造；没有运行期 setter）。而 `push_op` 是**每个动作**都要
+    /// 走一次的闸门，原先它每次都 `self.db.inner.read_recover()` 去读这两个数字。
+    ///
+    /// 单条写入无所谓——那条路径本来就要取一次写锁分配 ID。但批量入口
+    /// （`add_nodes` / `add_edges`）改走 `push_op` 之后，一次 6900 万条的导入
+    /// 就是 **6900 万次**全局读锁，而改动前每批只取一次。
+    ///
+    /// 快照与现取**语义完全相同**（值不变），差别只是不再有 N 次加锁。
+    max_actions: usize,
+    /// 见 [`Self::max_actions`]。
+    spill_enabled: bool,
     committed: bool,
 }
 
@@ -1908,9 +2018,17 @@ impl Transaction {
     ///
     /// 所有入队都必须经过它。分散到六个方法里各写一次边界判断，迟早会有一个
     /// 漏掉——那样上限就只在某些路径上有效，而调用方无从知道是哪一些。
+    ///
+    /// 上限与溢出开关取自事务创建时的快照（见 [`Self::max_actions`]），
+    /// **不再每次取全局锁**：本函数每个动作调用一次，取锁会让批量导入付出
+    /// 「每动作一次全局读锁」的代价。
     fn push_op(&mut self, op: TxAction) -> Result<(), GraphError> {
-        let limit = self.db.inner.read_recover().max_transaction_actions;
+        let limit = self.max_actions;
+        let spill_enabled = self.spill_enabled;
         if limit > 0 && self.ops.len() >= limit {
+            if spill_enabled {
+                return self.spill_resident(&op);
+            }
             return Err(GraphError::General(format!(
                 "Transaction action queue is full ({limit} actions). \
                  A transaction holds every action in memory until commit, so the queue \
@@ -1927,7 +2045,52 @@ impl Transaction {
         Ok(())
     }
 
-    /// 事务内**批量**添加节点，返回按输入顺序排列的 ID 列表。
+    /// 队列已满：把常驻动作全部溢写到 WAL，再把 `pending` 放进腾出的窗口。
+    ///
+    /// ## 为什么连 `pending` 一起写
+    ///
+    /// 调用方是 `push_op`，它手上正拿着一个**还没入队**的动作。若只溢出旧动作、
+    /// 把 `pending` 留在内存，那么窗口会一直占着一个位置，且下一次触顶又要再判断
+    /// 一次。把它一起写进去，窗口就真正腾空，逻辑只有一个分支。
+    ///
+    /// ## 锁的顺序
+    ///
+    /// 只在 `inner` 写锁内做（调用方 `add_node` 等已经持有或即将释放 `inner` 写锁；
+    /// 这里自己取一次读锁取配置、再取一次写锁更新 `spilled_txns`）。两次取锁之间
+    /// 没有别的锁，因此不与既有锁序冲突。
+    fn spill_resident(&mut self, pending: &TxAction) -> Result<(), GraphError> {
+        // 取一次写锁：既拿到 WAL，又能原子地维护 `spilled_txns`。
+        // Checkpoint 同样在这个写锁内判断是否允许截断 WAL，因此两者不会竞争。
+        let mut inner = self.db.inner.write_recover();
+        let wal = Arc::clone(inner.storage.wal_writer());
+
+        // 先写旧动作，再写 pending：整体顺序必须与入队顺序一致
+        let mut to_write: Vec<&TxAction> = self.ops.iter().collect();
+        to_write.push(pending);
+
+        // 基准必须在循环**之前**取：`self.spilled.push` 会让它的长度在循环里增长，
+        // 写成 `self.spilled.len() + i` 会得到 0、2、4、6…… 而不是 0、1、2、3……
+        // （首版就是这样，读回时的序号校验立刻报「expected seq 1, found 2」）。
+        let base = self.spilled.len();
+        for (i, op) in to_write.iter().enumerate() {
+            // `seq` 是**本事务内的全局序号**，不是窗口内下标：窗口会被反复腾空，
+            // 用下标会让不同批次的动作序号相撞。
+            let seq = (base + i) as u64;
+            let offset = wal.append(&crate::storage::WalRecord::ActionWrite {
+                tx_id: self.tx_id,
+                seq,
+                action: op.encode(),
+            })?;
+            self.spilled.push(offset);
+        }
+
+        self.ops.clear();
+        if !self.has_spilled {
+            self.has_spilled = true;
+            inner.spilled_txns += 1;
+        }
+        Ok(())
+    }
     ///
     /// ## 为什么需要它
     ///
@@ -1960,24 +2123,32 @@ impl Transaction {
             inner.disk_graph.allocate_next_node_ids(nodes.len())?
         };
 
-        let limit = self.db.inner.read_recover().max_transaction_actions;
-        if limit > 0 && self.ops.len() + nodes.len() > limit {
-            return Err(GraphError::General(format!(
-                "Batch of {} node actions would exceed the transaction action limit ({limit}); \
-                 {} queued so far. Commit in batches, or raise the limit with \
-                 NervusDbOptions::max_transaction_actions.",
-                nodes.len(),
-                self.ops.len()
-            )));
-        }
+        // 逐条经 `push_op`，因此**上限检查与溢出逻辑都只有一份实现**。
+        //
+        // 这里曾经自己内联判断上限：批量路径因此看不到后来加入的溢出逻辑，
+        // 于是「单条路径能溢出、批量路径仍然报错」——同一选项两种行为。批量
+        // 预留 ID 的收益（免去每条一次加锁）由上面的 `allocate_next_node_ids`
+        // 保有，逐条 `push_op` 只是把入队统一到同一闸门。
+        // 预分配，但**受上限约束**。
+        //
+        // 直接写 `reserve(nodes.len())`（改动前的写法）在溢出开启时是危险的：
+        // 溢出会把常驻窗口清空，窗口因此永远不会超过上限，于是一次 6900 万条的
+        // 批量会预订一个**永远不会被用满**的容量（每个动作 112 字节 → 约 7.7 GB），
+        // 而 `Vec::clear()` 不归还容量，它变成永久占用。按上限截断即可：窗口
+        // 本来就不会超过上限，多预留没有意义。
+        let cap = if self.max_actions > 0 {
+            self.max_actions
+        } else {
+            nodes.len()
+        };
+        self.ops.reserve(cap.min(nodes.len()));
 
-        self.ops.reserve(nodes.len());
         for (id, (labels, properties)) in ids.iter().copied().zip(nodes) {
-            self.ops.push(TxAction::AddNode {
+            self.push_op(TxAction::AddNode {
                 id,
                 labels,
                 properties,
-            });
+            })?;
         }
         Ok(ids)
     }
@@ -2001,27 +2172,23 @@ impl Transaction {
             inner.disk_graph.allocate_next_edge_ids(edges.len())?
         };
 
-        let limit = self.db.inner.read_recover().max_transaction_actions;
-        if limit > 0 && self.ops.len() + edges.len() > limit {
-            return Err(GraphError::General(format!(
-                "Batch of {} edge actions would exceed the transaction action limit ({limit}); \
-                 {} queued so far. Commit in batches, or raise the limit with \
-                 NervusDbOptions::max_transaction_actions.",
-                edges.len(),
-                self.ops.len()
-            )));
-        }
+        // 同 `add_nodes`：预分配按上限截断，理由见那里的说明。
+        let cap = if self.max_actions > 0 {
+            self.max_actions
+        } else {
+            edges.len()
+        };
+        self.ops.reserve(cap.min(edges.len()));
 
-        self.ops.reserve(edges.len());
         for (id, e) in ids.iter().copied().zip(edges) {
-            self.ops.push(TxAction::AddEdge {
+            self.push_op(TxAction::AddEdge {
                 id,
                 src_id: e.src_id,
                 dst_id: e.dst_id,
                 edge_type: e.edge_type,
                 properties: e.properties,
                 weight: e.weight,
-            });
+            })?;
         }
         Ok(ids)
     }
@@ -2165,10 +2332,50 @@ impl Transaction {
         let mut failed_err = None;
         // Take ownership of the action list instead of draining it into a fresh
         // allocation; the planner needs owned actions and `take` avoids the copy.
-        let ops: Vec<TxAction> = std::mem::take(&mut self.ops);
+        let mut ops: Vec<TxAction> = std::mem::take(&mut self.ops);
 
+        // 若有动作溢出到 WAL，按序读回并**前置**到常驻动作之前：
+        // 溢出发生时窗口已被清空，因此 `spilled` 里的动作全部早于 `ops` 里的。
+        //
+        // 这里的顺序就是 `push_op` 被调用的顺序，也是不溢出时 `ops` 会有的顺序。
+        // 恢复顺序正确是**正确性前提**：`AddNode` 必须先于引用它的 `AddEdge`。
+        if !self.spilled.is_empty() {
+            let wal = Arc::clone(inner.storage.wal_writer());
+            let mut recovered: Vec<TxAction> = Vec::with_capacity(self.spilled.len());
+            for (expect_seq, offset) in self.spilled.iter().enumerate() {
+                match wal.read_frame_at(*offset)? {
+                    Some(crate::storage::WalRecord::ActionWrite { tx_id, seq, action })
+                        if tx_id == self.tx_id =>
+                    {
+                        if seq != expect_seq as u64 {
+                            failed_err = Some(GraphError::StorageError(format!(
+                                "spilled action out of order: expected seq {expect_seq}, found {seq}"
+                            )));
+                            break;
+                        }
+                        recovered.push(TxAction::decode(&action)?);
+                    }
+                    other => {
+                        failed_err = Some(GraphError::StorageError(format!(
+                            "spilled action frame at offset {offset} is missing or belongs to \
+                             another transaction: {other:?}"
+                        )));
+                        break;
+                    }
+                }
+            }
+            if failed_err.is_none() {
+                recovered.extend(ops);
+                ops = recovered;
+            }
+        }
+
+        // `failed_err.is_none()` 是**原子性要求**，不是风格：读回溢出动作失败时，
+        // `ops` 里只剩下最后一个内存窗口（例如只有 `AddEdge`），继续施加会用它去
+        // 引用尚未读回的 `AddNode`，得到「NodeNotFound」这种与真实原因无关的报错，
+        // 而且会留下部分写入。首版就漏了这个条件，被顺序测试抓出来。
         let mut idx = 0usize;
-        while idx < ops.len() {
+        while failed_err.is_none() && idx < ops.len() {
             // 连续 AddEdge 段达到阈值时走两阶段批量织网，消除批内缓存抖动。
             // 只合并**连续**段，绝不跨非边操作重排，保证 AddNode 先于 AddEdge 的依赖不变。
             // 混合事务因段内夹杂非边操作而天然不触发批量路径，无需额外安全性启发式。
@@ -2337,20 +2544,33 @@ impl Transaction {
         }
 
         if let Some(err) = failed_err {
-            // 失败事务清理：丢弃未提交页（按基线还原内容与 WAL 位置索引）、
-            // 回拨内存元数据、并使二级索引整体失效，确保零残留、主库零污染。
-            let failed_pages = inner.disk_graph.drain_modified_pages();
-            {
-                let mut bpm = inner.disk_graph.bpm.lock_recover();
-                let _ = bpm.rollback_uncommitted_pages(&failed_pages);
+            // 失败事务清理：与语句级原子性**共用同一份实现**，不再内联第二份。
+            //
+            // 这里曾经把四步序列（丢弃未提交页 → 按基线还原 → 回拨元数据 → 索引失效）
+            // 手写了一遍。AGENTS.md §14 明确禁止那样做：「不要重新实现该序列，因为
+            // 第二份实现会与第一份产生分歧」——而它确实分歧了：溢出登记的注销只加在
+            // 这一份上。改为调用 `rollback_failed_statement` 之后，两条路径的回滚语义
+            // 由构造保证一致，而不是靠两处注释互相提醒。
+            NervusDb::rollback_failed_statement(&mut inner, &snapshot);
+
+            // 注销溢出登记（见下方成功路径的同一段说明）
+            if self.has_spilled {
+                inner.spilled_txns = inner.spilled_txns.saturating_sub(1);
             }
-            inner.disk_graph.restore_meta(&snapshot);
-            inner.index_mgr.invalidate_all();
+            self.committed = true;
             return Err(err);
         }
 
         inner.disk_graph.sync_header()?;
         NervusDb::commit_dirty_pages_to_wal(&mut inner, self.tx_id)?;
+        // 注销溢出登记：**提交成功与提交失败都必须注销**，漏掉任一条
+        // `spilled_txns` 就永远不归零，Checkpoint 会被永久拒绝。
+        // 首版只在回滚路径减了它，于是「溢出事务提交成功后无法再 Checkpoint」
+        // ——`spill_action_tests` 当场抓到。这里不能写成 `&mut self` 的方法：
+        // `inner` 借自 `self.db`，两者不能同时可变借用。
+        if self.has_spilled {
+            inner.spilled_txns = inner.spilled_txns.saturating_sub(1);
+        }
         drop(inner);
 
         self.committed = true;
@@ -2372,6 +2592,15 @@ impl Transaction {
 
     fn revert_internal(&mut self) {
         self.ops.clear();
+        // 已写入 WAL 的动作帧**不需要显式清理**：它们带未提交的 `tx_id`，
+        // 恢复时被「无 TxCommit 即忽略」的规则跳过，Checkpoint 也会截断它们。
+        // 这里只清位置索引与内存窗口。
+        self.spilled.clear();
+        if self.has_spilled {
+            self.has_spilled = false;
+            let mut inner = self.db.inner.write_recover();
+            inner.spilled_txns = inner.spilled_txns.saturating_sub(1);
+        }
     }
 }
 

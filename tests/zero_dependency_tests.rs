@@ -216,13 +216,40 @@ fn all_manifests_share_one_version() {
         ),
     ];
 
+    // `bindings/` 可能**合法缺席**：cargo 会自动把嵌套的 workspace 成员
+    // （`bindings/python`、`bindings/nodejs`）排除在发布包之外，因此从
+    // crates.io 下载的 crate 里没有这些清单。实测过：在
+    // `target/package/nervusdb-0.1.0` 上跑本测试会因为读不到文件而 panic——
+    // 那意味着任何 `cargo add nervusdb` 之后跑测试的人都会看到一次与他们无关的失败。
+    //
+    // 因此：文件不存在就跳过。**这一条守卫的价值本就在于「仓库内五处版本一致」**，
+    // 而仓库内它们必然存在；缺失只会发生在裁剪后的发布包里，那里没有可校验的东西。
     let mut versions: Vec<(&str, String)> = Vec::new();
+    let mut missing: Vec<&str> = Vec::new();
     for (label, path) in cases {
-        let text = fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let text = match fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(_) => {
+                missing.push(label);
+                continue;
+            }
+        };
         let v = extract_version(&text, "version")
             .unwrap_or_else(|| panic!("{label} has no version field"));
         versions.push((label, v));
+    }
+    if !missing.is_empty() {
+        // 核心清单必须在。缺了它说明不是「裁剪后的发布包」，而是仓库真的坏了。
+        assert!(
+            versions.iter().any(|(l, _)| *l == "Cargo.toml"),
+            "Cargo.toml itself is unreadable; this is not a trimmed package"
+        );
+        eprintln!(
+            "note: {} manifest(s) not present ({}) — treating this as a published \
+             package rather than a repository checkout",
+            missing.len(),
+            missing.join(", ")
+        );
     }
 
     let (first_label, first) = &versions[0];
@@ -431,9 +458,69 @@ fn documented_suite_table_matches_the_files() {
         "only {checked} suite rows were matched — the table format changed and this guard \
          is no longer checking anything meaningful"
     );
+
+    // 表格之外，**散文里的套件数**也曾漂移：README 写「13 suites」、ROADMAP 写
+    // 「16 suites」，而实际是 15。逐行比对抓不到这个，因为它比的是每行，不是行数。
+    // 这里把「声明的套件数」与实际行数对上。
+    // **反向检查：表格漏掉了某个测试文件。**
+    //
+    // 上面是「逐行核对已记录的行」，因此它天生看不见**没有行**的文件——
+    // 新增 `tests/planner_tests.rs` 时守卫完全沉默，我是手工发现漏登记的。
+    // 这是该守卫的**第二个**此类缺陷（第一个是只认标题不认编号条目），
+    // 两个都是「只查 A→B、不查 B→A」的同一个形状。
+    //
+    // 反向检查的意义不只是数字对不上：**没进表格的套件等于没被点名**，
+    // 而这张表的用途正是让人知道「哪套测试覆盖什么」。
+    {
+        let mut listed: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for line in doc.lines() {
+            let cells: Vec<&str> = line.split('|').map(|c| c.trim()).collect();
+            if cells.len() >= 4 {
+                let n = cells[1].trim_matches('`');
+                if n.ends_with(".rs") {
+                    listed.insert(n.to_string());
+                }
+            }
+        }
+        let entries = fs::read_dir(root.join("tests")).expect("tests/ must exist");
+        for entry in entries.flatten() {
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            if !file_name.ends_with(".rs") {
+                continue;
+            }
+            if !listed.contains(&file_name) {
+                problems.push(format!(
+                    "tests/{file_name} exists but has no row in the docs/testing.md suite \
+table. Add a row (name, case count, what it covers) — an undocumented suite is a suite \
+nobody knows to run."
+                ));
+            }
+        }
+    }
+
+    let declared_suites = checked;
+    for (path, needle) in [
+        ("ROADMAP.md", "test cases across {n} suites"),
+        ("README.md", "tests/              {n} suites,"),
+        ("docs/testing.md", "Run as {n} integration suites"),
+    ] {
+        let text = match fs::read_to_string(root.join(path)) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let expected = needle.replace("{n}", &declared_suites.to_string());
+        if !text.contains(&expected) {
+            problems.push(format!(
+                "{path} does not state {declared_suites} suites (expected to find `{expected}`). \
+                 The table in docs/testing.md has {declared_suites} rows, so any other number \
+                 there is stale."
+            ));
+        }
+    }
+
     assert!(
         problems.is_empty(),
-        "docs/testing.md disagrees with the test files:\n{}",
+        "docs disagree with the test files:\n{}",
         problems.join("\n")
     );
 }
@@ -476,9 +563,27 @@ fn published_package_names_avoid_known_conflicts() {
         ("graphlite-rust-sdk", "crates.io: GraphLite-AI/GraphLite"),
     ];
 
-    // PyPI 名：`[project]` 段下的 `name = "..."`
-    let pyproject = fs::read_to_string(root.join("bindings/python/pyproject.toml"))
-        .expect("bindings/python/pyproject.toml must exist");
+    // 与版本守卫同理：从 crates.io 下载的 crate 里没有 `bindings/`（cargo 排除
+    // 嵌套 workspace 成员），因此这三个名字可能读不到。读不到就**只校验
+    // crates.io 自己的名字**——那一条在发布包里依然可查，也依然是有意义的那条
+    // （它是「绝不能把本包发到别人的名字下」的直接防线）。
+    let pyproject = match fs::read_to_string(root.join("bindings/python/pyproject.toml")) {
+        Ok(t) => t,
+        Err(_) => {
+            let cargo = fs::read_to_string(root.join("Cargo.toml")).expect("Cargo.toml must exist");
+            let own = extract_version(&cargo, "name").expect("Cargo.toml must declare a name");
+            assert!(
+                !TAKEN.iter().any(|(n, _)| *n == own),
+                "the crate name `{own}` belongs to another project: {}",
+                TAKEN
+                    .iter()
+                    .find(|(n, _)| *n == own)
+                    .map(|(_, who)| *who)
+                    .unwrap_or("")
+            );
+            return;
+        }
+    };
     let mut in_project = false;
     let mut py_name = None;
     for line in pyproject.lines() {
@@ -499,8 +604,10 @@ fn published_package_names_avoid_known_conflicts() {
     let py_name = py_name.expect("pyproject.toml [project] must declare a name");
 
     // npm 名：顶层 `"name": "..."`
-    let pkg = fs::read_to_string(root.join("bindings/nodejs/package.json"))
-        .expect("bindings/nodejs/package.json must exist");
+    let pkg = match fs::read_to_string(root.join("bindings/nodejs/package.json")) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
     let npm_name = extract_version(&pkg, "name").expect("package.json must declare a name");
 
     // crates.io 名
@@ -588,6 +695,19 @@ fn documented_format_version_matches_the_code() {
         ("README.md", "frozen at **version {v}**"),
         // FORMAT.md 用「当前值是 N」的写法
         ("FORMAT.md", "The current value is **{v}**"),
+        // CHANGELOG 的 0.1.0 段记录这次格式变更；措辞与上面几处不同
+        ("CHANGELOG.md", "`DB_PAGE_VERSION` is now `{v}`"),
+    ];
+
+    // 反向守卫：0.1.0 段里不得再出现「格式版本停在 4」这类**陈旧**说法。
+    //
+    // 这正是本次的真实缺陷：改名把版本推到 5，而 CHANGELOG 里同一段既写 5
+    // 又写「format version stays 4」——一条 changelog 自相矛盾，读者无从判断。
+    // 上面的 cases 只能确认「写了正确的数字」，抓不到「同时写了错误的数字」。
+    const STALE_IN_CHANGELOG: &[&str] = &[
+        "format version stays 4",
+        "DB_PAGE_VERSION stays 4",
+        "version stays `4`",
     ];
 
     let mut problems: Vec<String> = Vec::new();
@@ -626,6 +746,19 @@ fn documented_format_version_matches_the_code() {
         }
     }
 
+    // 陈旧说法检查（见 STALE_IN_CHANGELOG 的说明）
+    if let Ok(changelog) = fs::read_to_string(root.join("CHANGELOG.md")) {
+        for stale in STALE_IN_CHANGELOG {
+            if changelog.contains(stale) {
+                problems.push(format!(
+                    "CHANGELOG.md still contains the stale claim `{stale}` while the \
+                     format version is {actual} — a changelog that states two different \
+                     versions for the same release cannot be trusted for either"
+                ));
+            }
+        }
+    }
+
     // 反向对照：确认这些文档**确实**在讨论版本，否则上面可能整体失效
     assert!(
         cases.len() >= 4,
@@ -635,6 +768,460 @@ fn documented_format_version_matches_the_code() {
     assert!(
         problems.is_empty(),
         "documented format version disagrees with `DB_PAGE_VERSION = {actual}`:\n{}",
+        problems.join("\n")
+    );
+}
+
+// =========================================================================
+// 章节引用守卫
+// =========================================================================
+//
+// 代码与文档里大量出现 `AGENTS.md §N` 形式的引用（本次统计 16 处）。把 §3 从
+// 「139 行的四个子节」压缩成「一个 36 行的节」时，**四处 §3.x 引用当场失效**——
+// 引用指向的编号不再存在，而没有任何东西会报错：读者只会看到一个查不到的章节号。
+//
+// 这条守卫把「引用必须能解析」变成断言。
+//
+// **它检查的是 AGENTS.md 的编号，仅此而已。** 两处它做不到，写在这里免得后人高估它：
+//
+//   1. 它不判断「引用指向了正确的地方」。实测抓到过一处：ROADMAP 曾用 `AGENTS.md §5`
+//      引用交易队列上限，而该上限写在 §1 的第 5 条不变量里，§5 讲的是工作流。编号存在，
+//      守卫放行，读者被指向了错的页。这类错误只能靠人对着代码读出来。
+//   2. `docs/architecture.md` 里的裸 `§N`（如 "See §11 for why"）指的是**它自己的**
+//      章节，守卫却拿 AGENTS.md 去校验。今天恰好都对得上，属于巧合；它不会发现
+//      architecture.md 自己重编号导致的失效。
+
+#[test]
+fn agents_section_references_resolve() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    // AGENTS.md 里章节号有**两种**形式，两种都要认：
+    //   - `## 1. Non-Negotiable Invariants` / `### 3.1 ...`（标题）
+    //   - `1. **Pure Disk-Backed Architecture**`（`## 1.` 节里的编号条目，
+    //     即 §1–§14 那些「不变量」）
+    //
+    // 只认第一种是首版守卫的实际错误：它把全仓库 20 多处 `§13` 判为失效引用，
+    // 而那些引用完全正确。**守卫误报比不报更糟**——它会训练人忽略它。
+    let agents = fs::read_to_string(root.join("AGENTS.md")).expect("AGENTS.md must exist");
+    let mut defined: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for line in agents.lines() {
+        // 形式一：标题
+        if let Some(rest) = line
+            .strip_prefix("## ")
+            .or_else(|| line.strip_prefix("### "))
+        {
+            let number: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            if !number.is_empty() && !number.ends_with('.') {
+                defined.insert(number);
+            }
+            continue;
+        }
+        // 形式二：`N. **标题**` 的编号条目（§1–§14）
+        let trimmed = line.trim_start();
+        let digits: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !digits.is_empty() && trimmed[digits.len()..].starts_with(". **") {
+            defined.insert(digits);
+        }
+    }
+    assert!(
+        defined.len() >= 10,
+        "only found {} section numbers in AGENTS.md — the heading format changed and this \
+         guard is no longer checking anything",
+        defined.len()
+    );
+
+    // 扫描仓库里的 `§N` / `§N.M` 引用。history 与 CHANGELOG 记录的是历史，
+    // 它们引用的是**当时**的章节号，不该按今天的 AGENTS.md 校验。
+    // 目录 + **根目录下的散文**。首版只扫目录，于是 `ROADMAP.md` 里的失效引用
+    // 被漏掉——而 ROADMAP 恰恰是「那个已不存在的 3.5 号」失效的那一处。负向验证
+    // （把坏引用注入 ROADMAP）暴露了这个洞：守卫当时**通过了**。
+    //
+    // 注意注释里不写 `§` + 数字：守卫读的是文本，它无法区分「引用」与「提到引用」，
+    // 写上去会变成自我误报。这正是守卫只该做机械检查、判断留给人的原因。
+    const SCAN_DIRS: &[&str] = &["src", "tests", "docs"];
+    const SCAN_ROOT_FILES: &[&str] = &["ROADMAP.md", "README.md"];
+    let mut checked = 0usize;
+    let mut problems: Vec<String> = Vec::new();
+
+    let mut scan_file = |path: &Path, contents: &str, problems: &mut Vec<String>| {
+        for (i, line) in contents.lines().enumerate() {
+            // 跳过 history 文档
+            if path.to_string_lossy().contains("/history/") {
+                continue;
+            }
+            let bytes: Vec<char> = line.chars().collect();
+            let mut idx = 0usize;
+            while idx < bytes.len() {
+                if bytes[idx] == '§' {
+                    let mut j = idx + 1;
+                    let mut num = String::new();
+                    while j < bytes.len() && (bytes[j].is_ascii_digit() || bytes[j] == '.') {
+                        num.push(bytes[j]);
+                        j += 1;
+                    }
+                    let num = num.trim_end_matches('.').to_string();
+                    if !num.is_empty() {
+                        checked += 1;
+                        if !defined.contains(&num) {
+                            problems.push(format!(
+                                "{}:{}: references §{num}, which does not exist in AGENTS.md",
+                                path.display(),
+                                i + 1
+                            ));
+                        }
+                    }
+                    idx = j;
+                    continue;
+                }
+                idx += 1;
+            }
+        }
+    };
+
+    for dir in SCAN_DIRS {
+        let mut stack = vec![root.join(dir)];
+        while let Some(d) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&d) else {
+                continue;
+            };
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                if p.extension().and_then(|s| s.to_str()) != Some("rs")
+                    && p.extension().and_then(|s| s.to_str()) != Some("md")
+                {
+                    continue;
+                }
+                if let Ok(c) = fs::read_to_string(&p) {
+                    scan_file(&p, &c, &mut problems);
+                }
+            }
+        }
+    }
+
+    for name in SCAN_ROOT_FILES {
+        let p = root.join(name);
+        if let Ok(c) = fs::read_to_string(&p) {
+            scan_file(&p, &c, &mut problems);
+        }
+    }
+
+    assert!(
+        checked > 0,
+        "no `§N` references found at all — this guard would pass vacuously"
+    );
+    assert!(
+        problems.is_empty(),
+        "{} of {checked} section references do not resolve:\n{}",
+        problems.len(),
+        problems.join("\n")
+    );
+}
+
+// =========================================================================
+// 发布包自洽性守卫
+// =========================================================================
+
+/// 发布包必须**自洽**：`cargo test` 在下载后的 crate 上也应当跑通。
+///
+/// ## 这条守卫来自一次实测的发布阻断
+///
+/// `bindings/python`、`bindings/nodejs` 是本 workspace 的成员，而 cargo 会自动把
+/// **嵌套的包**排除在父包之外。于是从 crates.io 下载的 `nervusdb` 里没有
+/// `bindings/`，而仓库里的两个守卫（版本一致性、包名冲突）当时直接 `.expect()`
+/// 那些清单 —— 实测在 `target/package/nervusdb-0.1.0` 上跑测试，
+/// **两个测试 panic**。也就是说任何 `cargo add nervusdb` 之后跑一次测试的人，
+/// 都会看到两条与他们无关的失败，且原因只在发布配置里。
+///
+/// 修复分两处：守卫改为「文件缺席则跳过」（见各自注释），以及**本守卫**——
+/// 把「打包后能跑通」这件事本身变成断言，而不是靠我记得去手工验证。
+///
+/// ## 它检查什么
+///
+/// 直接读 `cargo package --list` 的清单，断言：
+///
+/// 1. 库与测试源文件在包内（`include` 白名单曾把它们全部排除，实测
+///    「no targets specified in the manifest」）；
+/// 2. 守卫自己要读的文件在包内——否则下游必然 panic；
+/// 3. 开发用的 `.cargo/config.toml` **不在**包内（它对下游无用，只是噪声）。
+///
+/// 不调用 `cargo package` 本身（那会做一次完整构建，把单测变成分钟级）。清单由
+/// `cargo package --list` 生成，因此运行它需要 cargo 可用；环境里没有 cargo 时跳过
+/// 并说明，而不是假装通过。
+#[test]
+fn published_package_is_self_consistent() {
+    use std::process::Command;
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    // 只在仓库根上跑：在**已经打包**的目录里再打包没有意义（会递归、也会失败）。
+    if !root.join("bindings").exists() {
+        eprintln!("note: not a repository checkout (no bindings/); skipping package audit");
+        return;
+    }
+
+    let out = match Command::new("cargo")
+        .args(["package", "--list", "--allow-dirty"])
+        .current_dir(root)
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => {
+            eprintln!("note: `cargo package --list` unavailable; skipping package audit");
+            return;
+        }
+    };
+    let listing = String::from_utf8_lossy(&out.stdout);
+    let files: std::collections::HashSet<&str> = listing.lines().map(|l| l.trim()).collect();
+
+    let mut problems: Vec<String> = Vec::new();
+
+    // 1. 必须包含库与测试。`include` 是白名单，一旦误用就会静默排掉全部源码——
+    //    实测报错是 `no targets specified in the manifest`，但那是构建阶段的事，
+    //    清单阶段就该拦住。
+    for required in ["src/lib.rs", "Cargo.toml", "FORMAT.md", "CHANGELOG.md"] {
+        if !files.contains(required) {
+            problems.push(format!(
+                "`{required}` is missing from the published package. A crate without its \
+                 library cannot be built at all."
+            ));
+        }
+    }
+
+    // 2. 所有 `tests/*.rs` 都必须在包内——否则下游跑 `cargo test` 时测试少了一半，
+    //    而那两个守卫恰好是「发布配置正确」的唯一自动化检查。
+    let test_dir = root.join("tests");
+    if let Ok(entries) = fs::read_dir(&test_dir) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.ends_with(".rs") {
+                let rel = format!("tests/{name}");
+                if !files.contains(rel.as_str()) {
+                    problems.push(format!(
+                        "`{rel}` is missing from the published package; downstream \
+                         `cargo test` would silently run fewer checks"
+                    ));
+                }
+            }
+        }
+    }
+
+    // 3. 守卫读取的仓库根文件必须在包内。`bindings/` 是**故意**排除的（cargo 排除
+    //    嵌套包），因此不在此列；那两个守卫已改为容忍其缺席。
+    for required in [
+        "AGENTS.md",
+        "ROADMAP.md",
+        "README.md",
+        "docs/testing.md",
+        "src/page.rs",
+    ] {
+        if !files.contains(required) {
+            problems.push(format!(
+                "`{required}` is missing from the published package, but a guard in \
+                 tests/ reads it and would panic downstream"
+            ));
+        }
+    }
+
+    // 4. 开发配置不得进包。`exclude` 是黑名单，写错名字不会报错，只会静默无效——
+    //    因此这里核对结果而不是配置。
+    if files.contains(".cargo/config.toml") {
+        problems.push(
+            ".cargo/config.toml is being published. It carries this repository's macOS \
+             link flags; cargo does not read a dependency's config, so it is inert for \
+             consumers — just noise in their registry cache."
+                .to_string(),
+        );
+    }
+
+    assert!(
+        problems.is_empty(),
+        "the published package is not self-consistent:\n{}",
+        problems.join("\n")
+    );
+}
+
+// =========================================================================
+// 被忽略的测试守卫
+// =========================================================================
+
+/// 全项目只允许**一个** `#[ignore]`，且它必须是那个有理由的子进程探针。
+///
+/// ## 为什么值得一条守卫
+///
+/// `#[ignore]` 是**让测试静默不跑**的机制，而「静默不跑」与「跑过了」在 CI 上是
+/// 同一种绿色。因此它是本项目最容易被误用的属性：一个偶发失败的用例，改成
+/// `#[ignore]` 就绿了，而它验证的东西从此再没人验证。
+///
+/// 实测过它确实有正当用途：`cross_process_child_probe` 必须由父测试在**持锁**状态
+/// 下作为真实子进程启动（跨进程互斥只能那样验证），它自己依赖父进程传入的
+/// `GL_CHILD_DB`、且没有自己的断言。移除 `#[ignore]` 会同时让探针 panic、父测试失败。
+///
+/// 所以这条守卫不是「禁止 ignore」，而是**要求它始终是有理由的那一个**：
+///
+/// - 数量必须恰好是 1（新增一个 = 有人静默关掉了测试，必须解释）
+/// - 它必须仍是那个探针（被换成别的 = 原探针消失了）
+/// - 它的文档注释必须说明为什么必须被忽略（否则下一个人只会看到一行 `#[ignore]`）
+#[test]
+fn only_the_documented_child_probe_is_ignored() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    let mut found: Vec<(String, usize, String)> = Vec::new();
+
+    for entry in fs::read_dir(root.join("tests")).expect("tests/ must exist") {
+        let path = entry.expect("readable dir entry").path();
+        if path.extension().and_then(|s| s.to_str()) != Some("rs") {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .expect("file has a name")
+            .to_string_lossy()
+            .to_string();
+        let Ok(contents) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let lines: Vec<&str> = contents.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if line.trim() != "#[ignore]" {
+                continue;
+            }
+            // 找它下面的 fn 名
+            let fn_name = lines[i..]
+                .iter()
+                .find_map(|l| l.trim().strip_prefix("fn "))
+                .and_then(|rest| rest.split('(').next())
+                .unwrap_or("<unnamed>")
+                .to_string();
+            // 向上收集文档注释，作为「有理由」的证据。
+            //
+            // 必须**跳过属性行**（`#[test]` 就在 `#[ignore]` 上方）：朴素地只看紧邻
+            // 上一行会在属性处中断，得到空字符串——那时守卫会误报「没有理由」。
+            // 同一类归属问题在 Page-0 那处守卫里也踩过一次（见 #20 的记录）。
+            let mut doc = String::new();
+            let mut j = i;
+            while j > 0 {
+                let prev = lines[j - 1].trim();
+                if prev.starts_with("///") {
+                    doc.push_str(prev);
+                    doc.push(' ');
+                    j -= 1;
+                } else if prev.starts_with("#[") {
+                    // 属性行：越过它继续往上找文档注释
+                    j -= 1;
+                } else {
+                    break;
+                }
+            }
+            found.push((format!("{name}::{fn_name}"), i + 1, doc));
+        }
+    }
+
+    assert_eq!(
+        found.len(),
+        1,
+        "exactly one `#[ignore]` is expected (the cross-process child probe), found {}: {:?}\n\
+         A second `#[ignore]` means a test was silenced rather than fixed. If a genuinely \
+         ignore-only test was added, update this guard and say why in its doc comment.",
+        found.len(),
+        found
+            .iter()
+            .map(|(n, l, _)| format!("{n} at line {l}"))
+            .collect::<Vec<_>>()
+    );
+
+    let (name, _line, doc) = &found[0];
+    assert!(
+        name.ends_with("cross_process_child_probe"),
+        "the one ignored test must remain `cross_process_child_probe`, but it is `{name}`. \
+         If the probe was renamed or removed, this guard needs updating deliberately."
+    );
+    assert!(
+        doc.contains("GL_CHILD_DB") || doc.contains("子进程") || doc.contains("child process"),
+        "the ignored test must carry a doc comment explaining *why* it is ignored; its \
+         current doc is: {doc:?}"
+    );
+}
+
+// =========================================================================
+// examples 清单守卫
+// =========================================================================
+
+/// `examples/` 下的每个文件都必须登记在 `docs/api.zh-CN.md` 里，反之亦然。
+///
+/// ## 为什么
+///
+/// 那 10 个样例是**用户最先会照抄的东西**，而中文 API 文档是它们的唯一清单。清单
+/// 与实际文件脱节的两种后果都是静默的：
+///
+/// - 新增样例不进清单 → 没人知道它存在，等于白写；
+/// - 删除样例不改清单 → 文档指向一个不存在的文件，读者复制命令后得到
+///   `error: no example target named ...`。
+///
+/// 这与套件表守卫是同一类问题（文档与文件是同一份事实的两种陈述），因此用同一种
+/// 双向检查：只查「文档 → 文件」会漏掉未被登记的新文件，正是我在套件表上踩过的坑。
+///
+/// CI 另有一步**运行**每个样例；这条守卫管的是「有没有被登记」，那一步管的是
+/// 「跑起来对不对」。
+#[test]
+fn every_example_is_listed_in_the_api_doc() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    let mut actual: Vec<String> = Vec::new();
+    for entry in fs::read_dir(root.join("examples")).expect("examples/ must exist") {
+        let path = entry.expect("readable dir entry").path();
+        if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+            actual.push(
+                path.file_stem()
+                    .expect("example file has a stem")
+                    .to_string_lossy()
+                    .to_string(),
+            );
+        }
+    }
+    actual.sort();
+    assert!(
+        !actual.is_empty(),
+        "examples/ is empty — this guard would pass vacuously"
+    );
+
+    let doc =
+        fs::read_to_string(root.join("docs/api.zh-CN.md")).expect("docs/api.zh-CN.md must exist");
+    let listed: std::collections::HashSet<String> = doc
+        .split("examples/")
+        .skip(1)
+        .filter_map(|rest| rest.split(".rs").next())
+        .filter(|name| !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
+        .map(|s| s.to_string())
+        .collect();
+
+    let mut problems: Vec<String> = Vec::new();
+    for name in &actual {
+        if !listed.contains(name) {
+            problems.push(format!(
+                "examples/{name}.rs exists but is not listed in docs/api.zh-CN.md; a sample \
+                 nobody can find may as well not exist"
+            ));
+        }
+    }
+    for name in &listed {
+        if !actual.contains(name) {
+            problems.push(format!(
+                "docs/api.zh-CN.md lists examples/{name}.rs, but that file does not exist; \
+                 a reader copying from the doc gets `no example target named {name}`"
+            ));
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "examples and the API doc disagree:\n{}",
         problems.join("\n")
     );
 }

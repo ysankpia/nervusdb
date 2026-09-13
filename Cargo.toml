@@ -16,6 +16,17 @@ homepage = "https://github.com/ysankpia/nervusdb"
 documentation = "https://docs.rs/nervusdb"
 keywords = ["graph", "database", "sqlite", "cypher", "embedded"]
 categories = ["database-implementations", "embedded-database"]
+# `.cargo/config.toml` 是**本仓库的开发配置**，不进发布包。
+#
+# 它给 macOS 目标加了 `-undefined dynamic_lookup`：pyo3 的 `extension-module`
+# cdylib 刻意不链接 libpython（符号留到运行时由解释器提供），因此没有这两个标志时
+# `nervusdb-python` 链接失败——实测 `cargo build --workspace --release` 报
+# `ld: symbol(s) not found for architecture arm64`。所以它必须留在仓库里。
+#
+# 但它对**下游**没有用处：实测 cargo 不读取依赖包的 `.cargo/config.toml`
+# （把一个故意写坏的 rustflags 放进依赖目录，宿主仍然构建成功）。留在包里只会让
+# `cargo add nervusdb` 的人在自己的 `~/.cargo/registry` 里看到一条属于作者的配置。
+exclude = [".cargo/config.toml"]
 
 [dependencies]
 # 运行时零依赖：磁盘格式的每一个字节都由本仓库自己定义与编码。
@@ -26,7 +37,14 @@ categories = ["database-implementations", "embedded-database"]
 # ——这正是 Kuzu 归档后用户被迫迁移的同一类风险。
 #
 # 格式因此全部手写：`codec.rs`（字节原语）、`json.rs`（输出）、`crc32.rs`（校验和）。
-# Cargo.lock 中的依赖树应当为空；`tests/zero_dependency_tests.rs` 守住这条不变量。
+#
+# 这条不变量精确地是「**这个库**没有运行时依赖」，不是「Cargo.lock 是空的」。
+# 实测：`cargo tree -p nervusdb --edges normal` 只输出 nervusdb 自己一行；lock 里的
+# 几十条条目全部来自 **bindings**（pyo3 与 napi 的依赖树），它们是与本 crate 不同的
+# 包。把不变量写成「lock 为空」会让人以为可以拿 lock 的行数来判断，而那个判断会
+# 因为绑定升级而误报。
+# `tests/zero_dependency_tests.rs` 守住这条不变量：它扫描 `src/` 是否引用任何外部
+# crate，而不是数 lock 条目。
 
 [dev-dependencies]
 # 仅用于测试的临时目录，不进最终产物。
@@ -72,6 +90,18 @@ harness = false
 [[bench]]
 name = "crash_recovery_test"
 path = "benches/real_data/crash_recovery_test.rs"
+harness = false
+
+# #12 的复现/验证基准：通过非起点变量连接的多模式查询（「共同邻居」形态）。
+[[bench]]
+name = "join_shape_bench"
+path = "benches/real_data/join_shape_bench.rs"
+harness = false
+
+# 读扩展性基准：用合成图复现「读吞吐随线程数下降」，因此不依赖 SNAP 数据集。
+[[bench]]
+name = "concurrency_scaling_bench"
+path = "benches/real_data/concurrency_scaling_bench.rs"
 harness = false
 
 [[bench]]

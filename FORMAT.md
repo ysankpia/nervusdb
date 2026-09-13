@@ -248,9 +248,33 @@ or an old WAL would decode as the wrong record type.
 | 3   | `TxCommit`   | `tx_id:u64`                                     |
 | 4   | `TxRollback` | `tx_id:u64`                                     |
 | 5   | `Checkpoint` | _(none)_                                        |
+| 6   | `ActionWrite` | `tx_id:u64`, `seq:u64`, `action`               |
 
 Variable-length fields carry a `u32` length prefix. A decoder that finds trailing
 bytes after a record rejects the frame rather than ignoring them.
+
+`ActionWrite` (tag 6, added in version 5 without changing any page layout) carries a
+queued transaction action whose action queue exceeded
+`NervusDbOptions::max_transaction_actions`. It exists so one transaction can be larger
+than the action-queue cap without giving up rollback: the actions go to the WAL and
+only an 8-byte-per-action location index stays resident.
+
+Its recovery semantics are deliberately the same as `PageWrite`'s: an `ActionWrite`
+frame belongs to a `tx_id` and is **ignored unless that transaction has a matching
+`TxCommit`**. Replay applies only `PageWrite` frames, so an action frame can never
+reach the main data file — it describes work not yet applied, not new page contents.
+`seq` is a per-transaction monotonic counter; a reader that sees a gap or a
+non-increasing `seq` must reject rather than reorder, because applying an `AddEdge`
+before the `AddNode` it references is a silent corruption.
+
+Two consequences a reader of this format should know:
+
+- While any open transaction has spilled actions, **`Checkpoint` is refused**. It
+  truncates the WAL, which would discard those frames. The refusal is an error rather
+  than a no-op, so a caller cannot mistake "deferred" for "done".
+- An **automatic** checkpoint that is deferred this way does not fail the commit that
+  triggered it; the commit is already durable at that point, and reporting it as
+  failed would invite a duplicate-producing retry.
 
 Recovery is streaming and two-pass: the first pass collects committed and rolled
 back transaction ids, the second applies committed pages. Peak memory is

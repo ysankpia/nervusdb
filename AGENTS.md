@@ -57,6 +57,13 @@ Any modification that violates these rules must be rejected immediately:
      automatic flush: flushing mid-transaction commits part of it, which destroys the
      rollback guarantee that is the reason to use a transaction. Sizes and rationale:
      [`docs/architecture.md`](docs/architecture.md).
+     **A transaction larger than the cap is possible, but opt-in**:
+     `NervusDbOptions::spill_transaction_actions` writes overflow actions to the WAL as
+     `ActionWrite` frames and keeps only a location index. It is off by default because
+     it costs a partial WAL, and because **`Checkpoint` must be refused while any
+     transaction has spilled** — a checkpoint truncates the WAL, which would discard
+     those frames. A deferred *automatic* checkpoint must not fail the commit that
+     triggered it; that commit is already durable.
 
 6. **Two-Phase Batch Edge Weaving**
    - Edge batches with `EDGE_BATCH_WEAVE_MIN` or more consecutive `AddEdge` actions in one commit must go through `DiskGraph::insert_edges_batch`, never per-edge head insertion. Per-edge weaving touches the source node page, the target node page and the old head page for every edge; on a graph whose pages far exceed the pool the same page is evicted and re-read many times per batch, and each miss spills a full 4KB page to the WAL ("false spill").
@@ -107,8 +114,8 @@ Any modification that violates these rules must be rejected immediately:
 10. **Lock De-escalation & Concurrency Safety**
 
 - Avoid holding global write locks during long traversals. Read queries and graph algorithms (`dijkstra`, `bfs`, `has_cycle`, `query()`) must clone the lightweight `DiskGraph` handle and release the global read lock immediately, so they do not block writers for the duration of a traversal.
-- **Reads are serialized by the buffer pool, and this is a known, measured limitation — do not describe it as parallel.** `BufferPoolManager` is reached through a single `Arc<Mutex<BufferPoolManager>>`, so every page touch takes one global mutex. A read of one node takes at least three acquisitions, plus one per incident edge: a hub of degree 343 costs ≈345 acquisitions. Measured on the com-DBLP database (16 threads vs 1, same total work): plain point reads ran at **0.6×–1.4% scaling efficiency**, i.e. _slower_ than single-threaded. Control runs in the same process confirmed the environment is not the cause — pure CPU spins and read-lock-only loops both scaled to ≈40% at 16 threads.
-- `BufferPoolManager::latch` (`Arc<RwLock<()>>`) is **dead code**: declared and initialized, never read or written anywhere. Page-level latches therefore do not exist. Either implement per-frame latching (which is what would make readers genuinely parallel) or delete the field — do not leave it implying otherwise.
+- **Reads are serialized by the buffer pool, and this is a known, measured limitation — do not describe it as parallel.** `BufferPoolManager` is reached through a single `Arc<Mutex<BufferPoolManager>>`, so every page touch takes one global mutex. **A `get_node` now takes that mutex once**, regardless of degree: it used to be three plus one per incident edge (a degree-343 hub cost ≈345 acquisitions), and the chain walks and the four read steps have since each been collapsed into one acquisition. The acquisition count is no longer the problem; the single global mutex is. Measured on com-DBLP (16 threads vs 1, same total work): point reads ran at **0.6×–1.4% scaling efficiency**, i.e. _slower_ than single-threaded. Control runs in the same process confirmed the environment is not the cause — pure CPU spins and read-lock-only loops both scaled to ≈40% at 16 threads. On a reproducible synthetic fixture, collapsing the four reads into one raised 8-thread throughput 2.0× (191–208k → 396k ops/s) while leaving the 1-thread row unchanged; the curve still falls, so **there is still no read parallelism**. Do not quote the old acquisition counts as current.
+- There is **no page-level latching**, and `Frame` no longer pretends otherwise: it used to carry a `latch: Arc<RwLock<()>>` that was declared and initialized but never read or written. Deleted rather than left as unimplemented intent. Real per-frame latching is what would make readers genuinely parallel, and it is a buffer-pool redesign ([`ROADMAP.md`](ROADMAP.md) item 5) — not a field to re-add. (Item 1 is the separate reader-versus-writer problem.)
 - All pointer traversal loops (`while curr != 0`) must enforce cycle-detection guards (`seen: HashSet<u64>`) to guarantee zero infinite loops under concurrent pointer updates.
 
 11. **Exclusive Single-Writer Open (No Silent Multi-Writer Corruption)**
@@ -156,6 +163,8 @@ Workspace: `src/` (core, zero deps), `bindings/python`, `bindings/nodejs`, `test
 | Secondary indexes (label inverted, property BTreeMap) and constraints  | `src/index.rs`                              |
 | Structural verification (degree-conservation oracle)                   | `src/integrity.rs`                          |
 | Cypher: tokenize → parse → execute                                     | `src/cypher/{lexer,parser,executor,ast}.rs` |
+| Join order and the cost model (multi-pattern `MATCH`)                  | `src/cypher/planner.rs`                     |
+| Queued-action byte encoding (transaction spill to the WAL)             | `src/action_codec.rs`                       |
 | Graph algorithms over disk cursors                                     | `src/algo.rs`                               |
 | Domain models and `GraphError`                                         | `src/graph.rs`                              |
 | Byte-level format contract (**authoritative**)                         | `FORMAT.md`                                 |
@@ -165,13 +174,10 @@ rather than this table when you are looking for _where something is written down
 
 ---
 
-## 3. Engineering Workflows & Verification Commands
+## 3. Engineering Workflows & Verification
 
-All agents modifying this codebase must execute the relevant checks before concluding any task.
-
-### 3.1 The Full CI Gate (run all of these)
-
-CI runs exactly this set, on Linux and macOS. Anything less is incomplete verification:
+**Before concluding any task, run the full CI gate** — exactly this set, on Linux and
+macOS. Anything less is incomplete verification:
 
 ```bash
 cargo fmt --all -- --check
@@ -181,128 +187,31 @@ cargo test --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
 
-Two of these are easy to forget and have already caused a red CI:
+Two of these are easy to forget and have both caused a red CI: `rustdoc -D warnings`
+rejects unescaped angle brackets in doc comments (`<expr>` parses as an HTML tag), and
+clippy's lint set moves with the compiler — when a new lint breaks a green tree, **fix
+the code, never pin an older compiler**.
 
-- **`rustdoc -D warnings`** rejects unescaped angle brackets in doc comments
-  (`<expr>`, `<NodeId>` are parsed as HTML tags).
-- **clippy's lint set moves with the compiler.** A toolchain update can introduce
-  a new lint that turns a previously green tree red. When that happens, fix the
-  code; **never pin an older compiler to silence it**, because the lint is
-  usually correct.
+Then:
 
-### 3.2 Release-Mode Throughput Suites
+- **Throughput suites** need `--release` to mean anything:
+  `cargo test --release --test batch_tx_tests` and `--test edge_locality_tests`.
+- **Any page, checksum, or replay change: run the real dataset.** The SNAP benchmarks
+  are the only end-to-end check at realistic scale. Commands, environment variables,
+  and the exact red-line totals are in
+  [`docs/testing.md`](docs/testing.md#the-real-dataset-is-the-only-end-to-end-check-at-scale).
+- **Every fix must be validated by reverting it.** A regression test that passes with
+  the fix removed proves nothing; the two traps that make a reproducer useless (too
+  small a fixture, too clean a shutdown) are in
+  [`docs/testing.md`](docs/testing.md#a-regression-test-that-passes-with-the-fix-removed-proves-nothing).
+- **Any SDK or binding change:** [`docs/releasing.md`](docs/releasing.md) has the local
+  verify commands and why the artifact copy is mandatory.
+- **Releasing:** [`docs/releasing.md`](docs/releasing.md). Short version: a tag never
+  publishes; it needs an explicit `workflow_dispatch`.
 
-These carry throughput assertions that only mean anything when optimised:
+Per-suite detail, the house testing style, and the suite inventory:
+[`docs/testing.md`](docs/testing.md).
 
-```bash
-cargo test --release --test batch_tx_tests
-cargo test --release --test edge_locality_tests
-```
-
-**Throughput assertions must not depend on machine speed.** The suite previously
-asserted "batch is >20x faster than autocommit", which passed locally and failed
-on CI at ~16x because a cloud disk's fsync characteristics differ from a local
-SSD. Assert the _mechanism_ instead (N autocommitted writes cost N fsyncs; one
-batched transaction of N writes costs exactly 1), which holds on any hardware,
-and keep any speed ratio as a loose lower bound.
-
-### 3.3 Validate Fixes by Reverting Them
-
-**A regression test that passes with the fix removed proves nothing.** For each
-of the three defects found during the v3 page-CRC work, the fix was reverted in
-isolation and the new test re-run to confirm it fails. Two earlier attempts at a
-reproducer passed _with the fix removed_ and were discarded rather than kept.
-
-Two traps made those first attempts useless, and both recur:
-
-- **Too small a fixture.** The CRC-directory defects need more directory pages
-  than `CRC_CACHE_CAPACITY` (64) holds, i.e. roughly 65,000 data pages. 90k- and
-  800k-node fixtures passed while the engine was broken; only 300,000 distinct
-  page numbers reach the eviction path.
-- **Too clean a shutdown.** The replay defect needs a real `SIGKILL`. A normal
-  `drop` flushes the buffer pool and writes pages and checksums together, hiding
-  it entirely.
-
-### 3.4 Target-Specific Verification
-
-Any single suite: `cargo test --test <name>` (`ls tests/` lists them). The two that
-carry throughput assertions need `--release`. Suites whose scope is not obvious from
-the name are described in [`docs/testing.md`](docs/testing.md).
-
-- **Run the benchmarks**:
-  ```bash
-  cargo bench --bench throughput      # full; GL_SCALE=small for a smoke run
-  cargo bench --bench pool_probe
-  cargo bench --bench mem_probe
-  ```
-- **Run a real dataset — the only end-to-end check at realistic scale.** Do this for
-  any page, checksum, or replay change:
-
-  ```bash
-  DATASET_PATH=/data/com-dblp.ungraph.txt DB_DIR=/data/bench POOL_MB=256 \
-    cargo bench --bench snap_dblp_bench
-  DATASET_PATH=/data/soc-LiveJournal1.txt DB_DIR=/data/bench POOL_MB=1024 \
-    cargo bench --bench snap_livejournal_bench
-  ```
-
-  They take `DATASET_PATH`/`DATASET_DIR`, `DB_DIR`, `POOL_MB`, `MAX_EDGES`,
-  `AUTO_CHECKPOINT_MB` and print the configuration they ran with. Leave
-  `AUTO_CHECKPOINT_MB=0`: the engine's 64 MB default roughly halves bulk ingest
-  throughput and these benchmarks checkpoint explicitly.
-
-  **Red lines — a change here is a correctness regression, not noise:**
-  - LiveJournal edge ingestion **≥150,000 ops/s**
-  - LiveJournal hub 1-hop / 2-hop **exactly** 335,194 / 10,027,730
-  - com-DBLP hub 1-hop / 2-hop **exactly** 10,080 / 161,877
-
-  Hub selection must stay a **total order** (degree descending, then raw id
-  ascending): com-DBLP has three nodes tied at degree 164 _exactly at rank 50_, so a
-  partial order makes the 2-hop total depend on sort internals. Rates vary by run;
-  the exact totals are what detect a regression. Method and conditions:
-  [`docs/benchmarks.md`](docs/benchmarks.md).
-
-- **Verify an SDK.** The copy is mandatory, not a convenience: Node's `require`
-  cannot load a `.so`/`.dylib` (it fails with "Invalid or unexpected token"), and the
-  Python module must be importable as `nervusdb`, which only the renamed `.so`
-  provides. `.node-version` pins the runtime both workflows use.
-  ```bash
-  cargo build -p nervusdb-node && cp target/debug/libnervusdb_node.dylib bindings/nodejs/nervusdb.node
-  cd bindings/nodejs && node test.mjs
-
-  cargo build -p nervusdb-python && cp target/debug/libnervusdb_python.dylib bindings/python/nervusdb.so
-  cd bindings/python && PYTHONPATH=. python3 tests/test_nervusdb.py
-  ```
-
-### 3.5 Releasing
-
-`.github/workflows/release.yml`, triggered by a `v*` tag **or** a manual dispatch.
-Publishing is irreversible — a version cannot be overwritten and a released version
-cannot be deleted — so the two jobs are separated:
-
-- `verify` runs on the tag: the whole §3.1 gate re-run on the tagged commit (a tag can
-  point at a commit that never passed CI), a check that the tag matches the manifest
-  version, and `cargo package --locked`. It publishes nothing.
-- `publish` runs **only** on `workflow_dispatch` with `confirm: publish`, behind the
-  `release` GitHub Environment. A tag alone never publishes.
-
-Required secrets, all referenced **only** in the `publish` job:
-
-| Secret                 | For                        |
-| ---------------------- | -------------------------- |
-| `CARGO_REGISTRY_TOKEN` | crates.io                  |
-| `PYPI_API_TOKEN`       | PyPI (the wheel build)     |
-| `NPM_TOKEN`            | npm (the platform package) |
-
-The `release` environment exists (created 2026-09-13; check with
-`gh api repos/ysankpia/nervusdb/environments`). The three secrets do **not** exist yet
-and must be added before the first publish — the workflow will fail without them, and
-adding required reviewers to the environment is what turns its gate into a human
-approval rather than just a label.
-
-The registry name and version become permanent at that point, which is what the tag/
-manifest check above exists to protect.
-
----
 
 ## 4. Coding & Implementation Contracts
 
@@ -327,53 +236,21 @@ manifest check above exists to protect.
 - **Fast Path Node Iteration**: When no deletion holes exist (`first_free_node_id == 0 && node_count == next_node_id - 1`), `DiskGraph::all_node_ids()` returns `(1..next_node_id).collect()` in $O(1)$ without reading disk pages.
 - **Node Caching in Path Match**: Cache repeated hub node resolutions in a local query hashmap to avoid duplicate overflow page deserializations.
 
-### 4.4 Cypher Surface (Supported Grammar)
+### 4.4 Cypher Surface
 
-```text
-CREATE pat
-MERGE pat [ON CREATE SET item [, item ...]] [ON MATCH SET item [, item ...]]
-          [RETURN item [, item ...]]
-          [ORDER BY expr [ASC|DESC], ...] [SKIP n] [LIMIT n]
-UNWIND expr AS var [CREATE pat] [RETURN item [, item ...]]
-                        [ORDER BY expr [ASC|DESC], ...] [SKIP n] [LIMIT n]
-MATCH pat [, pat ...] [WHERE expr]
-      [SET item [, item ...]]
-      [DELETE var... | DETACH DELETE var...]
-      [CREATE pat]
-      [RETURN item [, item ...]]
-      [ORDER BY expr [ASC|DESC], ...] [SKIP n] [LIMIT n]
+Grammar and the executor constraints it depends on:
+[`docs/cypher.md`](docs/cypher.md). The three that most often get broken:
 
-item   := * | var | var.key [AS alias] | FUNC(*) | FUNC(var[.key]) [AS alias]
-FUNC   := count | sum | avg | min | max
-SET    := var.key = <literal|var.key|var> | var:Label
-pat    := (var:Label1:Label2 {k: expr}) -[r:TYPE*min..max {k: expr}]-> (var)
-expr   := literal | var | var.key | [expr, ...] | FUNC(...)
-```
-
-Constraints the executor relies on (mechanism and rationale:
-[`docs/architecture.md`](docs/architecture.md) §7):
-
-- **Pattern property values are expressions, not literals** — `UNWIND ... AS x
-CREATE (n {v: x})` must read `x`. But `MATCH` / `MERGE` pattern properties are
-  **validated as literals at parse time**: a pattern is matched before any variable is
-  bound, so an expression there could never be evaluated, and matching nothing
-  silently looks like an empty graph.
-- **`is_mutating()` is the single source of truth** for read-lock vs write-lock
-  routing. `MERGE` is unconditionally mutating (whether it writes is only known after
-  matching); `UNWIND` is mutating only when it carries `CREATE`.
+- **`is_mutating()` is the only decider** for read-lock vs write-lock routing. `MERGE`
+  is unconditionally mutating; `UNWIND` only when it carries `CREATE`.
 - **`SET` / `DELETE` on a scalar binding is an error**, never a silent no-op.
-- **Statements are atomic**: a failed write statement is undone through
-  `NervusDb::rollback_failed_statement` before the error returns. Do not add a write
-  entry point that skips it.
-- **Variable binding discipline**: contexts bind `Binding::Node(u64) | Binding::Edge(u64) | Binding::Value(Value)`.
-  Never key a context by a raw `u64` alone; node and edge ids share a numbering space.
-- **Aggregation**: `count(*)` counts rows, `count(x)` non-null bindings; `sum` returns
-  `Int` when every input is integral, `avg` always `Float`, `min`/`max` preserve type.
-  An empty group yields `count = 0`, `sum = 0`, null for `avg`/`min`/`max`.
-- **Delete**: `DELETE` on a node with relationships is a hard error advising
-  `DETACH DELETE`; `DETACH DELETE` cascades and chains freed slots into the Freelist.
-- **In-place node rewrites** (`SET n:Label`) use `DiskGraph::update_node_payload`,
-  never `insert_node_with_id_exact`, which would inflate `node_count`.
+- **Statements are atomic** — undo through `NervusDb::rollback_failed_statement` before
+  returning the error. Never add a write entry point that skips it.
+
+`MATCH` / `MERGE` pattern properties must be literals, checked at parse time: a pattern
+is matched before any variable is bound, so an expression there could never be
+evaluated, and silently matching nothing looks like an empty graph.
+
 
 ### 4.5 Graph Analytics Contracts
 
@@ -390,22 +267,36 @@ CREATE (n {v: x})` must read `x`. But `MATCH` / `MERGE` pattern properties are
 
 ## 5. Cleanliness, Development Workflow & Commit Standards
 
-### 5.1 Development workflow: PR-based, `main` is protected
+### 5.1 Development workflow: two long-lived branches
 
-`main` has branch protection enabled: force pushes and deletions are refused, `strict`
-is on (a PR must be up to date with `main` before merging), and **all five CI checks**
-must pass: `Test (ubuntu-latest)`, `Test (macos-latest)`, `SDK (node)`, `SDK (python)`,
-`Docs build`. Changes therefore go through a pull request, including the maintainer's
-own work:
+There are exactly **two** branches, and no topic branches:
+
+- **`main`** — the project. What gets released and what a new reader clones.
+- **`develop`** — where work happens. Every change lands here first.
+
+Do the work on `develop`, then merge it into `main`. Merging does not end the branch —
+`develop` keeps going, receives the next change, and merges again. There is no branch
+to create, name, or delete, and so no naming convention to get wrong.
 
 ```bash
-git switch -c fix/short-description
-# ... make the change, run the full CI gate from §3.1 ...
-git push -u origin fix/short-description
-gh pr create --fill
-# merge once CI is green
-gh pr merge --squash --delete-branch
+git switch develop
+# ... make the change, run the full CI gate from §3 ...
+git commit
+git push
+# when it should land on main:
+git switch main && git merge --no-ff develop && git push
+git switch develop
 ```
+
+`main` is protected: force pushes and deletions are refused, `strict` is on (a PR must
+be up to date with `main` before merging), and **all five CI checks** must pass:
+`Test (ubuntu-latest)`, `Test (macos-latest)`, `SDK (node)`, `SDK (python)`,
+`Docs build`. Because of that protection the merge into `main` goes through a pull
+request opened from `develop` — the same two branches, one PR per merge.
+
+A topic branch is warranted only when work must be **parked**: an experiment that may
+be abandoned, or a change that must not touch `develop` until it is known good.
+Otherwise it is one more thing to name and clean up.
 
 The two `SDK` checks exist because `cargo test --workspace` compiles the binding
 crates but has no test target to run there, so their end-to-end suites were invisible
@@ -415,11 +306,8 @@ first run of `SDK (node)` caught a real defect (Node's `require` cannot load a
 green run had masked because the copy already existed on the developer's machine and
 is gitignored.
 
-Branch naming: `feat/…`, `fix/…`, `perf/…`, `refactor/…`, `test/…`, `docs/…`,
-`chore/…`, matching the commit type it will produce.
-
-The maintainer may bypass protection in an emergency, but a bypassed change must
-be followed up by a verified green run. Do not make bypassing the normal path.
+The maintainer may bypass protection in an emergency, but a bypassed change must be
+followed up by a verified green run. Do not make bypassing the normal path.
 
 ### 5.2 External contributions are refused by policy
 
@@ -456,8 +344,9 @@ The file was untracked, so `git stash` had not captured it, and there was no
 recovery path — it had to be rebuilt from a session log, and the reconstruction
 silently lost two fixes that had to be re-derived afterwards.
 
-Untracked files (new modules, scratch harnesses, `examples/`) are the easiest
-thing to lose and the hardest to get back. Therefore:
+Untracked files (new modules, scratch harnesses, anything in `examples/` that is
+not yet committed) are the easiest thing to lose and the hardest to get back.
+Therefore:
 
 - **Move, don't delete.** Send anything you want out of the way to
   `.trash/<YYYY-MM-DD>/` and leave it there. `.trash/` is gitignored; a human
@@ -473,22 +362,22 @@ thing to lose and the hardest to get back. Therefore:
 
 ### 5.5 Housekeeping
 
-- Never commit test database artifacts (`*.db`, `*.db.wal`, `*.paged`).
-- Keep `.gitignore` updated for target builds, Node binaries (`*.node`), Python
-  dynamic libraries (`*.so`, `*.dylib`), benchmark scratch output (`/bench_db/`),
-  tool-generated indexes (`.codegraph/`), and the `.trash/` directory above.
+- Never commit test database artifacts (`*.db`, `*.db.wal`, `*.paged`). Keep
+  `.gitignore` covering generated output — the current list is the source of truth,
+  not a copy here.
 - No placeholder code: strictly forbidden to introduce `todo!()` or
   `unimplemented!()`.
-- **Keep `CHANGELOG.md` current.** Every user-visible change adds an entry under
-  `## [Unreleased]` in the same commit, grouped as Added / Changed / Fixed /
-  Removed / Security. The commit type alone is not enough: the changelog is what
-  tells a user whether they need to act (a storage format bump or a behavioural
-  change certainly qualifies).
-- Update the relevant documentation in the same change: `README.md` for
-  user-facing behaviour, `AGENTS.md` for invariants or workflows, `ROADMAP.md`
-  when a planned item lands or a new limitation is discovered, and **`FORMAT.md`
-  in the same commit as any change to the bytes on disk**. A stale format
-  specification is worse than none, because the next reader will trust it.
+- **Keep `CHANGELOG.md` current, in the same commit as the change.** Group entries as
+  Added / Changed / Fixed / Removed / Security under a `## [<version>]` heading — use
+  `## [Unreleased]` only between releases. The commit type alone is not enough: the
+  changelog is what tells a user whether they need to act, so a storage-format or
+  behavioural change must say so explicitly.
+- **Update the documents that a change makes wrong, in the same commit.** `README.md`
+  for user-facing behaviour, `ROADMAP.md` when a planned item lands or a new limitation
+  appears, and **`FORMAT.md` for any change to the bytes on disk** — a stale format
+  specification is worse than none, because the next reader trusts it. This file only
+  when an invariant or a workflow changes; a stale line here costs every future turn,
+  not just the one that reads it.
 
 ---
 

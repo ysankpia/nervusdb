@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ysankpia/nervusdb/actions/workflows/ci.yml/badge.svg)](https://github.com/ysankpia/nervusdb/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.98%2B-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.89%2B-orange.svg)](https://www.rust-lang.org)
 
 An embedded, single-file **property graph database**: the SQLite model applied to
 graphs. Two files on disk, no server, no daemon, and resident memory bounded by a
@@ -33,7 +33,7 @@ fn main() -> Result<(), GraphError> {
 ## Status
 
 **`v0.1.0` — first release under this name.** The engine, Cypher surface, analytics
-and safety guarantees are implemented and covered by 198 passing tests (199 total, 1 intentionally ignored). The on-disk format is
+and safety guarantees are implemented and covered by 245 passing tests (246 total, 1 intentionally ignored). The on-disk format is
 frozen at **version 5**; see `FORMAT.md` for the one exception to that freeze (the
 Page 0 magic, renamed with the project) and its migration path. Several known gaps
 remain — read [Known limitations](ROADMAP.md#next-planned) before considering
@@ -55,7 +55,9 @@ production use.
   transactions larger than the pool, crash recovery, exact rollback with a
   byte-identical main file. A failed write statement leaves nothing behind, and the
   transaction action queue is bounded (≈502 bytes/node action, 128 bytes/edge action,
-  capped at 4M actions) so memory stays set by configuration rather than by input.
+  capped at 4M actions) so memory stays set by configuration rather than by input. A
+  larger transaction is opt-in (`spill_transaction_actions`), which spills queued
+  actions to the WAL and keeps only a location index.
 - **Cypher.** `CREATE`, `MATCH` (multi-pattern), `MERGE` (idempotent write),
   `UNWIND` (batch ingestion in one statement), `WHERE`, `SET`,
   `DELETE` / `DETACH DELETE`, `ORDER BY`, `SKIP`, `LIMIT`, aggregates,
@@ -197,7 +199,7 @@ src/
   graph.rs          Domain models: Node, Edge, Value, Direction, GraphError
 bindings/
   python/           PyO3 SDK          nodejs/   NAPI-RS SDK
-tests/              13 suites, 123 cases
+tests/              20 suites, 216 cases (+28 inline unit tests, +2 doctests)
 benches/            Reproducible throughput, pool-size and memory probes
 ```
 

@@ -173,15 +173,6 @@ pub struct IndexManager {
 }
 
 impl IndexManager {
-    pub fn new() -> Self {
-        Self {
-            catalog: IndexCatalog::default(),
-            label_status: HashMap::new(),
-            label_index: HashMap::new(),
-            prop_index: HashMap::new(),
-        }
-    }
-
     pub fn from_catalog(catalog: IndexCatalog) -> Self {
         let mut label_status = HashMap::new();
         for l in &catalog.labels {
@@ -552,18 +543,5 @@ impl IndexManager {
         let mut set = self.catalog.properties.clone();
         set.extend(self.prop_index.keys().cloned());
         set.into_iter().collect()
-    }
-
-    /// 获取图模式中的关系类型清单
-    pub fn edge_types(&self) -> Vec<String> {
-        self.catalog.edge_types.iter().cloned().collect()
-    }
-
-    pub fn label_index_count(&self) -> usize {
-        self.label_index.len()
-    }
-
-    pub fn property_index_count(&self) -> usize {
-        self.prop_index.len()
     }
 }

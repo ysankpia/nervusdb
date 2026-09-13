@@ -243,7 +243,9 @@ or concurrently-mutated chain cannot spin forever.
 - **Reads are serialized, not parallel, and this is measured.** The buffer pool is
   reached through a single `Arc<Mutex<BufferPoolManager>>`, so every page touch
   acquires one global mutex — a `get_node` at least three times, plus once per
-  incident edge (degree 343 ⇒ ≈345 acquisitions). On com-DBLP, 16 threads doing
+  incident edge (degree 343 ⇒ ≈345 acquisitions, before the collapses described
+  below). `get_node` now takes the mutex **once** whatever the degree; what remains is
+  the single global mutex, not the acquisition count. On com-DBLP, 16 threads doing
   plain point reads achieved **0.6×–1.4% of single-thread throughput**: adding
   threads made reads *slower*. Control runs in the same process (pure CPU spin, and
   a loop taking only the outer read lock) both scaled to ≈40% at 16 threads, so the
@@ -268,6 +270,14 @@ or concurrently-mutated chain cannot spin forever.
   a transaction holds every action in memory until commit at ≈502 bytes per node action
   and 128 bytes per edge action. Overflow is an error, never an automatic flush:
   flushing mid-transaction would commit part of it and destroy the rollback guarantee.
+- **An over-cap transaction is opt-in**, via
+  `NervusDbOptions::spill_transaction_actions`. Overflow then writes actions to the WAL
+  as `ActionWrite` frames and keeps an 8-byte location index each — the STEAL pattern,
+  applied to actions instead of pages. Two consequences follow, and both are enforced
+  rather than documented only: `Checkpoint` is **refused** while any transaction has
+  spilled (it truncates the WAL), and a deferred *automatic* checkpoint does not fail
+  the commit that triggered it, because that commit is already durable and a failure
+  return would invite a duplicated retry. See `FORMAT.md` for the frame.
 
 ## 11. Production safety
 

@@ -309,121 +309,31 @@ impl DiskGraph {
                 "DiskGraph constructed on a file whose format version was not validated"
             );
 
-            self.next_node_id = u64::from_le_bytes(
-                frame.data[HeaderPage::NEXT_NODE_ID_OFFSET..HeaderPage::NEXT_NODE_ID_OFFSET + 8]
-                    .try_into()
-                    .unwrap(),
-            );
-            self.next_edge_id = u64::from_le_bytes(
-                frame.data[HeaderPage::NEXT_EDGE_ID_OFFSET..HeaderPage::NEXT_EDGE_ID_OFFSET + 8]
-                    .try_into()
-                    .unwrap(),
-            );
-            self.node_count = u64::from_le_bytes(
-                frame.data[HeaderPage::NODE_COUNT_OFFSET..HeaderPage::NODE_COUNT_OFFSET + 8]
-                    .try_into()
-                    .unwrap(),
-            ) as usize;
-            self.edge_count = u64::from_le_bytes(
-                frame.data[HeaderPage::EDGE_COUNT_OFFSET..HeaderPage::EDGE_COUNT_OFFSET + 8]
-                    .try_into()
-                    .unwrap(),
-            ) as usize;
-            let allocated_pages = u32::from_le_bytes(
-                frame.data[HeaderPage::TOTAL_PAGES_OFFSET..HeaderPage::TOTAL_PAGES_OFFSET + 4]
-                    .try_into()
-                    .unwrap(),
-            );
-            self.first_free_node_id = u64::from_le_bytes(
-                frame.data[HeaderPage::NODE_FREELIST_OFFSET..HeaderPage::NODE_FREELIST_OFFSET + 8]
-                    .try_into()
-                    .unwrap(),
-            );
-            self.first_free_edge_id = u64::from_le_bytes(
-                frame.data[HeaderPage::EDGE_FREELIST_OFFSET..HeaderPage::EDGE_FREELIST_OFFSET + 8]
-                    .try_into()
-                    .unwrap(),
-            );
-            let free_page = u32::from_le_bytes(
-                frame.data[HeaderPage::PAGE_FREELIST_OFFSET..HeaderPage::PAGE_FREELIST_OFFSET + 4]
-                    .try_into()
-                    .unwrap(),
-            );
-            let free_prop_page = u32::from_le_bytes(
-                frame.data[HeaderPage::PROP_FREELIST_OFFSET..HeaderPage::PROP_FREELIST_OFFSET + 4]
-                    .try_into()
-                    .unwrap(),
-            );
-            let last_prop_page = u32::from_le_bytes(
-                frame.data
-                    [HeaderPage::LAST_PROP_PAGE_OFFSET..HeaderPage::LAST_PROP_PAGE_OFFSET + 4]
-                    .try_into()
-                    .unwrap(),
-            );
-            let crc_dir_page = u32::from_le_bytes(
-                frame.data[HeaderPage::CRC_DIR_PAGE_OFFSET..HeaderPage::CRC_DIR_PAGE_OFFSET + 4]
-                    .try_into()
-                    .unwrap(),
-            );
-            self.dict_page_id = u32::from_le_bytes(
-                frame.data[HeaderPage::DICT_PAGE_OFFSET..HeaderPage::DICT_PAGE_OFFSET + 4]
-                    .try_into()
-                    .unwrap(),
-            );
-            self.index_catalog_page_id = u32::from_le_bytes(
-                frame.data[HeaderPage::INDEX_CATALOG_PAGE_OFFSET
-                    ..HeaderPage::INDEX_CATALOG_PAGE_OFFSET + 4]
-                    .try_into()
-                    .unwrap(),
-            );
-            let node_dir = u32::from_le_bytes(
-                frame.data[HeaderPage::NODE_DIR_OFFSET..HeaderPage::NODE_DIR_OFFSET + 4]
-                    .try_into()
-                    .unwrap(),
-            );
-            let edge_dir = u32::from_le_bytes(
-                frame.data[HeaderPage::EDGE_DIR_OFFSET..HeaderPage::EDGE_DIR_OFFSET + 4]
-                    .try_into()
-                    .unwrap(),
-            );
-            let free_overflow = u32::from_le_bytes(
-                frame.data[HeaderPage::OVERFLOW_FREELIST_OFFSET
-                    ..HeaderPage::OVERFLOW_FREELIST_OFFSET + 4]
-                    .try_into()
-                    .unwrap(),
-            );
-            let inline_dict_len = u32::from_le_bytes(
-                frame.data
-                    [HeaderPage::INLINE_DICT_LEN_OFFSET..HeaderPage::INLINE_DICT_LEN_OFFSET + 4]
-                    .try_into()
-                    .unwrap(),
-            ) as usize;
-            let inline_cat_len = u32::from_le_bytes(
-                frame.data[HeaderPage::INLINE_CATALOG_LEN_OFFSET
-                    ..HeaderPage::INLINE_CATALOG_LEN_OFFSET + 4]
-                    .try_into()
-                    .unwrap(),
-            ) as usize;
+            // 全部字段由 `HeaderFields::decode` 解析——布局定义在 `page.rs`，
+            // 与 `HeaderPage` 的偏移常量同处一个文件（见 #20）。
+            let fields = crate::page::HeaderFields::decode(&frame.data);
 
-            let mut direct_node_pages = [0; HeaderPage::DIRECT_NODE_PAGES_COUNT];
-            for (i, p) in direct_node_pages.iter_mut().enumerate() {
-                let off = HeaderPage::DIRECT_NODE_PAGES_OFFSET + i * 4;
-                // `frame.data` 是 `[u8; PAGE_SIZE]`，`off` 由槽位下标（上界见
-                // `DIRECT_*_PAGES_COUNT` 与 `HeaderPage::DIRECT_*_PAGES_OFFSET`）
-                // 算出，始终满足 `off + 4 <= PAGE_SIZE`。定长数组，转换不可能
-                // 失败（AGENTS.md §13）。
-                *p = u32::from_le_bytes(frame.data[off..off + 4].try_into().unwrap());
-            }
+            self.next_node_id = fields.next_node_id;
+            self.next_edge_id = fields.next_edge_id;
+            self.node_count = fields.node_count as usize;
+            self.edge_count = fields.edge_count as usize;
+            self.first_free_node_id = fields.node_freelist;
+            self.first_free_edge_id = fields.edge_freelist;
+            self.dict_page_id = fields.dict_page_id;
+            self.index_catalog_page_id = fields.index_catalog_page_id;
 
-            let mut direct_edge_pages = [0; HeaderPage::DIRECT_EDGE_PAGES_COUNT];
-            for (i, p) in direct_edge_pages.iter_mut().enumerate() {
-                let off = HeaderPage::DIRECT_EDGE_PAGES_OFFSET + i * 4;
-                // `frame.data` 是 `[u8; PAGE_SIZE]`，`off` 由槽位下标（上界见
-                // `DIRECT_*_PAGES_COUNT` 与 `HeaderPage::DIRECT_*_PAGES_OFFSET`）
-                // 算出，始终满足 `off + 4 <= PAGE_SIZE`。定长数组，转换不可能
-                // 失败（AGENTS.md §13）。
-                *p = u32::from_le_bytes(frame.data[off..off + 4].try_into().unwrap());
-            }
+            let allocated_pages = fields.total_pages;
+            let free_page = fields.page_freelist;
+            let free_prop_page = fields.prop_freelist;
+            let last_prop_page = fields.last_prop_page_id;
+            let crc_dir_page = fields.crc_dir_page_id;
+            let node_dir = fields.node_dir_page_id;
+            let edge_dir = fields.edge_dir_page_id;
+            let free_overflow = fields.overflow_freelist;
+            let inline_dict_len = fields.inline_dict_len as usize;
+            let inline_cat_len = fields.inline_catalog_len as usize;
+            let direct_node_pages = fields.direct_node_pages;
+            let direct_edge_pages = fields.direct_edge_pages;
 
             {
                 let mut alloc = self.allocator.lock_recover();
@@ -1332,76 +1242,35 @@ impl DiskGraph {
         let frame_id = bpm.fetch_page(HEADER_PAGE_ID)?;
         let frame = bpm.get_frame_mut(frame_id);
 
-        frame.data[HeaderPage::MAGIC_OFFSET..HeaderPage::MAGIC_OFFSET + 4]
-            .copy_from_slice(crate::page::DB_PAGE_MAGIC);
-        frame.data[HeaderPage::VERSION_OFFSET..HeaderPage::VERSION_OFFSET + 4]
-            .copy_from_slice(&crate::page::DB_PAGE_VERSION.to_le_bytes());
-        frame.data[HeaderPage::PAGE_SIZE_OFFSET..HeaderPage::PAGE_SIZE_OFFSET + 4]
-            .copy_from_slice(&(crate::page::PAGE_SIZE as u32).to_le_bytes());
-        frame.data[HeaderPage::TOTAL_PAGES_OFFSET..HeaderPage::TOTAL_PAGES_OFFSET + 4]
-            .copy_from_slice(&alloc.allocated_pages.to_le_bytes());
-
-        frame.data[HeaderPage::NODE_FREELIST_OFFSET..HeaderPage::NODE_FREELIST_OFFSET + 8]
-            .copy_from_slice(&self.first_free_node_id.to_le_bytes());
-        frame.data[HeaderPage::EDGE_FREELIST_OFFSET..HeaderPage::EDGE_FREELIST_OFFSET + 8]
-            .copy_from_slice(&self.first_free_edge_id.to_le_bytes());
-        frame.data[HeaderPage::PAGE_FREELIST_OFFSET..HeaderPage::PAGE_FREELIST_OFFSET + 4]
-            .copy_from_slice(&alloc.first_free_page_id.to_le_bytes());
-
-        frame.data[HeaderPage::DICT_PAGE_OFFSET..HeaderPage::DICT_PAGE_OFFSET + 4]
-            .copy_from_slice(&self.dict_page_id.to_le_bytes());
-        frame.data
-            [HeaderPage::INDEX_CATALOG_PAGE_OFFSET..HeaderPage::INDEX_CATALOG_PAGE_OFFSET + 4]
-            .copy_from_slice(&self.index_catalog_page_id.to_le_bytes());
-        frame.data[HeaderPage::NODE_COUNT_OFFSET..HeaderPage::NODE_COUNT_OFFSET + 8]
-            .copy_from_slice(&(self.node_count as u64).to_le_bytes());
-        frame.data[HeaderPage::EDGE_COUNT_OFFSET..HeaderPage::EDGE_COUNT_OFFSET + 8]
-            .copy_from_slice(&(self.edge_count as u64).to_le_bytes());
-
-        frame.data[HeaderPage::NEXT_NODE_ID_OFFSET..HeaderPage::NEXT_NODE_ID_OFFSET + 8]
-            .copy_from_slice(&self.next_node_id.to_le_bytes());
-        frame.data[HeaderPage::NEXT_EDGE_ID_OFFSET..HeaderPage::NEXT_EDGE_ID_OFFSET + 8]
-            .copy_from_slice(&self.next_edge_id.to_le_bytes());
-
-        frame.data[HeaderPage::NODE_DIR_OFFSET..HeaderPage::NODE_DIR_OFFSET + 4]
-            .copy_from_slice(&alloc.node_dir_page_id.to_le_bytes());
-        frame.data[HeaderPage::EDGE_DIR_OFFSET..HeaderPage::EDGE_DIR_OFFSET + 4]
-            .copy_from_slice(&alloc.edge_dir_page_id.to_le_bytes());
-        frame.data[HeaderPage::OVERFLOW_FREELIST_OFFSET..HeaderPage::OVERFLOW_FREELIST_OFFSET + 4]
-            .copy_from_slice(&alloc.first_free_overflow_page.to_le_bytes());
-        frame.data[HeaderPage::PROP_FREELIST_OFFSET..HeaderPage::PROP_FREELIST_OFFSET + 4]
-            .copy_from_slice(&alloc.first_free_prop_page.to_le_bytes());
-        frame.data[HeaderPage::LAST_PROP_PAGE_OFFSET..HeaderPage::LAST_PROP_PAGE_OFFSET + 4]
-            .copy_from_slice(&alloc.last_prop_page_id.to_le_bytes());
-        frame.data[HeaderPage::CRC_DIR_PAGE_OFFSET..HeaderPage::CRC_DIR_PAGE_OFFSET + 4]
-            .copy_from_slice(&alloc.crc_dir_page_id.to_le_bytes());
-
-        frame.data[HeaderPage::INLINE_DICT_LEN_OFFSET..HeaderPage::INLINE_DICT_LEN_OFFSET + 4]
-            .copy_from_slice(&inline_dict_len.to_le_bytes());
-        frame.data
-            [HeaderPage::INLINE_CATALOG_LEN_OFFSET..HeaderPage::INLINE_CATALOG_LEN_OFFSET + 4]
-            .copy_from_slice(&inline_cat_len.to_le_bytes());
-
-        if inline_dict_len > 0 {
-            let start = HeaderPage::INLINE_PAYLOAD_OFFSET;
-            let end = start + inline_dict_len as usize;
-            frame.data[start..end].copy_from_slice(&dict_bytes);
+        // 字节布局由 `HeaderFields::encode` 负责——它与 `HeaderPage` 的偏移常量
+        // 同在 `page.rs`。这里只提供数值。见 #20。
+        crate::page::HeaderFields {
+            total_pages: alloc.allocated_pages,
+            node_freelist: self.first_free_node_id,
+            edge_freelist: self.first_free_edge_id,
+            page_freelist: alloc.first_free_page_id,
+            dict_page_id: self.dict_page_id,
+            node_count: self.node_count as u64,
+            edge_count: self.edge_count as u64,
+            next_node_id: self.next_node_id,
+            next_edge_id: self.next_edge_id,
+            node_dir_page_id: alloc.node_dir_page_id,
+            edge_dir_page_id: alloc.edge_dir_page_id,
+            overflow_freelist: alloc.first_free_overflow_page,
+            inline_dict_len,
+            inline_catalog_len: inline_cat_len,
+            index_catalog_page_id: self.index_catalog_page_id,
+            direct_node_pages: alloc.direct_node_pages,
+            direct_edge_pages: alloc.direct_edge_pages,
+            prop_freelist: alloc.first_free_prop_page,
+            last_prop_page_id: alloc.last_prop_page_id,
+            crc_dir_page_id: alloc.crc_dir_page_id,
         }
-        if inline_cat_len > 0 {
-            let start = HeaderPage::INLINE_PAYLOAD_OFFSET + inline_dict_len as usize;
-            let end = start + inline_cat_len as usize;
-            frame.data[start..end].copy_from_slice(&cat_bytes);
-        }
-
-        for (i, &pid) in alloc.direct_node_pages.iter().enumerate() {
-            let off = HeaderPage::DIRECT_NODE_PAGES_OFFSET + i * 4;
-            frame.data[off..off + 4].copy_from_slice(&pid.to_le_bytes());
-        }
-
-        for (i, &pid) in alloc.direct_edge_pages.iter().enumerate() {
-            let off = HeaderPage::DIRECT_EDGE_PAGES_OFFSET + i * 4;
-            frame.data[off..off + 4].copy_from_slice(&pid.to_le_bytes());
-        }
+        .encode(
+            &mut frame.data,
+            &dict_bytes[..inline_dict_len as usize],
+            &cat_bytes[..inline_cat_len as usize],
+        );
 
         bpm.unpin_page(HEADER_PAGE_ID, true);
         bpm.mark_page_uncommitted(HEADER_PAGE_ID);
@@ -1420,17 +1289,30 @@ impl DiskGraph {
 
     /// 读取原始节点记录（不校验 in_use，供 Freelist 使用）
     pub fn read_node_record_raw(&self, node_id: u64) -> Result<Option<NodeRecord>, GraphError> {
+        let mut bpm = self.bpm.lock_recover();
+        Self::read_node_record_locked(&mut bpm, &self.allocator, &self.tx_modified_pages, node_id)
+    }
+
+    /// 在**调用方已持有** `bpm` 锁的前提下读一条节点记录。
+    ///
+    /// 与 [`DiskGraph::read_edge_record_locked`] 同一目的：让一次点读的多个寻址步骤
+    /// 共用一次加锁。语义与 `read_node_record_raw` 完全一致。
+    fn read_node_record_locked(
+        bpm: &mut BufferPoolManager,
+        allocator: &Arc<Mutex<AllocatorMeta>>,
+        tx_modified: &Arc<Mutex<HashSet<PageId>>>,
+        node_id: u64,
+    ) -> Result<Option<NodeRecord>, GraphError> {
         if node_id == 0 {
             return Ok(None);
         }
         let logical_page = (node_id - 1) as usize / NODE_RECORDS_PER_PAGE;
         let offset = ((node_id - 1) as usize % NODE_RECORDS_PER_PAGE) * NodeRecord::RECORD_SIZE;
 
-        let mut bpm = self.bpm.lock_recover();
         let physical_page = match Self::get_or_allocate_node_page(
-            &mut bpm,
-            &self.allocator,
-            &self.tx_modified_pages,
+            bpm,
+            allocator,
+            tx_modified,
             logical_page,
             false,
         )? {
@@ -1599,7 +1481,15 @@ impl DiskGraph {
         }
 
         let mut bpm = self.bpm.lock_recover();
-        let payload = Self::read_prop_record(&mut bpm, ptr)?;
+        Self::read_node_data_locked(&mut bpm, ptr)
+    }
+
+    /// 在**调用方已持有** `bpm` 锁的前提下读节点载荷。
+    fn read_node_data_locked(
+        bpm: &mut BufferPoolManager,
+        ptr: u32,
+    ) -> Result<NodeData, GraphError> {
+        let payload = Self::read_prop_record(bpm, ptr)?;
         if payload.is_empty() {
             return Ok(NodeData {
                 labels: HashSet::new(),
@@ -1891,16 +1781,53 @@ impl DiskGraph {
         Ok(())
     }
 
-    /// 获取完整 Node 结构体（按需通过 Buffer Pool 调入）
+    /// 获取完整 Node 结构体（按需通过 Buffer Pool 调入）。
+    ///
+    /// ## 一次加锁，而不是四次
+    ///
+    /// 这条路径由 `read_node_record` + `read_node_data` + 两条链遍历组成。若各自
+    /// 持锁，一次 `get_node` 就是 **4 次**全局 `bpm` 加锁（链遍历已由
+    /// `collect_edge_chain_batched` 从 O(度) 降到 O(1)）。4 次在单线程下无所谓，
+    /// 在 16 线程下就是 4 倍的争用窗口。
+    ///
+    /// 本机实测（20 万节点/60 万边，读互不相交区间，命中率 98.7%，即瓶颈是锁而非
+    /// 磁盘）：1 线程 779k ops/s，8 线程降到 195k——**负扩展**。把 4 次合并为 1 次
+    /// 直接缩小每个读取在临界区里的停留次数。
+    ///
+    /// ## 这不等于让读者并行
+    ///
+    /// `bpm` 仍是**一把**全局锁：合并加锁只缩短临界区，两个读者依然互斥。真正的
+    /// 并行需要按帧加锁（缓冲池并发模型重设计，见 AGENTS.md §10 与 `ROADMAP.md`）。
+    /// 这里做到的是「把 4 次争用变成 1 次」，不是「没有争用」。
     pub fn get_node(&self, node_id: u64) -> Result<Option<Node>, GraphError> {
-        let record = match self.read_node_record(node_id)? {
-            Some(r) => r,
-            None => return Ok(None),
+        // 单次持锁完成全部读取。四个步骤原本各自 `lock_recover()`，现在共用一次。
+        let mut bpm = self.bpm.lock_recover();
+
+        let record = match Self::read_node_record_locked(
+            &mut bpm,
+            &self.allocator,
+            &self.tx_modified_pages,
+            node_id,
+        )? {
+            Some(r) if r.in_use == 1 => r,
+            _ => return Ok(None),
         };
 
-        let node_data = self.read_node_data(record.prop_page_id)?;
-        let outgoing = self.collect_outgoing_edge_ids(record.first_outgoing_edge_id)?;
-        let incoming = self.collect_incoming_edge_ids(record.first_incoming_edge_id)?;
+        let node_data = Self::read_node_data_locked(&mut bpm, record.prop_page_id)?;
+        let outgoing = Self::collect_edge_chain_locked(
+            &mut bpm,
+            &self.allocator,
+            &self.tx_modified_pages,
+            record.first_outgoing_edge_id,
+            false,
+        )?;
+        let incoming = Self::collect_edge_chain_locked(
+            &mut bpm,
+            &self.allocator,
+            &self.tx_modified_pages,
+            record.first_incoming_edge_id,
+            true,
+        )?;
 
         let mut node = Node::new(node_id, node_data.labels, node_data.properties);
         node.outgoing = outgoing;
@@ -1948,19 +1875,34 @@ impl DiskGraph {
         first_edge_id: u64,
         incoming: bool,
     ) -> Result<Vec<u64>, GraphError> {
+        // 锁的持有顺序与既有实现一致（先 bpm，后 allocator），不引入新的锁序。
+        let mut bpm = self.bpm.lock_recover();
+        Self::collect_edge_chain_locked(
+            &mut bpm,
+            &self.allocator,
+            &self.tx_modified_pages,
+            first_edge_id,
+            incoming,
+        )
+    }
+
+    /// 在**调用方已持有** `bpm` 锁的前提下遍历整条边链。
+    ///
+    /// 抽出来的原因与 `read_edge_record_locked` 相同：让 `get_node` 的四个读取步骤
+    /// 共用一次加锁（见 [`DiskGraph::get_node`]）。
+    fn collect_edge_chain_locked(
+        bpm: &mut BufferPoolManager,
+        allocator: &Arc<Mutex<AllocatorMeta>>,
+        tx_modified: &Arc<Mutex<HashSet<PageId>>>,
+        first_edge_id: u64,
+        incoming: bool,
+    ) -> Result<Vec<u64>, GraphError> {
         let mut ids = Vec::new();
         let mut curr = first_edge_id;
         let mut seen = HashSet::new();
 
-        // 锁的持有顺序与既有实现一致（先 bpm，后 allocator），不引入新的锁序。
-        let mut bpm = self.bpm.lock_recover();
         while curr != 0 && seen.insert(curr) {
-            match Self::read_edge_record_locked(
-                &mut bpm,
-                &self.allocator,
-                &self.tx_modified_pages,
-                curr,
-            )? {
+            match Self::read_edge_record_locked(bpm, allocator, tx_modified, curr)? {
                 // 与 `read_edge_record` 一致：只接受 in_use 的记录
                 Some(record) if record.in_use == 1 => {
                     ids.push(curr);

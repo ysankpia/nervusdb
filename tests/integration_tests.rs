@@ -397,6 +397,10 @@ fn test_05_crash_recovery_from_wal() -> Result<(), GraphError> {
     }
 
     // 模拟灾难现场：在 WAL 文件末尾追加损坏的垃圾半帧数据（模拟写入到一半突发断电导致帧残缺）
+    //
+    // 这里**不能**用 `db.wal_path()`：`db` 在上面的作用域末尾被刻意 drop 掉了
+    // （模拟突发断电），句柄已不存在。因此只能按同一条规则手工拼出路径——
+    // 这是本测试唯一必须这么做的地方，其余测试一律用访问器。
     let wal_path = {
         let mut s = db_path.as_os_str().to_os_string();
         s.push(".wal");
@@ -1519,6 +1523,359 @@ fn test_tx_commit_failure_memory_cleanup() -> Result<(), GraphError> {
     assert_eq!(db_reopened.node_count(), 2);
     let taint_search_reopened = db_reopened.query_cypher("MATCH (t:TaintNode) RETURN t")?;
     assert_eq!(taint_search_reopened.row_count(), 0);
+
+    Ok(())
+}
+
+// =========================================================================
+// #16：链式查询中此前从未被调用的三个构建方法
+// =========================================================================
+
+/// `limit` / `filter_src` / `filter_edge` 必须真正生效。
+///
+/// ## 为什么这条测试存在
+///
+/// #16 把 `QueryBuilder` 与 `GraphQuery` 两套重复实现合并成一套（原先字段相同、
+/// 九个方法逐行等价，只有「借用 vs 拥有」的差别）。合并的**风险**在于转发写错：
+/// 某个方法没接到 `builder` 上，调用它就静默变成空操作，而现有测试不会发现——
+/// 因为这三个方法全项目**从来没有被调用过**。
+///
+/// 因此这条测试的价值不是「覆盖一个新功能」，而是**给转发补上可观测点**：
+/// 一旦某个方法的转发断掉，这里的断言就会失败。
+#[test]
+fn test_query_chain_limit_filter_src_filter_edge() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = NervusDb::open(dir.path().join("query_chain.db"))?;
+
+    // 图：hub 出发 3 条边，指向 A / B / C；每条边带 kind 属性
+    let hub = db.add_node(HashSet::from(["Hub".to_string()]), {
+        let mut p = HashMap::new();
+        p.insert("name".to_string(), Value::from("hub"));
+        p
+    })?;
+    for (i, (name, kind)) in [("A", "keep"), ("B", "keep"), ("C", "drop")]
+        .iter()
+        .enumerate()
+    {
+        let n = db.add_node(HashSet::from(["Leaf".to_string()]), {
+            let mut p = HashMap::new();
+            p.insert("name".to_string(), Value::from(*name));
+            p.insert("idx".to_string(), Value::from(i as i64));
+            p
+        })?;
+        let mut ep = HashMap::new();
+        ep.insert("kind".to_string(), Value::from(*kind));
+        db.add_edge(hub, n, "LINK", ep, 1.0)?;
+    }
+
+    // 1) traverse 不带筛选：3 条路径
+    let all = db
+        .query()
+        .traverse(hub, "LINK", Direction::Outgoing, 1)
+        .execute();
+    assert_eq!(all.multi_hop_paths().len(), 3, "all three edges must match");
+
+    // 2) limit=2：必须只返回 2 条 —— 这条断言使 `limit` 的转发可观测
+    let limited = db
+        .query()
+        .traverse(hub, "LINK", Direction::Outgoing, 1)
+        .limit(2)
+        .execute();
+    assert_eq!(
+        limited.multi_hop_paths().len(),
+        2,
+        "`limit` must actually truncate; a broken forward would return all 3"
+    );
+
+    // 3) filter_edge：只留 kind == "keep" 的边 —— 共 2 条
+    let kept = db
+        .query()
+        .traverse(hub, "LINK", Direction::Outgoing, 1)
+        .filter_edge(|e| e.get_prop("kind").and_then(|v| v.as_str()) == Some("keep"))
+        .execute();
+    assert_eq!(
+        kept.multi_hop_paths().len(),
+        2,
+        "`filter_edge` must actually filter; a broken forward would return all 3"
+    );
+
+    // 4) filter_src + match_pattern：起点名必须是 hub
+    let by_src = db
+        .query()
+        .match_pattern("Hub", "LINK", "Leaf")
+        .filter_src(|n| n.get_prop("name").and_then(|v| v.as_str()) == Some("hub"))
+        .execute();
+    assert_eq!(
+        by_src.paths().len(),
+        3,
+        "`filter_src` must keep matching sources"
+    );
+
+    // 5) filter_src 收窄到不存在的名字 → 0 条（证明它真的在筛，而不是恒真）
+    let none = db
+        .query()
+        .match_pattern("Hub", "LINK", "Leaf")
+        .filter_src(|n| n.get_prop("name").and_then(|v| v.as_str()) == Some("nope"))
+        .execute();
+    assert_eq!(
+        none.paths().len(),
+        0,
+        "`filter_src` must be able to reject; a no-op forward would keep all 3"
+    );
+
+    Ok(())
+}
+
+/// 回归：`filter_src` / `filter_edge` 在 traverse 路径上曾经是**静默空操作**。
+///
+/// ## 这是一个真实缺陷，不是重构的副产品
+///
+/// `execute_traverse` 此前只应用 `dst_filters` 与 `prop_filters`，**完全忽略**
+/// `src_filters` 与 `edge_filters`（`execute_pattern` 四个都应用）。因此：
+///
+/// ```text
+/// db.query().traverse(hub, "LINK", Outgoing, 1)
+///           .filter_edge(|e| e.get_prop("kind") == Some("keep"))
+///           .execute()
+/// ```
+///
+/// 会返回**全部** 3 条边，而不是 2 条——筛选被丢弃且不报错。调用方看到的是
+/// 「查出来比预期多」，而没有任何信号说明筛选没生效。
+///
+/// 该缺陷在 `main` 上同样存在（已用 `git show origin/main:src/query.rs` 确认），
+/// 是既有问题。它长期存活的**原因**正是 #16 指出的：这两个方法改造前全项目
+/// 没有任何调用点，所以没人撞上。
+#[test]
+fn test_traverse_honors_edge_and_src_filters() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = NervusDb::open(dir.path().join("traverse_filters.db"))?;
+
+    let hub = db.add_node(
+        HashSet::from(["Hub".to_string()]),
+        HashMap::from([("name".to_string(), Value::from("hub"))]),
+    )?;
+    for (name, kind) in [("A", "keep"), ("B", "keep"), ("C", "drop")] {
+        let n = db.add_node(
+            HashSet::from(["Leaf".to_string()]),
+            HashMap::from([("name".to_string(), Value::from(name))]),
+        )?;
+        db.add_edge(
+            hub,
+            n,
+            "LINK",
+            HashMap::from([("kind".to_string(), Value::from(kind))]),
+            1.0,
+        )?;
+    }
+
+    // 不加筛选：3 条
+    let all = db
+        .query()
+        .traverse(hub, "LINK", Direction::Outgoing, 1)
+        .execute();
+    assert_eq!(all.multi_hop_paths().len(), 3, "sanity: three edges exist");
+
+    // 边筛选：只剩 kind == "keep" 的两条
+    let kept = db
+        .query()
+        .traverse(hub, "LINK", Direction::Outgoing, 1)
+        .filter_edge(|e| e.get_prop("kind").and_then(|v| v.as_str()) == Some("keep"))
+        .execute();
+    assert_eq!(
+        kept.multi_hop_paths().len(),
+        2,
+        "`filter_edge` must be applied on the traverse path; returning 3 means it was \
+         silently ignored (the pre-fix behaviour)"
+    );
+
+    // 起点筛选：hub 满足 → 3 条；换成不存在的名字 → 0 条
+    let ok = db
+        .query()
+        .traverse(hub, "LINK", Direction::Outgoing, 1)
+        .filter_src(|n| n.get_prop("name").and_then(|v| v.as_str()) == Some("hub"))
+        .execute();
+    assert_eq!(
+        ok.multi_hop_paths().len(),
+        3,
+        "matching src filter keeps paths"
+    );
+
+    let rejected = db
+        .query()
+        .traverse(hub, "LINK", Direction::Outgoing, 1)
+        .filter_src(|n| n.get_prop("name").and_then(|v| v.as_str()) == Some("other"))
+        .execute();
+    assert_eq!(
+        rejected.multi_hop_paths().len(),
+        0,
+        "`filter_src` must be applied on the traverse path; returning 3 means it was \
+         silently ignored (the pre-fix behaviour)"
+    );
+
+    Ok(())
+}
+// =========================================================================
+// #19：把「刻意对外提供」的接口补上可观测点
+// =========================================================================
+//
+// 审出 20 多个公开函数零调用。分诊结论里，这一类**保留**：它们是刻意提供的
+// 接口（文档写过、或被 SDK 作为能力入口），只是当时没有测试。删掉它们会移除
+// 用户真正需要的能力，所以按 #19 的第三种处置——补测试。
+//
+// 没有测试的公开 API 与不存在的 API 在实践上很难区分：改错没人发现，删掉也
+// 没人发现。这条测试就是那个「有人用」的证据。
+
+/// `Value` 的辅助判定必须与内部表示一致。
+#[test]
+fn test_value_helpers_match_their_representation() -> Result<(), GraphError> {
+    // `Value::null()` 是 `Value::Null` 的构造器，两者必须相等
+    assert_eq!(Value::null(), Value::Null);
+    assert!(Value::null().is_null());
+    assert!(!Value::from(1).is_null());
+
+    // `is_list` 只对 `List` 为真
+    assert!(Value::List(vec![Value::from(1)]).is_list());
+    assert!(!Value::from(1).is_list());
+    assert!(!Value::Null.is_list());
+    assert!(!Value::from("x").is_list());
+
+    // `is_storable` 与 `is_list`/`is_null` 的关系：后两者都不可落盘
+    assert!(!Value::Null.is_storable());
+    assert!(!Value::List(vec![]).is_storable());
+    assert!(Value::from(1).is_storable());
+    assert!(Value::from("x").is_storable());
+    assert!(Value::from(true).is_storable());
+    Ok(())
+}
+
+/// `VacuumReport::summary` 必须把关键数字都带上（它是给人看的单行摘要）。
+#[test]
+fn test_vacuum_summary_reports_the_counts() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = NervusDb::open(dir.path().join("vacuum_summary.db"))?;
+
+    // 建一些数据，确保数字不是全零（全零会让「什么都对」）
+    for i in 0..10 {
+        db.add_node(
+            HashSet::from(["V".to_string()]),
+            HashMap::from([("i".to_string(), Value::from(i as i64))]),
+        )?;
+    }
+    db.checkpoint()?;
+
+    let report = db.vacuum()?;
+    let text = report.summary();
+
+    // 摘要必须包含它承诺的每一项
+    for needle in ["node(s)", "edge(s)", "bytes", "reusable property page(s)"] {
+        assert!(
+            text.contains(needle),
+            "vacuum summary must mention `{needle}`, got: {text}"
+        );
+    }
+    // 节点数是实测的 10，摘要里应当出现
+    assert!(
+        text.contains("10 node"),
+        "the summary must report the live node count, got: {text}"
+    );
+    Ok(())
+}
+
+/// `QueryResult` 的取值方法与 `MultiHopPath` 的访问器必须自洽。
+#[test]
+fn test_query_result_and_path_accessors() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db = NervusDb::open(dir.path().join("qr_accessors.db"))?;
+
+    // 链：a -> b -> c，另有 d 作为端点
+    db.execute("CREATE (a:T {name: 'a'})-[:R]->(b:T {name: 'b'})-[:R]->(c:T {name: 'c'})")?;
+    db.execute("CREATE (d:T {name: 'd'})")?;
+    let a = db
+        .query_cypher("MATCH (n:T {name: 'a'}) RETURN id(n)")?
+        .rows[0]
+        .values[0]
+        .as_i64()
+        .expect("id must be an integer") as u64;
+
+    // --- 单跳：paths() / nodes() / edges() / count() ---
+    let single = db.query().match_pattern("T", "R", "T").execute();
+    assert_eq!(single.paths().len(), 2, "two :R edges exist in the chain");
+    assert_eq!(single.count(), 2, "count() must equal the path count");
+    assert_eq!(
+        single.edges().len(),
+        2,
+        "edges() must deduplicate to 2 edges"
+    );
+    // 涉及 3 个不同节点（a、b、c）
+    let node_names: std::collections::BTreeSet<String> = single
+        .nodes()
+        .iter()
+        .filter_map(|n| {
+            n.get_prop("name")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        })
+        .collect();
+    assert_eq!(
+        node_names,
+        ["a", "b", "c"].iter().map(|s| s.to_string()).collect(),
+        "nodes() must return every distinct endpoint"
+    );
+    // src_nodes 只含起点：a 与 b
+    let srcs: std::collections::BTreeSet<String> = single
+        .src_nodes()
+        .iter()
+        .filter_map(|n| {
+            n.get_prop("name")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        })
+        .collect();
+    assert_eq!(
+        srcs,
+        ["a", "b"].iter().map(|s| s.to_string()).collect(),
+        "src_nodes() must return only the sources"
+    );
+
+    // --- 多跳：multi_hop_paths() 与 MultiHopPath 的访问器 ---
+    let multi = db
+        .query()
+        .traverse(a, "R", Direction::Outgoing, 2)
+        .execute();
+    assert_eq!(
+        multi.multi_hop_paths().len(),
+        1,
+        "only one 2-hop path from a"
+    );
+    let path = &multi.multi_hop_paths()[0];
+    assert_eq!(path.hop_count(), 2, "hop_count() must equal the edge count");
+    assert_eq!(
+        path.start_node()
+            .and_then(|n| n.get_prop("name"))
+            .and_then(|v| v.as_str()),
+        Some("a"),
+        "start_node() must be the traversal start"
+    );
+    assert_eq!(
+        path.end_node()
+            .and_then(|n| n.get_prop("name"))
+            .and_then(|v| v.as_str()),
+        Some("c"),
+        "end_node() must be the far end"
+    );
+    // 多跳结果没有单跳 paths，因此 count() 回落到多跳计数
+    assert_eq!(
+        multi.count(),
+        1,
+        "count() must fall back to the multi-hop count"
+    );
+    assert!(!multi.is_empty());
+
+    // 空结果集的两个取值方法都应给 0 / true
+    let empty = db.query().match_pattern("Nope", "R", "Nope").execute();
+    assert!(empty.is_empty());
+    assert_eq!(empty.count(), 0);
+    assert!(empty.nodes().is_empty());
 
     Ok(())
 }

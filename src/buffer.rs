@@ -6,9 +6,9 @@ use crate::sync_ext::MutexRecoverExt;
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 /// 启用 STEAL 外存溢出的最小缓冲池帧数（外存最小工作集水位）。
 ///
@@ -25,7 +25,6 @@ fn page_crc(data: &[u8; PAGE_SIZE]) -> u32 {
 
 /// 底层物理磁盘页管理器（直接面向单文件 {path} 进行 4KB 物理分页管理，支持 :memory: 纯内存模式）
 pub struct DiskManager {
-    file_path: PathBuf,
     is_memory: bool,
     file: Mutex<Option<File>>,
     memory_pages: Mutex<Vec<[u8; PAGE_SIZE]>>,
@@ -41,7 +40,6 @@ impl DiskManager {
 
         if is_memory {
             return Ok(Self {
-                file_path: PathBuf::from(":memory:"),
                 is_memory: true,
                 file: Mutex::new(None),
                 memory_pages: Mutex::new(Vec::new()),
@@ -69,7 +67,6 @@ impl DiskManager {
         let num_pages = (file_len / PAGE_SIZE as u64).max(1);
 
         Ok(Self {
-            file_path,
             is_memory: false,
             file: Mutex::new(Some(file)),
             memory_pages: Mutex::new(Vec::new()),
@@ -77,10 +74,6 @@ impl DiskManager {
             num_reads: AtomicU64::new(0),
             num_writes: AtomicU64::new(0),
         })
-    }
-
-    pub fn is_memory(&self) -> bool {
-        self.is_memory
     }
 
     /// 取出文件句柄，**不 panic**。
@@ -203,10 +196,6 @@ impl DiskManager {
             0
         }
     }
-
-    pub fn file_path(&self) -> &Path {
-        &self.file_path
-    }
 }
 
 /// 标准 LRU 页面置换淘汰器。
@@ -277,16 +266,6 @@ impl LRUReplacer {
         self.link_back(frame_id);
     }
 
-    /// 淘汰队首（最久未用）
-    pub fn victim(&mut self) -> Option<usize> {
-        if self.head == LRU_NULL {
-            return None;
-        }
-        let frame_id = self.head;
-        self.unlink(frame_id);
-        Some(frame_id)
-    }
-
     /// 从队首开始寻找第一个满足谓词的候选并摘除；找不到返回 `None`。
     ///
     /// 扫描期间不修改链表结构，命中后按链表语义摘除，因此 LRU 顺序始终精确。
@@ -345,10 +324,6 @@ impl LRUReplacer {
         self.len += 1;
     }
 
-    pub fn size(&self) -> usize {
-        self.len
-    }
-
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -360,13 +335,21 @@ impl Default for LRUReplacer {
     }
 }
 
-/// Buffer Pool 中的物理页缓存帧（配备页级读写门闩 Page-Level Latch）
+/// Buffer Pool 中的物理页缓存帧。
+///
+/// 这里**没有**页级门闩（latch）。此结构体曾带一个 `latch: Arc<RwLock<()>>` 字段，
+/// 声明并初始化后**从未被读写**——即死代码，却让读者以为存在页级并发控制。
+/// 实际的并发控制是整个 `BufferPoolManager` 外面那一把 `Arc<Mutex<..>>`，因此
+/// 读会被串行化；这是已测量的限制，代价与修复方向见 AGENTS.md §10 与
+/// `docs/benchmarks.md#concurrency-scaling`。
+///
+/// 真要实现页级并行，需要给帧加真正的 latch 并把缓冲池的并发模型改成分帧锁定
+/// ——那是 ROADMAP 里的一项设计工作，不是在这里补一个没人用的字段。
 pub struct Frame {
     pub page_id: PageId,
     pub pin_count: usize,
     pub is_dirty: bool,
     pub data: [u8; PAGE_SIZE],
-    pub latch: Arc<RwLock<()>>,
 }
 
 impl Default for Frame {
@@ -382,7 +365,6 @@ impl Frame {
             pin_count: 0,
             is_dirty: false,
             data: [0u8; PAGE_SIZE],
-            latch: Arc::new(RwLock::new(())),
         }
     }
 }
@@ -480,7 +462,7 @@ impl BufferPoolManager {
     }
 
     /// 挂载 WAL 写入器：挂载后未提交脏页即可在达到最小工作集水位时安全溢出入 WAL
-    pub fn attach_wal(&mut self, wal: Arc<WalWriter>) {
+    pub(crate) fn attach_wal(&mut self, wal: Arc<WalWriter>) {
         self.wal = Some(wal);
     }
 
@@ -496,7 +478,7 @@ impl BufferPoolManager {
     ///
     /// 放在缓冲池上是因为它同时持有 `DiskManager` 与 `CrcStore`，无需把后者借出再借回。
     /// 校验和在此处（惰性）计算，而不是在事务写入路径上。
-    pub fn replay_wal_with_crc(
+    pub(crate) fn replay_wal_with_crc(
         &mut self,
         wal: &WalWriter,
         db_path: &Path,
@@ -518,7 +500,7 @@ impl BufferPoolManager {
     }
 
     /// 记录某页的校验和（供上层在把页写入主文件后调用）
-    pub fn record_checksum(
+    pub(crate) fn record_checksum(
         &mut self,
         page_id: PageId,
         data: &[u8; PAGE_SIZE],
@@ -530,7 +512,7 @@ impl BufferPoolManager {
     ///
     /// 必须在**数据页全部落盘之后**调用，否则崩溃时会出现「数据已写、校验和未写」
     /// 的中间态。
-    pub fn flush_crc(&mut self) -> Result<(), GraphError> {
+    pub(crate) fn flush_crc(&mut self) -> Result<(), GraphError> {
         if let Some(store) = self.crc.as_mut() {
             store.flush()?;
         }
@@ -564,10 +546,6 @@ impl BufferPoolManager {
             store.verify(page_id, data)?;
         }
         Ok(())
-    }
-
-    pub fn spill_enabled(&self) -> bool {
-        self.spill_enabled
     }
 
     /// 获取或从磁盘（或 WAL 溢出副本）调入指定物理页并 Pin 住（返回 frame_id）
@@ -629,7 +607,7 @@ impl BufferPoolManager {
     }
 
     /// 分配全新的物理页并在缓冲池中分配 Frame 并 Pin 住
-    pub fn new_page(&mut self) -> Result<(PageId, usize), GraphError> {
+    pub(crate) fn new_page(&mut self) -> Result<(PageId, usize), GraphError> {
         let frame_id = self.acquire_frame()?;
         let page_id = self.disk_manager.allocate_page()?;
 
@@ -653,7 +631,7 @@ impl BufferPoolManager {
     }
 
     /// 强制刷盘所有已提交脏页（未提交页与仅存在于 WAL 的页绝不会污染主文件）
-    pub fn flush_all_pages(&mut self) -> Result<(), GraphError> {
+    pub(crate) fn flush_all_pages(&mut self) -> Result<(), GraphError> {
         for i in 0..self.frames.len() {
             let pid = self.frames[i].page_id;
             if pid == INVALID_PAGE_ID || !self.frames[i].is_dirty {
@@ -717,12 +695,8 @@ impl BufferPoolManager {
     }
 
     /// 清空置换豁免集（事务回滚恢复元数据后调用，再由上层重新同步当前目录页）
-    pub fn clear_protected_pages(&mut self) {
+    pub(crate) fn clear_protected_pages(&mut self) {
         self.protected_pages.clear();
-    }
-
-    pub fn protected_page_count(&self) -> usize {
-        self.protected_pages.len()
     }
 
     /// 淘汰帧：已提交脏页写回主文件，仅存在于 WAL 的页保留其 WAL 位置索引
@@ -791,7 +765,11 @@ impl BufferPoolManager {
     }
 
     /// 事务提交：常驻脏页写入 WAL redo 帧后追加 TxCommit 并 fsync，随后放行未提交标记
-    pub fn commit_tx(&mut self, tx_id: u64, modified_pages: &[PageId]) -> Result<(), GraphError> {
+    pub(crate) fn commit_tx(
+        &mut self,
+        tx_id: u64,
+        modified_pages: &[PageId],
+    ) -> Result<(), GraphError> {
         if let Some(wal) = self.wal.clone() {
             wal.append(&WalRecord::TxBegin { tx_id })?;
 
@@ -824,7 +802,7 @@ impl BufferPoolManager {
     }
 
     /// 事务提交后放行修改页，允许后续安全置换刷盘
-    pub fn mark_pages_committed(&mut self, pages: &[PageId]) {
+    fn mark_pages_committed(&mut self, pages: &[PageId]) {
         for pid in pages {
             self.uncommitted_pages.remove(pid);
             self.tx_baseline.remove(pid);
@@ -873,12 +851,8 @@ impl BufferPoolManager {
     }
 
     /// 清空「仅存在于 WAL」的页位置索引（Checkpoint 落盘并截断 WAL 后调用）
-    pub fn clear_wal_page_index(&mut self) {
+    pub(crate) fn clear_wal_page_index(&mut self) {
         self.wal_pages.clear();
-    }
-
-    pub fn wal_page_count(&self) -> usize {
-        self.wal_pages.len()
     }
 
     pub fn get_frame(&self, frame_id: usize) -> &Frame {
@@ -893,7 +867,11 @@ impl BufferPoolManager {
         &self.disk_manager
     }
 
-    pub fn stats(&self) -> BufferStats {
+    /// 缓冲池运行指标快照。
+    ///
+    /// `pub(crate)`：外部经 `NervusDb::buffer_stats()` 获取（它持锁后调用本函数）。
+    /// 此前是 `pub`，但全项目只有那一处调用——本文件之外没有第二个调用者。
+    pub(crate) fn stats(&self) -> BufferStats {
         let hits = self.cache_hits.load(Ordering::Relaxed);
         let misses = self.cache_misses.load(Ordering::Relaxed);
         let total = hits + misses;

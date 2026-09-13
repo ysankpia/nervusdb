@@ -75,6 +75,179 @@ impl HeaderPage {
     pub const MAX_INLINE_PAYLOAD_SIZE: usize = PAGE_SIZE - Self::INLINE_PAYLOAD_OFFSET;
 }
 
+/// Page 0 的**字段视图**：把一页字节解析出来的标量与数组。
+///
+/// ## 为什么它在这里，而不是在 `disk_graph.rs`
+///
+/// 每种页格式的读写逻辑都住在 `page.rs`（`NodeRecord`、`EdgeRecord`、`PropertyPage`、
+/// `DirectoryPage`、`SlottedPropPage`），**只有 Page 0 例外**：它的偏移常量在这里，
+/// 而读写逻辑曾在 `disk_graph.rs` —— 373 行散落在那个 3000 行的文件里。
+///
+/// 后果是：改动冻结格式时，得去最大的文件里找，而不是在格式规范的旁边。
+/// 现在读写在下一组 `encode`/`decode` 里，与本类型和常量放在一起；
+/// `disk_graph` 只负责提供数值和取用结果。
+///
+/// ## 字节布局不变
+///
+/// 这是**纯粹的搬家**：字段顺序、偏移、宽度全部照抄原有代码，`DB_PAGE_VERSION`
+/// 不升版。验收方式是字节比对（同一组操作产出的文件必须逐字节相同），而不是
+/// 靠「重构应当是中性的」这种假设。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeaderFields {
+    pub total_pages: u32,
+    pub node_freelist: u64,
+    pub edge_freelist: u64,
+    pub page_freelist: u32,
+    pub dict_page_id: u32,
+    pub node_count: u64,
+    pub edge_count: u64,
+    pub next_node_id: u64,
+    pub next_edge_id: u64,
+    pub node_dir_page_id: u32,
+    pub edge_dir_page_id: u32,
+    pub overflow_freelist: u32,
+    pub inline_dict_len: u32,
+    pub inline_catalog_len: u32,
+    pub index_catalog_page_id: u32,
+    pub direct_node_pages: [u32; HeaderPage::DIRECT_NODE_PAGES_COUNT],
+    pub direct_edge_pages: [u32; HeaderPage::DIRECT_EDGE_PAGES_COUNT],
+    pub prop_freelist: u32,
+    pub last_prop_page_id: u32,
+    pub crc_dir_page_id: u32,
+}
+
+impl HeaderFields {
+    /// 把字段写进一页。
+    ///
+    /// 魔术、版本、页大小由本函数负责（它们是格式常量，不是调用方的数据）；
+    /// 其余字段按 `HeaderPage` 的偏移常量逐个落位。
+    ///
+    /// `inline_dict` / `inline_catalog` 是内联载荷：长度必须与调用方传的
+    /// `inline_dict_len` / `inline_catalog_len` 一致，否则字节会错位。
+    pub fn encode(&self, page: &mut [u8; PAGE_SIZE], inline_dict: &[u8], inline_catalog: &[u8]) {
+        page[HeaderPage::MAGIC_OFFSET..HeaderPage::MAGIC_OFFSET + 4].copy_from_slice(DB_PAGE_MAGIC);
+        page[HeaderPage::VERSION_OFFSET..HeaderPage::VERSION_OFFSET + 4]
+            .copy_from_slice(&DB_PAGE_VERSION.to_le_bytes());
+        page[HeaderPage::PAGE_SIZE_OFFSET..HeaderPage::PAGE_SIZE_OFFSET + 4]
+            .copy_from_slice(&(PAGE_SIZE as u32).to_le_bytes());
+        page[HeaderPage::TOTAL_PAGES_OFFSET..HeaderPage::TOTAL_PAGES_OFFSET + 4]
+            .copy_from_slice(&self.total_pages.to_le_bytes());
+
+        page[HeaderPage::NODE_FREELIST_OFFSET..HeaderPage::NODE_FREELIST_OFFSET + 8]
+            .copy_from_slice(&self.node_freelist.to_le_bytes());
+        page[HeaderPage::EDGE_FREELIST_OFFSET..HeaderPage::EDGE_FREELIST_OFFSET + 8]
+            .copy_from_slice(&self.edge_freelist.to_le_bytes());
+        page[HeaderPage::PAGE_FREELIST_OFFSET..HeaderPage::PAGE_FREELIST_OFFSET + 4]
+            .copy_from_slice(&self.page_freelist.to_le_bytes());
+
+        page[HeaderPage::DICT_PAGE_OFFSET..HeaderPage::DICT_PAGE_OFFSET + 4]
+            .copy_from_slice(&self.dict_page_id.to_le_bytes());
+        page[HeaderPage::INDEX_CATALOG_PAGE_OFFSET..HeaderPage::INDEX_CATALOG_PAGE_OFFSET + 4]
+            .copy_from_slice(&self.index_catalog_page_id.to_le_bytes());
+        page[HeaderPage::NODE_COUNT_OFFSET..HeaderPage::NODE_COUNT_OFFSET + 8]
+            .copy_from_slice(&self.node_count.to_le_bytes());
+        page[HeaderPage::EDGE_COUNT_OFFSET..HeaderPage::EDGE_COUNT_OFFSET + 8]
+            .copy_from_slice(&self.edge_count.to_le_bytes());
+
+        page[HeaderPage::NEXT_NODE_ID_OFFSET..HeaderPage::NEXT_NODE_ID_OFFSET + 8]
+            .copy_from_slice(&self.next_node_id.to_le_bytes());
+        page[HeaderPage::NEXT_EDGE_ID_OFFSET..HeaderPage::NEXT_EDGE_ID_OFFSET + 8]
+            .copy_from_slice(&self.next_edge_id.to_le_bytes());
+
+        page[HeaderPage::NODE_DIR_OFFSET..HeaderPage::NODE_DIR_OFFSET + 4]
+            .copy_from_slice(&self.node_dir_page_id.to_le_bytes());
+        page[HeaderPage::EDGE_DIR_OFFSET..HeaderPage::EDGE_DIR_OFFSET + 4]
+            .copy_from_slice(&self.edge_dir_page_id.to_le_bytes());
+        page[HeaderPage::OVERFLOW_FREELIST_OFFSET..HeaderPage::OVERFLOW_FREELIST_OFFSET + 4]
+            .copy_from_slice(&self.overflow_freelist.to_le_bytes());
+        page[HeaderPage::PROP_FREELIST_OFFSET..HeaderPage::PROP_FREELIST_OFFSET + 4]
+            .copy_from_slice(&self.prop_freelist.to_le_bytes());
+        page[HeaderPage::LAST_PROP_PAGE_OFFSET..HeaderPage::LAST_PROP_PAGE_OFFSET + 4]
+            .copy_from_slice(&self.last_prop_page_id.to_le_bytes());
+        page[HeaderPage::CRC_DIR_PAGE_OFFSET..HeaderPage::CRC_DIR_PAGE_OFFSET + 4]
+            .copy_from_slice(&self.crc_dir_page_id.to_le_bytes());
+
+        page[HeaderPage::INLINE_DICT_LEN_OFFSET..HeaderPage::INLINE_DICT_LEN_OFFSET + 4]
+            .copy_from_slice(&self.inline_dict_len.to_le_bytes());
+        page[HeaderPage::INLINE_CATALOG_LEN_OFFSET..HeaderPage::INLINE_CATALOG_LEN_OFFSET + 4]
+            .copy_from_slice(&self.inline_catalog_len.to_le_bytes());
+
+        if !inline_dict.is_empty() {
+            let start = HeaderPage::INLINE_PAYLOAD_OFFSET;
+            let end = start + inline_dict.len();
+            page[start..end].copy_from_slice(inline_dict);
+        }
+        if !inline_catalog.is_empty() {
+            let start = HeaderPage::INLINE_PAYLOAD_OFFSET + inline_dict.len();
+            let end = start + inline_catalog.len();
+            page[start..end].copy_from_slice(inline_catalog);
+        }
+
+        for (i, &pid) in self.direct_node_pages.iter().enumerate() {
+            let off = HeaderPage::DIRECT_NODE_PAGES_OFFSET + i * 4;
+            page[off..off + 4].copy_from_slice(&pid.to_le_bytes());
+        }
+        for (i, &pid) in self.direct_edge_pages.iter().enumerate() {
+            let off = HeaderPage::DIRECT_EDGE_PAGES_OFFSET + i * 4;
+            page[off..off + 4].copy_from_slice(&pid.to_le_bytes());
+        }
+    }
+
+    /// 从一页字节解析出字段视图。
+    ///
+    /// **不校验魔术/版本**：那是 `NervusDb::open` 在写任何东西之前做的闸门
+    /// （见 `check_format_version`）。走到这里说明文件已被接受，重复校验只会
+    /// 让两处判断有机会分叉。
+    pub fn decode(page: &[u8; PAGE_SIZE]) -> Self {
+        // 每个偏移都由 `HeaderPage` 的常量与本类型字段宽度决定，且
+        // `INLINE_CRC_OFFSET`(364) 之后的区域在本函数中不触及——所有读取都在
+        // 0..360 之内，因此 `off + width <= PAGE_SIZE` 由构造保证。
+        // 定长数组切片转换不可能失败（AGENTS.md §13）。
+        macro_rules! u32_at {
+            ($off:expr) => {
+                u32::from_le_bytes(page[$off..$off + 4].try_into().unwrap())
+            };
+        }
+        macro_rules! u64_at {
+            ($off:expr) => {
+                u64::from_le_bytes(page[$off..$off + 8].try_into().unwrap())
+            };
+        }
+
+        let mut direct_node_pages = [0u32; HeaderPage::DIRECT_NODE_PAGES_COUNT];
+        for (i, p) in direct_node_pages.iter_mut().enumerate() {
+            *p = u32_at!(HeaderPage::DIRECT_NODE_PAGES_OFFSET + i * 4);
+        }
+        let mut direct_edge_pages = [0u32; HeaderPage::DIRECT_EDGE_PAGES_COUNT];
+        for (i, p) in direct_edge_pages.iter_mut().enumerate() {
+            *p = u32_at!(HeaderPage::DIRECT_EDGE_PAGES_OFFSET + i * 4);
+        }
+
+        Self {
+            total_pages: u32_at!(HeaderPage::TOTAL_PAGES_OFFSET),
+            node_freelist: u64_at!(HeaderPage::NODE_FREELIST_OFFSET),
+            edge_freelist: u64_at!(HeaderPage::EDGE_FREELIST_OFFSET),
+            page_freelist: u32_at!(HeaderPage::PAGE_FREELIST_OFFSET),
+            dict_page_id: u32_at!(HeaderPage::DICT_PAGE_OFFSET),
+            node_count: u64_at!(HeaderPage::NODE_COUNT_OFFSET),
+            edge_count: u64_at!(HeaderPage::EDGE_COUNT_OFFSET),
+            next_node_id: u64_at!(HeaderPage::NEXT_NODE_ID_OFFSET),
+            next_edge_id: u64_at!(HeaderPage::NEXT_EDGE_ID_OFFSET),
+            node_dir_page_id: u32_at!(HeaderPage::NODE_DIR_OFFSET),
+            edge_dir_page_id: u32_at!(HeaderPage::EDGE_DIR_OFFSET),
+            overflow_freelist: u32_at!(HeaderPage::OVERFLOW_FREELIST_OFFSET),
+            inline_dict_len: u32_at!(HeaderPage::INLINE_DICT_LEN_OFFSET),
+            inline_catalog_len: u32_at!(HeaderPage::INLINE_CATALOG_LEN_OFFSET),
+            index_catalog_page_id: u32_at!(HeaderPage::INDEX_CATALOG_PAGE_OFFSET),
+            direct_node_pages,
+            direct_edge_pages,
+            prop_freelist: u32_at!(HeaderPage::PROP_FREELIST_OFFSET),
+            last_prop_page_id: u32_at!(HeaderPage::LAST_PROP_PAGE_OFFSET),
+            crc_dir_page_id: u32_at!(HeaderPage::CRC_DIR_PAGE_OFFSET),
+        }
+    }
+}
+
 /// 定长 32 字节 NodeRecord
 /// 实现严格 O(1) 磁盘直接寻址
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -923,5 +1096,161 @@ impl CrcDirPage {
             return true;
         }
         Self::compute_self_crc(page) == stored
+    }
+}
+
+#[cfg(test)]
+mod header_layout_tests {
+    use super::*;
+
+    /// 每个字段都填不同的值，往返一次后必须完全相等。
+    ///
+    /// ## 这条测试为什么存在
+    ///
+    /// Page 0 的读写逻辑从 `disk_graph.rs` 搬到了本文件（#20）。搬家的风险是
+    /// **偏移抄错**：某个字段写到了相邻字段的位置，而那种错误不会崩溃——它只是让
+    /// 两个字段互相覆盖，表现为「节点数变成了页数」这类诡异现象，且只有在对应用例
+    /// 上才显形。
+    ///
+    /// 让每个字段取**互不相同**的值，任何偏移互换都会让往返不等。
+    /// 若所有字段都填同一个值（例如 0 或 1），偏移抄错就测不出来——这正是这类
+    /// 测试最容易犯的错。
+    #[test]
+    fn header_fields_round_trip_with_distinct_values() {
+        let mut f = HeaderFields {
+            total_pages: 0x1111_1111,
+            node_freelist: 0x2222_2222_2222_2222,
+            edge_freelist: 0x3333_3333_3333_3333,
+            page_freelist: 0x4444_4444,
+            dict_page_id: 0x5555_5555,
+            node_count: 0x6666_6666_6666_6666,
+            edge_count: 0x7777_7777_7777_7777,
+            next_node_id: 0x8888_8888_8888_8888,
+            next_edge_id: 0x9999_9999_9999_9999,
+            node_dir_page_id: 0xAAAA_AAAA,
+            edge_dir_page_id: 0xBBBB_BBBB,
+            overflow_freelist: 0xCCCC_CCCC,
+            inline_dict_len: 0,
+            inline_catalog_len: 0,
+            index_catalog_page_id: 0xDDDD_DDDD,
+            direct_node_pages: [0; HeaderPage::DIRECT_NODE_PAGES_COUNT],
+            direct_edge_pages: [0; HeaderPage::DIRECT_EDGE_PAGES_COUNT],
+            prop_freelist: 0xEEEE_EEEE,
+            last_prop_page_id: 0x0101_0101,
+            crc_dir_page_id: 0x0202_0202,
+        };
+        // 目录页数组逐项取不同值
+        for (i, p) in f.direct_node_pages.iter_mut().enumerate() {
+            *p = 0x1000_0000 + i as u32;
+        }
+        for (i, p) in f.direct_edge_pages.iter_mut().enumerate() {
+            *p = 0x2000_0000 + i as u32;
+        }
+
+        let mut page = [0u8; PAGE_SIZE];
+        f.encode(&mut page, &[], &[]);
+        let back = HeaderFields::decode(&page);
+
+        assert_eq!(back, f, "encode/decode must be lossless");
+    }
+
+    /// 魔术、版本、页大小由 encode 负责写入——它们是格式常量，不是调用方数据。
+    #[test]
+    fn header_encode_stamps_the_format_constants() {
+        // 本函数内的 `try_into().unwrap()` 都在定长 `[u8; PAGE_SIZE]` 上按
+        // `HeaderPage::*_OFFSET` 常量取 4 字节，起止与 `u32` 宽度对齐，因此转换
+        // 不可能失败（AGENTS.md §13）。
+        // （说明写在这里而不是文档注释里：守卫在 `#[test]` 属性处中断了「向上找
+        //  紧邻文档注释」的查找，写在正文里才是它认的位置。）
+        let f = HeaderFields {
+            total_pages: 1,
+            node_freelist: 0,
+            edge_freelist: 0,
+            page_freelist: 0,
+            dict_page_id: 0,
+            node_count: 0,
+            edge_count: 0,
+            next_node_id: 1,
+            next_edge_id: 1,
+            node_dir_page_id: 0,
+            edge_dir_page_id: 0,
+            overflow_freelist: 0,
+            inline_dict_len: 0,
+            inline_catalog_len: 0,
+            index_catalog_page_id: 0,
+            direct_node_pages: [0; HeaderPage::DIRECT_NODE_PAGES_COUNT],
+            direct_edge_pages: [0; HeaderPage::DIRECT_EDGE_PAGES_COUNT],
+            prop_freelist: 0,
+            last_prop_page_id: 0,
+            crc_dir_page_id: 0,
+        };
+        let mut page = [0u8; PAGE_SIZE];
+        f.encode(&mut page, &[], &[]);
+
+        assert_eq!(
+            &page[HeaderPage::MAGIC_OFFSET..HeaderPage::MAGIC_OFFSET + 4],
+            DB_PAGE_MAGIC
+        );
+        assert_eq!(
+            u32::from_le_bytes(
+                page[HeaderPage::VERSION_OFFSET..HeaderPage::VERSION_OFFSET + 4]
+                    .try_into()
+                    .unwrap()
+            ),
+            DB_PAGE_VERSION
+        );
+        assert_eq!(
+            u32::from_le_bytes(
+                page[HeaderPage::PAGE_SIZE_OFFSET..HeaderPage::PAGE_SIZE_OFFSET + 4]
+                    .try_into()
+                    .unwrap()
+            ),
+            PAGE_SIZE as u32
+        );
+    }
+
+    /// 内联载荷必须落在 `INLINE_PAYLOAD_OFFSET`，且字典在前、目录在后。
+    #[test]
+    fn header_encode_places_inline_payloads_in_order() {
+        let mut f = HeaderFields {
+            total_pages: 1,
+            node_freelist: 0,
+            edge_freelist: 0,
+            page_freelist: 0,
+            dict_page_id: 0,
+            node_count: 0,
+            edge_count: 0,
+            next_node_id: 1,
+            next_edge_id: 1,
+            node_dir_page_id: 0,
+            edge_dir_page_id: 0,
+            overflow_freelist: 0,
+            inline_dict_len: 3,
+            inline_catalog_len: 2,
+            index_catalog_page_id: 0,
+            direct_node_pages: [0; HeaderPage::DIRECT_NODE_PAGES_COUNT],
+            direct_edge_pages: [0; HeaderPage::DIRECT_EDGE_PAGES_COUNT],
+            prop_freelist: 0,
+            last_prop_page_id: 0,
+            crc_dir_page_id: 0,
+        };
+        let dict = [0xAAu8, 0xBB, 0xCC];
+        let cat = [0xDDu8, 0xEE];
+        let mut page = [0u8; PAGE_SIZE];
+        f.encode(&mut page, &dict, &cat);
+
+        let off = HeaderPage::INLINE_PAYLOAD_OFFSET;
+        assert_eq!(&page[off..off + 3], &dict, "dictionary must come first");
+        assert_eq!(
+            &page[off + 3..off + 5],
+            &cat,
+            "catalog follows the dictionary"
+        );
+
+        // 长度字段与载荷一致（否则读取侧会按错误的长度切片）
+        let back = HeaderFields::decode(&page);
+        assert_eq!(back.inline_dict_len, 3);
+        assert_eq!(back.inline_catalog_len, 2);
+        let _ = &mut f;
     }
 }

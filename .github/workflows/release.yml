@@ -105,7 +105,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.inputs.tag }}
+          # Must match `verify`'s expression. This job has no `if:`, so it also runs
+          # on a tag push, where `inputs.tag` is empty — and an empty `ref` silently
+          # falls back to checkout's own default rather than naming the commit. That
+          # happens to resolve to the tag today, but it is an accident of the
+          # fallback, not a statement of intent, and it would stop being true if this
+          # job ever gained a trigger whose default ref differs.
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -138,11 +144,18 @@ jobs:
         run: |
           cd bindings/nodejs
           npm install
-          npx napi build --platform --release --target ${{ matrix.target }}
-          # Strip debug symbols: 1.6MB -> 1.3MB per platform, and this multiplies
-          # by four in the published package.
-          test -f "nervusdb.${{ matrix.target }}.node" \
-            || { echo "::error::napi did not produce nervusdb.${{ matrix.target }}.node"; ls -l; exit 1; }
+          napi build --platform --release --target ${{ matrix.target }}
+
+          # Strip debug symbols before shipping. Measured on macOS aarch64:
+          # 1.6 MB -> 1.3 MB, and four platforms ship in one package, so the
+          # saving is worth four separate strip invocations. `strip` is present on
+          # all four runners (Xcode CLT on macOS, binutils on Ubuntu).
+          BINARY="nervusdb.${{ matrix.target }}.node"
+          test -f "$BINARY" \
+            || { echo "::error::napi did not produce $BINARY"; ls -l; exit 1; }
+          cp "$BINARY" "$BINARY.debug"
+          strip -x "$BINARY" 2>/dev/null || strip "$BINARY" || true
+          ls -l "$BINARY" "$BINARY.debug"
 
       - name: Upload the artifacts
         uses: actions/upload-artifact@v4

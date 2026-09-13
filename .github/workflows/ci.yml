@@ -1,8 +1,11 @@
 name: CI
 
 on:
+  # `develop` is where work happens, so it needs the same gate as `main` — otherwise
+  # a broken change is only discovered at the merge, which is precisely when it is
+  # most expensive to unwind.
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
     branches: [main]
 
@@ -58,6 +61,22 @@ jobs:
 
       - name: Tests
         run: cargo test --workspace
+
+      # Examples are documentation that the compiler can check and `cargo check`
+      # already does — but *running* them is a different claim, and it is the one a
+      # reader makes when they copy one. `cargo check --all-targets` above compiles
+      # them and would pass even if an example panicked or produced a wrong result on
+      # every run. The examples are also the only place the public API is exercised in
+      # the exact shape the README advertises, so a break there is a user-visible one
+      # that the test suite can miss.
+      - name: Run the examples
+        run: |
+          set -e
+          for ex in examples/*.rs; do
+            name=$(basename "$ex" .rs)
+            echo "--- running example: $name"
+            cargo run --quiet --example "$name"
+          done
 
       # The edge-locality and batch suites carry throughput assertions that are
       # only meaningful in an optimised build; run them there too.
