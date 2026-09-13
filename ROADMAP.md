@@ -221,6 +221,37 @@ still falls (894k → 396k from 1 to 8 threads), so **there is no read paralleli
 only fewer, shorter visits to one lock. Closing it needs per-frame latching, i.e. a
 redesign of the buffer pool's concurrency model, not a patch.
 
+**The target, measured on the real dataset.** The synthetic fixture above shows a curve
+shape; it does not say how much is left. com-DBLP (317,080 nodes / 1,049,866 edges) with
+a pool actually large enough to hold it (256 MB against an 81 MB file, 99.6% cache hits,
+so the mutex is the only variable left), all threads reading the **same** 50
+highest-degree hubs — the worst case for one global lock:
+
+| Threads | ops/s  | Efficiency |
+| ------- | ------ | ---------- |
+| 1       | 69,962 | 1.00×      |
+| 2       | 57,880 | 0.41×      |
+| 4       | 57,514 | 0.21×      |
+| 8       | 56,876 | 0.10×      |
+| 16      | 57,132 | **0.051×** |
+
+**5.1% efficiency against the ≈40% this machine can deliver**, and throughput flattens
+rather than falls once the mutex is the only constraint left. That is the number
+per-frame latching has to move. Reproduce with:
+
+```bash
+DB_PATH=<a dblp_bench database> POOL_FRAMES=65536 HUB_READ=1 \
+  cargo bench --bench concurrency_scaling_bench
+```
+
+**A trap in measuring this.** The same read path with the **default 4 MB pool** reports
+0.78× at 16 threads instead of 0.42× — disk I/O masks the contention and makes the
+problem look smaller than it is. Any comparison of a latching change must state its pool
+size. And `HUB_READ` (every thread on the same hubs) versus disjoint ranges (a different
+node per thread) are not interchangeable: the first is the worst case for one global
+lock, the second the best. Mixing them yields a before/after that reads like a comparison
+but measures two different workloads.
+
 **Not the same fix as item 1** — that one is reader-versus-writer through the outer
 `RwLock`; this one is reader-versus-reader inside the pool. See the note under item 1.
 
