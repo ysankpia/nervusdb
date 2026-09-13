@@ -886,8 +886,7 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         limit: Option<usize>,
     ) -> Result<CypherResultSet, GraphError> {
         let (rows, synthetic) = self.unwind_rows(expr, variable)?;
-        let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
-        ro.project_results(&[synthetic], rows, return_clause, order_by, skip, limit)
+        self.project_results(&[synthetic], rows, return_clause, order_by, skip, limit)
     }
 
     /// 把模式的属性映射求值为具体值。
@@ -1529,6 +1528,29 @@ impl<'a> CypherExecutor<'a> {
         Self { graph, index_mgr }
     }
 
+    /// 借出只读视图，用于求值、匹配与投影。
+    ///
+    /// ## 它存在的理由：让「怎么构造只读视图」只有一处
+    ///
+    /// 写入路径需要复用只读路径的能力（求表达式、匹配模式、投影结果）。此前每个
+    /// 调用点都自己写一遍 `self.read()`
+    /// ——改造前有 **16 处**这样的构造，其中 13 处是写入路径为了借一个方法而临时搭的。
+    ///
+    /// 那不只是重复：它把「只读视图由哪两个引用构成」这件事散布到 13 个位置，
+    /// 任何一处写法不同都可能让求值看到不同的图/索引组合，而那种差异是静默的。
+    ///
+    /// 现在写入路径一律 `self.read()`，构造方式只有这一处。
+    ///
+    /// ## 为什么不能缓存成字段
+    ///
+    /// 本结构体持有 `&'a mut DiskGraph`，而只读视图要借同一个对象。把视图存成字段
+    /// 就构成自引用结构体，在零依赖前提下只能用 `unsafe`——本项目不做那种取舍
+    /// （见 `src/query.rs` 的同类说明）。因此每次调用重建；它是两个引用的组合，
+    /// 没有分配，代价可忽略。
+    fn read(&self) -> CypherReadOnlyExecutor<'_> {
+        CypherReadOnlyExecutor::new(self.graph, self.index_mgr)
+    }
+
     /// 属性表达式求值（写路径）。
     ///
     /// 委托给只读执行器：属性求值不区分读写，两处各写一份必然漂移。
@@ -1539,8 +1561,7 @@ impl<'a> CypherExecutor<'a> {
         props: &HashMap<String, Expr>,
         ctx: &RowCtx,
     ) -> Result<HashMap<String, Value>, GraphError> {
-        CypherReadOnlyExecutor::new(self.graph, self.index_mgr)
-            .resolve_storable_properties(props, ctx)
+        self.read().resolve_storable_properties(props, ctx)
     }
 
     /// 生成执行计划文本（`EXPLAIN`）。
@@ -1873,7 +1894,7 @@ impl<'a> CypherExecutor<'a> {
                     !set_clause.is_empty() || delete_clause.is_some() || create_clause.is_some();
 
                 if !writes {
-                    let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+                    let ro = self.read();
                     return ro.execute_match(
                         patterns,
                         where_clause,
@@ -1885,7 +1906,7 @@ impl<'a> CypherExecutor<'a> {
                 }
 
                 let matched = {
-                    let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+                    let ro = self.read();
                     ro.find_matches(&patterns, &where_clause)?
                 };
 
@@ -1908,10 +1929,10 @@ impl<'a> CypherExecutor<'a> {
                 // 写语句若有 RETURN 子句，按变更后的图状态重新投影
                 if let Some(items) = return_clause {
                     let refreshed = {
-                        let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+                        let ro = self.read();
                         ro.find_matches(&patterns, &where_clause)?
                     };
-                    let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+                    let ro = self.read();
                     let mut result = ro.project_results(
                         &patterns,
                         refreshed,
@@ -2067,7 +2088,7 @@ impl<'a> CypherExecutor<'a> {
     ) -> Result<CypherResultSet, GraphError> {
         // 1) 先匹配。MERGE 的模式属性已被解析期限定为字面量，与 MATCH 同一套索引路径。
         let matched = {
-            let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+            let ro = self.read();
             ro.find_matches(std::slice::from_ref(pattern), &None)?
         };
 
@@ -2087,7 +2108,7 @@ impl<'a> CypherExecutor<'a> {
                 // 直接用 _bindings 也可以，但那样必须把「模式里哪个变量对应哪一行」
                 // 再推导一遍；重新匹配复用同一条已测试的路径，少一份实现。
                 let created = {
-                    let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+                    let ro = self.read();
                     ro.find_matches(std::slice::from_ref(pattern), &None)?
                 };
                 properties_set += self.apply_set(on_create, &created)?;
@@ -2123,10 +2144,10 @@ impl<'a> CypherExecutor<'a> {
         };
 
         let refreshed = {
-            let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+            let ro = self.read();
             ro.find_matches(std::slice::from_ref(pattern), &None)?
         };
-        let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+        let ro = self.read();
         let mut result = ro.project_results(
             std::slice::from_ref(pattern),
             refreshed,
@@ -2166,8 +2187,7 @@ impl<'a> CypherExecutor<'a> {
         create_clause: Option<PathPattern>,
     ) -> Result<CypherResultSet, GraphError> {
         // 行构造复用只读执行器：展开语义只有一处实现
-        let (mut rows, synthetic) =
-            CypherReadOnlyExecutor::new(self.graph, self.index_mgr).unwind_rows(expr, variable)?;
+        let (mut rows, synthetic) = self.read().unwind_rows(expr, variable)?;
 
         let mut nodes_created = 0;
         let mut edges_created = 0;
@@ -2197,7 +2217,7 @@ impl<'a> CypherExecutor<'a> {
         //
         // 复用只读执行器而不是复制一份投影实现——聚合与分页的语义在这里必须
         // 与 MATCH 路径完全一致，复制出来的第二份实现迟早会漂移。
-        let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+        let ro = self.read();
         let mut result =
             ro.project_results(&[synthetic], rows, Some(items), &order_by, skip, limit)?;
 
@@ -2234,8 +2254,7 @@ impl<'a> CypherExecutor<'a> {
                             }
                             Some(Binding::Edge(id)) => {
                                 let val = {
-                                    let ro =
-                                        CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+                                    let ro = self.read();
                                     ro.eval_expr_value(value, ctx).unwrap_or_else(null_value)
                                 };
                                 // 边属性不参与二级索引，直接写入磁盘溢出页
@@ -2247,7 +2266,7 @@ impl<'a> CypherExecutor<'a> {
                         };
 
                         let val = {
-                            let ro = CypherReadOnlyExecutor::new(self.graph, self.index_mgr);
+                            let ro = self.read();
                             ro.eval_expr_value(value, ctx).unwrap_or_else(null_value)
                         };
 
