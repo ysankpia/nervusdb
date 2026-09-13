@@ -216,13 +216,40 @@ fn all_manifests_share_one_version() {
         ),
     ];
 
+    // `bindings/` 可能**合法缺席**：cargo 会自动把嵌套的 workspace 成员
+    // （`bindings/python`、`bindings/nodejs`）排除在发布包之外，因此从
+    // crates.io 下载的 crate 里没有这些清单。实测过：在
+    // `target/package/nervusdb-0.1.0` 上跑本测试会因为读不到文件而 panic——
+    // 那意味着任何 `cargo add nervusdb` 之后跑测试的人都会看到一次与他们无关的失败。
+    //
+    // 因此：文件不存在就跳过。**这一条守卫的价值本就在于「仓库内五处版本一致」**，
+    // 而仓库内它们必然存在；缺失只会发生在裁剪后的发布包里，那里没有可校验的东西。
     let mut versions: Vec<(&str, String)> = Vec::new();
+    let mut missing: Vec<&str> = Vec::new();
     for (label, path) in cases {
-        let text = fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let text = match fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(_) => {
+                missing.push(label);
+                continue;
+            }
+        };
         let v = extract_version(&text, "version")
             .unwrap_or_else(|| panic!("{label} has no version field"));
         versions.push((label, v));
+    }
+    if !missing.is_empty() {
+        // 核心清单必须在。缺了它说明不是「裁剪后的发布包」，而是仓库真的坏了。
+        assert!(
+            versions.iter().any(|(l, _)| *l == "Cargo.toml"),
+            "Cargo.toml itself is unreadable; this is not a trimmed package"
+        );
+        eprintln!(
+            "note: {} manifest(s) not present ({}) — treating this as a published \
+             package rather than a repository checkout",
+            missing.len(),
+            missing.join(", ")
+        );
     }
 
     let (first_label, first) = &versions[0];
@@ -536,9 +563,27 @@ fn published_package_names_avoid_known_conflicts() {
         ("graphlite-rust-sdk", "crates.io: GraphLite-AI/GraphLite"),
     ];
 
-    // PyPI 名：`[project]` 段下的 `name = "..."`
-    let pyproject = fs::read_to_string(root.join("bindings/python/pyproject.toml"))
-        .expect("bindings/python/pyproject.toml must exist");
+    // 与版本守卫同理：从 crates.io 下载的 crate 里没有 `bindings/`（cargo 排除
+    // 嵌套 workspace 成员），因此这三个名字可能读不到。读不到就**只校验
+    // crates.io 自己的名字**——那一条在发布包里依然可查，也依然是有意义的那条
+    // （它是「绝不能把本包发到别人的名字下」的直接防线）。
+    let pyproject = match fs::read_to_string(root.join("bindings/python/pyproject.toml")) {
+        Ok(t) => t,
+        Err(_) => {
+            let cargo = fs::read_to_string(root.join("Cargo.toml")).expect("Cargo.toml must exist");
+            let own = extract_version(&cargo, "name").expect("Cargo.toml must declare a name");
+            assert!(
+                !TAKEN.iter().any(|(n, _)| *n == own),
+                "the crate name `{own}` belongs to another project: {}",
+                TAKEN
+                    .iter()
+                    .find(|(n, _)| *n == own)
+                    .map(|(_, who)| *who)
+                    .unwrap_or("")
+            );
+            return;
+        }
+    };
     let mut in_project = false;
     let mut py_name = None;
     for line in pyproject.lines() {
@@ -559,8 +604,10 @@ fn published_package_names_avoid_known_conflicts() {
     let py_name = py_name.expect("pyproject.toml [project] must declare a name");
 
     // npm 名：顶层 `"name": "..."`
-    let pkg = fs::read_to_string(root.join("bindings/nodejs/package.json"))
-        .expect("bindings/nodejs/package.json must exist");
+    let pkg = match fs::read_to_string(root.join("bindings/nodejs/package.json")) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
     let npm_name = extract_version(&pkg, "name").expect("package.json must declare a name");
 
     // crates.io 名
@@ -873,6 +920,129 @@ fn agents_section_references_resolve() {
         problems.is_empty(),
         "{} of {checked} section references do not resolve:\n{}",
         problems.len(),
+        problems.join("\n")
+    );
+}
+
+// =========================================================================
+// 发布包自洽性守卫
+// =========================================================================
+
+/// 发布包必须**自洽**：`cargo test` 在下载后的 crate 上也应当跑通。
+///
+/// ## 这条守卫来自一次实测的发布阻断
+///
+/// `bindings/python`、`bindings/nodejs` 是本 workspace 的成员，而 cargo 会自动把
+/// **嵌套的包**排除在父包之外。于是从 crates.io 下载的 `nervusdb` 里没有
+/// `bindings/`，而仓库里的两个守卫（版本一致性、包名冲突）当时直接 `.expect()`
+/// 那些清单 —— 实测在 `target/package/nervusdb-0.1.0` 上跑测试，
+/// **两个测试 panic**。也就是说任何 `cargo add nervusdb` 之后跑一次测试的人，
+/// 都会看到两条与他们无关的失败，且原因只在发布配置里。
+///
+/// 修复分两处：守卫改为「文件缺席则跳过」（见各自注释），以及**本守卫**——
+/// 把「打包后能跑通」这件事本身变成断言，而不是靠我记得去手工验证。
+///
+/// ## 它检查什么
+///
+/// 直接读 `cargo package --list` 的清单，断言：
+///
+/// 1. 库与测试源文件在包内（`include` 白名单曾把它们全部排除，实测
+///    「no targets specified in the manifest」）；
+/// 2. 守卫自己要读的文件在包内——否则下游必然 panic；
+/// 3. 开发用的 `.cargo/config.toml` **不在**包内（它对下游无用，只是噪声）。
+///
+/// 不调用 `cargo package` 本身（那会做一次完整构建，把单测变成分钟级）。清单由
+/// `cargo package --list` 生成，因此运行它需要 cargo 可用；环境里没有 cargo 时跳过
+/// 并说明，而不是假装通过。
+#[test]
+fn published_package_is_self_consistent() {
+    use std::process::Command;
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    // 只在仓库根上跑：在**已经打包**的目录里再打包没有意义（会递归、也会失败）。
+    if !root.join("bindings").exists() {
+        eprintln!("note: not a repository checkout (no bindings/); skipping package audit");
+        return;
+    }
+
+    let out = match Command::new("cargo")
+        .args(["package", "--list", "--allow-dirty"])
+        .current_dir(root)
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => {
+            eprintln!("note: `cargo package --list` unavailable; skipping package audit");
+            return;
+        }
+    };
+    let listing = String::from_utf8_lossy(&out.stdout);
+    let files: std::collections::HashSet<&str> = listing.lines().map(|l| l.trim()).collect();
+
+    let mut problems: Vec<String> = Vec::new();
+
+    // 1. 必须包含库与测试。`include` 是白名单，一旦误用就会静默排掉全部源码——
+    //    实测报错是 `no targets specified in the manifest`，但那是构建阶段的事，
+    //    清单阶段就该拦住。
+    for required in ["src/lib.rs", "Cargo.toml", "FORMAT.md", "CHANGELOG.md"] {
+        if !files.contains(required) {
+            problems.push(format!(
+                "`{required}` is missing from the published package. A crate without its \
+                 library cannot be built at all."
+            ));
+        }
+    }
+
+    // 2. 所有 `tests/*.rs` 都必须在包内——否则下游跑 `cargo test` 时测试少了一半，
+    //    而那两个守卫恰好是「发布配置正确」的唯一自动化检查。
+    let test_dir = root.join("tests");
+    if let Ok(entries) = fs::read_dir(&test_dir) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.ends_with(".rs") {
+                let rel = format!("tests/{name}");
+                if !files.contains(rel.as_str()) {
+                    problems.push(format!(
+                        "`{rel}` is missing from the published package; downstream \
+                         `cargo test` would silently run fewer checks"
+                    ));
+                }
+            }
+        }
+    }
+
+    // 3. 守卫读取的仓库根文件必须在包内。`bindings/` 是**故意**排除的（cargo 排除
+    //    嵌套包），因此不在此列；那两个守卫已改为容忍其缺席。
+    for required in [
+        "AGENTS.md",
+        "ROADMAP.md",
+        "README.md",
+        "docs/testing.md",
+        "src/page.rs",
+    ] {
+        if !files.contains(required) {
+            problems.push(format!(
+                "`{required}` is missing from the published package, but a guard in \
+                 tests/ reads it and would panic downstream"
+            ));
+        }
+    }
+
+    // 4. 开发配置不得进包。`exclude` 是黑名单，写错名字不会报错，只会静默无效——
+    //    因此这里核对结果而不是配置。
+    if files.contains(".cargo/config.toml") {
+        problems.push(
+            ".cargo/config.toml is being published. It carries this repository's macOS \
+             link flags; cargo does not read a dependency's config, so it is inert for \
+             consumers — just noise in their registry cache."
+                .to_string(),
+        );
+    }
+
+    assert!(
+        problems.is_empty(),
+        "the published package is not self-consistent:\n{}",
         problems.join("\n")
     );
 }

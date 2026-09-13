@@ -16,6 +16,17 @@ homepage = "https://github.com/ysankpia/nervusdb"
 documentation = "https://docs.rs/nervusdb"
 keywords = ["graph", "database", "sqlite", "cypher", "embedded"]
 categories = ["database-implementations", "embedded-database"]
+# `.cargo/config.toml` 是**本仓库的开发配置**，不进发布包。
+#
+# 它给 macOS 目标加了 `-undefined dynamic_lookup`：pyo3 的 `extension-module`
+# cdylib 刻意不链接 libpython（符号留到运行时由解释器提供），因此没有这两个标志时
+# `nervusdb-python` 链接失败——实测 `cargo build --workspace --release` 报
+# `ld: symbol(s) not found for architecture arm64`。所以它必须留在仓库里。
+#
+# 但它对**下游**没有用处：实测 cargo 不读取依赖包的 `.cargo/config.toml`
+# （把一个故意写坏的 rustflags 放进依赖目录，宿主仍然构建成功）。留在包里只会让
+# `cargo add nervusdb` 的人在自己的 `~/.cargo/registry` 里看到一条属于作者的配置。
+exclude = [".cargo/config.toml"]
 
 [dependencies]
 # 运行时零依赖：磁盘格式的每一个字节都由本仓库自己定义与编码。
