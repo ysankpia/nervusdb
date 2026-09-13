@@ -358,6 +358,100 @@ check("a finished transaction reports itself as finished", () => {
   );
 });
 
+
+check("addNodes batches and returns BigInt ids in order", () => {
+  const tx = db.beginTransaction();
+  const ids = tx.addNodes([
+    { labels: ["Batched"], properties: { name: "A", big: 9007199254740993n } },
+    { labels: ["Batched", "Extra"], properties: { name: "B" } },
+    { labels: ["Batched"], properties: {} },
+  ]);
+  tx.commit();
+
+  eq(ids.length, 3, "returned id count");
+  for (const id of ids) eq(typeof id, "bigint", "batched id type");
+  eq(
+    db.query("MATCH (n:Batched) RETURN count(n)")[0]["count(n)"],
+    3n,
+    "batched node count",
+  );
+  // The point of the batch path is that it must not lose precision either.
+  const big = db.query("MATCH (n:Batched {name: 'A'}) RETURN n.big")[0]["n.big"];
+  eq(big, 9007199254740993n, "large integer through addNodes");
+  // Multi-label input must be preserved, not collapsed to the first label.
+  eq(
+    db.query("MATCH (n:Extra) RETURN count(n)")[0]["count(n)"],
+    1n,
+    "multi-label node count",
+  );
+});
+
+check("addEdges batches and returns BigInt ids", () => {
+  const nodes = db.query("MATCH (n:Batched) RETURN n.name");
+  assert(nodes.length >= 3, "need the batched nodes first");
+  const [a, b, c] = db
+    .query("MATCH (n:Batched) RETURN id(n) AS nid")
+    .map((r) => r.nid);
+
+  const tx = db.beginTransaction();
+  const ids = tx.addEdges([
+    { src: a, dst: b, edgeType: "BATCHED_LINK", properties: { w: 1 }, weight: 2.5 },
+    { src: b, dst: c, edgeType: "BATCHED_LINK" },
+  ]);
+  tx.commit();
+
+  eq(ids.length, 2, "returned edge id count");
+  for (const id of ids) eq(typeof id, "bigint", "batched edge id type");
+  eq(
+    db.query("MATCH ()-[r:BATCHED_LINK]->() RETURN count(r)")[0]["count(r)"],
+    2n,
+    "batched edge count",
+  );
+});
+
+check("batched and per-record insertion agree", () => {
+  // The documented claim is that batching is a performance choice, not a semantic
+  // one. Same number of records, two paths, same result.
+  const N = 200;
+  const t1 = db.beginTransaction();
+  for (let i = 0; i < N; i++) t1.addNode(["SeqOne"], { i });
+  t1.commit();
+
+  const t2 = db.beginTransaction();
+  t2.addNodes(Array.from({ length: N }, (_, i) => ({ labels: ["SeqTwo"], properties: { i } })));
+  t2.commit();
+
+  eq(
+    db.query("MATCH (n:SeqOne) RETURN count(n)")[0]["count(n)"],
+    BigInt(N),
+    "per-record count",
+  );
+  eq(
+    db.query("MATCH (n:SeqTwo) RETURN count(n)")[0]["count(n)"],
+    BigInt(N),
+    "batched count",
+  );
+});
+
+check("empty batches are accepted and insert nothing", () => {
+  const tx = db.beginTransaction();
+  eq(tx.addNodes([]).length, 0, "empty addNodes must return no ids");
+  eq(tx.addEdges([]).length, 0, "empty addEdges must return no ids");
+  tx.commit();
+});
+
+check("a malformed batch entry is refused with a useful message", () => {
+  let msg = null;
+  try {
+    const tx = db.beginTransaction();
+    tx.addNodes([{ properties: {} }]); // no `labels`
+  } catch (e) {
+    msg = String(e.message);
+  }
+  assert(msg !== null, "a batch entry without `labels` must be refused");
+  assert(msg.includes("labels"), `the error must name the missing field: ${msg}`);
+});
+
 // ---------------------------------------------------------------------------
 // 7. Stats and checkpoint
 // ---------------------------------------------------------------------------

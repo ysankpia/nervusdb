@@ -176,31 +176,31 @@ read-only, 10-core machine, release build. Each configuration ran for a fixed 1.
 wall-clock budget so that slow configurations are not flattered by finishing first;
 the reported figure is completed operations ÷ elapsed.
 
-| Threads | Hub point reads (high lock count) | Random point reads | `MATCH (n) RETURN count(*)` |
-| ------- | --------------------------------- | ------------------ | --------------------------- |
-| 1       | 14,581 ops/s (1.00×)              | 55,972 ops/s (1.00×) | 5 ops/s (1.00×)           |
-| 2       | 11,275 ops/s (0.77×)              | 49,001 ops/s (0.88×) | 5 ops/s (0.90×)           |
-| 4       | 7,991 ops/s (0.55×)               | 40,521 ops/s (0.72×) | 4 ops/s (0.80×)           |
-| 8       | 9,865 ops/s (0.68×)               | 37,184 ops/s (0.66×) | 2 ops/s (0.46×)           |
-| 16      | 10,420 ops/s (0.71×)              | 38,790 ops/s (0.69×) | 2 ops/s (0.47×)           |
+| Threads | Hub point reads (high lock count) | Random point reads   | `MATCH (n) RETURN count(*)` |
+| ------- | --------------------------------- | -------------------- | --------------------------- |
+| 1       | 14,581 ops/s (1.00×)              | 55,972 ops/s (1.00×) | 5 ops/s (1.00×)             |
+| 2       | 11,275 ops/s (0.77×)              | 49,001 ops/s (0.88×) | 5 ops/s (0.90×)             |
+| 4       | 7,991 ops/s (0.55×)               | 40,521 ops/s (0.72×) | 4 ops/s (0.80×)             |
+| 8       | 9,865 ops/s (0.68×)               | 37,184 ops/s (0.66×) | 2 ops/s (0.46×)             |
+| 16      | 10,420 ops/s (0.71×)              | 38,790 ops/s (0.69×) | 2 ops/s (0.47×)             |
 
 At 16 threads the scaling efficiency (`speedup ÷ threads`) is **0.6%–4.5%** — adding
 threads makes reads slower, not faster.
 
-*(This table was measured **before** the acquisition-count reductions described below.
+_(This table was measured **before** the acquisition-count reductions described below.
 The current figures, on the same dataset and with a pool large enough to hold it, are in
 "The same question on the real dataset" further down — the effect of the changes is real
-but the pool size matters more than it looks, so read both before quoting either.)*
+but the pool size matters more than it looks, so read both before quoting either.)_
 
 **Control runs, because a bad number must be shown to be real.** The collapse could
 plausibly be the measuring machine rather than the database, so three variants ran in
 the same process:
 
-| Variant                                  | 16-thread speedup | Efficiency |
-| ---------------------------------------- | ----------------- | ---------- |
-| Pure CPU spin (no database calls)        | 6.34×             | 39.6%      |
-| Loop taking only the outer read lock     | 6.40×             | 40.0%      |
-| Point reads (any, i.e. touching the pool)| 0.10×–0.23×       | 0.6%–1.4%  |
+| Variant                                   | 16-thread speedup | Efficiency |
+| ----------------------------------------- | ----------------- | ---------- |
+| Pure CPU spin (no database calls)         | 6.34×             | 39.6%      |
+| Loop taking only the outer read lock      | 6.40×             | 40.0%      |
+| Point reads (any, i.e. touching the pool) | 0.10×–0.23×       | 0.6%–1.4%  |
 
 The first two establish what this 10-core machine can deliver (≈6.4×, ≈40%
 efficiency) and show that neither the environment nor the outer `RwLock` is at fault.
@@ -219,17 +219,17 @@ whole adjacency chain inside **one** buffer-pool acquisition instead of one per 
 (`DiskGraph::collect_edge_chain_batched`), so a degree-343 hub costs a handful of
 acquisitions rather than ≈345.
 
-*(The two paragraphs above describe the state at the time of the com-DBLP measurement.
+_(The two paragraphs above describe the state at the time of the com-DBLP measurement.
 A later change collapsed those remaining four acquisitions into **one**, making a point
 read a single critical section whatever the degree — see the `get_node` rows further
-down. The acquisition counts here are history, not the current behaviour.)* Measured under contention — 8 threads all reading the
+down. The acquisition counts here are history, not the current behaviour.)_ Measured under contention — 8 threads all reading the
 same hub, which is the worst case for a global mutex, alternating the old and new
 builds:
 
-| Build                          | Run 1 | Run 2 | Run 3 |
-| ------------------------------ | ----- | ----- | ----- |
-| before (per-edge acquisition)  | 17,431 ops/s | 27,605 ops/s | 27,813 ops/s |
-| after (per-chain acquisition)  | **38,283** | **37,842** | **38,071** |
+| Build                         | Run 1        | Run 2        | Run 3        |
+| ----------------------------- | ------------ | ------------ | ------------ |
+| before (per-edge acquisition) | 17,431 ops/s | 27,605 ops/s | 27,813 ops/s |
+| after (per-chain acquisition) | **38,283**   | **37,842**   | **38,071**   |
 
 Roughly 1.4–2.2×, and the "after" column varies by under 2% while "before" varies by
 60% — less lock traffic means less sensitivity to scheduling.
@@ -243,22 +243,22 @@ which is a redesign of the buffer pool's concurrency model rather than a patch.
 **Writes were profiled separately, and the bottleneck is different.** Continuing the
 same com-DBLP setup, write workloads were measured at three granularities:
 
-| Workload                                          | 1 thread | 2 | 4 | 8 |
-| ------------------------------------------------- | -------- | --- | --- | --- |
-| one commit per node (`add_node`)                  | 249 ops/s | — | — | — |
-| one transaction per node (`with_transaction`)     | 251 ops/s | 249 | 253 | 249 |
-| one transaction per 20,000 nodes (`add_nodes`)    | 451,576 ops/s | 823,948 | 1,053,810 | — |
+| Workload                                       | 1 thread      | 2       | 4         | 8   |
+| ---------------------------------------------- | ------------- | ------- | --------- | --- |
+| one commit per node (`add_node`)               | 249 ops/s     | —       | —         | —   |
+| one transaction per node (`with_transaction`)  | 251 ops/s     | 249     | 253       | 249 |
+| one transaction per 20,000 nodes (`add_nodes`) | 451,576 ops/s | 823,948 | 1,053,810 | —   |
 
 The middle row does not scale **at all** — 8 threads equal 1 thread — but the cause is
 not the mutex. Holding the per-transaction cost fixed while varying the number of
 nodes per transaction isolates it:
 
-| Nodes per transaction | Transactions | ops/s | Time per transaction |
-| --------------------- | ------------ | ----- | -------------------- |
-| 1                     | 2,000        | 255   | 3.92 ms |
-| 10                    | 200          | 2,747 | 3.64 ms |
-| 200                   | 10           | 55,971 | 3.57 ms |
-| 2,000                 | 1            | 397,927 | 5.03 ms |
+| Nodes per transaction | Transactions | ops/s   | Time per transaction |
+| --------------------- | ------------ | ------- | -------------------- |
+| 1                     | 2,000        | 255     | 3.92 ms              |
+| 10                    | 200          | 2,747   | 3.64 ms              |
+| 200                   | 10           | 55,971  | 3.57 ms              |
+| 2,000                 | 1            | 397,927 | 5.03 ms              |
 
 Time per transaction is ≈3.5 ms **regardless of how many nodes it writes**. That is
 the `fsync`, and it is serialized by definition. So the 250 ops/s ceiling for
@@ -272,7 +272,7 @@ are limited by one fsync per commit and scale once batching removes that.
 
 **A second mitigation: one lock acquisition per `get_node`, not four.** `get_node` was
 taking the global `bpm` mutex four times (record, payload, outgoing chain, incoming
-chain). The chain walks had already been collapsed from one acquisition *per edge* to
+chain). The chain walks had already been collapsed from one acquisition _per edge_ to
 one per chain; this collapses the remaining four into one, so a point read is a single
 critical section instead of four.
 
@@ -282,12 +282,12 @@ which builds a synthetic 200k-node/600k-edge graph so no external dataset is nee
 of data does, and every row below reports a 98.7% cache hit rate, which is what rules
 out disk I/O as the cause:
 
-| Threads | Before (4 acquisitions) | After (1 acquisition) | Change |
-| ------- | ----------------------- | --------------------- | ------ |
+| Threads | Before (4 acquisitions) | After (1 acquisition) | Change             |
+| ------- | ----------------------- | --------------------- | ------------------ |
 | 1       | 872k / 892k ops/s       | 894k ops/s            | ~1.00× (no change) |
-| 2       | 510k / 521k ops/s       | 594k ops/s            | 1.15×  |
-| 4       | 326k / 322k ops/s       | 437k ops/s            | 1.35×  |
-| 8       | 191k / 208k ops/s       | 396k ops/s            | **2.0×** |
+| 2       | 510k / 521k ops/s       | 594k ops/s            | 1.15×              |
+| 4       | 326k / 322k ops/s       | 437k ops/s            | 1.35×              |
+| 8       | 191k / 208k ops/s       | 396k ops/s            | **2.0×**           |
 
 Two rows are quoted for the "before" column because it was measured twice; the "after"
 value is stable across three runs (425–440k at 4 threads, 396k at 8).
@@ -304,15 +304,15 @@ item 5 tracks it.
 
 ### The same question on the real dataset, and what the pool size does to the answer
 
-The synthetic curve above is a *shape*; it is not the number a real deployment sees.
+The synthetic curve above is a _shape_; it is not the number a real deployment sees.
 Re-running the same read path against the com-DBLP graph (317,080 nodes / 1,049,866
 edges) with the pool actually large enough to hold it (256 MB against an 81 MB file)
 changes the picture in both directions:
 
-| Pool | Hit rate | 1 thread | 16 threads | 16-thread scaling |
-| ---- | -------- | -------- | ---------- | ----------------- |
-| 4 MB (the default) | 80%   | 131k ops/s | 103k ops/s | 0.78× |
-| 256 MB             | 99.6% | 866k ops/s | 359k ops/s | 0.42× |
+| Pool               | Hit rate | 1 thread   | 16 threads | 16-thread scaling |
+| ------------------ | -------- | ---------- | ---------- | ----------------- |
+| 4 MB (the default) | 80%      | 131k ops/s | 103k ops/s | 0.78×             |
+| 256 MB             | 99.6%    | 866k ops/s | 359k ops/s | 0.42×             |
 
 **With a too-small pool, disk I/O hides the lock contention and makes the curve look
 gentler** — 0.78× instead of 0.42×. That is worth stating plainly, because it means a
@@ -323,12 +323,12 @@ remains is the mutex.
 Restricting to the scenario the original figure was measured in — all threads reading the
 **same** 50 highest-degree hubs, 100% cache hits — gives:
 
-| Threads | ops/s | Efficiency |
-| ------- | ----- | ---------- |
-| 1       | 69,962 | 1.00× |
-| 2       | 57,880 | 0.41× |
-| 4       | 57,514 | 0.21× |
-| 8       | 56,876 | 0.10× |
+| Threads | ops/s  | Efficiency |
+| ------- | ------ | ---------- |
+| 1       | 69,962 | 1.00×      |
+| 2       | 57,880 | 0.41×      |
+| 4       | 57,514 | 0.21×      |
+| 8       | 56,876 | 0.10×      |
 | 16      | 57,132 | **0.051×** |
 
 **5.1% efficiency against the ≈40% this machine can deliver**, and throughput stops
@@ -345,7 +345,7 @@ thread collides on the same pages), while disjoint node ranges are the best case
 the two produces a before/after that looks like a comparison but is actually two
 different workloads.
 
-**Scope of the claim.** This is about *read parallelism*, not correctness or
+**Scope of the claim.** This is about _read parallelism_, not correctness or
 single-threaded speed: the full suite passes, and the batched walk is
 indistinguishable from the per-edge walk in every existing test (the chain semantics,
 the `in_use` filter and the `seen` cycle guard are all reproduced). See [architecture.md §10](architecture.md#10-concurrency-model) and
@@ -369,9 +369,21 @@ FFI boundary is not the bottleneck — measured directly, a 50,000-node batch sp
 0.037 s crossing the boundary and parsing, against 0.095 s actually committing to
 disk. The commit is the cost; the boundary is noise.
 
-`Transaction::add_nodes` / `add_edges` exist in both SDKs. They are kept for
-ergonomics and to avoid taking the global write lock once per record, **not** as a
-throughput claim: on the standard benchmark their effect is within run-to-run noise.
+`Transaction::add_nodes` / `add_edges` exist in both SDKs (`add_nodes`/`add_edges` in
+Python, `addNodes`/`addEdges` in Node.js). They are kept for ergonomics and to avoid
+taking the global write lock once per record, **not** as a throughput claim: on the
+standard benchmark their effect is within run-to-run noise.
+
+One batch method reserves all ids in a single lock acquisition, which is why the
+documented bulk-ingest figure depends on it — 451,576 ops/s at 20,000 nodes per
+transaction against 251 ops/s for one transaction per node. They are semantically
+identical to the per-record calls; `bindings/nodejs/test.mjs` asserts the two paths
+produce the same result.
+
+**Correction.** This paragraph previously read that the methods "exist in both SDKs"
+while only the Python binding had them — the Node side offered no batch entry point at
+all, so the fastest documented ingestion path was unavailable there. The sentence is
+true as of 0.1.0; it was not before.
 
 Correction history — the previous version of this table read:
 

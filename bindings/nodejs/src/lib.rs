@@ -209,11 +209,81 @@ fn parse_direction(direction: Option<&str>) -> Result<nervusdb_core::Direction, 
     }
 }
 
+/// 解析一条批量节点输入：`{ labels: string[], properties?: {...} }`。
+///
+/// 逐字段读取而非整体反序列化，是为了让属性值**保持 BigInt**：走
+/// `serde_json::Value` 会把 BigInt 变成 f64，正是这次改动要消除的问题。
+fn parse_node_item(
+    env: &Env,
+    item: JsUnknown,
+) -> Result<(HashSet<String>, HashMap<String, Value>), napi::Error> {
+    let obj = JsObject::try_from(item)
+        .map_err(|_| napi::Error::from_reason("each node must be an object".to_string()))?;
+
+    let labels_unknown = JsObject::get::<_, JsUnknown>(&obj, "labels")?
+        .ok_or_else(|| napi::Error::from_reason("node is missing `labels`".to_string()))?;
+    let labels_arr = JsObject::try_from(labels_unknown).map_err(|_| {
+        napi::Error::from_reason("`labels` must be an array of strings".to_string())
+    })?;
+    let len = labels_arr.get_array_length()? as usize;
+    let mut labels = HashSet::with_capacity(len);
+    for i in 0..len {
+        let v: JsUnknown = labels_arr.get_element(i as u32)?;
+        labels.insert(v.coerce_to_string()?.into_utf8()?.as_str()?.to_string());
+    }
+
+    let props: Option<JsUnknown> = JsObject::get(&obj, "properties")?;
+    let properties = js_to_properties(env, props)?;
+    Ok((labels, properties))
+}
+
+/// 解析一条批量边输入：`{ src, dst, edgeType, properties?, weight? }`。
+fn parse_edge_item(
+    env: &Env,
+    item: JsUnknown,
+) -> Result<nervusdb_core::disk_graph::EdgeInsert, napi::Error> {
+    let obj = JsObject::try_from(item)
+        .map_err(|_| napi::Error::from_reason("each edge must be an object".to_string()))?;
+
+    let read_u64 = |name: &str| -> Result<u64, napi::Error> {
+        let v = JsObject::get::<_, JsUnknown>(&obj, name)?
+            .ok_or_else(|| napi::Error::from_reason(format!("edge is missing `{name}`")))?;
+        let big = BigInt::from_unknown(v)
+            .map_err(|_| napi::Error::from_reason(format!("`{name}` must be a BigInt")))?;
+        to_u64(&big)
+    };
+    let src_id = read_u64("src")?;
+    let dst_id = read_u64("dst")?;
+
+    let edge_type = JsObject::get::<_, JsUnknown>(&obj, "edgeType")?
+        .ok_or_else(|| napi::Error::from_reason("edge is missing `edgeType`".to_string()))?
+        .coerce_to_string()?
+        .into_utf8()?
+        .as_str()?
+        .to_string();
+
+    let props: Option<JsUnknown> = JsObject::get(&obj, "properties")?;
+    let properties = js_to_properties(env, props)?;
+
+    let weight: Option<f64> = match JsObject::get::<_, JsUnknown>(&obj, "weight")? {
+        Some(v) => Some(v.coerce_to_number()?.get_double()?),
+        None => None,
+    };
+
+    Ok(nervusdb_core::disk_graph::EdgeInsert {
+        edge_id: 0, // 引擎在批量预留时填充；见 `Transaction::add_edges` 的说明
+        src_id,
+        dst_id,
+        edge_type,
+        properties,
+        weight: weight.unwrap_or(1.0),
+    })
+}
+
 #[napi(js_name = "NervusDb")]
 pub struct JsNervusDb {
     inner: CoreNervusDb,
 }
-
 #[napi]
 impl JsNervusDb {
     #[napi(factory)]
@@ -510,6 +580,76 @@ impl Transaction {
             .add_node(labels_set, props)
             .map_err(|e| napi::Error::from_reason(e.to_string()))?;
         Ok(bigint(id as i64))
+    }
+
+    /// 事务内**批量**添加节点，返回按输入顺序排列的 id。
+    ///
+    /// `nodes` 是 `{ labels, properties }` 的数组：
+    ///
+    /// ```js
+    /// const tx = db.beginTransaction();
+    /// const ids = tx.addNodes([
+    ///   { labels: ["Person"], properties: { name: "A" } },
+    ///   { labels: ["Person"], properties: { name: "B" } },
+    /// ]);
+    /// tx.commit();
+    /// ```
+    ///
+    /// ## 为什么它不只是循环调用 `addNode`
+    ///
+    /// 逐条 `addNode` 每条取一次全局写锁并各自预留 id；批量版本**一次预留全部
+    /// id**。文档里这是主要的性能手段：每个事务 20,000 节点时 451,576 ops/s，
+    /// 而每节点一个事务只有 251 ops/s（见 `docs/benchmarks.md`）。
+    ///
+    /// **Python SDK 一直有 `add_nodes`/`add_edges`，Node 没有**，而
+    /// `docs/benchmarks.md` 写着「`add_nodes` / `add_edges` exist in both SDKs」。
+    /// 那句话当时是假的，现在补上。
+    ///
+    /// 语义与逐条 `addNode` 完全一致（同一事务、同样索引维护、同样约束校验），
+    /// 返回的 id 与输入**顺序一一对应**。
+    #[napi(js_name = "addNodes")]
+    pub fn add_nodes(
+        &mut self,
+        env: Env,
+        nodes: Vec<JsUnknown>,
+    ) -> Result<Vec<BigInt>, napi::Error> {
+        let mut parsed = Vec::with_capacity(nodes.len());
+        for item in nodes {
+            parsed.push(parse_node_item(&env, item)?);
+        }
+        let tx = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| napi::Error::from_reason("transaction already finished"))?;
+        let ids = tx
+            .add_nodes(parsed)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        Ok(ids.into_iter().map(|id| bigint(id as i64)).collect())
+    }
+
+    /// 事务内**批量**添加边，返回按输入顺序排列的 id。
+    ///
+    /// `edges` 是 `{ src, dst, edgeType, properties?, weight? }` 的数组。
+    /// id 由引擎分配（与 `addEdge` 同一规则：调用方给的 id 不生效）；这里的
+    /// `src`/`dst` 接受 BigInt。
+    #[napi(js_name = "addEdges")]
+    pub fn add_edges(
+        &mut self,
+        env: Env,
+        edges: Vec<JsUnknown>,
+    ) -> Result<Vec<BigInt>, napi::Error> {
+        let mut inserts = Vec::with_capacity(edges.len());
+        for item in edges {
+            inserts.push(parse_edge_item(&env, item)?);
+        }
+        let tx = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| napi::Error::from_reason("transaction already finished"))?;
+        let ids = tx
+            .add_edges(inserts)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+        Ok(ids.into_iter().map(|id| bigint(id as i64)).collect())
     }
 
     #[napi]

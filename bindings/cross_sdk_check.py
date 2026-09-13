@@ -72,6 +72,27 @@ out.floats["one_point_five"] = db.query("MATCH (n:F) RETURN n.f")[0]["n.f"];
 out.counts["P"] = db.query("MATCH (n:P) RETURN count(n)")[0]["count(n)"].toString();
 const id = db.addNode(["Solo"], {});
 out.ids["solo"] = id.toString();
+
+// Batch entry points (Node names them addNodes/addEdges).
+{
+  const tx = db.beginTransaction();
+  const nids = tx.addNodes([
+    { labels: ["B"], properties: { big: 9007199254740993n } },
+    { labels: ["B"], properties: {} },
+    { labels: ["B"], properties: {} },
+  ]);
+  const eids = tx.addEdges([
+    { src: nids[0], dst: nids[1], edgeType: "BL" },
+    { src: nids[1], dst: nids[2], edgeType: "BL" },
+  ]);
+  tx.commit();
+  out.batch = {
+    count: db.query("MATCH (n:B) RETURN count(n)")[0]["count(n)"].toString(),
+    big: db.query("MATCH (n:B) RETURN n.big").map((r) => r["n.big"]).find((v) => v !== null && v !== undefined).toString(),
+    edges: db.query("MATCH ()-[r:BL]->() RETURN count(r)")[0]["count(r)"].toString(),
+  };
+  void eids;
+}
 console.log(JSON.stringify(out));
 """
 
@@ -94,6 +115,16 @@ db.execute("MATCH (n:F) SET n.f = 1.5")
 out["floats"]["one_point_five"] = db.query("MATCH (n:F) RETURN n.f")[0]["n.f"]
 out["counts"]["P"] = str(db.query("MATCH (n:P) RETURN count(n)")[0]["count(n)"])
 out["ids"]["solo"] = str(db.add_node(["Solo"], {}))
+
+# Batch entry points (Python names them add_nodes/add_edges).
+with db.begin_transaction() as tx:
+    nids = tx.add_nodes([(["B"], {"big": 9007199254740993}), (["B"], {}), (["B"], {})])
+    tx.add_edges([(nids[0], nids[1], "BL"), (nids[1], nids[2], "BL")])
+out["batch"] = {
+    "count": str(db.query("MATCH (n:B) RETURN count(n)")[0]["count(n)"]),
+    "big": str(next(r["n.big"] for r in db.query("MATCH (n:B) RETURN n.big") if r["n.big"] is not None)),
+    "edges": str(db.query("MATCH ()-[r:BL]->() RETURN count(r)")[0]["count(r)"]),
+}
 print(json.dumps(out))
 """
 
@@ -180,13 +211,35 @@ def main() -> int:
         if not out["ids"]["solo"] or out["ids"]["solo"] == "0":
             failures.append(f"id: {name} returned {out['ids']['solo']!r}")
 
+
+    # 5. The batch entry points must exist and behave the same in both SDKs. This is
+    #    what caught the Node binding offering no `addNodes` at all while
+    #    docs/benchmarks.md claimed the methods "exist in both SDKs".
+    for name, out in (("node", node_out), ("python", py_out)):
+        if "batch" not in out:
+            failures.append(
+                f"batch methods: {name} did not report a batch result; the batch entry "
+                f"point may be missing from that SDK"
+            )
+            continue
+        b = out["batch"]
+        if b["count"] != "3":
+            failures.append(f"batch add: {name} inserted {b['count']}, expected 3")
+        if b["big"] != "9007199254740993":
+            failures.append(
+                f"batch add: {name} returned {b['big']} for a large integer, "
+                f"expected 9007199254740993"
+            )
+        if b["edges"] != "2":
+            failures.append(f"batch addEdge: {name} inserted {b['edges']}, expected 2")
+
     if failures:
         print("CROSS-SDK DISAGREEMENTS:")
         for f in failures:
             print(f"  - {f}")
         return 1
 
-    print(f"ok    both SDKs agree on {len(CASES)} integers, floats, counts and ids")
+    print(f"ok    both SDKs agree on {len(CASES)} integers, floats, counts, ids and the batch entry points")
     print("Cross-SDK check passed.")
     return 0
 
