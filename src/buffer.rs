@@ -478,20 +478,32 @@ impl BufferPoolManager {
     ///
     /// 放在缓冲池上是因为它同时持有 `DiskManager` 与 `CrcStore`，无需把后者借出再借回。
     /// 校验和在此处（惰性）计算，而不是在事务写入路径上。
-    pub(crate) fn replay_wal_with_crc(
-        &mut self,
-        wal: &WalWriter,
-        db_path: &Path,
-    ) -> Result<usize, GraphError> {
+    pub(crate) fn replay_wal_with_crc(&mut self, wal: &WalWriter) -> Result<usize, GraphError> {
+        // 落点必须是 `DiskManager`，不能是「主文件路径」。
+        //
+        // 这里原先自己 `OpenOptions::open(db_path)` 再写入。文件模式下两者等价，
+        // 但 `:memory:` 模式下 `StorageEngine` 把 `db_path` 记成字面串 `":memory:"`，
+        // 于是 Checkpoint 会在**当前工作目录建一个真文件**，把页写进去；而内存
+        // `DiskManager` 的 `memory_pages` 拿不到这些页。紧接着 WAL 被截断，那些
+        // 只存在于 WAL 的已提交页就**永久丢失**——`node_count` 仍报原值（它是元
+        // 数据），但每个节点都读不回来。实测 3000/3000 丢失，复现见
+        // `tests/memory_mode_tests.rs`。
+        //
+        // 走 `DiskManager` 则自带 memory 分支，两种模式各归其位。
         let dm = Arc::clone(&self.disk_manager);
         let crc = &mut self.crc;
-        crate::storage::apply_committed_pages_with(wal, db_path, &mut |page_id, data| {
-            if let Some(store) = crc.as_mut() {
-                store.record(page_id, data)?;
-            }
-            let _ = &dm;
-            Ok(())
-        })
+        let applied = crate::storage::for_each_committed_page(
+            wal,
+            &mut |page_id: PageId, data: &[u8; PAGE_SIZE]| {
+                dm.write_page(page_id, data)?;
+                if let Some(store) = crc.as_mut() {
+                    store.record(page_id, data)?;
+                }
+                Ok(())
+            },
+        )?;
+        dm.sync_all()?;
+        Ok(applied)
     }
 
     /// 取出 CRC 存储句柄（提交/检查点路径需要它，见 `NervusDb::checkpoint`）
@@ -667,15 +679,35 @@ impl BufferPoolManager {
             return Ok(frame_id);
         }
 
-        // 第二轮：STEAL —— 把未提交脏页镜像溢出到 WAL 后安全置换
+        // 第二轮：STEAL —— 置换未提交页。
+        //
+        // 未提交页有**两种**形态，都必须能置换：
+        //   (a) 脏且镜像尚未进 WAL → 先溢出到 WAL 再置换；
+        //   (b) 干净但镜像**已在** WAL（此前溢出过一次，之后又被读回）→ 直接置换。
+        //
+        // 原先只认 (a)（要求 `is_dirty`）。当池里恰好全是 (b) 时，第一轮因
+        // 「未提交」拒绝、第二轮因「不脏」拒绝，两轮都空手而归，池子就此死锁：
+        // 所有帧都可用却一个也拿不到。实测（512 帧 / 10 万节点 / 20 万边）正是
+        // 如此：246/256 帧属于 (b)，`dirty=2`，报 NO-STEAL 而非继续工作。
+        //
+        // 置换 (b) 是安全的：页的权威镜像在 WAL 里，`wal_pages` 记着位置，
+        // `tx_baseline` 记着回滚基线；`evict_frame` 的干净分支不会碰 `wal_pages`，
+        // 之后任何读取都会先经 `wal_pages` 从 WAL 取回镜像。回滚与提交都只看
+        // WAL 位置索引，不看帧是否常驻（见 `commit_tx` 里「非常驻页的最新镜像
+        // 已在溢出时写入 WAL」）。
         if self.spill_enabled {
             if let Some(frame_id) = self.replacer.victim_filter(|fid| {
                 let frame = &self.frames[fid];
-                frame.page_id != INVALID_PAGE_ID
-                    && frame.is_dirty
-                    && !self.protected_pages.contains(&frame.page_id)
+                let pid = frame.page_id;
+                pid != INVALID_PAGE_ID
+                    && self.uncommitted_pages.contains(&pid)
+                    && !self.protected_pages.contains(&pid)
+                    && (frame.is_dirty || self.wal_pages.contains_key(&pid))
             }) {
-                self.spill_frame(frame_id)?;
+                // 只有 (a) 需要先溢出；(b) 的镜像已经在 WAL 里了。
+                if self.frames[frame_id].is_dirty {
+                    self.spill_frame(frame_id)?;
+                }
                 self.evict_frame(frame_id)?;
                 return Ok(frame_id);
             }

@@ -337,6 +337,39 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
 ### Fixed
 
+- **`checkpoint()` on a `:memory:` database wrote a real file to the working
+  directory, and lost the data that was supposed to be in memory.** Checkpoint
+  replayed the WAL's committed pages through `StorageEngine::db_path()`, which in
+  memory mode holds the literal string `":memory:"` — so the pages went into a new
+  file of that name in the current directory, while the in-memory page store
+  received nothing. The WAL was then truncated, permanently discarding those pages.
+
+  Two symptoms, both silent. The directory gained a file named `:memory:` (72 MB in
+  the run that found this), and after a checkpoint **every node became unreadable** —
+  measured 3000/3000. `node_count()` still reported the right number, because that is
+  metadata; what was lost was page content, and `get_node` is lossy, so it returned
+  `None` rather than an error. Replay now goes through `DiskManager`, which already
+  selects file or memory. Pinned by `tests/memory_mode_tests.rs`.
+
+- **A buffer pool could deadlock with every frame free.** STEAL eviction only
+  accepted _dirty_ uncommitted frames, so once a page had been spilled to the WAL and
+  subsequently read back — clean, but still uncommitted — it matched neither eviction
+  round: round one rejects it as uncommitted, round two as not dirty. With enough such
+  frames the pool reported `NO-STEAL enforced` while holding 246 of 256 idle frames.
+  Reproduced with 512 frames / 100k nodes / 200k edges, where a documented benchmark
+  scenario (1M nodes + 4M edges in a 1 MB pool) failed outright. Clean uncommitted
+  frames are now evictable too, which is safe because their authoritative image is in
+  the WAL and `wal_pages` records where.
+
+- **`cargo bench --bench throughput` no longer ran.** The 10M-node scenario queues 10M
+  actions in one transaction, which exceeds the 4M `DEFAULT_MAX_TRANSACTION_ACTIONS`
+  cap; the benchmark aborted before measuring anything. It now lifts the cap for
+  itself (chunking would silently change the workload the published figures describe)
+  and honours `GL_MAX_ACTIONS` so a constrained machine can still see the rejection.
+
+All three predate this release — the `:memory:` and NO-STEAL defects reproduce on
+`v1.0.0` as well — and none changes the storage format.
+
 - **Read concurrency was _negative_: more threads made reads slower.** Measured on
   com-DBLP, 16 threads doing plain point reads reached **0.6%–1.4% of single-thread
   throughput**. The cause was lock traffic, not the machine: every page touch goes
