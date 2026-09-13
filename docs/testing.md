@@ -36,13 +36,13 @@ cargo test --test robustness_tests        # page CRC at scale, WAL replay, chunk
 
 ## Current state
 
-**245 test cases — 244 pass, 1 intentionally `#[ignore]`d** (a child-process lock
+**246 test cases — 245 pass, 1 intentionally `#[ignore]`d** (a child-process lock
 probe launched by its parent test).
 
-Run as 20 integration suites (215 cases, of which 1 is `#[ignore]`d) plus 28 inline
+Run as 20 integration suites (216 cases, of which 1 is `#[ignore]`d) plus 28 inline
 unit tests in the hand-written codecs, the action codec, and the Page-0 layout
 (`src/codec.rs`, `src/json.rs`, `src/crc32.rs`, `src/action_codec.rs`, `src/page.rs`), which are what the on-disk
-format is made of, plus 2 doc-tests: 215 + 28 + 2 = 245.
+format is made of, plus 2 doc-tests: 216 + 28 + 2 = 246.
 
 **The one `#[ignore]`d case is not a skipped test.** It is
 `production_safety_tests::cross_process_child_probe`, an eight-line probe that must be
@@ -78,7 +78,7 @@ removed without updating this table fails the build rather than drifting:
 | `analytics_tests.rs`             | 7     | PageRank, WCC, K-hop                                                            |
 | `steal_spill_tests.rs`           | 5     | Spilling, rollback pollution, checkpoint                                        |
 | `equivalence_tests.rs`           | 4     | v1.0.0 behaviour guardrails: query, transaction, API, format                    |
-| `zero_dependency_tests.rs`       | 12    | Empty deps; version, name, suite-count, section-ref, package, ignore guards     |
+| `zero_dependency_tests.rs`       | 13    | Empty deps; version, name, suite-count, section-ref, package, ignore + example guards |
 | `planner_tests.rs`               | 9     | Join reorder equivalence, EXPLAIN plan, bound-driven work reduction, non-driven rescan |
 | `lock_wait_tests.rs`             | 5     | Lock wait: default no-wait, wait succeeds, timeout, still exclusive              |
 | `lock_cross_process_tests.rs`    | 1     | Two real processes: second refused, then waits and writes                        |

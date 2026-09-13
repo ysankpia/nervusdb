@@ -55,7 +55,7 @@ Working and covered by tests:
 - Tooling: Python and Node.js SDKs with transaction and batch-write support.
   Inspection and dump go through the library API — the CLI and the browser
   workbench were removed before 0.1.0.
-- 245 test cases across 20 suites (244 run, 1 intentionally `#[ignore]`d for a
+- 246 test cases across 20 suites (245 run, 1 intentionally `#[ignore]`d for a
   child-process lock probe); `cargo fmt`, `cargo clippy -D warnings` and
   `rustdoc -D warnings` all clean.
 

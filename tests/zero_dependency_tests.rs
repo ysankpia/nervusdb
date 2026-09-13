@@ -1148,3 +1148,80 @@ fn only_the_documented_child_probe_is_ignored() {
          current doc is: {doc:?}"
     );
 }
+
+// =========================================================================
+// examples 清单守卫
+// =========================================================================
+
+/// `examples/` 下的每个文件都必须登记在 `docs/api.zh-CN.md` 里，反之亦然。
+///
+/// ## 为什么
+///
+/// 那 10 个样例是**用户最先会照抄的东西**，而中文 API 文档是它们的唯一清单。清单
+/// 与实际文件脱节的两种后果都是静默的：
+///
+/// - 新增样例不进清单 → 没人知道它存在，等于白写；
+/// - 删除样例不改清单 → 文档指向一个不存在的文件，读者复制命令后得到
+///   `error: no example target named ...`。
+///
+/// 这与套件表守卫是同一类问题（文档与文件是同一份事实的两种陈述），因此用同一种
+/// 双向检查：只查「文档 → 文件」会漏掉未被登记的新文件，正是我在套件表上踩过的坑。
+///
+/// CI 另有一步**运行**每个样例；这条守卫管的是「有没有被登记」，那一步管的是
+/// 「跑起来对不对」。
+#[test]
+fn every_example_is_listed_in_the_api_doc() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    let mut actual: Vec<String> = Vec::new();
+    for entry in fs::read_dir(root.join("examples")).expect("examples/ must exist") {
+        let path = entry.expect("readable dir entry").path();
+        if path.extension().and_then(|s| s.to_str()) == Some("rs") {
+            actual.push(
+                path.file_stem()
+                    .expect("example file has a stem")
+                    .to_string_lossy()
+                    .to_string(),
+            );
+        }
+    }
+    actual.sort();
+    assert!(
+        !actual.is_empty(),
+        "examples/ is empty — this guard would pass vacuously"
+    );
+
+    let doc =
+        fs::read_to_string(root.join("docs/api.zh-CN.md")).expect("docs/api.zh-CN.md must exist");
+    let listed: std::collections::HashSet<String> = doc
+        .split("examples/")
+        .skip(1)
+        .filter_map(|rest| rest.split(".rs").next())
+        .filter(|name| !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
+        .map(|s| s.to_string())
+        .collect();
+
+    let mut problems: Vec<String> = Vec::new();
+    for name in &actual {
+        if !listed.contains(name) {
+            problems.push(format!(
+                "examples/{name}.rs exists but is not listed in docs/api.zh-CN.md; a sample \
+                 nobody can find may as well not exist"
+            ));
+        }
+    }
+    for name in &listed {
+        if !actual.contains(name) {
+            problems.push(format!(
+                "docs/api.zh-CN.md lists examples/{name}.rs, but that file does not exist; \
+                 a reader copying from the doc gets `no example target named {name}`"
+            ));
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "examples and the API doc disagree:\n{}",
+        problems.join("\n")
+    );
+}
