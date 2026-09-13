@@ -431,9 +431,33 @@ fn documented_suite_table_matches_the_files() {
         "only {checked} suite rows were matched — the table format changed and this guard \
          is no longer checking anything meaningful"
     );
+
+    // 表格之外，**散文里的套件数**也曾漂移：README 写「13 suites」、ROADMAP 写
+    // 「16 suites」，而实际是 15。逐行比对抓不到这个，因为它比的是每行，不是行数。
+    // 这里把「声明的套件数」与实际行数对上。
+    let declared_suites = checked;
+    for (path, needle) in [
+        ("ROADMAP.md", "test cases across {n} suites"),
+        ("README.md", "tests/              {n} suites,"),
+        ("docs/testing.md", "Run as {n} integration suites"),
+    ] {
+        let text = match fs::read_to_string(root.join(path)) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let expected = needle.replace("{n}", &declared_suites.to_string());
+        if !text.contains(&expected) {
+            problems.push(format!(
+                "{path} does not state {declared_suites} suites (expected to find `{expected}`). \
+                 The table in docs/testing.md has {declared_suites} rows, so any other number \
+                 there is stale."
+            ));
+        }
+    }
+
     assert!(
         problems.is_empty(),
-        "docs/testing.md disagrees with the test files:\n{}",
+        "docs disagree with the test files:\n{}",
         problems.join("\n")
     );
 }
