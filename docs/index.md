@@ -6,13 +6,14 @@ which one answers your question is the whole point of an index.
 
 ## Using the database
 
-| Document                                | Read it when                                                                                                       |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| [README.md](../README.md)               | First. Install, quick start, capabilities, limitations.                                                            |
-| [FORMAT.md](../FORMAT.md)               | You need the exact bytes — writing a reader, or reasoning about durability. The frozen-format contract lives here. |
-| [docs/architecture.md](architecture.md) | You want to know _why_ it works: paging, WAL, adjacency, batch weave, locks.                                       |
-| [docs/concurrency.md](concurrency.md)   | Multiple handles, threads, or processes — what is allowed today, what each other database allows, and the options. |
-| [docs/benchmarks.md](benchmarks.md)     | You need a performance number **and the conditions it was measured under**.                                        |
+| Document                                | Read it when                                                                                                                                                                        |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [README.md](../README.md)               | First. Install, quick start, capabilities, limitations.                                                                                                                             |
+| [examples/](../examples/)               | Copy-paste starting points — CRUD, Cypher, transactions, batch writes, snapshots, graph algorithms, backup, export, unique constraints. Each is **run** by CI, not merely compiled. |
+| [FORMAT.md](../FORMAT.md)               | You need the exact bytes — writing a reader, or reasoning about durability. The frozen-format contract lives here.                                                                  |
+| [docs/architecture.md](architecture.md) | You want to know _why_ it works: paging, WAL, adjacency, batch weave, locks.                                                                                                        |
+| [docs/concurrency.md](concurrency.md)   | Multiple handles, threads, or processes — what is allowed today, what each other database allows, and the options.                                                                  |
+| [docs/benchmarks.md](benchmarks.md)     | You need a performance number **and the conditions it was measured under**.                                                                                                         |
 
 ## Working on it
 

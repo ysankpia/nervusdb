@@ -15,8 +15,14 @@ examples/cypher_queries.rs       examples/export.rs
 ```
 
 运行其中任意一个：`cargo run --example crud`。
-**CI 会编译它们**（`cargo check --workspace --all-targets` 覆盖 `examples/`），
-所以样例不会无声腐坏。
+
+**CI 会把它们逐个跑一遍**（不是只编译）：`cargo check --all-targets` 能证明样例能
+编译，但证明不了它跑起来是对的——一个每次都 panic、或输出错误结果的样例，编译阶段
+照样通过。因此 CI 里有一条单独的步骤执行 `examples/` 下每个文件。
+
+这一条是有来历的：样例曾经只被编译，直到有人真的去跑，才发现 `k_hop_subgraph` 的
+参数个数写错、以及「写句柄存活时只读打开会失败」这条边界没被写进样例。编译通过而
+跑不对，是这类文档最容易出、也最难发现的问题。
 
 英文 API 名称保持原样，注释用中文。
 
