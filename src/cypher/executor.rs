@@ -1680,21 +1680,26 @@ impl<'a> CypherExecutor<'a> {
                         }
                     }
                     if multi {
-                        // 估计值必须连同**依据**一起打印：只说 0.02 行不变真假，
-                        // 说清它是标签索引数出来的，才可核对。
-                        let basis = if planned.estimate.start_is_measured {
-                            "起点实测"
-                        } else {
-                            "起点为估计上界"
-                        };
+                        // 依据必须打印出来，而且要打印**规划器算出的那一份**。
+                        //
+                        // 这里曾经只报一个由 `start_is_measured` 推出的粗略标签
+                        // （「起点实测」/「起点为估计上界」），于是 `estimate_start`
+                        // 精心拼出的具体依据——用的是哪个索引、键和值分别是什么——
+                        // 算完就被丢掉。那正是 AGENTS.md §12 说的「计算后被丢弃的
+                        // 累加器」，也违背了 planner 模块文档的承诺（「估计值和它的
+                        // 依据一起打印出来」）。
+                        //
+                        // 现在直接打印 `start_basis`：它本身已经包含「实测 vs 上界」
+                        // 这个区分（例如「label index (:P)」是实测，
+                        // 「full scan (…索引尚未建立)」是上界），信息量严格更大。
                         let driven = if planned.driven_by_binding {
                             "；起点变量已绑定 → 索引嵌套循环"
                         } else {
                             ""
                         };
                         lines.push(format!(
-                            "  │    Est. rows: {:.0} ({}{})",
-                            planned.estimate.rows, basis, driven
+                            "  │    Est. rows: {:.0}（起点依据：{}{}）",
+                            planned.estimate.rows, planned.estimate.start_basis, driven
                         ));
                     }
                 }

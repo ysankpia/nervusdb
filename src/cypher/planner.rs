@@ -97,10 +97,12 @@ impl<'a> PlanStats<'a> {
 pub struct PatternEstimate {
     /// 估计产出行数（上界口径，见模块文档）
     pub rows: f64,
-    /// 起点候选数及其来源（EXPLAIN 展示用）
+    /// 起点候选数**及其来源**（EXPLAIN 直接打印这一项）。
+    ///
+    /// 字符串里已经包含「实测 vs 上界」的区分——「label index (:P)」是索引里数出来的，
+    /// 「full scan (…索引尚未建立)」是上界。因此**不需要**一个并列的布尔标志：那种标志
+    /// 一旦没有读者，就变成「算了却不用」的第二个字段，正是本字段要修掉的问题。
     pub start_basis: String,
-    /// 起点候选数是否为实测（索引里数出来的）而非估计
-    pub start_is_measured: bool,
 }
 
 /// 定序后的一个模式。
@@ -120,11 +122,10 @@ pub fn estimate_pattern(pattern: &PathPattern, stats: &PlanStats) -> PatternEsti
         return PatternEstimate {
             rows: 0.0,
             start_basis: "empty pattern".to_string(),
-            start_is_measured: true,
         };
     };
 
-    let (mut rows, start_basis, start_is_measured) = estimate_start(start, stats);
+    let (mut rows, start_basis) = estimate_start(start, stats);
 
     let avg_degree = stats.average_degree();
     let total_nodes = stats.node_count_f64();
@@ -154,15 +155,16 @@ pub fn estimate_pattern(pattern: &PathPattern, stats: &PlanStats) -> PatternEsti
         rows = clamp_estimate(rows);
     }
 
-    PatternEstimate {
-        rows,
-        start_basis,
-        start_is_measured,
-    }
+    PatternEstimate { rows, start_basis }
 }
 
 /// 起点候选数的估计（含决定它是实测还是近似）。
-fn estimate_start(start: &NodePattern, stats: &PlanStats) -> (f64, String, bool) {
+/// 返回 `(起点候选数, 依据文字)`。
+///
+/// 只返回两项：曾经的第三个返回值是一个「是否实测」的布尔量，而它的全部用途就是让
+/// EXPLAIN 拼一句粗略标签。既然现在直接打印 `start_basis`，那个布尔量就没有读者了，
+/// 留着只会重演「算了却不用」的老问题。
+fn estimate_start(start: &NodePattern, stats: &PlanStats) -> (f64, String) {
     let total = stats.node_count_f64();
 
     if let Some(lbl) = start.labels.first() {
@@ -170,29 +172,20 @@ fn estimate_start(start: &NodePattern, stats: &PlanStats) -> (f64, String, bool)
         for (key, val_expr) in &start.properties {
             if let Expr::Literal(val) = val_expr {
                 if let Some(n) = stats.equality_candidates(lbl, key, val) {
-                    return (
-                        n,
-                        format!("property index (:{lbl} {{{key}: {val:?}}})"),
-                        true,
-                    );
+                    return (n, format!("property index (:{lbl} {{{key}: {val:?}}})"));
                 }
             }
         }
         let (card, measured) = stats.label_cardinality(lbl);
         if measured {
-            return (card, format!("label index (:{lbl})"), true);
+            return (card, format!("label index (:{lbl})"));
         }
-        return (
-            total,
-            format!("full scan (label :{lbl} 的索引尚未建立)"),
-            false,
-        );
+        return (total, format!("full scan (label :{lbl} 的索引尚未建立)"));
     }
 
     (
         total,
         "full scan (起点无标签约束，将遍历全部节点)".to_string(),
-        false,
     )
 }
 

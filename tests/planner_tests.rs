@@ -150,10 +150,19 @@ fn test_explain_reports_join_order_and_estimate_basis() -> Result<(), GraphError
         plan.contains("Est. rows"),
         "the plan must report an estimated cardinality:\n{plan}"
     );
-    // 依据必须说明是实测还是近似，二者都要能出现
+    // 依据必须是**规划器算出的那一份**，而不是从布尔量重推的粗略标签。
+    //
+    // 这条断言曾经只要求出现「起点实测」或「起点为估计上界」——那是从
+    // `start_is_measured` 拼出来的两句话，信息量比 `estimate_start` 实际算出的
+    // 少（它知道用的是哪个索引、键和值是什么）。现在直接断言那些**具体内容**，
+    // 使「算了却不用」这种退化无法再通过测试。
     assert!(
-        plan.contains("起点实测") || plan.contains("起点为估计上界"),
-        "the estimate must state whether it was measured or approximated:\n{plan}"
+        plan.contains("起点依据："),
+        "the estimate must print the planner's own basis:\n{plan}"
+    );
+    assert!(
+        plan.contains("label index (:P)"),
+        "the basis must name the index actually used, not a coarse label:\n{plan}"
     );
     assert!(
         plan.contains("索引嵌套循环"),
