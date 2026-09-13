@@ -10,7 +10,7 @@ conditions are quoted with it.
 
 ---
 
-## Current state (v1.0.0, stable)
+## Current state (v0.1.0)
 
 Working and covered by tests:
 
@@ -55,7 +55,7 @@ Working and covered by tests:
 - Tooling: Python and Node.js SDKs with transaction and batch-write support.
   Inspection and dump go through the library API — the CLI and the browser
   workbench were removed before 0.1.0.
-- 199 test cases across 16 suites (198 run, 1 intentionally `#[ignore]`d for a
+- 199 test cases across 15 suites (198 run, 1 intentionally `#[ignore]`d for a
   child-process lock probe); `cargo fmt`, `cargo clippy -D warnings` and
   `rustdoc -D warnings` all clean.
 

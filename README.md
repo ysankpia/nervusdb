@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/ysankpia/nervusdb/actions/workflows/ci.yml/badge.svg)](https://github.com/ysankpia/nervusdb/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.98%2B-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.89%2B-orange.svg)](https://www.rust-lang.org)
 
 An embedded, single-file **property graph database**: the SQLite model applied to
 graphs. Two files on disk, no server, no daemon, and resident memory bounded by a
@@ -197,7 +197,7 @@ src/
   graph.rs          Domain models: Node, Edge, Value, Direction, GraphError
 bindings/
   python/           PyO3 SDK          nodejs/   NAPI-RS SDK
-tests/              13 suites, 123 cases
+tests/              15 suites, 177 cases (+20 inline unit tests, +2 doctests)
 benches/            Reproducible throughput, pool-size and memory probes
 ```
 

@@ -588,6 +588,19 @@ fn documented_format_version_matches_the_code() {
         ("README.md", "frozen at **version {v}**"),
         // FORMAT.md 用「当前值是 N」的写法
         ("FORMAT.md", "The current value is **{v}**"),
+        // CHANGELOG 的 0.1.0 段记录这次格式变更；措辞与上面几处不同
+        ("CHANGELOG.md", "`DB_PAGE_VERSION` is now `{v}`"),
+    ];
+
+    // 反向守卫：0.1.0 段里不得再出现「格式版本停在 4」这类**陈旧**说法。
+    //
+    // 这正是本次的真实缺陷：改名把版本推到 5，而 CHANGELOG 里同一段既写 5
+    // 又写「format version stays 4」——一条 changelog 自相矛盾，读者无从判断。
+    // 上面的 cases 只能确认「写了正确的数字」，抓不到「同时写了错误的数字」。
+    const STALE_IN_CHANGELOG: &[&str] = &[
+        "format version stays 4",
+        "DB_PAGE_VERSION stays 4",
+        "version stays `4`",
     ];
 
     let mut problems: Vec<String> = Vec::new();
@@ -623,6 +636,19 @@ fn documented_format_version_matches_the_code() {
                  expected to find: {expected}\n\
                  a version-ish line there: {found}"
             ));
+        }
+    }
+
+    // 陈旧说法检查（见 STALE_IN_CHANGELOG 的说明）
+    if let Ok(changelog) = fs::read_to_string(root.join("CHANGELOG.md")) {
+        for stale in STALE_IN_CHANGELOG {
+            if changelog.contains(stale) {
+                problems.push(format!(
+                    "CHANGELOG.md still contains the stale claim `{stale}` while the \
+                     format version is {actual} — a changelog that states two different \
+                     versions for the same release cannot be trusted for either"
+                ));
+            }
         }
     }
 
