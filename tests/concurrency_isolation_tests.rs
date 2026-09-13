@@ -486,7 +486,7 @@ fn test_index_and_scan_agree_under_concurrent_writes() -> Result<(), GraphError>
 ///
 /// 因此这里用精确编排代替碰运气：读线程**显式地**读了一半就停住，让写者去尝试
 /// 删除。快照若真的持锁，写者必然被挡住；若有人把它改成不加锁（例如为了「提高
-/// 并发度」），这里会 100% 失败而不是偶尔失败。这正是 AGENTS.md §3.3 要求的：
+/// 并发度」），这里会 100% 失败而不是偶尔失败。这正是 `docs/testing.md` 要求的：
 /// 能可靠失败的测试才有价值。
 #[test]
 fn test_snapshot_prevents_interleaved_deletion() -> Result<(), GraphError> {

@@ -688,3 +688,147 @@ fn documented_format_version_matches_the_code() {
         problems.join("\n")
     );
 }
+
+// =========================================================================
+// 章节引用守卫
+// =========================================================================
+//
+// 代码与文档里大量出现 `AGENTS.md §N` 形式的引用（本次统计 16 处）。把 §3 从
+// 「139 行的四个子节」压缩成「一个 36 行的节」时，**四处 §3.x 引用当场失效**——
+// 引用指向的编号不再存在，而没有任何东西会报错：读者只会看到一个查不到的章节号。
+//
+// 这条守卫把「引用必须能解析」变成断言。它只检查**编号是否存在**，不检查被引用的
+// 内容是否仍然相关——后者靠人判断，机器做不了。
+
+#[test]
+fn agents_section_references_resolve() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    // AGENTS.md 里章节号有**两种**形式，两种都要认：
+    //   - `## 1. Non-Negotiable Invariants` / `### 3.1 ...`（标题）
+    //   - `1. **Pure Disk-Backed Architecture**`（`## 1.` 节里的编号条目，
+    //     即 §1–§14 那些「不变量」）
+    //
+    // 只认第一种是首版守卫的实际错误：它把全仓库 20 多处 `§13` 判为失效引用，
+    // 而那些引用完全正确。**守卫误报比不报更糟**——它会训练人忽略它。
+    let agents = fs::read_to_string(root.join("AGENTS.md")).expect("AGENTS.md must exist");
+    let mut defined: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for line in agents.lines() {
+        // 形式一：标题
+        if let Some(rest) = line
+            .strip_prefix("## ")
+            .or_else(|| line.strip_prefix("### "))
+        {
+            let number: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            if !number.is_empty() && !number.ends_with('.') {
+                defined.insert(number);
+            }
+            continue;
+        }
+        // 形式二：`N. **标题**` 的编号条目（§1–§14）
+        let trimmed = line.trim_start();
+        let digits: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !digits.is_empty() && trimmed[digits.len()..].starts_with(". **") {
+            defined.insert(digits);
+        }
+    }
+    assert!(
+        defined.len() >= 10,
+        "only found {} section numbers in AGENTS.md — the heading format changed and this \
+         guard is no longer checking anything",
+        defined.len()
+    );
+
+    // 扫描仓库里的 `§N` / `§N.M` 引用。history 与 CHANGELOG 记录的是历史，
+    // 它们引用的是**当时**的章节号，不该按今天的 AGENTS.md 校验。
+    // 目录 + **根目录下的散文**。首版只扫目录，于是 `ROADMAP.md` 里的失效引用
+    // 被漏掉——而 ROADMAP 恰恰是「那个已不存在的 3.5 号」失效的那一处。负向验证
+    // （把坏引用注入 ROADMAP）暴露了这个洞：守卫当时**通过了**。
+    //
+    // 注意注释里不写 `§` + 数字：守卫读的是文本，它无法区分「引用」与「提到引用」，
+    // 写上去会变成自我误报。这正是守卫只该做机械检查、判断留给人的原因。
+    const SCAN_DIRS: &[&str] = &["src", "tests", "docs"];
+    const SCAN_ROOT_FILES: &[&str] = &["ROADMAP.md", "README.md"];
+    let mut checked = 0usize;
+    let mut problems: Vec<String> = Vec::new();
+
+    let mut scan_file = |path: &Path, contents: &str, problems: &mut Vec<String>| {
+        for (i, line) in contents.lines().enumerate() {
+            // 跳过 history 文档
+            if path.to_string_lossy().contains("/history/") {
+                continue;
+            }
+            let bytes: Vec<char> = line.chars().collect();
+            let mut idx = 0usize;
+            while idx < bytes.len() {
+                if bytes[idx] == '§' {
+                    let mut j = idx + 1;
+                    let mut num = String::new();
+                    while j < bytes.len() && (bytes[j].is_ascii_digit() || bytes[j] == '.') {
+                        num.push(bytes[j]);
+                        j += 1;
+                    }
+                    let num = num.trim_end_matches('.').to_string();
+                    if !num.is_empty() {
+                        checked += 1;
+                        if !defined.contains(&num) {
+                            problems.push(format!(
+                                "{}:{}: references §{num}, which does not exist in AGENTS.md",
+                                path.display(),
+                                i + 1
+                            ));
+                        }
+                    }
+                    idx = j;
+                    continue;
+                }
+                idx += 1;
+            }
+        }
+    };
+
+    for dir in SCAN_DIRS {
+        let mut stack = vec![root.join(dir)];
+        while let Some(d) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&d) else {
+                continue;
+            };
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                    continue;
+                }
+                if p.extension().and_then(|s| s.to_str()) != Some("rs")
+                    && p.extension().and_then(|s| s.to_str()) != Some("md")
+                {
+                    continue;
+                }
+                if let Ok(c) = fs::read_to_string(&p) {
+                    scan_file(&p, &c, &mut problems);
+                }
+            }
+        }
+    }
+
+    for name in SCAN_ROOT_FILES {
+        let p = root.join(name);
+        if let Ok(c) = fs::read_to_string(&p) {
+            scan_file(&p, &c, &mut problems);
+        }
+    }
+
+    assert!(
+        checked > 0,
+        "no `§N` references found at all — this guard would pass vacuously"
+    );
+    assert!(
+        problems.is_empty(),
+        "{} of {checked} section references do not resolve:\n{}",
+        problems.len(),
+        problems.join("\n")
+    );
+}

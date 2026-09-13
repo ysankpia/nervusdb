@@ -55,7 +55,7 @@ Working and covered by tests:
 - Tooling: Python and Node.js SDKs with transaction and batch-write support.
   Inspection and dump go through the library API — the CLI and the browser
   workbench were removed before 0.1.0.
-- 199 test cases across 15 suites (198 run, 1 intentionally `#[ignore]`d for a
+- 200 test cases across 15 suites (199 run, 1 intentionally `#[ignore]`d for a
   child-process lock probe); `cargo fmt`, `cargo clippy -D warnings` and
   `rustdoc -D warnings` all clean.
 
@@ -108,7 +108,7 @@ releases there have been yanked, so the name now resolves only to the new line.
 Linux wheel and an npm tarball with no loadable binary, so neither registry could have
 served a working install. What remains before a first publish is not code: the three
 registry tokens must be set, and required reviewers added to the `release` environment
-(see AGENTS.md §3.5).
+(see [docs/releasing.md](docs/releasing.md)).
 
 **The previously recorded "9x slower than native" figure is retracted** — it came
 from debug builds of the bindings compared against a release core. Measured with

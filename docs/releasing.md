@@ -99,7 +99,7 @@ known to belong to another project, naming the owner in the message.
 
 ## Before the first release
 
-1. Run the full gate locally (`AGENTS.md` §3.1).
+1. Run the full gate locally ([AGENTS.md](../AGENTS.md) §3).
 2. Run the real-dataset acceptance and compare the red lines
    ([testing.md](testing.md) lists them; [benchmarks.md](benchmarks.md) explains why
    the exact totals, not the rates, are the check).
