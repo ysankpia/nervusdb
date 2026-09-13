@@ -243,7 +243,9 @@ or concurrently-mutated chain cannot spin forever.
 - **Reads are serialized, not parallel, and this is measured.** The buffer pool is
   reached through a single `Arc<Mutex<BufferPoolManager>>`, so every page touch
   acquires one global mutex — a `get_node` at least three times, plus once per
-  incident edge (degree 343 ⇒ ≈345 acquisitions). On com-DBLP, 16 threads doing
+  incident edge (degree 343 ⇒ ≈345 acquisitions, before the collapses described
+  below). `get_node` now takes the mutex **once** whatever the degree; what remains is
+  the single global mutex, not the acquisition count. On com-DBLP, 16 threads doing
   plain point reads achieved **0.6×–1.4% of single-thread throughput**: adding
   threads made reads *slower*. Control runs in the same process (pure CPU spin, and
   a loop taking only the outer read lock) both scaled to ≈40% at 16 threads, so the

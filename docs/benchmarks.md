@@ -212,7 +212,12 @@ threads into contention.
 **Mitigation applied: collapse the per-edge acquisitions.** `get_node` now walks a
 whole adjacency chain inside **one** buffer-pool acquisition instead of one per edge
 (`DiskGraph::collect_edge_chain_batched`), so a degree-343 hub costs a handful of
-acquisitions rather than ≈345. Measured under contention — 8 threads all reading the
+acquisitions rather than ≈345.
+
+*(The two paragraphs above describe the state at the time of the com-DBLP measurement.
+A later change collapsed those remaining four acquisitions into **one**, making a point
+read a single critical section whatever the degree — see the `get_node` rows further
+down. The acquisition counts here are history, not the current behaviour.)* Measured under contention — 8 threads all reading the
 same hub, which is the worst case for a global mutex, alternating the old and new
 builds:
 
