@@ -489,3 +489,52 @@ fn test_uncommitted_spilled_actions_are_ignored_after_an_abrupt_exit() -> Result
     assert_eq!(count(&db, "After")?, 1);
     Ok(())
 }
+
+/// 大批量 + 小上限 + 溢出开启：仍能全部入队并正确提交。
+///
+/// ## 这条覆盖 #13 引入的新组合
+///
+/// #13 之后，`Transaction` 在创建时**快照**了上限与溢出开关（`push_op` 不再每次取全局
+/// 锁），并且批量入口的预分配**按上限截断**（否则 6900 万条会预订约 7.7 GB 一个永远
+/// 用不满的容量，而 `Vec::clear()` 不归还）。
+///
+/// 已有测试分别覆盖「上限生效」与「溢出可提交」，但没有覆盖「大批量走溢出、且预分配
+/// 被上限压住」这一组合——正是本次改动动到的路径。规模取 2000 条配上限 100，
+/// 足以触发 20 次溢出腾窗。
+///
+/// ## 它断言什么
+///
+/// - 批量入口在溢出开启时**不再受上限拒绝**（上限变成「窗口大小」而非「事务大小」）
+/// - 全部 2000 条最终落盘，一条不少（溢出按序读回）
+#[test]
+fn test_large_batch_spills_under_a_small_cap() -> Result<(), GraphError> {
+    let (_dir, db) = open_spilling("spill_large_batch.db", 100)?;
+
+    let items: Vec<_> = (0..2000i64)
+        .map(|i| {
+            (
+                HashSet::from(["Big".to_string()]),
+                HashMap::from([("i".to_string(), Value::from(i))]),
+            )
+        })
+        .collect();
+
+    let mut tx = db.begin_transaction()?;
+    let ids = tx.add_nodes(items)?;
+    assert_eq!(ids.len(), 2000, "every queued node must get an id");
+    tx.commit()?;
+
+    assert_eq!(
+        count(&db, "Big")?,
+        2000,
+        "all 2000 nodes must commit; a smaller number means the spill lost actions"
+    );
+    // 属性逐个正确 → 溢出按序读回，编号没有错位
+    let sum = db.run_cypher("MATCH (b:Big) RETURN sum(b.i)")?;
+    assert_eq!(
+        sum.rows[0].values[0],
+        Value::from((0..2000i64).sum::<i64>()),
+        "property values must survive spill-then-read-back in order"
+    );
+    Ok(())
+}

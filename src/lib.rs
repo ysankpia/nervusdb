@@ -1679,14 +1679,20 @@ impl NervusDb {
 
     /// 开启显式事务
     pub fn begin_transaction(&self) -> Result<Transaction, GraphError> {
-        let tx_id = {
+        let (tx_id, max_actions, spill_enabled) = {
             let mut inner = self
                 .inner
                 .write()
                 .map_err(|e| GraphError::General(e.to_string()))?;
             let tx_id = inner.next_tx_id;
             inner.next_tx_id += 1;
-            tx_id
+            // 上限与溢出开关在此取一次快照：开库后不再改变，而 `push_op` 每个
+            // 动作都要用它。见 `Transaction::max_actions` 的说明。
+            (
+                tx_id,
+                inner.max_transaction_actions,
+                inner.spill_transaction_actions,
+            )
         };
 
         Ok(Transaction {
@@ -1695,6 +1701,8 @@ impl NervusDb {
             ops: Vec::new(),
             spilled: Vec::new(),
             has_spilled: false,
+            max_actions,
+            spill_enabled,
             committed: false,
         })
     }
@@ -2013,6 +2021,22 @@ pub struct Transaction {
     spilled: Vec<u64>,
     /// 本事务是否已把 `spilled_txns` 计数加过一（保证只减一次）。
     has_spilled: bool,
+    /// 动作队列上限与溢出开关的**快照**，在 `begin_transaction` 时取一次。
+    ///
+    /// ## 为什么快照而不是每次现取
+    ///
+    /// 这两个值在打开数据库之后不再改变（只由 `NervusDbOptions` 设置，见
+    /// `GraphInner` 的构造；没有运行期 setter）。而 `push_op` 是**每个动作**都要
+    /// 走一次的闸门，原先它每次都 `self.db.inner.read_recover()` 去读这两个数字。
+    ///
+    /// 单条写入无所谓——那条路径本来就要取一次写锁分配 ID。但批量入口
+    /// （`add_nodes` / `add_edges`）改走 `push_op` 之后，一次 6900 万条的导入
+    /// 就是 **6900 万次**全局读锁，而改动前每批只取一次。
+    ///
+    /// 快照与现取**语义完全相同**（值不变），差别只是不再有 N 次加锁。
+    max_actions: usize,
+    /// 见 [`Self::max_actions`]。
+    spill_enabled: bool,
     committed: bool,
 }
 
@@ -2025,14 +2049,13 @@ impl Transaction {
     ///
     /// 所有入队都必须经过它。分散到六个方法里各写一次边界判断，迟早会有一个
     /// 漏掉——那样上限就只在某些路径上有效，而调用方无从知道是哪一些。
+    ///
+    /// 上限与溢出开关取自事务创建时的快照（见 [`Self::max_actions`]），
+    /// **不再每次取全局锁**：本函数每个动作调用一次，取锁会让批量导入付出
+    /// 「每动作一次全局读锁」的代价。
     fn push_op(&mut self, op: TxAction) -> Result<(), GraphError> {
-        let (limit, spill_enabled) = {
-            let inner = self.db.inner.read_recover();
-            (
-                inner.max_transaction_actions,
-                inner.spill_transaction_actions,
-            )
-        };
+        let limit = self.max_actions;
+        let spill_enabled = self.spill_enabled;
         if limit > 0 && self.ops.len() >= limit {
             if spill_enabled {
                 return self.spill_resident(&op);
@@ -2137,6 +2160,20 @@ impl Transaction {
         // 于是「单条路径能溢出、批量路径仍然报错」——同一选项两种行为。批量
         // 预留 ID 的收益（免去每条一次加锁）由上面的 `allocate_next_node_ids`
         // 保有，逐条 `push_op` 只是把入队统一到同一闸门。
+        // 预分配，但**受上限约束**。
+        //
+        // 直接写 `reserve(nodes.len())`（改动前的写法）在溢出开启时是危险的：
+        // 溢出会把常驻窗口清空，窗口因此永远不会超过上限，于是一次 6900 万条的
+        // 批量会预订一个**永远不会被用满**的容量（每个动作 112 字节 → 约 7.7 GB），
+        // 而 `Vec::clear()` 不归还容量，它变成永久占用。按上限截断即可：窗口
+        // 本来就不会超过上限，多预留没有意义。
+        let cap = if self.max_actions > 0 {
+            self.max_actions
+        } else {
+            nodes.len()
+        };
+        self.ops.reserve(cap.min(nodes.len()));
+
         for (id, (labels, properties)) in ids.iter().copied().zip(nodes) {
             self.push_op(TxAction::AddNode {
                 id,
@@ -2166,7 +2203,14 @@ impl Transaction {
             inner.disk_graph.allocate_next_edge_ids(edges.len())?
         };
 
-        // 同 `add_nodes`：统一走 `push_op`，上限与溢出只有一处实现。
+        // 同 `add_nodes`：预分配按上限截断，理由见那里的说明。
+        let cap = if self.max_actions > 0 {
+            self.max_actions
+        } else {
+            edges.len()
+        };
+        self.ops.reserve(cap.min(edges.len()));
+
         for (id, e) in ids.iter().copied().zip(edges) {
             self.push_op(TxAction::AddEdge {
                 id,
