@@ -187,6 +187,11 @@ the reported figure is completed operations ÷ elapsed.
 At 16 threads the scaling efficiency (`speedup ÷ threads`) is **0.6%–4.5%** — adding
 threads makes reads slower, not faster.
 
+*(This table was measured **before** the acquisition-count reductions described below.
+The current figures, on the same dataset and with a pool large enough to hold it, are in
+"The same question on the real dataset" further down — the effect of the changes is real
+but the pool size matters more than it looks, so read both before quoting either.)*
+
 **Control runs, because a bad number must be shown to be real.** The collapse could
 plausibly be the measuring machine rather than the database, so three variants ran in
 the same process:
@@ -293,11 +298,52 @@ help a single thread, and it does not. The gain appears only where threads compe
 grows with thread count.
 
 **This is not the fix for read parallelism.** Readers are still serialized by one global
-mutex; the curve still falls from 894k to 396k. Collapsing four acquisitions into one
-shortens each visit to the critical section, it does not admit two readers at once.
-That needs per-frame latching — a buffer-pool concurrency redesign, not a patch.
-`ROADMAP.md` item 5 tracks it; item 1 (reader-versus-writer through the outer lock) is a
-separate problem with a separate fix.
+mutex. Collapsing four acquisitions into one shortens each visit to the critical section,
+it does not admit two readers at once. Per-frame latching remains the fix; `ROADMAP.md`
+item 5 tracks it.
+
+### The same question on the real dataset, and what the pool size does to the answer
+
+The synthetic curve above is a *shape*; it is not the number a real deployment sees.
+Re-running the same read path against the com-DBLP graph (317,080 nodes / 1,049,866
+edges) with the pool actually large enough to hold it (256 MB against an 81 MB file)
+changes the picture in both directions:
+
+| Pool | Hit rate | 1 thread | 16 threads | 16-thread scaling |
+| ---- | -------- | -------- | ---------- | ----------------- |
+| 4 MB (the default) | 80%   | 131k ops/s | 103k ops/s | 0.78× |
+| 256 MB             | 99.6% | 866k ops/s | 359k ops/s | 0.42× |
+
+**With a too-small pool, disk I/O hides the lock contention and makes the curve look
+gentler** — 0.78× instead of 0.42×. That is worth stating plainly, because it means a
+reader who benchmarks with the default pool will conclude the concurrency problem is
+smaller than it is. The 256 MB row is the honest one: cache hits at 99.6%, so what
+remains is the mutex.
+
+Restricting to the scenario the original figure was measured in — all threads reading the
+**same** 50 highest-degree hubs, 100% cache hits — gives:
+
+| Threads | ops/s | Efficiency |
+| ------- | ----- | ---------- |
+| 1       | 69,962 | 1.00× |
+| 2       | 57,880 | 0.41× |
+| 4       | 57,514 | 0.21× |
+| 8       | 56,876 | 0.10× |
+| 16      | 57,132 | **0.051×** |
+
+**5.1% efficiency against the ≈40% this machine can deliver**, and throughput stops
+falling once the mutex is the only constraint left. This is the target for per-frame
+latching, and it is measured with the same instrument anyone else can run:
+
+```bash
+DB_PATH=/path/to/dblp_team3.db POOL_FRAMES=65536 HUB_READ=1 \
+  cargo bench --bench concurrency_scaling_bench
+```
+
+`HUB_READ` matters for comparison: hub reads are the worst case for a global lock (every
+thread collides on the same pages), while disjoint node ranges are the best case. Mixing
+the two produces a before/after that looks like a comparison but is actually two
+different workloads.
 
 **Scope of the claim.** This is about *read parallelism*, not correctness or
 single-threaded speed: the full suite passes, and the batched walk is
