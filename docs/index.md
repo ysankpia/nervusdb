@@ -48,6 +48,15 @@ mystery when one of them mentions `/triage` or an ADR.
 them lazily when a term or decision is actually resolved. Scaffolding them empty would
 just be two files nobody reads.
 
+## 中文文档 / Chinese docs
+
+中文文档只有这两份，深度文档以英文版为唯一权威来源——同一件事写两遍必然漂移。
+
+| Document | Contents |
+| -------- | -------- |
+| [README.zh-CN.md](../README.zh-CN.md) | 项目介绍：状态、特性、安装、快速上手。 |
+| [docs/api.zh-CN.md](api.zh-CN.md) | 按任务分组的 API 用法样例，每段都在 `examples/` 下编译并运行过。 |
+
 ## Historical
 
 | Document                                                        | Note                                                                                                                                              |

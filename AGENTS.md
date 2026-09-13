@@ -335,8 +335,9 @@ The file was untracked, so `git stash` had not captured it, and there was no
 recovery path — it had to be rebuilt from a session log, and the reconstruction
 silently lost two fixes that had to be re-derived afterwards.
 
-Untracked files (new modules, scratch harnesses, `examples/`) are the easiest
-thing to lose and the hardest to get back. Therefore:
+Untracked files (new modules, scratch harnesses, anything in `examples/` that is
+not yet committed) are the easiest thing to lose and the hardest to get back.
+Therefore:
 
 - **Move, don't delete.** Send anything you want out of the way to
   `.trash/<YYYY-MM-DD>/` and leave it there. `.trash/` is gitignored; a human
