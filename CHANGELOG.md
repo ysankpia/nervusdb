@@ -56,6 +56,35 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
 ### Added
 
+- **Cost-based join ordering for multi-pattern `MATCH`.** A query with several patterns
+  in one `MATCH` is no longer solved by expanding each pattern independently and
+  multiplying. Patterns are ordered by estimated cardinality, preferring ones that share
+  a variable with the patterns already solved, and a pattern whose start variable is
+  already bound expands **from that node** instead of computing its full match set:
+
+  ```text
+  MATCH (h:Hub {key: 'target'}), (h)-[:R]->(c) RETURN count(*)
+  ```
+
+  The second pattern used to enumerate every `(h)-[:R]->(c)` pair in the graph before
+  filtering on `h`. It now expands from the one bound node. Measured on a fixture with
+  20,000 nodes and a 64-frame pool, buffer-pool misses for that query are 0–5 against
+  **316** when the bound-driven path is disabled.
+
+  **Behavioural, and worth knowing:** the **row order** of a multi-pattern result can
+  differ from previous versions, because rows now come out in the planned order. Cypher
+  does not guarantee an order without `ORDER BY` and the row _set_ is unchanged, but if
+  you were relying on the incidental order, add `ORDER BY`.
+
+  **The cost model's limit, stated rather than implied:** there is no per-relationship
+  edge count and no degree histogram in the storage engine, so fan-out is approximated
+  as the average degree `2E/N` scaled by the target label's share. It reliably separates
+  an indexed lookup from a full scan and cannot reliably rank two patterns of similar
+  size. It chooses **order**, not access method — the index is used when one exists
+  rather than being costed against a scan. `EXPLAIN` prints each pattern's estimate
+  together with whether it was measured from an index or approximated, so the numbers
+  can be checked rather than trusted.
+
 - **`UNWIND <list> AS <var>` — batch ingestion in one statement.** It expands a list
   into rows and binds each element, which is the only way to express bulk data inside
   a single query:
@@ -177,8 +206,7 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
     build instead of drifting.
 
   Both guards needed a second attempt to be worth keeping, which is recorded in their
-  comments: the first slice guard matched only single-line conversions (missing 23 of
-  46) and then attributed doc comments to the wrong function (18 false positives); the
+  comments: the first slice guard matched only single-line conversions (missing 23 of 46) and then attributed doc comments to the wrong function (18 false positives); the
   first count guard derived a total that could not be made to agree with the runner. A
   guard that is blind or noisy is worse than none, because it trains people to ignore
   it.

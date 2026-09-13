@@ -435,6 +435,42 @@ fn documented_suite_table_matches_the_files() {
     // 表格之外，**散文里的套件数**也曾漂移：README 写「13 suites」、ROADMAP 写
     // 「16 suites」，而实际是 15。逐行比对抓不到这个，因为它比的是每行，不是行数。
     // 这里把「声明的套件数」与实际行数对上。
+    // **反向检查：表格漏掉了某个测试文件。**
+    //
+    // 上面是「逐行核对已记录的行」，因此它天生看不见**没有行**的文件——
+    // 新增 `tests/planner_tests.rs` 时守卫完全沉默，我是手工发现漏登记的。
+    // 这是该守卫的**第二个**此类缺陷（第一个是只认标题不认编号条目），
+    // 两个都是「只查 A→B、不查 B→A」的同一个形状。
+    //
+    // 反向检查的意义不只是数字对不上：**没进表格的套件等于没被点名**，
+    // 而这张表的用途正是让人知道「哪套测试覆盖什么」。
+    {
+        let mut listed: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for line in doc.lines() {
+            let cells: Vec<&str> = line.split('|').map(|c| c.trim()).collect();
+            if cells.len() >= 4 {
+                let n = cells[1].trim_matches('`');
+                if n.ends_with(".rs") {
+                    listed.insert(n.to_string());
+                }
+            }
+        }
+        let entries = fs::read_dir(root.join("tests")).expect("tests/ must exist");
+        for entry in entries.flatten() {
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            if !file_name.ends_with(".rs") {
+                continue;
+            }
+            if !listed.contains(&file_name) {
+                problems.push(format!(
+                    "tests/{file_name} exists but has no row in the docs/testing.md suite \
+table. Add a row (name, case count, what it covers) — an undocumented suite is a suite \
+nobody knows to run."
+                ));
+            }
+        }
+    }
+
     let declared_suites = checked;
     for (path, needle) in [
         ("ROADMAP.md", "test cases across {n} suites"),

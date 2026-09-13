@@ -55,7 +55,7 @@ Working and covered by tests:
 - Tooling: Python and Node.js SDKs with transaction and batch-write support.
   Inspection and dump go through the library API — the CLI and the browser
   workbench were removed before 0.1.0.
-- 200 test cases across 15 suites (199 run, 1 intentionally `#[ignore]`d for a
+- 208 test cases across 16 suites (207 run, 1 intentionally `#[ignore]`d for a
   child-process lock probe); `cargo fmt`, `cargo clippy -D warnings` and
   `rustdoc -D warnings` all clean.
 
@@ -98,10 +98,43 @@ giving up rollback.
 
 ### 3. Cost-based query planning
 
-Start-node selection is rule-based (index when available, otherwise a scan) and
-`LIMIT` push-down is decided by a fixed safety check. There is no cost model, no
-join reordering and no index-nested-loop selection. Adequate at the current scale;
-a limitation for complex analytical queries.
+**Done, with a stated limit.** `src/cypher/planner.rs` holds the cost model and the
+join order; `find_matches` now runs a planned index-nested loop instead of expanding
+every pattern independently and multiplying.
+
+What it does:
+
+- **Orders patterns by estimated cardinality**, preferring a pattern that shares a
+  variable with the ones already solved. Connectivity comes first because a cheap
+  pattern with no shared variable only produces rows for a later Cartesian product.
+- **Drives the inner pattern from the bound node.** When a pattern's start variable is
+  already bound, it expands from that one node rather than computing the pattern's full
+  match set and discarding almost all of it.
+- **Reports the plan in `EXPLAIN`**, including each pattern's estimate and whether that
+  estimate was _measured_ (counted from a real index) or _approximated_.
+
+What it does **not** do — the limit is the point, so it is stated rather than implied:
+
+- **There is no per-relationship-type edge count and no degree histogram.** Fan-out is
+  approximated as the average degree `2E/N`, scaled by the target label's share. The
+  model therefore separates "indexed equality lookup" from "full scan" (orders of
+  magnitude) but **cannot** rank two patterns whose candidate counts are similar.
+- **No index-nested-loop _selection_**: the index is used when one exists rather than
+  being costed against a scan. The planner decides order, not access method.
+- **The estimate feeds only the ordering**, never a row-count promise. `EXPLAIN` labels
+  each number's basis so a reader is not misled into treating an approximation as a
+  measurement.
+
+Measured effect (this repository's fixture, 64-frame pool, 20,000 decoy nodes with only
+one relevant edge): buffer-pool misses for the driven query are 0–5 with the bound-driven
+path against **316** with it disabled — the reorder is a real work reduction, not a
+notation change. `tests/planner_tests.rs` pins that comparison and asserts the row sets
+are unchanged by reordering.
+
+**Row order in multi-pattern results changed.** Cypher does not promise an order without
+`ORDER BY`, so this is not a compatibility break, but it is a visible difference: rows
+now come out in the planned pattern order. Documented here and in the changelog rather
+than left for a caller to discover.
 
 ### 4. SDK publication
 

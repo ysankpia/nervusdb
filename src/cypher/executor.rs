@@ -2,6 +2,7 @@ use crate::cypher::ast::{
     AggregateArg, AggregateFunc, BinaryOperator, CypherStatement, DeleteClause, ExecuteResult,
     Expr, MatchClause, NodePattern, OrderItem, PathPattern, ReturnItem, SetItem,
 };
+use crate::cypher::planner::{plan_pattern_order, PlanStats};
 use crate::disk_graph::DiskGraph;
 use crate::graph::{Direction, GraphError, Value};
 use crate::index::IndexManager;
@@ -152,7 +153,18 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         self.find_single_pattern_matches_capped(&patterns[0], where_clause, cap)
     }
 
-    /// 多模式匹配：逐模式求解后按共享变量做连接（笛卡尔积 + 一致性约束）
+    /// 多模式匹配：按代价模型定序，再以索引嵌套循环求解。
+    ///
+    /// ## 与旧实现的关系
+    ///
+    /// 旧实现把每个模式**各自**求完整匹配集，再两两相乘做一致性连接。当后一个模式
+    /// 的起点与前面的模式**共享变量**时，这次相乘是纯浪费：后一个模式会先在全图展开，
+    /// 之后才用共享变量把绝大部分结果过滤掉。
+    ///
+    /// 现在由 `planner` 决定求解顺序，并在起点变量已被绑定时**只从那个节点展开**。
+    ///
+    /// 单模式路径的结果与行序与旧实现**逐位相同**：定序退化为 `[0]`，而「空上下文 +
+    /// 枚举候选起点」正是原来的 `find_single_pattern_matches`。
     pub fn find_matches(
         &self,
         patterns: &[PathPattern],
@@ -162,33 +174,30 @@ impl<'a> CypherReadOnlyExecutor<'a> {
             return Ok(Vec::new());
         }
 
+        let stats = PlanStats::new(self.graph, self.index_mgr);
+        let order = plan_pattern_order(patterns, &stats);
+
         let mut combined: Vec<RowCtx> = vec![RowCtx::new()];
 
-        for (idx, pattern) in patterns.iter().enumerate() {
-            // 仅对首个模式启用索引加速（WHERE 中的候选集推导基于整体表达式）
-            let pattern_rows = if idx == 0 {
-                self.find_single_pattern_matches(pattern, where_clause)?
-            } else {
-                self.find_single_pattern_matches(pattern, &None)?
-            };
+        for planned in order.iter() {
+            let pattern = &patterns[planned.index];
 
-            if pattern_rows.is_empty() {
-                return Ok(Vec::new());
-            }
-
-            let mut joined: Vec<RowCtx> = Vec::new();
+            let mut next: Vec<RowCtx> = Vec::new();
             for base in &combined {
-                for candidate in &pattern_rows {
-                    if let Some(merged) = merge_contexts(base, candidate) {
-                        joined.push(merged);
-                    }
-                }
+                // WHERE 交给每个模式：`find_initial_candidates` 只在 WHERE 里出现
+                // **本模式起点变量**的等值/范围条件时才会用它收窄候选，否则原样退回
+                // 标签索引或全扫。因此对不相干的模式它是惰性的。
+                //
+                // 定序之前只有 `patterns[0]` 得到这份收窄，而 `patterns[0]` 未必是
+                // 被选中先执行的那个。传给它自己，收窄才跟着它走；漏传只是少一次
+                // 优化（行集不变），传错模式也不可能——收窄条件仍受最终 WHERE 过滤。
+                self.expand_pattern(pattern, base, where_clause, &mut next)?;
             }
-            combined = joined;
 
-            if combined.is_empty() {
+            if next.is_empty() {
                 return Ok(Vec::new());
             }
+            combined = next;
         }
 
         if let Some(ref w) = where_clause {
@@ -198,21 +207,37 @@ impl<'a> CypherReadOnlyExecutor<'a> {
         Ok(combined)
     }
 
-    /// 求解单个路径模式的全部匹配上下文
-    fn find_single_pattern_matches(
+    /// 在一个既有行上下文上展开一个模式（索引嵌套循环的内层）。
+    ///
+    /// 起点变量若已被前面的模式绑定，就直接从那个节点展开；否则枚举候选起点。
+    /// 这条 `if` 就是复杂度差异的来源：绑定存在时，展开量由「一个节点」决定，
+    /// 而不是由「该模式在全图中的匹配总数」决定。
+    fn expand_pattern(
         &self,
         pattern: &PathPattern,
+        base: &RowCtx,
         where_clause: &Option<Expr>,
-    ) -> Result<Vec<RowCtx>, GraphError> {
-        if pattern.nodes.is_empty() {
-            return Ok(Vec::new());
+        out: &mut Vec<RowCtx>,
+    ) -> Result<(), GraphError> {
+        let Some(start_pat) = pattern.nodes.first() else {
+            return Ok(());
+        };
+
+        if let Some(var) = &start_pat.variable {
+            if let Some(Binding::Node(bound_id)) = base.get(var) {
+                let start_id = *bound_id;
+                // 模式对起点可能还有额外约束（`MATCH (a:P), (a:Q)-[:R]->(b)`），
+                // 已绑定不等于满足本模式的标签/属性要求。
+                if self.graph.read_node_record(start_id)?.is_some()
+                    && self.node_matches_pattern(start_id, start_pat)
+                {
+                    self.match_path_step(pattern, 0, start_id, base, out)?;
+                }
+                return Ok(());
+            }
         }
 
-        let start_pat = &pattern.nodes[0];
-        let candidate_start_nodes = self.find_initial_candidates(start_pat, where_clause)?;
-
-        let mut matched = Vec::new();
-        for start_id in candidate_start_nodes {
+        for start_id in self.find_initial_candidates(start_pat, where_clause)? {
             // 通过定长 NodeRecord 做快速过滤，避免无谓的溢出页调入
             if self.graph.read_node_record(start_id)?.is_none() {
                 continue;
@@ -221,18 +246,24 @@ impl<'a> CypherReadOnlyExecutor<'a> {
                 continue;
             }
 
-            let mut ctx = RowCtx::new();
+            let mut ctx = base.clone();
             if let Some(ref var) = start_pat.variable {
-                ctx.insert(var.clone(), Binding::Node(start_id));
+                // 同名变量是连接约束而非覆盖
+                if !bind_or_reject(&mut ctx, var, Binding::Node(start_id)) {
+                    continue;
+                }
             }
-
-            self.match_path_step(pattern, 0, start_id, &ctx, &mut matched)?;
+            self.match_path_step(pattern, 0, start_id, &ctx, out)?;
         }
 
-        Ok(matched)
+        Ok(())
     }
 
-    /// 与 [`Self::find_single_pattern_matches`] 相同，但凑够 `cap` 行即停。
+    /// 与单模式展开相同，但凑够 `cap` 行即停。
+    ///
+    /// 这是 `LIMIT` 下推的实现（`execute_match` → `limit_pushdown`）。它走的是
+    /// **未定序**的单模式路径，与 [`Self::expand_pattern`] 的区别只有两点：起点
+    /// 恒为空上下文，以及行数达到 `cap` 后停止枚举。
     ///
     /// 提前停止的条件是**外层候选循环**：一旦 `matched.len() >= cap` 就不再尝试
     /// 下一个起点。这是 `LIMIT` 真正的加速点——`LIMIT 1` 只需要第一个能匹配的
@@ -1341,21 +1372,6 @@ fn bind_or_reject(ctx: &mut RowCtx, var: &str, binding: Binding) -> bool {
     }
 }
 
-/// 合并两个上下文（共享变量必须绑定一致，否则连接失败）
-fn merge_contexts(base: &RowCtx, candidate: &RowCtx) -> Option<RowCtx> {
-    let mut merged = base.clone();
-    for (k, v) in candidate {
-        match merged.get(k) {
-            Some(existing) if existing != v => return None,
-            Some(_) => {}
-            None => {
-                merged.insert(k.clone(), v.clone());
-            }
-        }
-    }
-    Some(merged)
-}
-
 /// 依据遍历方向求取边上「对端」节点
 fn neighbor_of(edge: &crate::graph::Edge, from: u64) -> u64 {
     if edge.src_id == from && edge.dst_id == from {
@@ -1450,7 +1466,11 @@ impl<'a> CypherExecutor<'a> {
     ///
     /// 计划由 AST 与索引元数据推导，**不触碰磁盘**，也不执行内层语句。
     /// 因此在空库上同样可用，且没有副作用。
-    fn explain_statement(stmt: &CypherStatement, index_mgr: &IndexManager) -> CypherResultSet {
+    fn explain_statement(
+        stmt: &CypherStatement,
+        graph: &DiskGraph,
+        index_mgr: &IndexManager,
+    ) -> CypherResultSet {
         let mut lines: Vec<String> = Vec::new();
 
         match stmt {
@@ -1519,10 +1539,29 @@ impl<'a> CypherExecutor<'a> {
                     "ReadQuery (共享读锁即可)".to_string()
                 });
 
-                // 起点选择：与 `find_initial_candidates` 的判断顺序一致
-                for (pi, pattern) in clause.patterns.iter().enumerate() {
+                // 连接定序：与 `find_matches` 同一份规划器输出，且**必须**同源。
+                // 计划里报一个顺序、执行时用另一个，比没有计划更糟。
+                let stats = PlanStats::new(graph, index_mgr);
+                let order = plan_pattern_order(&clause.patterns, &stats);
+                let multi = clause.patterns.len() > 1;
+
+                if multi {
+                    lines.push(format!(
+                        "  ├─ JoinOrder ({} 个模式，按估计基数升序；共享变量优先)",
+                        order.len()
+                    ));
+                }
+
+                for (rank, planned) in order.iter().enumerate() {
+                    let pattern = &clause.patterns[planned.index];
+                    let label = if multi {
+                        format!("模式 {} (原第 {} 位)", rank, planned.index)
+                    } else {
+                        format!("模式 {}", planned.index)
+                    };
+                    lines.push(format!("  ├─ Expand ({})", label));
                     if let Some(start) = pattern.nodes.first() {
-                        lines.push(format!("  ├─ Expand (模式 {})", pi));
+                        // 起点依据的措辞与 `find_initial_candidates` 的判断顺序一致
                         let how =
                             Self::explain_start_selection(start, &clause.where_clause, index_mgr);
                         lines.push(format!("  │    StartNode: {}", how));
@@ -1544,6 +1583,24 @@ impl<'a> CypherExecutor<'a> {
                             };
                             lines.push(format!("  │      {} [{}]{}", dir, ty, hops));
                         }
+                    }
+                    if multi {
+                        // 估计值必须连同**依据**一起打印：只说 0.02 行不变真假，
+                        // 说清它是标签索引数出来的，才可核对。
+                        let basis = if planned.estimate.start_is_measured {
+                            "起点实测"
+                        } else {
+                            "起点为估计上界"
+                        };
+                        let driven = if planned.driven_by_binding {
+                            "；起点变量已绑定 → 索引嵌套循环"
+                        } else {
+                            ""
+                        };
+                        lines.push(format!(
+                            "  │    Est. rows: {:.0} ({}{})",
+                            planned.estimate.rows, basis, driven
+                        ));
                     }
                 }
 
@@ -1647,7 +1704,9 @@ impl<'a> CypherExecutor<'a> {
         stmt: CypherStatement,
     ) -> Result<CypherResultSet, GraphError> {
         match stmt {
-            CypherStatement::Explain(inner) => Ok(Self::explain_statement(&inner, self.index_mgr)),
+            CypherStatement::Explain(inner) => {
+                Ok(Self::explain_statement(&inner, self.graph, self.index_mgr))
+            }
             CypherStatement::Create { pattern } => self.execute_create(&[pattern]),
             CypherStatement::Unwind {
                 expr,
@@ -2310,7 +2369,7 @@ pub fn execute_cypher_read(
     // ——包括 `EXPLAIN CREATE ...` 与 `EXPLAIN ... SET ...`。
     // 位置必须在 is_mutating 守卫**之前**，否则这些查询会被误判为写操作而拒绝。
     if let CypherStatement::Explain(inner) = &statement {
-        return Ok(CypherExecutor::explain_statement(inner, index_mgr));
+        return Ok(CypherExecutor::explain_statement(inner, graph, index_mgr));
     }
 
     if statement.is_mutating() {

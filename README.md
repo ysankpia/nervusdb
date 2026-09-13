@@ -33,7 +33,7 @@ fn main() -> Result<(), GraphError> {
 ## Status
 
 **`v0.1.0` — first release under this name.** The engine, Cypher surface, analytics
-and safety guarantees are implemented and covered by 199 passing tests (200 total, 1 intentionally ignored). The on-disk format is
+and safety guarantees are implemented and covered by 207 passing tests (208 total, 1 intentionally ignored). The on-disk format is
 frozen at **version 5**; see `FORMAT.md` for the one exception to that freeze (the
 Page 0 magic, renamed with the project) and its migration path. Several known gaps
 remain — read [Known limitations](ROADMAP.md#next-planned) before considering
@@ -197,7 +197,7 @@ src/
   graph.rs          Domain models: Node, Edge, Value, Direction, GraphError
 bindings/
   python/           PyO3 SDK          nodejs/   NAPI-RS SDK
-tests/              15 suites, 178 cases (+20 inline unit tests, +2 doctests)
+tests/              16 suites, 186 cases (+20 inline unit tests, +2 doctests)
 benches/            Reproducible throughput, pool-size and memory probes
 ```
 
