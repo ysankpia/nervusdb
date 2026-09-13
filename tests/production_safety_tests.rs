@@ -1094,8 +1094,27 @@ fn test_read_only_handle_rejects_every_write_path() -> Result<(), GraphError> {
                 .map(|_| ()),
         ),
         ("checkpoint", ro.checkpoint()),
+        // The transaction entry points. These were missing from the list for as long
+        // as it existed, and the omission was not cosmetic: `begin_transaction` /
+        // `with_transaction` / `commit` carried no read-only guard at all, so a
+        // read-only handle could write through them and report success. See
+        // `test_read_only_handle_cannot_write_via_transactions` for the full case.
+        (
+            "begin_transaction+commit",
+            (|| -> Result<(), GraphError> {
+                let mut tx = ro.begin_transaction()?;
+                tx.add_node(HashSet::from(["N".to_string()]), props(3))?;
+                tx.commit()
+            })(),
+        ),
+        (
+            "with_transaction(add_node)",
+            ro.with_transaction(|tx| {
+                tx.add_node(HashSet::from(["N".to_string()]), props(4))?;
+                Ok(())
+            }),
+        ),
     ];
-
     let mut violations = Vec::new();
     for (label, result) in &attempts {
         if result.is_ok() {
@@ -1118,6 +1137,98 @@ fn test_read_only_handle_rejects_every_write_path() -> Result<(), GraphError> {
     );
 
     // 最关键的断言：库里确实什么都没变
+    drop(ro);
+    let check = NervusDb::open(&db_path)?;
+    assert_eq!(check.node_count(), 1, "no node may have been created");
+    let res = check.run_cypher("MATCH (n) RETURN count(*) AS n")?;
+    assert_eq!(res.rows[0].values[0].as_i64(), Some(1));
+
+    Ok(())
+}
+
+/// **只读句柄不得通过事务写入 —— 而这曾经可以，且完全静默。**
+///
+/// ## 缺陷
+///
+/// `reject_write` 在 12 个写入口上生效（直接 CRUD、Cypher、checkpoint、vacuum、
+/// 约束），但事务入口一个都没有：
+///
+/// - `begin_transaction` 只递增 `next_tx_id`；
+/// - `Transaction::commit` 直接走 `commit_internal`，不检查句柄标志。
+///
+/// 于是 `open_read_only(...)` 之后 `with_transaction(|tx| tx.add_node(...))`
+/// **返回 `Ok`**，WAL 真的增长，数据真的持久化。实测：单次写入让 WAL 从 0 涨到
+/// 12429 字节，重开数据库后该节点在库里。
+///
+/// ## 为什么这个比「写进去了」更糟
+///
+/// 只读句柄取的是**共享**锁（`DbLock::acquire_shared`），共享锁之间互不排斥——
+/// 这是「多个读者」的设计。但一旦只读者也能写，**多个只读句柄就变成了多个写者**，
+/// 而它们之间没有任何互斥。实测两个只读句柄各提交 500 个事务：
+///
+/// - 1000 次提交**全部返回 `Ok`**；
+/// - 重开后只有 1 个节点（初始那个），**1000 次写入一条不剩**；
+/// - `integrity_check` 报 0 个问题——它检查的是图结构，不是「写入有没有落地」。
+///
+/// 这正是 `AGENTS.md` §11 要禁止的「静默多写者」，只不过从只读这条路绕了进来。
+/// 锁的文档其实写明了这个前提（`acquire_shared`：「调用方仍需保证自己不写文件」），
+/// 但那是一句约定，代码从未强制它。
+#[test]
+fn test_read_only_handle_cannot_write_via_transactions() -> Result<(), GraphError> {
+    let dir = tempdir()?;
+    let db_path = dir.path().join("ro_tx.db");
+
+    {
+        let db = NervusDb::open(&db_path)?;
+        db.add_node(HashSet::from(["N".to_string()]), props(1))?;
+        db.checkpoint()?;
+    }
+
+    let wal_path = db_path.with_extension("db.wal");
+    let wal_before = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+
+    let ro = NervusDb::open_read_only(&db_path)?;
+    assert!(ro.is_read_only());
+
+    // 两条事务路径都必须被拒绝……
+    let via_with = ro.with_transaction(|tx| {
+        tx.add_node(HashSet::from(["Evil".to_string()]), props(666))?;
+        Ok(())
+    });
+    assert!(
+        via_with.is_err(),
+        "`with_transaction` on a read-only handle must be refused, but it returned Ok"
+    );
+
+    let via_begin = (|| -> Result<(), GraphError> {
+        let mut tx = ro.begin_transaction()?;
+        tx.add_node(HashSet::from(["Evil2".to_string()]), props(667))?;
+        tx.commit()
+    })();
+    assert!(
+        via_begin.is_err(),
+        "`begin_transaction` + `commit` on a read-only handle must be refused, \
+         but it returned Ok"
+    );
+
+    // ……错误信息要能指导用户，而不是只说「失败了」。
+    let msg = via_with.unwrap_err().to_string();
+    assert!(
+        msg.contains("read-only"),
+        "error must name the cause, got: {msg}"
+    );
+
+    // ……而且**磁盘上必须真的没有变化**。
+    //
+    // 只断言「返回 Err」是不够的：这个缺陷的表现就是「返回 Ok 但数据丢了」，
+    // 反过来也可能出现「返回 Err 但 WAL 已经写进去了」。WAL 长度是能直接观察
+    // 到写入是否发生的量，而 `node_count` 在只读句柄上会读到自己的未提交状态。
+    let wal_after = std::fs::metadata(&wal_path).map(|m| m.len()).unwrap_or(0);
+    assert_eq!(
+        wal_before, wal_after,
+        "a refused transaction must not append anything to the WAL"
+    );
+
     drop(ro);
     let check = NervusDb::open(&db_path)?;
     assert_eq!(check.node_count(), 1, "no node may have been created");

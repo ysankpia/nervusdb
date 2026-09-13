@@ -1649,7 +1649,16 @@ impl NervusDb {
     }
 
     /// 开启显式事务
+    ///
+    /// **只读句柄在此拒绝**，而不是在 `commit` 处。这是唯一的入口：`with_transaction`
+    /// 也走它，因此一处守卫覆盖两条事务路径。
+    ///
+    /// 为什么必须在入口拦：只读句柄取的是**共享**锁，共享锁之间互不排斥（「多个读者」
+    /// 的设计）。一旦只读者能写，多个只读句柄就变成多个**没有互斥的写者**——实测两个
+    /// 只读句柄各提交 500 次，1000 次全部返回 `Ok` 而数据一条不剩。等到 `commit` 才拦
+    /// 也晚了一步：事务已经构造完成，调用方在两次调用之间看不出任何异常。
     pub fn begin_transaction(&self) -> Result<Transaction, GraphError> {
+        self.reject_write("begin a transaction")?;
         let (tx_id, max_actions, spill_enabled) = {
             let mut inner = self
                 .inner

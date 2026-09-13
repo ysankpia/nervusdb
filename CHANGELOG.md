@@ -337,6 +337,27 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
 ### Fixed
 
+- **A read-only handle could write, and did — silently.** `reject_write` guarded the 12
+  direct write entry points (CRUD, Cypher, checkpoint, vacuum, constraints) but no
+  transaction entry point. `with_transaction(|tx| tx.add_node(..))` on a handle from
+  `open_read_only` therefore returned `Ok` and persisted: measured, the WAL went from 0
+  to 12429 bytes and the node was present after reopening. `begin_transaction` too.
+
+  The consequence is worse than "a read-only handle wrote". Read-only handles take a
+  **shared** lock, and shared locks do not exclude each other — that is the
+  many-readers design. Once a reader could write, N read-only handles became N writers
+  with **no mutex between them**. Measured: two handles committing 500 transactions
+  each returned `Ok` **1000 times** and left **zero** of those writes behind, with
+  `integrity_check` reporting no problem at all — it verifies graph structure, not
+  whether writes landed. This is exactly the silent-multi-writer case that
+  `AGENTS.md` §11 exists to forbid, reached through the read-only door.
+
+  `DbLock::acquire_shared`'s own doc comment stated the premise ("the caller must still
+  guarantee it does not write"); nothing enforced it. The guard is now in
+  `begin_transaction`, the single entry point that `with_transaction` also goes
+  through — not in `commit`, because by then the caller has already been told nothing is
+  wrong.
+
 - **`checkpoint()` on a `:memory:` database wrote a real file to the working
   directory, and lost the data that was supposed to be in memory.** Checkpoint
   replayed the WAL's committed pages through `StorageEngine::db_path()`, which in
@@ -367,8 +388,8 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
   itself (chunking would silently change the workload the published figures describe)
   and honours `GL_MAX_ACTIONS` so a constrained machine can still see the rejection.
 
-All three predate this release — the `:memory:` and NO-STEAL defects reproduce on
-`v1.0.0` as well — and none changes the storage format.
+All four predate this release — the `:memory:`, NO-STEAL and read-only defects all
+reproduce on `v1.0.0` — and none changes the storage format.
 
 - **Read concurrency was _negative_: more threads made reads slower.** Measured on
   com-DBLP, 16 threads doing plain point reads reached **0.6%–1.4% of single-thread
