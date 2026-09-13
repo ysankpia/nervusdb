@@ -808,7 +808,10 @@ impl NervusDb {
             )));
         }
 
-        // 1. 把 WAL 中已提交的页按序重放到主数据文件，同时为每页记录校验和。
+        // 1. 把 WAL 中已提交的页按序重放回存储，同时为每页记录校验和。
+        //    落点是 `DiskManager`（文件或内存页），**不是**把 `db_path` 当文件打开：
+        //    `:memory:` 的 `db_path` 是字面串 ":memory:"，按路径开会建出真文件并让
+        //    内存页永远拿不到数据（详见 `replay_wal_with_crc` 的说明）。
         //    此步可能首次建立 CRC 目录，因此紧接着把根页号写回 Header 元数据。
         {
             let GraphInner {
@@ -817,10 +820,9 @@ impl NervusDb {
                 ..
             } = &mut *inner;
             let wal = Arc::clone(storage.wal_writer());
-            let db_path = storage.db_path().to_path_buf();
             let root = {
                 let mut bpm = disk_graph.bpm.lock_recover();
-                bpm.replay_wal_with_crc(&wal, &db_path)?;
+                bpm.replay_wal_with_crc(&wal)?;
                 bpm.crc_dir_root()
             };
             if let Some(root) = root {

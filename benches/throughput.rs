@@ -4,14 +4,22 @@
 //! ```bash
 //! cargo bench --bench throughput                # all scenarios
 //! GL_SCALE=small cargo bench --bench throughput # quick smoke run
+//! GL_MAX_ACTIONS=4000000 cargo bench --bench throughput # keep the engine's cap
 //! ```
 //!
 //! Scenarios are read from `GL_SCALE` so the same code can be used for a fast
 //! sanity check and for the full documented run. Every scenario reports its own
 //! configuration alongside the result, so numbers can never be quoted without
 //! their measurement conditions.
+//!
+//! The documented scenarios queue a whole batch in **one** transaction, which is the
+//! measurement condition the published figures were taken under. The 10M-node scenario
+//! therefore exceeds `DEFAULT_MAX_TRANSACTION_ACTIONS` and the engine rejects it, by
+//! design. The benchmark lifts the cap for itself (see `GL_MAX_ACTIONS`) rather than
+//! chunking, because chunking would measure a different workload than the figure claims
+//! to.
 
-use nervusdb::{NervusDb, Value};
+use nervusdb::{NervusDb, NervusDbOptions, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -48,7 +56,25 @@ fn run(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
         dir.path().join("bench.db")
     };
 
-    let db = NervusDb::open_with_pool_size(&path, cfg.pool_frames)?;
+    // The documented scenarios are **single-transaction** batched writes — that is
+    // the measurement condition the figures were taken under, not an accident. The
+    // 10M-node scenario therefore queues 10M actions and exceeds
+    // `DEFAULT_MAX_TRANSACTION_ACTIONS` (4M), which the engine rejects on purpose.
+    //
+    // Chunking here would be the wrong fix: it would silently change what is being
+    // measured, and the published figures would then describe a different workload
+    // than the one they were taken from. So the cap is lifted deliberately, and only
+    // here. `GL_MAX_ACTIONS` lets a constrained machine set a real bound and see the
+    // rejection instead.
+    let options = NervusDbOptions {
+        buffer_pool_frames: cfg.pool_frames,
+        max_transaction_actions: match std::env::var("GL_MAX_ACTIONS") {
+            Ok(v) => v.parse().unwrap_or(0),
+            Err(_) => 0,
+        },
+        ..NervusDbOptions::default()
+    };
+    let db = NervusDb::open_with_options(&path, options)?;
 
     // ---------- nodes ----------
     let node_start = Instant::now();

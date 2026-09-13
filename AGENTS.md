@@ -62,7 +62,7 @@ Any modification that violates these rules must be rejected immediately:
      `ActionWrite` frames and keeps only a location index. It is off by default because
      it costs a partial WAL, and because **`Checkpoint` must be refused while any
      transaction has spilled** — a checkpoint truncates the WAL, which would discard
-     those frames. A deferred *automatic* checkpoint must not fail the commit that
+     those frames. A deferred _automatic_ checkpoint must not fail the commit that
      triggered it; that commit is already durable.
 
 6. **Two-Phase Batch Edge Weaving**
@@ -123,6 +123,14 @@ Any modification that violates these rules must be rejected immediately:
 - A database file may have **exactly one open handle** at a time, across processes and within one process. `NervusDb::open` must take an exclusive lock on `{path}` itself (`std::fs::File::try_lock`, stable since Rust 1.89 — never add a third-party dependency or a sidecar `.lock` file, which would break the two-file invariant). A contended open returns `GraphError::DatabaseLocked`.
 - The lock MUST be acquired **before** `StorageEngine::open`, because WAL replay writes the main data file; locking afterwards already permits a racing replay.
 - `:memory:` mode takes no lock.
+- **`:memory:` mode must never create a file, and every checkpoint path must route
+  through `DiskManager` rather than a path.** The guard is that `StorageEngine::db_path()`
+  returns the literal string `":memory:"` in this mode; anything that opens it as a path
+  writes a real file into the process's working directory while the in-memory page store
+  stays empty — and if the WAL is then truncated, the committed pages are gone for good.
+  Both symptoms are silent: the file appears without an error, and `node_count()` keeps
+  reporting the right number because it is metadata, while `get_node` is lossy and
+  returns `None` for every node. `tests/memory_mode_tests.rs` pins both.
 - Rationale: without this, two writers each report success and the second write is silently lost.
 
 12. **Integrity Checking & No Silent Read Errors**
@@ -212,7 +220,6 @@ Then:
 Per-suite detail, the house testing style, and the suite inventory:
 [`docs/testing.md`](docs/testing.md).
 
-
 ## 4. Coding & Implementation Contracts
 
 ### 4.1 Error Handling
@@ -250,7 +257,6 @@ Grammar and the executor constraints it depends on:
 `MATCH` / `MERGE` pattern properties must be literals, checked at parse time: a pattern
 is matched before any variable is bound, so an expression there could never be
 evaluated, and silently matching nothing looks like an empty graph.
-
 
 ### 4.5 Graph Analytics Contracts
 
