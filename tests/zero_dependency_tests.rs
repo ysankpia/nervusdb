@@ -1355,3 +1355,94 @@ fn addressing_constants_match_the_format_spec() {
         );
     }
 }
+
+/// `ci/long_run.sh` 的每个阶段都必须有函数**和**分派分支。
+///
+/// ## 为什么需要这条
+///
+/// 加 `boundaries` 阶段时，我用了一个带**空格缩进**的替换锚点，而脚本用 **tab**——
+/// 于是替换静默失败：`ALL_STAGES` 与 `case` 分支改了（那两处不含缩进），`stage_boundaries`
+/// 函数体**没插进去**。结果是默认全量模式跑到该阶段时
+/// `stage_boundaries: command not found`，而 `case` 的 `*)` 分支直到那时才报
+/// `unknown stage`。
+///
+/// 这不是产品缺陷，是**脚本自身的缺陷**，但性质与本项目一直在防的完全相同：
+/// 一处改动没有配套的另一处，且失败被推迟到运行时。所以用同一套办法：**变成断言**。
+///
+/// 三处必须一致：`ALL_STAGES` 数组、`stage_<name>()` 函数、`case` 里的分派分支。
+#[test]
+fn long_run_script_stages_are_consistent() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script =
+        fs::read_to_string(root.join("ci/long_run.sh")).expect("ci/long_run.sh must exist");
+
+    // ALL_STAGES=(a b c)
+    let all_line = script
+        .lines()
+        .find(|l| l.trim_start().starts_with("ALL_STAGES=("))
+        .expect("the script must declare ALL_STAGES=(...)");
+    let stages: Vec<String> = all_line
+        .trim_start()
+        .trim_start_matches("ALL_STAGES=(")
+        .trim_end_matches(')')
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect();
+    assert!(!stages.is_empty(), "ALL_STAGES must not be empty");
+
+    // stage_<name>() { —— 只认行首（脚本里的定义不缩进）
+    let defined: Vec<String> = script
+        .lines()
+        .filter_map(|l| l.strip_prefix("stage_"))
+        .filter_map(|rest| rest.split("()").next())
+        .map(|s| s.to_string())
+        .collect();
+
+    // \t<name>) run_stage ...
+    let dispatched: Vec<String> = script
+        .lines()
+        .filter_map(|l| l.strip_prefix('\t'))
+        .filter_map(|rest| rest.split(')').next())
+        .filter(|name| !name.is_empty() && !name.contains(' ') && !name.contains('*'))
+        .map(|s| s.to_string())
+        .collect();
+
+    let mut problems: Vec<String> = Vec::new();
+
+    for stage in &stages {
+        if !defined.contains(stage) {
+            problems.push(format!(
+                "`{stage}` is listed in ALL_STAGES but `stage_{stage}()` is not defined — \
+                 the run aborts with `stage_{stage}: command not found`"
+            ));
+        }
+        if !dispatched.contains(stage) {
+            problems.push(format!(
+                "`{stage}` is listed in ALL_STAGES but has no `case` branch — the run \
+                 aborts with `unknown stage: {stage}`"
+            ));
+        }
+    }
+
+    // 反向：定义了却没列入，说明它是死代码或忘了加进默认集合。
+    for name in &defined {
+        if !stages.contains(name) {
+            problems.push(format!(
+                "`stage_{name}()` is defined but `{name}` is not in ALL_STAGES, so it \
+                 never runs by default"
+            ));
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "ci/long_run.sh's stages disagree:\n  - {}",
+        problems.join("\n  - ")
+    );
+
+    // `stage_sdk` 依赖 `bindings/cross_sdk_check.py`；路径写错会让阶段在 CI 上才失败。
+    assert!(
+        root.join("bindings/cross_sdk_check.py").exists(),
+        "stage_sdk runs bindings/cross_sdk_check.py, which must exist"
+    );
+}

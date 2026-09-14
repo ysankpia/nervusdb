@@ -140,6 +140,15 @@ stage_fault() {
 	cargo bench --bench fault_injection_bench
 }
 
+# 结构性魔数边界：记录密度（128/64 每页）、直接目录页覆盖（4096 节点 / 2048 边）、
+# 属性页槽位、1KB 内联/溢出分界。越界出错时症状是「读到别的实体的数据」，因此每个
+# 边界**两侧各测一次**。注意：这个阶段与寻址常量守卫配套——那条守卫在 `full` 里，
+# 因为「改常量」这种改动行为测试根本看不到（见该测试的注释）。
+stage_boundaries() {
+	set -e
+	cargo bench --bench page_boundary_bench
+}
+
 stage_differential() {
 	set -e
 	DB_DIR="$OUT/diff" STEPS="$DIFF_STEPS" cargo bench --bench differential_test
@@ -221,6 +230,7 @@ for stage in "${STAGES[@]}"; do
 	full) run_stage full stage_full ;;
 	fuzz) run_stage fuzz stage_fuzz ;;
 	fault) run_stage fault stage_fault ;;
+	boundaries) run_stage boundaries stage_boundaries ;;
 	differential) run_stage differential stage_differential ;;
 	crash) run_stage crash stage_crash ;;
 	concurrency) run_stage concurrency stage_concurrency ;;
