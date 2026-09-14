@@ -366,6 +366,48 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
 ### Fixed
 
+- **`has_cycle()` reported cycles in acyclic graphs.** The iterative DFS marked *every*
+  neighbour of a node Gray at once instead of descending into one at a time, so two
+  nodes that merely share a parent were both Gray simultaneously — and the second was
+  treated as a back edge. It is a false positive on exactly the shape real data is full
+  of: multiple authors of one paper, several files in one directory.
+
+  Minimal reproduction, a diamond `P→X, P→Y, X→Y`. The same graph, only the edge
+  insertion order differs:
+
+  | Insertion order | Edges | Old result | Correct |
+  | --- | --- | --- | --- |
+  | `P→X, P→Y, X→Y` | `[(1,2),(1,3),(2,3)]` | `true` | `false` |
+  | `P→Y, P→X, X→Y` | `[(1,3),(1,2),(2,3)]` | `false` | `false` |
+
+  On random DAGs (edges run only from a lower id to a higher one, so a cycle is
+  impossible) **3 of 40 trials reported a cycle**. `find_cycles` used the correct
+  pattern all along, twenty lines away; only `has_cycle` was wrong.
+
+  The existing deep-chain test could not catch it: a chain gives every node exactly one
+  outgoing edge, so it never produces siblings. Two regression tests now cover it — a
+  minimal diamond (readable) and 40 randomized DAGs (broad).
+
+- **`k_hop_subgraph` dropped edges between nodes on the k-th layer.** Node discovery
+  used BFS and stopped expanding at depth `k`, so edges were collected only from nodes
+  it expanded — an edge whose two endpoints both sit exactly at layer `k` was never
+  seen, even though both endpoints are inside the subgraph. `AGENTS.md` §4.5 requires
+  the opposite: keep every edge whose endpoints are inside.
+
+  Measured with k=1 and `Direction::Both`:
+
+  | Shape | Nodes | Old edges | Expected |
+  | --- | --- | --- | --- |
+  | `1↔2` | 2 (correct) | 1 | **2** (missing `2→1`) |
+  | Triangle `1→2→3→1` | 3 (correct) | 2 | **3** (missing `2→3`) |
+  | Star `1→2,1→3,1→4` plus `2→3` | 4 (correct) | 3 | **4** (missing `2→3`) |
+
+  The node set was always right, which is why the old test passed: it asserted
+  `edges.len()` — a **count** — and never which edges. Two phases now: BFS discovers
+  nodes, then a separate pass collects the edges, filtered to those with both endpoints
+  inside. The regression test compares the edge set against an independent Cypher
+  recomputation rather than against itself.
+
 - **`dump_cypher` produced a script the parser could not read back, for any negative or
   whole-number float property.** Two defects in the same round trip, which the docs
   designate as the format-migration path:

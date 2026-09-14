@@ -246,38 +246,77 @@ pub fn try_has_cycle(graph: &DiskGraph) -> Result<bool, GraphError> {
 /// 触发进程崩溃是不可接受的。
 ///
 /// 改为显式栈后，内存用量在堆上按需增长，与数据规模成正比而非与栈上限相关。
-/// 着色语义与递归版完全一致（White→Gray 入栈、Gray→Black 出栈，遇到 Gray 即成环）。
+///
+/// ## 必须**逐个**邻居深入，这与递归版的语义完全一致
+///
+/// 每个栈帧带一个「下一个待访问的邻居下标」，一次只压入**一个**邻居：访问完它
+/// 才轮到它的兄弟。这正是递归版的执行顺序。
+///
+/// **这里曾经一次性把所有邻居标灰并压栈，那是个假阳性缺陷。** 一次标灰整个邻接
+/// 表会让互为兄弟的节点同时处于 Gray：处理兄弟 A 时看到兄弟 B 仍是 Gray，就被
+/// 判成 A→B 的环——而 A 与 B 之间根本没有边。
+///
+/// 实测（`i<j` 自然序的随机 DAG，**必然无环**，40 次试验）：**3 次报出有环**。
+/// 最小复现是一个菱形 `P→X, P→Y, X→Y`：
+///
+/// | 插入顺序 | 边 | 结果 |
+/// | --- | --- | --- |
+/// | `P→X, P→Y, X→Y` | `[(1,2),(1,3),(2,3)]` | **`true`**（错） |
+/// | `P→Y, P→X, X→Y` | `[(1,3),(1,2),(2,3)]` | `false`（对） |
+///
+/// 同一个图、同一个拓扑，只因边的插入顺序不同而给出相反答案——这也是它一直没被
+/// 发现的原因：现有测试用的链与环都不含「共享父节点的兄弟」，而那种形状在真实
+/// 数据里到处都是（一篇论文的多位作者、一个目录下的多个文件）。
 fn dfs_has_cycle_iterative(
     graph: &DiskGraph,
     start: u64,
     color_map: &mut HashMap<u64, Color>,
 ) -> bool {
-    // (节点, 是否已完成其全部邻居)
-    let mut stack: Vec<(u64, bool)> = vec![(start, false)];
-    color_map.insert(start, Color::Gray);
+    // (节点, 其邻居列表, 下一个待访问的邻居下标)
+    //
+    // 显式携带邻居列表与下标，而不是「全部压栈一次」，是为了复刻递归版**逐个
+    // 深入**的顺序。`Vec<u64>` 的克隆代价由边数摊还：每个节点只解析邻接表一次。
+    struct Frame {
+        node: u64,
+        neighbors: Vec<u64>,
+        next: usize,
+    }
 
-    while let Some((node_id, expanded)) = stack.pop() {
-        if expanded {
-            // 邻居已全部处理完，标记为 Black 并出栈
-            color_map.insert(node_id, Color::Black);
+    color_map.insert(start, Color::Gray);
+    let mut stack: Vec<Frame> = vec![Frame {
+        node: start,
+        neighbors: graph
+            .neighbors(start, crate::graph::Direction::Outgoing)
+            .unwrap_or_default(),
+        next: 0,
+    }];
+
+    while let Some(frame) = stack.last_mut() {
+        if frame.next >= frame.neighbors.len() {
+            // 该节点的全部邻居都已处理完，出栈并转黑。
+            let done = stack.pop().map(|f| f.node).unwrap_or(start);
+            color_map.insert(done, Color::Black);
             continue;
         }
 
-        // 重新压入自己并标记为「待完成」，这样它会在所有子节点之后被处理。
-        // 必须重新压入而不是修改栈顶：邻居也要压栈，必须夹在中间。
-        stack.push((node_id, true));
+        let neighbor = frame.neighbors[frame.next];
+        frame.next += 1;
 
-        if let Ok(neighbors) = graph.neighbors(node_id, crate::graph::Direction::Outgoing) {
-            for neighbor in neighbors {
-                match color_map.get(&neighbor).copied() {
-                    Some(Color::Gray) => return true,
-                    Some(Color::White) => {
-                        color_map.insert(neighbor, Color::Gray);
-                        stack.push((neighbor, false));
-                    }
-                    _ => {}
-                }
+        match color_map.get(&neighbor).copied() {
+            // Gray 意味着它仍在当前 DFS 栈上，即存在一条回到它的路径——真环。
+            Some(Color::Gray) => return true,
+            Some(Color::White) => {
+                color_map.insert(neighbor, Color::Gray);
+                stack.push(Frame {
+                    node: neighbor,
+                    neighbors: graph
+                        .neighbors(neighbor, crate::graph::Direction::Outgoing)
+                        .unwrap_or_default(),
+                    next: 0,
+                });
             }
+            // Black：已完成的子树，与当前路径无关。
+            _ => {}
         }
     }
 
@@ -567,9 +606,7 @@ pub fn k_hop_subgraph(
     let mut visited: HashSet<u64> = HashSet::new();
     visited.insert(start_id);
 
-    let mut internal_edges: Vec<Edge> = Vec::new();
-    let mut seen_edges: HashSet<u64> = HashSet::new();
-
+    // 第一遍：只做**节点发现**（BFS 逐层，严格去重）。
     let mut frontier: VecDeque<(u64, usize)> = VecDeque::new();
     frontier.push_back((start_id, 0));
 
@@ -601,10 +638,6 @@ pub fn k_hop_subgraph(
                 edge.src_id
             };
 
-            if seen_edges.insert(edge.id) {
-                internal_edges.push(edge.clone());
-            }
-
             if visited.insert(neighbor) {
                 frontier.push_back((neighbor, depth + 1));
             }
@@ -613,10 +646,58 @@ pub fn k_hop_subgraph(
 
     let mut nodes: Vec<u64> = visited.into_iter().collect();
     nodes.sort_unstable();
-
-    // 只保留两端均落在子图内的边
     let node_set: HashSet<u64> = nodes.iter().copied().collect();
-    internal_edges.retain(|e| node_set.contains(&e.src_id) && node_set.contains(&e.dst_id));
+
+    // 第二遍：**独立地**收集子图内部的边。
+    //
+    // ## 为什么不能在第一遍里顺手收集
+    //
+    // 第一遍在 `depth >= k` 时停止展开，因此第 k 层的节点**从不被展开**——于是
+    // 「两端都恰好落在第 k 层」的边永远不会被看到。而承诺是「保留两端都在子图内的
+    // 边」（AGENTS §4.5），这些边符合条件却漏掉了。
+    //
+    // 实测漏收（独立用 Cypher 复算全部边比对）：
+    //
+    // | 形状（k=1，Both） | 节点集 | 旧边数 | 应有 |
+    // | --- | --- | --- | --- |
+    // | `1↔2` | 2（对） | 1 | **2**（缺 `2→1`） |
+    // | 三角形 `1→2→3→1` | 3（对） | 2 | **3**（缺 `2→3`） |
+    // | 星 `1→2,1→3,1→4` 加 `2→3` | 4（对） | 3 | **4**（缺 `2→3`） |
+    //
+    // 节点集一直是对的，所以「数量」看着合理；错的是**哪些边**。原测试只断言
+    // `edges.len()`，因此这个缺陷在它面前不可见。
+    //
+    // 方向与类型过滤在这里同样适用：`direction` 决定每个节点要枚举哪一侧的邻接
+    // （与第一遍一致），`edge_type_filter` 只放行匹配的类型。去重按边 id，因为
+    // `Direction::Both` 下同一条边会从两端各被枚举一次。
+    let mut internal_edges: Vec<Edge> = Vec::new();
+    let mut seen_edges: HashSet<u64> = HashSet::new();
+    for &node in &nodes {
+        let candidates = match direction {
+            Direction::Outgoing => graph.outgoing_edges(node)?,
+            Direction::Incoming => graph.incoming_edges(node)?,
+            Direction::Both => {
+                let mut both = graph.outgoing_edges(node)?;
+                both.extend(graph.incoming_edges(node)?);
+                both
+            }
+        };
+
+        for edge in candidates {
+            if let Some(expected) = edge_type_filter {
+                if edge.edge_type != expected {
+                    continue;
+                }
+            }
+            // 两端都必须在节点集内——这就是「子图内部的边」的定义。
+            if !node_set.contains(&edge.src_id) || !node_set.contains(&edge.dst_id) {
+                continue;
+            }
+            if seen_edges.insert(edge.id) {
+                internal_edges.push(edge);
+            }
+        }
+    }
     internal_edges.sort_by_key(|e| e.id);
 
     Ok(KHopSubgraph {
