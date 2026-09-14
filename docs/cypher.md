@@ -84,3 +84,32 @@ into the Freelist.
 
 `SET n:Label` and similar go through `DiskGraph::update_node_payload`, never
 `insert_node_with_id_exact`, which would inflate `node_count`.
+### Variable-length patterns and relationship uniqueness
+
+`-[r:TYPE*min..max]->` returns one row **per path**, not per reachable node. A node
+reachable by several paths appears several times, so `count(b)` counts paths.
+(`DISTINCT` is not part of the grammar here — see the `item` production above.)
+
+**A relationship is used at most once per match.** This is the standard Cypher default,
+not a local choice. openCypher CIP **CIR-2017-174** states it as:
+
+> Cypher pattern matching assumes relationship uniqueness: A relationship can only be
+> matched once per instance of a pattern.
+> Pattern matching in Cypher by default only returns relationship-unique matches.
+
+Concretely, with edges `8→8` (call it e1) and `8→5` (e2):
+
+| Query from node 8 | Result | Why |
+| --- | --- | --- |
+| `[:R*1..1]->` | 2 paths (`8→8`, `8→5`) | each uses one edge once |
+| `[:R*2..2]->` | **1** path (`8→8→5`) | `8→8→8` would need e1 twice |
+
+That bound is also what keeps the traversal **finite**: unbounded relationship reuse over
+a cyclic graph has no natural termination. The CIP lists the possibility of infinite
+results as one of the considerations in relaxing uniqueness — which is why relaxing it
+would be a deliberate feature, not a bug fix.
+
+**Where this bites:** a model-based test that computes reachable *nodes*, or
+unconstrained *paths*, will disagree with the engine — and the engine is right. The
+`cypher_fuzz_bench` oracle made that mistake twice before it was checked against the
+specification; it now carries a per-path used-edge set, and its comment records why.

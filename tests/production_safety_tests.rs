@@ -1907,3 +1907,85 @@ fn test_constraint_and_schema_persist_together() -> Result<(), GraphError> {
 
     Ok(())
 }
+
+/// **一个 0444（只读）的库文件必须能被只读打开。**
+///
+/// ## 缺陷
+///
+/// 只读打开被它自己的**写入能力**拖垮了，共三处，逐一实测定位：
+///
+/// 1. `DbLock::acquire_inner` 一律以 `read(true).write(true).create(true)` 打开主
+///    文件（注释写着「是否真的写入由上层逻辑保证」——约定而非强制）；
+/// 2. `StorageEngine::open`（读写版）会 `create_dir_all`、以写模式开 WAL，并**回放**
+///    （写主数据文件）；
+/// 3. `DiskManager::open` 同样以写模式打开。
+///
+/// 三者叠加的结果：`open_read_only` 在 0444 文件上报
+/// `Storage I/O error: Permission denied (os error 13)`；把权限改回 0644，同一个
+/// 调用立刻成功。
+///
+/// ## 为什么值得一个正式测试
+///
+/// 只读库是**常见部署形态**：容器里只挂载数据卷、备份盘被标成 read-only、只读副本。
+/// 在这些环境里，「只想读的句柄因为需要写权限而打不开」是功能完全不可用，而错误信息
+/// 只说是权限问题，不指向真正的原因。
+///
+/// 判据有两条，缺一不可：只读打开**必须成功**，且主库内容**不得被改动**（只读打开
+/// 不应有副作用——这也是 `create(true)` 必须去掉的原因）。
+#[cfg(unix)]
+#[test]
+fn test_read_only_open_works_on_a_read_only_file() -> Result<(), GraphError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempdir()?;
+    let db_path = dir.path().join("ro_file.db");
+
+    {
+        let db = NervusDb::open(&db_path)?;
+        for i in 1..=10u64 {
+            db.add_node(HashSet::from(["N".to_string()]), props(i as i64))?;
+        }
+        db.checkpoint()?;
+    }
+
+    // 记录只读打开前后的字节，用于断言「无副作用」。
+    let before = std::fs::read(&db_path)?;
+
+    let mut perm = std::fs::metadata(&db_path)?.permissions();
+    perm.set_mode(0o444);
+    std::fs::set_permissions(&db_path, perm)?;
+
+    let result = (|| -> Result<usize, GraphError> {
+        let ro = NervusDb::open_read_only(&db_path)?;
+        assert!(ro.is_read_only());
+        // 真的读一遍，确认不是「打开了但读不到」。
+        Ok((1..=10u64).filter(|i| ro.get_node(*i).is_some()).count())
+    })();
+
+    // 先恢复权限，无论断言结果如何——否则后续清理会失败，掩盖真正的错误。
+    let mut perm = std::fs::metadata(&db_path)?.permissions();
+    perm.set_mode(0o644);
+    std::fs::set_permissions(&db_path, perm)?;
+
+    let readable = result?;
+    assert_eq!(
+        readable, 10,
+        "a read-only handle on a 0444 file must read every node"
+    );
+
+    // 只读打开不得改动文件（`create(true)` / `create_dir_all` 都会留下痕迹）。
+    let after = std::fs::read(&db_path)?;
+    assert_eq!(
+        before, after,
+        "opening read-only must not modify the data file"
+    );
+
+    Ok(())
+}
+
+/// 非 Unix 平台上这条用例不适用（没有权限位），显式标注而不是静默跳过整个文件。
+#[cfg(not(unix))]
+#[test]
+fn test_read_only_open_works_on_a_read_only_file() {
+    // 权限位是 Unix 概念；Windows 的只读属性语义不同，另行设计。
+}

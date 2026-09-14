@@ -109,6 +109,22 @@ name = "scale_bench"
 path = "benches/real_data/scale_bench.rs"
 harness = false
 
+# Cypher 模糊测试：随机查询 vs 独立内存模型。已有的 differential_test 只对拍**写**
+# 操作，查询本身从未被对拍——而 `has_cycle` 的假阳性说明缺陷藏在没人构造过的形状里，
+# 查询的形状空间比读写大得多。可长跑，失败时输出可复现的种子。
+[[bench]]
+name = "cypher_fuzz_bench"
+path = "benches/real_data/cypher_fuzz_bench.rs"
+harness = false
+
+# 故障注入：磁盘满、权限、截断、WAL 丢失。这些**外部故障**此前几乎没测过，而它们
+# 正是「静默数据错误」最集中的地方——写失败若被折叠成「成功」，用户几周后才发现。
+# 判据不只是「返回 Err」，还有「失败的写不得污染已提交数据」「故障解除后完全可用」。
+[[bench]]
+name = "fault_injection_bench"
+path = "benches/real_data/fault_injection_bench.rs"
+harness = false
+
 [lib]
 name = "nervusdb"
 path = "src/lib.rs"

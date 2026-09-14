@@ -36,13 +36,13 @@ cargo test --test robustness_tests        # page CRC at scale, WAL replay, chunk
 
 ## Current state
 
-**258 test cases — 257 pass, 1 intentionally `#[ignore]`d** (a child-process lock
+**260 test cases — 259 pass, 1 intentionally `#[ignore]`d** (a child-process lock
 probe launched by its parent test).
 
-Run as 21 integration suites (228 cases, of which 1 is `#[ignore]`d) plus 28 inline
+Run as 21 integration suites (230 cases, of which 1 is `#[ignore]`d) plus 28 inline
 unit tests in the hand-written codecs, the action codec, and the Page-0 layout
 (`src/codec.rs`, `src/json.rs`, `src/crc32.rs`, `src/action_codec.rs`, `src/page.rs`), which are what the on-disk
-format is made of, plus 2 doc-tests: 228 + 28 + 2 = 258.
+format is made of, plus 2 doc-tests: 230 + 28 + 2 = 260.
 
 **The one `#[ignore]`d case is not a skipped test.** It is
 `production_safety_tests::cross_process_child_probe`, an eight-line probe that must be
@@ -66,7 +66,7 @@ removed without updating this table fails the build rather than drifting:
 | -------------------------------- | ----- | --------------------------------------------------------------------------------------------------------------------- |
 | `integration_tests.rs`           | 31    | CRUD, ACID, concurrency, indexing, stress, query chain, public-API helpers                                            |
 | `memory_mode_tests.rs`           | 6     | `:memory:` disk-free + readable across checkpoint; clean-uncommitted eviction; backup refusal; uncovered entry points |
-| `production_safety_tests.rs`     | 33    | Exclusive lock, integrity, constraints, read-only writes (incl. transaction paths), queue cap                         |
+| `production_safety_tests.rs`     | 35    | Exclusive lock, integrity, constraints, read-only writes (incl. transaction paths), queue cap                         |
 | `cypher_advanced_tests.rs`       | 19    | Cypher 1.0 syntax closure, EXPLAIN, aggregates, negative/float literal round trip                                     |
 | `unwind_tests.rs`                | 16    | `UNWIND`, batch ingestion, statement atomicity                                                                        |
 | `merge_tests.rs`                 | 14    | `MERGE` idempotence, ON CREATE / ON MATCH                                                                             |

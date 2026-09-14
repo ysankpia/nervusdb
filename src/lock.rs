@@ -96,15 +96,36 @@ impl DbLock {
             }
         }
 
-        // 锁必须能读能写：Windows 上仅以 append 模式打开的文件无法加锁。
-        // 只读模式也以可写方式打开**文件描述符**——共享锁限制的是别人的写权限，
-        // 不是本句柄的。是否真的写入由上层逻辑保证（只读句柄不调用写路径）。
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)?;
+        // 打开模式取决于锁的**意图**，而不是「反正只锁文件描述符」。
+        //
+        // ## 只读句柄必须只用读权限打开
+        //
+        // 这里曾经一律用 `read(true).write(true).create(true)`，理由是 Windows 上
+        // 只以 append 模式打开的文件无法加锁。那条理由只适用于**排他**锁；对共享锁
+        // （只读句柄）而言，它带来一个真实后果：
+        //
+        // 一个 0444 的库文件上，`NervusDb::open_read_only` 在**加锁**这一步就报
+        // `Permission denied` —— 一个只想读的句柄，因为锁的打开模式而失败。只读库是
+        // 常见部署形态（容器里只挂载数据盘、卷被标成 read-only），因此这条路径
+        // 必须能独立工作。
+        //
+        // 原注释写着「是否真的写入由上层逻辑保证（只读句柄不调用写路径）」——又是
+        // 一句**约定**而非代码强制。改为按模式选择权限后，即使上层出错，内核也会
+        // 拒绝写入（返回 `Err`，而不是静默丢弃）。
+        //
+        // `create(true)` 同样只在排他模式下需要：只读打开**不应创建**文件。文件
+        // 不存在时 `open` 直接失败，这正是只读打开应有的行为。
+        let file = match mode {
+            LockMode::Exclusive => OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&path)?,
+            // Windows 的顾虑见上：共享锁在这里只用读权限，必要时由调用方保证文件
+            // 已存在（`NervusDb::open` 在加锁前的 `check_format_version` 已确认）。
+            LockMode::Shared => OpenOptions::new().read(true).open(&path)?,
+        };
 
         // 重试的**退避**：先让出 CPU，再逐渐拉长间隔。
         //

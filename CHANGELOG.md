@@ -366,6 +366,69 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
 ### Fixed
 
+- **A read-only `0444` database file could not be opened read-only.** Three write-mode
+  opens stood in the path of a reader, so `open_read_only` failed with
+  `Permission denied` on a file it only needed to read from:
+
+  1. `DbLock::acquire_inner` opened the data file `read(true).write(true).create(true)`
+     regardless of the lock mode. Its comment said "whether a write actually happens is
+     the caller's responsibility" — a convention, not an enforcement.
+  2. `StorageEngine::open` (the read-write variant) does `create_dir_all`, opens the WAL
+     for writing, and **replays** (which writes the data file).
+  3. `DiskManager::open` opens the data file for writing.
+
+  Each now has a read-only counterpart, and the read-only open path uses all three. The
+  lock branch is the one that mattered most: it is why the failure was a bare
+  `Permission denied` rather than anything pointing at the real cause. `create(true)`
+  is also gone from the read-only path — a reader must not create files.
+
+  Read-only databases are a normal deployment shape (a container with a read-only data
+  volume, a backup disk, a read replica), so this was the whole feature being
+  unavailable, not a corner case.
+
+  Pinned by `test_read_only_open_works_on_a_read_only_file`, which asserts both halves:
+  the read succeeds **and** the file is byte-identical afterwards.
+
+### Added
+
+- **`benches/real_data/cypher_fuzz_bench.rs` — random Cypher queries checked against an
+  independent in-memory model.** The existing `differential_test` fuzzes **writes**; the
+  queries themselves had never been checked against a model. Twelve query shapes are
+  generated per round (counts, property filters, aggregates, min/max, ORDER BY with
+  SKIP/LIMIT, edge counts by endpoint labels and type, variable-length paths, immediate
+  read-back after commit) with a deterministic seed, so a failure is reproducible with
+  `SEED0=<seed> SEEDS=1`. Verified by injecting a one-off error into `count()`: it is
+  caught immediately with the exact query and the seed that produced it.
+
+- **`benches/real_data/fault_injection_bench.rs` — external failures must be visible.**
+  Covers read-only data files, unwritable directories, truncated files, a deleted WAL,
+  an unwritable working directory with `:memory:`, `backup` onto a directory, and full
+  usability after the fault clears. The criterion is deliberately more than "returns an
+  error": a failed write must not corrupt committed data, and the error must be
+  diagnosable. This is where the `0444` defect above surfaced.
+
+- **`ci/long_run.sh` — runs every instrument in stages.** `LONG=1` scales it (400 fuzz
+  seeds ×2 ranges, 200k differential steps, 20 SIGKILL rounds). Failures do not stop the
+  run; each stage logs separately and a summary reports pass/fail/skip per stage, so one
+  broken area does not hide the state of the others.
+
+### Changed
+
+- **`docs/cypher.md` now specifies variable-length pattern semantics**, which it did not
+  before: one row **per path**, and **a relationship is used at most once per match**.
+
+  The second point was checked against the standard rather than assumed. openCypher CIP
+  **CIR-2017-174** states: "Cypher pattern matching assumes relationship uniqueness: A
+  relationship can only be matched once per instance of a pattern … by default only
+  returns relationship-unique matches." So the engine's existing behaviour is correct and
+  standard-conforming; it was simply undocumented.
+
+  This is recorded because the omission misled the fuzz oracle above, **twice**. Its first
+  expectation was reachable *nodes*, its second was unconstrained *paths*; both disagreed
+  with the engine and both were wrong. Had the second been acted on, it would have changed
+  a standard-conforming engine into a non-conforming one. The oracle now carries a
+  per-path used-edge set.
+
 - **`has_cycle()` reported cycles in acyclic graphs.** The iterative DFS marked *every*
   neighbour of a node Gray at once instead of descending into one at a time, so two
   nodes that merely share a parent were both Gray simultaneously — and the second was
