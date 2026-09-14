@@ -1225,3 +1225,224 @@ fn every_example_is_listed_in_the_api_doc() {
         problems.join("\n")
     );
 }
+
+/// 寻址常量必须与 `FORMAT.md` 声称的一致。
+///
+/// ## 为什么这条守卫必要
+///
+/// 物理寻址是一个**纯算术公式**：
+///
+/// ```text
+/// NodeRecord: logical_page = (id - 1) / 128, offset = ((id - 1) % 128) * 32
+/// EdgeRecord: logical_page = (id - 1) / 64,  offset = ((id - 1) % 64)  * 64
+/// ```
+///
+/// 那两个除数（`NODE_RECORDS_PER_PAGE`、`EDGE_RECORDS_PER_PAGE`）是**格式的一部分**
+/// —— `FORMAT.md` 明确写着「NodeRecord — 32 bytes, 128 per page」。改动它们等于改变
+/// 每个 id 落在哪个字节上。
+///
+/// **而版本闸门抓不到这种改动。** 它检查 magic 与版本号；把 128 改成 127 不会让任何
+/// 一个字节的 Page 0 变化，版本号也不必变。后果是静默且严重的：旧构建写的库被新构建
+/// 按不同公式解读，**每个 id 都映射到相邻记录的字节偏移上**，读出来是**别的实体的
+/// 数据**，不报错。
+///
+/// ## 为什么行为测试也抓不到
+///
+/// 写入与读取**共用同一个常量**，所以同一次构建内始终自洽——实测把常量改成 127，
+/// `page_boundary_bench` 的 25 项边界检查**全部照常通过**。要检出必须**跨构建**比对，
+/// 而这不是 CI 能廉价做到的。因此改为把常量钉在文档上：改了常量就必须同时改
+/// `FORMAT.md`，而那一刻会被看到。
+///
+/// 这属于「把约定变成断言」那一类：`FORMAT.md` 已经记录了这个数字，但代码与它之间
+/// 没有任何连接。
+#[test]
+fn addressing_constants_match_the_format_spec() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let page = fs::read_to_string(root.join("src/page.rs")).expect("src/page.rs must exist");
+
+    let page_size: usize = {
+        let needle = "pub const PAGE_SIZE: usize = ";
+        let line = page
+            .lines()
+            .find(|l| l.trim_start().starts_with(needle))
+            .unwrap_or_else(|| panic!("src/page.rs must declare `{needle}…`"));
+        line.trim()
+            .trim_start_matches(needle)
+            .trim()
+            .trim_end_matches(';')
+            .trim()
+            .parse()
+            .expect("PAGE_SIZE must be a literal integer")
+    };
+
+    // 记录大小必须从**对应类型**的 impl 块里读。
+    //
+    // `NodeRecord` 与 `EdgeRecord` **都**声明了 `RECORD_SIZE`，因此在整份文件里搜
+    // `pub const RECORD_SIZE` 会拿到先出现的那个（NodeRecord 的 32），于是边记录的密度
+    // 算成 4096/32 = 128。本守卫的前两版就是这样错的（先取 32 当密度，再取到 128 当
+    // 边记录密度）。改为：先定位 `impl <Type>`，只在它之后的片段里找常量。
+    let record_size_of = |type_name: &str, const_name: &str| -> usize {
+        let impl_marker = format!("impl {type_name} {{");
+        let start = page
+            .find(&impl_marker)
+            .unwrap_or_else(|| panic!("src/page.rs must contain `{impl_marker}`"))
+            + impl_marker.len();
+        let decl = format!("pub const {const_name}: usize = ");
+        page[start..]
+            .lines()
+            .find(|l| l.trim_start().starts_with(&decl))
+            .unwrap_or_else(|| panic!("{type_name} must declare `{decl}…`"))
+            .trim()
+            .trim_start_matches(&decl)
+            .trim()
+            .trim_end_matches(';')
+            .trim()
+            .parse()
+            .unwrap_or_else(|_| panic!("{type_name}::{const_name} must be a literal integer"))
+    };
+
+    let node_bytes = record_size_of("NodeRecord", "RECORD_SIZE");
+    let edge_bytes = record_size_of("EdgeRecord", "RECORD_SIZE");
+    let node_per_page = page_size / node_bytes;
+    let edge_per_page = page_size / edge_bytes;
+
+    // 事实来源之二：FORMAT.md 的标题行。
+    let format = fs::read_to_string(root.join("FORMAT.md")).expect("FORMAT.md must exist");
+
+    // 每条是 (实际密度, 文档标题行, 该行里的记录大小)。
+    //
+    // 不从这个片段里「猜」哪个数字是密度——`### EdgeRecord — 64 bytes, 64 per page`
+    // 两个数字相同，任何按位置的启发式都会在某一侧出错（本守卫第一版就这样错了两次：
+    // 先取到 32，改取末位后又对边记录取到 64 与 128 比对）。改为显式声明：
+    // 文档行必须逐字存在，且其中两个数字必须分别等于实际记录大小与实际密度。
+    let cases: &[(usize, usize, &str)] = &[
+        (
+            node_bytes,
+            node_per_page,
+            "### NodeRecord — 32 bytes, 128 per page",
+        ),
+        (
+            edge_bytes,
+            edge_per_page,
+            "### EdgeRecord — 64 bytes, 64 per page",
+        ),
+    ];
+
+    for (record_bytes, actual_per_page, documented) in cases {
+        assert!(
+            format.contains(documented),
+            "FORMAT.md no longer states {documented:?}. If the addressing density changed, \
+             that is a **format change**: update FORMAT.md and the version in the same commit. \
+             The code currently uses {actual_per_page} records per page."
+        );
+
+        // 文档行里的数字必须同时匹配「记录大小」与「每页条数」，顺序固定。
+        let numbers: Vec<usize> = documented
+            .split_whitespace()
+            .filter_map(|w| {
+                w.trim_matches(|c: char| !c.is_ascii_digit())
+                    .parse::<usize>()
+                    .ok()
+            })
+            .collect();
+        assert_eq!(
+            numbers,
+            vec![*record_bytes, *actual_per_page],
+            "FORMAT.md's line {documented:?} claims sizes {numbers:?}, but the code uses \
+             {record_bytes} bytes per record and {actual_per_page} records per page. \
+             This ratio defines where every id lands on disk; a mismatch means the two \
+             disagree about the file layout."
+        );
+    }
+}
+
+/// `ci/long_run.sh` 的每个阶段都必须有函数**和**分派分支。
+///
+/// ## 为什么需要这条
+///
+/// 加 `boundaries` 阶段时，我用了一个带**空格缩进**的替换锚点，而脚本用 **tab**——
+/// 于是替换静默失败：`ALL_STAGES` 与 `case` 分支改了（那两处不含缩进），`stage_boundaries`
+/// 函数体**没插进去**。结果是默认全量模式跑到该阶段时
+/// `stage_boundaries: command not found`，而 `case` 的 `*)` 分支直到那时才报
+/// `unknown stage`。
+///
+/// 这不是产品缺陷，是**脚本自身的缺陷**，但性质与本项目一直在防的完全相同：
+/// 一处改动没有配套的另一处，且失败被推迟到运行时。所以用同一套办法：**变成断言**。
+///
+/// 三处必须一致：`ALL_STAGES` 数组、`stage_<name>()` 函数、`case` 里的分派分支。
+#[test]
+fn long_run_script_stages_are_consistent() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script =
+        fs::read_to_string(root.join("ci/long_run.sh")).expect("ci/long_run.sh must exist");
+
+    // ALL_STAGES=(a b c)
+    let all_line = script
+        .lines()
+        .find(|l| l.trim_start().starts_with("ALL_STAGES=("))
+        .expect("the script must declare ALL_STAGES=(...)");
+    let stages: Vec<String> = all_line
+        .trim_start()
+        .trim_start_matches("ALL_STAGES=(")
+        .trim_end_matches(')')
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect();
+    assert!(!stages.is_empty(), "ALL_STAGES must not be empty");
+
+    // stage_<name>() { —— 只认行首（脚本里的定义不缩进）
+    let defined: Vec<String> = script
+        .lines()
+        .filter_map(|l| l.strip_prefix("stage_"))
+        .filter_map(|rest| rest.split("()").next())
+        .map(|s| s.to_string())
+        .collect();
+
+    // \t<name>) run_stage ...
+    let dispatched: Vec<String> = script
+        .lines()
+        .filter_map(|l| l.strip_prefix('\t'))
+        .filter_map(|rest| rest.split(')').next())
+        .filter(|name| !name.is_empty() && !name.contains(' ') && !name.contains('*'))
+        .map(|s| s.to_string())
+        .collect();
+
+    let mut problems: Vec<String> = Vec::new();
+
+    for stage in &stages {
+        if !defined.contains(stage) {
+            problems.push(format!(
+                "`{stage}` is listed in ALL_STAGES but `stage_{stage}()` is not defined — \
+                 the run aborts with `stage_{stage}: command not found`"
+            ));
+        }
+        if !dispatched.contains(stage) {
+            problems.push(format!(
+                "`{stage}` is listed in ALL_STAGES but has no `case` branch — the run \
+                 aborts with `unknown stage: {stage}`"
+            ));
+        }
+    }
+
+    // 反向：定义了却没列入，说明它是死代码或忘了加进默认集合。
+    for name in &defined {
+        if !stages.contains(name) {
+            problems.push(format!(
+                "`stage_{name}()` is defined but `{name}` is not in ALL_STAGES, so it \
+                 never runs by default"
+            ));
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "ci/long_run.sh's stages disagree:\n  - {}",
+        problems.join("\n  - ")
+    );
+
+    // `stage_sdk` 依赖 `bindings/cross_sdk_check.py`；路径写错会让阶段在 CI 上才失败。
+    assert!(
+        root.join("bindings/cross_sdk_check.py").exists(),
+        "stage_sdk runs bindings/cross_sdk_check.py, which must exist"
+    );
+}

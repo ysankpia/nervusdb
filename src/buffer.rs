@@ -76,6 +76,48 @@ impl DiskManager {
         })
     }
 
+    /// 以**只读**方式打开主数据文件：不创建、不要求写权限。
+    ///
+    /// ## 为什么需要单独一个构造
+    ///
+    /// `open` 用了 `read(true).write(true).create(true)`，因为写句柄需要它们。
+    /// 但**只读句柄也走了 `open`**，于是在一个 0444 的文件上直接
+    /// `Permission denied` —— 一个只想读的句柄，因为它自己的写入能力而失败。
+    ///
+    /// 实测（0444 文件）：`NervusDb::open_read_only` 返回
+    /// `Storage I/O error: Permission denied (os error 13)`；文件权限恢复为 0644
+    /// 后同一调用成功。只读库是常见部署形态（容器里只挂载数据盘、配置成只读卷），
+    /// 因此这条路径必须能独立工作。
+    ///
+    /// 写路径不会被这个构造打开：只读句柄在 `reject_write` 层就拒绝了所有写入口，
+    /// 且不会调用 `flush`/`checkpoint`。若真发生写入，`write_page` 会得到
+    /// `Err`（文件句柄无写权限），而不是静默丢弃。
+    pub(crate) fn open_read_only_file<P: AsRef<Path>>(path: P) -> Result<Self, GraphError> {
+        let path_ref = path.as_ref();
+        let is_memory = path_ref.to_str() == Some(":memory:") || path_ref.as_os_str().is_empty();
+
+        if is_memory {
+            return Self::open(path);
+        }
+
+        let file_path = path_ref.to_path_buf();
+        // 与 `open` 不同：**不** create_dir_all（只读打开不应产生副作用），
+        // **不** create(true)（文件必须已存在）。
+        let file = OpenOptions::new().read(true).open(&file_path)?;
+
+        let file_len = file.metadata()?.len();
+        let num_pages = (file_len / PAGE_SIZE as u64).max(1);
+
+        Ok(Self {
+            is_memory: false,
+            file: Mutex::new(Some(file)),
+            memory_pages: Mutex::new(Vec::new()),
+            num_pages: AtomicU64::new(num_pages),
+            num_reads: AtomicU64::new(0),
+            num_writes: AtomicU64::new(0),
+        })
+    }
+
     /// 取出文件句柄，**不 panic**。
     ///
     /// `file` 是 `Option<File>`：`:memory:` 模式构造为 `None`，其它模式构造为

@@ -504,10 +504,26 @@ impl NervusDb {
         }
 
         // 1. 初始化页级 WAL 持久化引擎（若存在未 Checkpoint 的 WAL，自动将已提交页重放至主文件）
-        let storage = StorageEngine::open(&db_path)?;
+        //
+        // **只读句柄必须走 `open_readonly`。** 读写版的 `StorageEngine::open` 会
+        // `create_dir_all`、以写模式打开 WAL 并**回放（写主数据文件）**——对只读
+        // 句柄来说三件事都不该做。实测一个 0444 的库文件上 `open_read_only` 会因
+        // 这一步报 `Permission denied`：一个只想读的句柄被自己的写入能力拖垮。
+        let storage = if options.read_only && !is_memory {
+            StorageEngine::open_readonly(&db_path)?
+        } else {
+            StorageEngine::open(&db_path)?
+        };
 
         // 2. 初始化纯磁盘 4KB 物理分页管理器与 LRU Buffer Pool（统一单文件 {path}）
-        let disk_manager = Arc::new(DiskManager::open(&db_path)?);
+        //
+        // 同理：只读句柄用不创建、不要求写权限的构造。否则 0444 的库文件在这里
+        // 再次 `Permission denied`。
+        let disk_manager = Arc::new(if options.read_only && !is_memory {
+            DiskManager::open_read_only_file(&db_path)?
+        } else {
+            DiskManager::open(&db_path)?
+        });
         let mut bpm = BufferPoolManager::new(Arc::clone(&disk_manager), pool_size.max(2));
         // 挂载页级 WAL：缓冲池据此支持 STEAL 溢出与未提交页安全置换
         bpm.attach_wal(Arc::clone(storage.wal_writer()));

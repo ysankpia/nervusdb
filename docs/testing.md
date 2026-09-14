@@ -36,13 +36,13 @@ cargo test --test robustness_tests        # page CRC at scale, WAL replay, chunk
 
 ## Current state
 
-**258 test cases — 257 pass, 1 intentionally `#[ignore]`d** (a child-process lock
+**262 test cases — 261 pass, 1 intentionally `#[ignore]`d** (a child-process lock
 probe launched by its parent test).
 
-Run as 21 integration suites (228 cases, of which 1 is `#[ignore]`d) plus 28 inline
+Run as 21 integration suites (232 cases, of which 1 is `#[ignore]`d) plus 28 inline
 unit tests in the hand-written codecs, the action codec, and the Page-0 layout
 (`src/codec.rs`, `src/json.rs`, `src/crc32.rs`, `src/action_codec.rs`, `src/page.rs`), which are what the on-disk
-format is made of, plus 2 doc-tests: 228 + 28 + 2 = 258.
+format is made of, plus 2 doc-tests: 232 + 28 + 2 = 262.
 
 **The one `#[ignore]`d case is not a skipped test.** It is
 `production_safety_tests::cross_process_child_probe`, an eight-line probe that must be
@@ -66,7 +66,7 @@ removed without updating this table fails the build rather than drifting:
 | -------------------------------- | ----- | --------------------------------------------------------------------------------------------------------------------- |
 | `integration_tests.rs`           | 31    | CRUD, ACID, concurrency, indexing, stress, query chain, public-API helpers                                            |
 | `memory_mode_tests.rs`           | 6     | `:memory:` disk-free + readable across checkpoint; clean-uncommitted eviction; backup refusal; uncovered entry points |
-| `production_safety_tests.rs`     | 33    | Exclusive lock, integrity, constraints, read-only writes (incl. transaction paths), queue cap                         |
+| `production_safety_tests.rs`     | 35    | Exclusive lock, integrity, constraints, read-only writes (incl. transaction paths), queue cap                         |
 | `cypher_advanced_tests.rs`       | 19    | Cypher 1.0 syntax closure, EXPLAIN, aggregates, negative/float literal round trip                                     |
 | `unwind_tests.rs`                | 16    | `UNWIND`, batch ingestion, statement atomicity                                                                        |
 | `merge_tests.rs`                 | 14    | `MERGE` idempotence, ON CREATE / ON MATCH                                                                             |
@@ -79,7 +79,7 @@ removed without updating this table fails the build rather than drifting:
 | `analytics_tests.rs`             | 10    | PageRank, WCC, K-hop completeness, cycle false-positives                        |
 | `steal_spill_tests.rs`           | 5     | Spilling, rollback pollution, checkpoint                                                                              |
 | `equivalence_tests.rs`           | 4     | v1.0.0 behaviour guardrails: query, transaction, API, format                                                          |
-| `zero_dependency_tests.rs`       | 13    | Empty deps; version, name, suite-count, section-ref, package, ignore + example guards                                 |
+| `zero_dependency_tests.rs`       | 15    | Empty deps; version, name, suite-count, section-ref, package, ignore + example guards                                 |
 | `planner_tests.rs`               | 9     | Join reorder equivalence, EXPLAIN plan, bound-driven work reduction, non-driven rescan                                |
 | `lock_wait_tests.rs`             | 5     | Lock wait: default no-wait, wait succeeds, timeout, still exclusive                                                   |
 | `lock_cross_process_tests.rs`    | 1     | Two real processes: second refused, then waits and writes                                                             |
