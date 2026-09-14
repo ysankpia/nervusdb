@@ -79,6 +79,35 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
 ### Changed
 
+- **BREAKING: the Node.js SDK now represents every integer as a JavaScript `BigInt`.**
+  Graph integers are `i64`, and JavaScript's `number` is an f64, so values above 2^53
+  were being rounded **silently** on the way in and out:
+
+  | Written                           | Previously read back   | Now                    |
+  | --------------------------------- | ---------------------- | ---------------------- |
+  | `9007199254740993` (2^53 + 1)     | `9007199254740992`     | `9007199254740993`     |
+  | `9223372036854775807` (i64::MAX)  | `9223372036854776000`  | `9223372036854775807`  |
+  | `-9223372036854775808` (i64::MIN) | `-9223372036854776000` | `-9223372036854775808` |
+
+  The Python SDK was already exact (`int` is arbitrary precision), so the same database
+  returned different answers depending on the SDK — with Node never reporting an error.
+  The core engine had already chosen exactness over convenience here (`sum()` uses
+  `checked_add` because an f64 accumulation once rounded silently), and the binding was
+  discarding it.
+
+  Affected: node and edge ids, integer properties, `execute()` counts, `stats()`
+  counters, aggregate results, and the ids inside `pageRank` / `bfs` / `dijkstra` /
+  `weaklyConnectedComponents` / `kHopSubgraph`. Floats stay `number`.
+
+  **What breaks in existing Node code:** `count + 1` now throws
+  `TypeError: Cannot mix BigInt and other types`, and `JSON.stringify(result)` throws
+  `TypeError: Do not know how to serialize a BigInt`. Comparisons (`>`, `===` against a
+  BigInt), template strings and `Number(x)` all still work. Convert at the boundary:
+  `Number(row["count(n)"])`, or a `JSON.stringify(v, (k, x) => typeof x === "bigint" ? x.toString() : x)`.
+
+  A value outside `i64` is now refused with the offending number named, instead of being
+  wrapped.
+
 - **`NervusDb::wal_path()` is now used by the test suite.** It was documented and
   correct but untested; three tests built `{path}.wal` by hand instead. They now call the
   accessor, so the path rule has one implementation.
@@ -336,6 +365,48 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
   size identical at 81.26 MB).
 
 ### Fixed
+
+- **`has_cycle()` reported cycles in acyclic graphs.** The iterative DFS marked *every*
+  neighbour of a node Gray at once instead of descending into one at a time, so two
+  nodes that merely share a parent were both Gray simultaneously — and the second was
+  treated as a back edge. It is a false positive on exactly the shape real data is full
+  of: multiple authors of one paper, several files in one directory.
+
+  Minimal reproduction, a diamond `P→X, P→Y, X→Y`. The same graph, only the edge
+  insertion order differs:
+
+  | Insertion order | Edges | Old result | Correct |
+  | --- | --- | --- | --- |
+  | `P→X, P→Y, X→Y` | `[(1,2),(1,3),(2,3)]` | `true` | `false` |
+  | `P→Y, P→X, X→Y` | `[(1,3),(1,2),(2,3)]` | `false` | `false` |
+
+  On random DAGs (edges run only from a lower id to a higher one, so a cycle is
+  impossible) **3 of 40 trials reported a cycle**. `find_cycles` used the correct
+  pattern all along, twenty lines away; only `has_cycle` was wrong.
+
+  The existing deep-chain test could not catch it: a chain gives every node exactly one
+  outgoing edge, so it never produces siblings. Two regression tests now cover it — a
+  minimal diamond (readable) and 40 randomized DAGs (broad).
+
+- **`k_hop_subgraph` dropped edges between nodes on the k-th layer.** Node discovery
+  used BFS and stopped expanding at depth `k`, so edges were collected only from nodes
+  it expanded — an edge whose two endpoints both sit exactly at layer `k` was never
+  seen, even though both endpoints are inside the subgraph. `AGENTS.md` §4.5 requires
+  the opposite: keep every edge whose endpoints are inside.
+
+  Measured with k=1 and `Direction::Both`:
+
+  | Shape | Nodes | Old edges | Expected |
+  | --- | --- | --- | --- |
+  | `1↔2` | 2 (correct) | 1 | **2** (missing `2→1`) |
+  | Triangle `1→2→3→1` | 3 (correct) | 2 | **3** (missing `2→3`) |
+  | Star `1→2,1→3,1→4` plus `2→3` | 4 (correct) | 3 | **4** (missing `2→3`) |
+
+  The node set was always right, which is why the old test passed: it asserted
+  `edges.len()` — a **count** — and never which edges. Two phases now: BFS discovers
+  nodes, then a separate pass collects the edges, filtered to those with both endpoints
+  inside. The regression test compares the edge set against an independent Cypher
+  recomputation rather than against itself.
 
 - **`dump_cypher` produced a script the parser could not read back, for any negative or
   whole-number float property.** Two defects in the same round trip, which the docs

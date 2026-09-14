@@ -9,7 +9,13 @@ crate-type = ["cdylib"]
 [dependencies]
 nervusdb_core = { package = "nervusdb", path = "../../" }
 napi = { version = "2.16", default-features = false, features = [
-  "napi4",
+  # napi6 is required for BigInt. Integer-valued graph properties are `i64`, and
+  # JavaScript's `number` is an f64 — passing an i64 through it silently rounds
+  # anything above 2^53. Measured before this change: `2^53 + 1` came back as
+  # `2^53`, and `i64::MAX` as `9223372036854776000`. The core library went out of
+  # its way to be exact here (`sum()` uses `checked_add` precisely because an f64
+  # accumulation rounded silently), so the binding must not undo that.
+  "napi6",
   "serde-json",
 ] }
 napi-derive = "2.16"
