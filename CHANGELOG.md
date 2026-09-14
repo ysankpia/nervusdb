@@ -364,6 +364,32 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
   re-running the real-data acceptance afterwards (DBLP red lines bit-identical, file
   size identical at 81.26 MB).
 
+### Added
+
+- **`benches/real_data/page_boundary_bench.rs` — both sides of every structural
+  boundary.** Addressing here is a fixed formula (`page = (id-1)/128`, `offset =
+  ((id-1)%128)*32` for nodes; `/64` and `*64` for edges), and Page 0 inlines 32 direct
+  directory pages covering the first 4096 nodes / 2048 edges. 25 checks sit on either side
+  of each: 127/128/129 nodes per page, 4095/4096/4097 nodes across the direct-page
+  coverage boundary, 2047/2048/2049 edges, slotted-page sharing at 15/16/17 and 63/64/65,
+  and the 1KB inline/overflow split at 1023/1024/1025 — each with a checkpoint-and-reopen
+  where relevant, plus the same boundaries driven through a 64-frame pool so the STEAL
+  spill path is exercised at the edges too. An out-of-range id here reads *another
+  entity's data* rather than erroring, which is why both sides are checked.
+
+- **`addressing_constants_match_the_format_spec`** — a guard that pins the record sizes
+  in `src/page.rs` to the numbers `FORMAT.md` states.
+
+  Why a guard rather than a test: **no behavioural test can catch this.** Writes and reads
+  share the same constant, so changing `NodeRecord::RECORD_SIZE` from 32 to 31 is
+  internally consistent — measured, all 25 page-boundary checks still pass. The damage is
+  cross-build: an older file would be interpreted with a different divisor, mapping every
+  id onto a neighbouring record's bytes, **without an error**. The version gate does not
+  help either, because Page 0's magic and version are untouched.
+
+  The guard therefore compares both directions — change the code and it fails, change
+  `FORMAT.md` and it fails — so the ratio cannot drift from its specification silently.
+
 ### Fixed
 
 - **A read-only `0444` database file could not be opened read-only.** Three write-mode

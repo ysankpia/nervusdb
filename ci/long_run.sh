@@ -16,11 +16,12 @@
 #   1. full       —— Rust 全量套件（含 5 项门禁）
 #   2. fuzz       —— Cypher 模糊测试，多个种子区间
 #   3. fault      —— 外部故障注入
-#   4. differential —— 写操作对拍内存模型（长时间）
-#   5. crash      —— SIGKILL 崩溃恢复多轮
-#   6. concurrency—— 并发扩展与压力
-#   7. sdk        —— 两个 SDK 端到端 + 跨 SDK 对照
-#   8. realdata   —— com-DBLP 红线（需要数据集，缺失则跳过并说明）
+#   4. boundaries —— 页/记录密度等结构性边界（两侧各测一次）
+#   5. differential —— 写操作对拍内存模型（长时间）
+#   6. crash      —— SIGKILL 崩溃恢复多轮
+#   7. concurrency—— 并发扩展与压力
+#   8. sdk        —— 两个 SDK 端到端 + 跨 SDK 对照
+#   9. realdata   —— com-DBLP 红线（需要数据集，缺失则跳过并说明）
 #
 # ## 用法
 #
@@ -50,7 +51,7 @@ else
 	CRASH_ROUNDS="${CRASH_ROUNDS:-8}"
 fi
 
-ALL_STAGES=(full fuzz fault differential crash concurrency sdk realdata)
+ALL_STAGES=(full fuzz fault boundaries differential crash concurrency sdk realdata)
 STAGES=("$@")
 if [ ${#STAGES[@]} -eq 0 ]; then
 	STAGES=("${ALL_STAGES[@]}")
