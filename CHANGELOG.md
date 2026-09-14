@@ -366,6 +366,34 @@ evaluated, so they matched nothing) and `SET`/`DELETE` applied to a scalar bindi
 
 ### Added
 
+- **`docs/audit-baseline.md` — what has already been checked, and what is deliberate.**
+  A full audit should not re-derive earlier work, and must not report an intentional
+  design decision as a defect. The document records: how each defect so far was actually
+  found (none by a failing test — every one by a *method*), what the suites and
+  instruments cover, the last full campaign's numbers, claims verified correct, the
+  deliberate scope limits with their rationale, what is genuinely uncovered, and where
+  the leverage is for an auditor.
+
+  It is guarded by `audit_baseline_references_resolve`, which fails if a referenced file
+  stops existing, if a listed instrument is no longer registered as a bench, or if a
+  registered instrument is missing from the list. A stale coverage claim is worse than no
+  claim, because it makes an auditor skip the area.
+
+### Changed
+
+- **The test-count line now states which counting rule it uses.** The suite table is
+  asserted against the **source text** (`#[test]` occurrences) while the total is asserted
+  against a **run** (`cargo test --workspace`). They differ by the number of cases behind
+  a `#[cfg]` the current platform does not compile — presently 2, both `#[cfg(not(unix))]`
+  stubs that exist so a non-Unix build compiles. The two were being quoted
+  interchangeably, which made the arithmetic look wrong by 2; the note is in
+  `docs/testing.md` so the next reader does not have to rediscover why.
+
+  Current on this platform: **262 cases (261 pass, 1 intentionally ignored)** — 231
+  integration, 28 inline unit tests, 2 doc-tests.
+
+### Added
+
 - **`benches/real_data/page_boundary_bench.rs` — both sides of every structural
   boundary.** Addressing here is a fixed formula (`page = (id-1)/128`, `offset =
   ((id-1)%128)*32` for nodes; `/64` and `*64` for edges), and Page 0 inlines 32 direct

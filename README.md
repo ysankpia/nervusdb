@@ -199,7 +199,7 @@ src/
   graph.rs          Domain models: Node, Edge, Value, Direction, GraphError
 bindings/
   python/           PyO3 SDK          nodejs/   NAPI-RS SDK
-tests/              21 suites, 232 cases (+28 inline unit tests, +2 doctests)
+tests/              21 suites, 233 cases (+28 inline unit tests, +2 doctests)
 benches/            Reproducible throughput, pool-size and memory probes
 ```
 

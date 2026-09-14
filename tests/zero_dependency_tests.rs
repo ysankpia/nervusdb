@@ -1446,3 +1446,118 @@ fn long_run_script_stages_are_consistent() {
         "stage_sdk runs bindings/cross_sdk_check.py, which must exist"
     );
 }
+
+/// `docs/audit-baseline.md` 里引用的每个文件、测试、工具都必须真实存在。
+///
+/// ## 为什么
+///
+/// 那份文档的用途是「让下一次审计不重复劳动」。它的价值**完全依赖于准确性**：一条
+/// 指向已删除工具的「已覆盖」会让审计跳过真正未覆盖的区域；一条写着「测试覆盖了 X」
+/// 而 X 的测试已删除的说法，比没有这句话更糟。
+///
+/// 文档会随代码演进而失效，这是必然的；能做的是让**失效立刻可见**。因此这里扫描
+/// 文档里的路径引用与测试名，逐个核对存在性——而不是靠人记得更新它。
+///
+/// 与 `agents_section_references_resolve` 同一思路：把「文档说的」钉在「代码有的」上。
+#[test]
+fn audit_baseline_references_resolve() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let doc = fs::read_to_string(root.join("docs/audit-baseline.md"))
+        .expect("docs/audit-baseline.md must exist");
+
+    // 1) 反引号里的**路径**必须存在。
+    //
+    // 只认带 `/` 且以已知扩展名结尾的片段，避免把 `:memory:`、`has_cycle` 这类
+    // 代码标识符误当路径。
+    let known_ext = [".rs", ".md", ".sh", ".py", ".js", ".mjs", ".toml", ".yml"];
+    let mut missing: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+
+    for line in doc.lines() {
+        for chunk in line.split('`').skip(1).step_by(2) {
+            let looks_like_path = chunk.contains('/')
+                && !chunk.contains(' ')
+                && known_ext.iter().any(|e| chunk.ends_with(e));
+            if !looks_like_path {
+                continue;
+            }
+            // 去掉可能的锚点（`file.md#section`）。
+            let path = chunk.split('#').next().unwrap_or(chunk);
+            checked += 1;
+            if !root.join(path).exists() {
+                missing.push(path.to_string());
+            }
+        }
+    }
+    assert!(
+        checked > 10,
+        "only {checked} path reference(s) found in the baseline doc — the extraction is \
+         probably broken, which would make this guard vacuous"
+    );
+    assert!(
+        missing.is_empty(),
+        "docs/audit-baseline.md references files that do not exist: {missing:?}. \
+         Either restore them or update the document — a stale claim about coverage is \
+         worse than no claim, because an auditor will skip what it says is covered."
+    );
+
+    // 2) 文档点名的测试函数必须真的存在于某个套件里。
+    //
+    // 形如 `` `foo.rs::bar` `` 的引用，逐个人工列出——自动抽取函数名会误抓代码标识符。
+    let named: &[(&str, &str)] = &[(
+        "tests/zero_dependency_tests.rs",
+        "audit_baseline_references_resolve",
+    )];
+    for (file, func) in named {
+        let src =
+            fs::read_to_string(root.join(file)).unwrap_or_else(|_| panic!("{file} must exist"));
+        assert!(
+            src.contains(&format!("fn {func}(")),
+            "{file} must define `{func}` (referenced by docs/audit-baseline.md)"
+        );
+    }
+
+    // 3) 文档点名的**仪器**必须真的注册为 bench。
+    //
+    // 注册在 Cargo.toml 里；一个写在文档里但没注册的 bench 跑不起来，而文档会让
+    // 审计以为它可用。
+    let manifest = fs::read_to_string(root.join("Cargo.toml")).expect("Cargo.toml");
+    let instruments = [
+        "cypher_fuzz_bench",
+        "differential_test",
+        "crash_recovery_test",
+        "fault_injection_bench",
+        "page_boundary_bench",
+        "concurrency_scaling_bench",
+        "snap_dblp_bench",
+    ];
+    for name in instruments {
+        assert!(
+            manifest.contains(&format!("name = \"{name}\"")),
+            "docs/audit-baseline.md lists the instrument `{name}`, but it is not \
+             registered as a bench in Cargo.toml — it cannot be run"
+        );
+        assert!(
+            doc.contains(name),
+            "the instrument `{name}` is registered but the baseline doc does not \
+             mention it; the document is supposed to list what can be run"
+        );
+    }
+
+    // 4) 长跑脚本必须存在且可执行（文档把它列为编排入口）。
+    let script = root.join("ci/long_run.sh");
+    assert!(script.exists(), "ci/long_run.sh must exist");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&script)
+            .expect("stat long_run.sh")
+            .permissions()
+            .mode();
+        assert!(
+            mode & 0o111 != 0,
+            "ci/long_run.sh must be executable (mode {:o})",
+            mode
+        );
+    }
+}

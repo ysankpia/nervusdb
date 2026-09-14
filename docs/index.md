@@ -17,14 +17,15 @@ which one answers your question is the whole point of an index.
 
 ## Working on it
 
-| Document                              | Read it when                                                                                                           |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| [AGENTS.md](../AGENTS.md)             | **Before changing code.** Invariants, contracts, verification workflow.                                                |
-| [docs/testing.md](testing.md)         | Running or adding tests — the CI gate, the red-line totals, the suite inventory, and the adversarial style it follows. |
-| [docs/cypher.md](cypher.md)           | Changing the query language — grammar and the executor constraints it depends on.                                      |
-| [docs/releasing.md](releasing.md)     | Cutting a release, or changing the release workflow.                                                                   |
-| [CONTRIBUTING.md](../CONTRIBUTING.md) | Before opening anything. **Issues only; external PRs are closed automatically.**                                       |
-| [CLA.md](../CLA.md)                   | You have been asked to sign a CLA. The project does not collect them; see CONTRIBUTING.md for why.                     |
+| Document                                    | Read it when                                                                                                                                                         |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [AGENTS.md](../AGENTS.md)                   | **Before changing code.** Invariants, contracts, verification workflow.                                                                                              |
+| [docs/testing.md](testing.md)               | Running or adding tests — the CI gate, the red-line totals, the suite inventory, and the adversarial style it follows.                                               |
+| [docs/audit-baseline.md](audit-baseline.md) | **Before auditing this project.** What has already been checked, what is verified correct, what is deliberate rather than a defect, and what is genuinely uncovered. |
+| [docs/cypher.md](cypher.md)                 | Changing the query language — grammar and the executor constraints it depends on.                                                                                    |
+| [docs/releasing.md](releasing.md)           | Cutting a release, or changing the release workflow.                                                                                                                 |
+| [CONTRIBUTING.md](../CONTRIBUTING.md)       | Before opening anything. **Issues only; external PRs are closed automatically.**                                                                                     |
+| [CLA.md](../CLA.md)                         | You have been asked to sign a CLA. The project does not collect them; see CONTRIBUTING.md for why.                                                                   |
 
 ## Status, policy, licensing
 
